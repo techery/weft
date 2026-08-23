@@ -314,6 +314,12 @@ export function buildCtx(rt: RunRuntime): Ctx {
               });
               workCwd = worktree.path;
             }
+            // An in-place writer edits the integration tree directly — no worktree,
+            // no patch capture — so its declared scope needs its own record:
+            // snapshot the tree now and diff after the dispatch to see what was
+            // REALLY touched (a sandbox like Codex's permits the whole repo).
+            let inPlaceSnap: string | undefined;
+            if (mode.writeInPlace && scope) inPlaceSnap = await integrationBaseCommit(workCwd);
             let finalPrompt = prompt;
             if (scope) {
               const also = scope.also?.length
@@ -430,76 +436,124 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
             const usage = chargeUsage(result.usage);
 
-            let transcriptRef: BlobRefJson | undefined;
-            if (result.result.transcript) {
-              const blob = await rt.host.blobs.put(result.result.transcript, { kind: "transcript" });
-              transcriptRef = { $blob: blob.hash, size: blob.size };
-            }
-
-            let patch: PatchRef | null = null;
-            let files: string[] = result.result.filesTouched ?? [];
-            if (worktree && scope) {
-              const captured = await capturePatch({ worktreePath: worktree.path });
-              files = captured.files;
-              if (captured.patch.length > 0) {
-                const blob = await rt.host.blobs.put(captured.patch, { kind: "patch" });
-                const { outOfScope } = checkScope(captured.files, scope);
-                const quarantined = scope.mode === "strict" && outOfScope.length > 0;
-                const patchKey = opts.key ?? label;
-                patch = {
-                  ref: blob.hash,
-                  key: patchKey,
-                  files: captured.files,
-                  ...(quarantined ? { quarantined } : {}),
-                  ...(outOfScope.length > 0 ? { outOfScope } : {}),
-                };
-                await rt.append([
-                  {
-                    type: "patch.captured",
-                    seq: io.seq,
-                    key: patchKey,
-                    ref: blob.hash,
-                    files: captured.files,
-                    ...(outOfScope.length > 0 ? { outOfScope } : {}),
-                  },
-                  ...(outOfScope.length > 0
-                    ? [
-                        {
-                          type: "scope.violation",
-                          seq: io.seq,
-                          key: patchKey,
-                          files: outOfScope,
-                          mode: scope.mode,
-                        } as const,
-                      ]
-                    : []),
-                ]);
+            // Everything past the charge is bookkeeping on a PAID call: if any of
+            // it fails, the error must still carry the spend so step.attempt /
+            // step.failed journal it — otherwise a resume restores a budget that
+            // never saw this call and reruns it against an artificially low total.
+            try {
+              let transcriptRef: BlobRefJson | undefined;
+              if (result.result.transcript) {
+                const blob = await rt.host.blobs.put(result.result.transcript, { kind: "transcript" });
+                transcriptRef = { $blob: blob.hash, size: blob.size };
               }
-            }
 
-            // Journal the RAW wire value; both live and replay paths validate from raw,
-            // so schema transforms apply exactly once.
-            const journalOutput = { value: result.raw, files, patch };
-            const detailed: DetailedAgentResult<InferOut<S>> = {
-              value: result.validated as InferOut<S>,
-              usage,
-              files,
-              ...(patch ? { patch } : {}),
-              attempts: result.attempts,
-              ...(result.result.sessionId !== undefined ? { sessionId: result.result.sessionId } : {}),
-            };
-            return {
-              value: detailed,
-              journalOutput,
-              usage,
-              ...(result.result.sessionId !== undefined ? { sessionId: result.result.sessionId } : {}),
-              ...(transcriptRef !== undefined ? { transcriptRef } : {}),
-              ...(patch ? { patchRef: patch.ref } : {}),
-              attempts: result.attempts,
-            };
+              let patch: PatchRef | null = null;
+              let files: string[] = result.result.filesTouched ?? [];
+              if (worktree && scope) {
+                const captured = await capturePatch({ worktreePath: worktree.path });
+                files = captured.files;
+                if (captured.patch.length > 0) {
+                  const blob = await rt.host.blobs.put(captured.patch, { kind: "patch" });
+                  const { outOfScope } = checkScope(captured.files, scope);
+                  const quarantined = scope.mode === "strict" && outOfScope.length > 0;
+                  const patchKey = opts.key ?? label;
+                  patch = {
+                    ref: blob.hash,
+                    key: patchKey,
+                    files: captured.files,
+                    ...(quarantined ? { quarantined } : {}),
+                    ...(outOfScope.length > 0 ? { outOfScope } : {}),
+                  };
+                  await rt.append([
+                    {
+                      type: "patch.captured",
+                      seq: io.seq,
+                      key: patchKey,
+                      ref: blob.hash,
+                      files: captured.files,
+                      ...(outOfScope.length > 0 ? { outOfScope } : {}),
+                    },
+                    ...(outOfScope.length > 0
+                      ? [
+                          {
+                            type: "scope.violation",
+                            seq: io.seq,
+                            key: patchKey,
+                            files: outOfScope,
+                            mode: scope.mode,
+                          } as const,
+                        ]
+                      : []),
+                  ]);
+                }
+              } else if (inPlaceSnap !== undefined && scope) {
+                // The tree diff is the authoritative record of an in-place writer's
+                // edits (the provider's self-report is advisory). Under a strict
+                // scope, stray edits are ROLLED BACK, not just reported — the
+                // declared scope is enforced, whatever the sandbox permitted.
+                const afterSnap = await integrationBaseCommit(workCwd);
+                if (afterSnap !== inPlaceSnap) {
+                  const diff = await gitHandle.raw(["diff", "--name-only", inPlaceSnap, afterSnap]);
+                  files = diff.stdout
+                    .split("\n")
+                    .map((f) => f.trim())
+                    .filter((f) => f !== "");
+                  const { outOfScope } = checkScope(files, scope);
+                  if (outOfScope.length > 0) {
+                    if (scope.mode === "strict") {
+                      await restorePatchFiles(inPlaceSnap, outOfScope);
+                      files = files.filter((f) => !outOfScope.includes(f));
+                    }
+                    await rt.append([
+                      {
+                        type: "scope.violation",
+                        seq: io.seq,
+                        key: opts.key ?? label,
+                        files: outOfScope,
+                        mode: scope.mode,
+                      },
+                    ]);
+                  }
+                }
+              }
+
+              // Journal the RAW wire value; both live and replay paths validate from raw,
+              // so schema transforms apply exactly once.
+              const journalOutput = { value: result.raw, files, patch };
+              const detailed: DetailedAgentResult<InferOut<S>> = {
+                value: result.validated as InferOut<S>,
+                usage,
+                files,
+                ...(patch ? { patch } : {}),
+                attempts: result.attempts,
+                ...(result.result.sessionId !== undefined ? { sessionId: result.result.sessionId } : {}),
+              };
+              return {
+                value: detailed,
+                journalOutput,
+                usage,
+                ...(result.result.sessionId !== undefined ? { sessionId: result.result.sessionId } : {}),
+                ...(transcriptRef !== undefined ? { transcriptRef } : {}),
+                ...(patch ? { patchRef: patch.ref } : {}),
+                attempts: result.attempts,
+              };
+            } catch (err) {
+              const failed = StepError.from(err, stepRef);
+              const carried = (failed.detail as { usage?: Usage } | undefined)?.usage;
+              if (carried === undefined) {
+                (failed as { detail?: unknown }).detail = {
+                  ...(typeof failed.detail === "object" && failed.detail !== null ? failed.detail : {}),
+                  usage,
+                };
+              }
+              throw failed;
+            }
           } finally {
             releaseCall();
-            if (worktree) await removeWorktree({ repoRoot: rt.cwd, path: worktree.path });
+            // Cleanup must never veto a paid, journaled result: a stale worktree
+            // is pruned by the next resume's pre-clean above.
+            if (worktree)
+              await removeWorktree({ repoRoot: rt.cwd, path: worktree.path }).catch(() => undefined);
           }
         },
       });
@@ -1438,7 +1492,20 @@ export function buildCtx(rt: RunRuntime): Ctx {
               allowFailure: true,
               input: patchText,
             });
-            return reverse.exitCode === 0;
+            if (reverse.exitCode === 0) return true;
+            // A LATER journaled merge that started from this patch's resultTree may
+            // have edited the very lines this patch introduced — the reverse check
+            // fails then, but the integration is still in the chain, and reapplying
+            // would conflict with or duplicate the later work.
+            if (rt.replay?.mergedBaseTrees.has(j.resultTree)) return true;
+            // Only an unambiguous rollback re-executes: the patch applying cleanly
+            // FORWARD means the tree genuinely lacks it. Both checks failing means
+            // the tree moved past it some other way — trust the journaled merge.
+            const forward = await gitHandle.raw(["apply", "--check"], {
+              allowFailure: true,
+              input: patchText,
+            });
+            return forward.exitCode !== 0;
           },
           onSettle: (value) => {
             const state = rt.patches.get(patch.key);
@@ -1475,7 +1542,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 {
                   schema: z.object({ resolved: z.boolean(), notes: z.string() }),
                   key: `merge:${patch.key}`,
-                  write: { paths: applied.conflicts, mode: "warn" },
+                  // Strict, and enforced: the in-place capture diffs the tree and
+                  // rolls back anything the resolver touched beyond the conflicts.
+                  write: { paths: applied.conflicts, mode: "strict" },
                 },
                 { detailed: false, writeInPlace: true },
               );

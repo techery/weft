@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   Engine,
   type JournalEvent,
@@ -7,6 +10,7 @@ import {
   ProviderRegistry,
   ReplayIndex,
 } from "@weft/core";
+import { mock } from "@weft/provider-mock";
 import { defineWorkflow, z } from "@weft/sdk";
 import { afterAll, describe, expect, test, vi } from "vitest";
 import { cleanupRepos, reopen, tempDir, tempRepo, testEngine } from "./helpers.ts";
@@ -1120,5 +1124,123 @@ describe("codex review findings, round 7 (PR #1)", () => {
     });
     recs = await records(t2.journal, h.runId);
     expect(recs.filter((r) => r.ev.type === "signal.received")).toHaveLength(1);
+  });
+});
+
+describe("codex review findings, round 8 (PR #1)", () => {
+  const FixResult = z.object({ summary: z.string() });
+
+  test("an integrated patch whose lines a LATER patch edited replays as served, not reapplied", async () => {
+    const t1 = testEngine();
+    t1.builder.on({ key: "w1" }, { summary: "one" }, { writes: { "f.txt": "A\n" } });
+    t1.builder.on({ key: "w2" }, { summary: "two" }, { writes: { "f.txt": "B\n" } });
+    const cwd = await tempRepo();
+    const def = defineWorkflow(
+      { name: "chain", description: "c", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const p1 = await ctx.agent.detailed("one", {
+          schema: FixResult,
+          key: "w1",
+          write: { paths: ["f.txt"] },
+        });
+        await ctx.integrate([p1]);
+        const p2 = await ctx.agent.detailed("two", {
+          schema: FixResult,
+          key: "w2",
+          write: { paths: ["f.txt"] },
+        });
+        await ctx.integrate([p2]);
+        const go = await ctx.human.approve({ action: "done?" });
+        return { ok: go.approved };
+      },
+    );
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+    await t1.engine.shutdown();
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome(); // the replay must reach the request again first
+    if (o2.status !== "waiting_for_human") throw new Error(`expected re-suspension, got ${o2.status}`);
+    await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    expect(await h2.result).toEqual({ ok: true });
+    // Patch 2 rewrote the very line patch 1 added, so patch 1 no longer
+    // reverse-applies — the journaled CHAIN (patch 2 built on patch 1's result
+    // tree) is what proves the integration held. Reapplying would conflict.
+    const recs = await records(t2.journal, h1.runId);
+    const merged = recs.filter((r) => r.ev.type === "patch.merged");
+    expect(merged.map((r) => (r.ev as { key?: string }).key)).toEqual(["w1", "w2"]);
+    expect(await readFile(join(cwd, "f.txt"), "utf8")).toBe("B\n");
+  });
+
+  test("a conflict resolver's stray edits are rolled back and reported — its scope is ENFORCED", async () => {
+    const t = testEngine();
+    t.builder.on({ key: "fix:c" }, { summary: "edit" }, { writes: { "a.txt": "AGENT\n" } });
+    // The resolver fixes the conflict file but ALSO drops a file it was told not to touch.
+    t.builder.on(
+      { key: "merge:fix:c" },
+      { resolved: true, notes: "fixed" },
+      { writes: { "a.txt": "RESOLVED\n", "stray.txt": "oops\n" } },
+    );
+    const cwd = await tempRepo({ "a.txt": "base\n" });
+    const def = defineWorkflow(
+      { description: "m", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        const fix = await ctx.agent.detailed("fix", {
+          schema: FixResult,
+          key: "fix:c",
+          write: { paths: ["a.txt"] },
+        });
+        // Drift the integration tree so the patch 3-way conflicts.
+        await ctx.bash("printf 'MAIN\\n' > a.txt");
+        await ctx.integrate([fix], { onConflict: "agent" });
+        return {};
+      },
+    );
+    const handle = await t.engine.start(def, { input: {}, cwd });
+    expect(await handle.result).toEqual({});
+    // The resolution itself stands...
+    expect(await readFile(join(cwd, "a.txt"), "utf8")).toBe("RESOLVED\n");
+    // ...but the out-of-scope edit was rolled back, not silently accepted.
+    expect(existsSync(join(cwd, "stray.txt"))).toBe(false);
+    const recs = await records(t.journal, handle.runId);
+    const violation = recs.find((r) => r.ev.type === "scope.violation")?.ev;
+    if (violation?.type !== "scope.violation") throw new Error("missing scope.violation");
+    expect(violation.files).toEqual(["stray.txt"]);
+    expect(violation.mode).toBe("strict");
+  });
+
+  test("spend charged before a post-processing failure is journaled for the resume's budget restore", async () => {
+    class FailingBlobs extends MemoryBlobStore {
+      override async put(bytes: Uint8Array | string, meta?: { kind?: string }) {
+        if (meta?.kind === "transcript") throw new Error("blob store down");
+        return super.put(bytes);
+      }
+    }
+    const journal = new MemoryJournalStore();
+    const builder = mock();
+    builder.on({ key: "paid" }, { ok: true }, { usage: { input: 800, output: 200 } });
+    const providers = new ProviderRegistry();
+    providers.register(builder.provider("claude"));
+    const engine = new Engine({ journal, blobs: new FailingBlobs(), providers });
+    const def = defineWorkflow(
+      { name: "paidfail", description: "p", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("do", { schema: z.object({ ok: z.boolean() }), key: "paid" });
+        return {};
+      },
+    );
+    const h = await engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(h.result).rejects.toMatchObject({ code: "internal" });
+    const recs = await records(journal, h.runId);
+    const failed = recs.find((r) => r.ev.type === "step.failed")?.ev;
+    if (failed?.type !== "step.failed") throw new Error("missing step.failed");
+    // The provider call was PAID before the transcript blob store failed: the
+    // spend rides the failure record...
+    const carried = (failed.error.detail as { usage?: { input: number; output: number } }).usage;
+    expect(carried).toMatchObject({ input: 800, output: 200 });
+    // ...and a resume's budget restore counts it.
+    expect(ReplayIndex.fromRecords(recs).totalUsage.tokens).toBe(1_000);
   });
 });

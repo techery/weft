@@ -69,6 +69,13 @@ export class ReplayIndex {
   readonly signalsByName = new Map<string, SignalEntry[]>();
   /** Total journaled usage, restored into the budget on resume. */
   totalUsage = { tokens: 0, usd: 0 };
+  /**
+   * baseTree of every journaled patch.merged. A resultTree found in here was
+   * CONSUMED by a later journaled merge — that later patch may edit the very
+   * lines the earlier one introduced, so a failed reverse-apply of the earlier
+   * patch does not mean its integration is gone.
+   */
+  readonly mergedBaseTrees = new Set<string>();
   maxSeq = 0;
   maxHumanId = 0;
   maxJournalIndex = -1;
@@ -195,6 +202,10 @@ export class ReplayIndex {
           const list = index.signalsByName.get(ev.name) ?? [];
           list.push({ name: ev.name, payload: ev.payload, order: rec.i, consumed: false });
           index.signalsByName.set(ev.name, list);
+          break;
+        }
+        case "patch.merged": {
+          index.mergedBaseTrees.add(ev.baseTree);
           break;
         }
         default:
