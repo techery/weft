@@ -129,6 +129,45 @@ export async function treeHash(cwd: string): Promise<string> {
   }
 }
 
+/**
+ * Materialize the CURRENT integration state — tracked and untracked, including
+ * changes an earlier ctx.integrate() left uncommitted — as a dangling commit,
+ * without touching HEAD, the real index, or the working tree. Write-step
+ * worktrees seed from it (so later agents build on earlier integrations), and
+ * conflict rollbacks restore from it (so a user's pre-existing untracked file is
+ * restored, never deleted as if the patch had created it). Returns HEAD when the
+ * tree is already identical to it.
+ */
+export async function integrationBaseCommit(cwd: string): Promise<string> {
+  const indexFile = join(tmpdir(), `weft-index-${randomUUID()}`);
+  const env = {
+    ...process.env,
+    GIT_INDEX_FILE: indexFile,
+    GIT_AUTHOR_NAME: "weft-engine",
+    GIT_AUTHOR_EMAIL: "engine@weft.invalid",
+    GIT_COMMITTER_NAME: "weft-engine",
+    GIT_COMMITTER_EMAIL: "engine@weft.invalid",
+  };
+  try {
+    await execa("git", ["add", "-A", "."], { cwd, env });
+    const tree = (await execa("git", ["write-tree"], { cwd, env })).stdout.trim();
+    const head = (await execa("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
+    const headTree = (await execa("git", ["rev-parse", "HEAD^{tree}"], { cwd })).stdout.trim();
+    if (tree === headTree) return head;
+    const { stdout } = await execa(
+      "git",
+      ["commit-tree", tree, "-p", head, "-m", "weft integration snapshot"],
+      {
+        cwd,
+        env,
+      },
+    );
+    return stdout.trim();
+  } finally {
+    await nodeFs.rm(indexFile, { force: true }).catch(() => undefined);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // buildCtx
 // ---------------------------------------------------------------------------
@@ -251,7 +290,14 @@ export function buildCtx(rt: RunRuntime): Ctx {
           let worktree: { path: string; base: string } | undefined;
           if (useWorktree) {
             const dir = join(tmpdir(), "weft-worktrees", rt.runId, `${io.seq}`);
-            worktree = await addWorktree({ repoRoot: rt.cwd, dir });
+            // Seed from the CURRENT integration state, not HEAD: patches merged by
+            // an earlier ctx.integrate() are uncommitted in the tree, and a later
+            // write agent must build on them.
+            worktree = await addWorktree({
+              repoRoot: rt.cwd,
+              dir,
+              baseRef: await integrationBaseCommit(rt.cwd),
+            });
             workCwd = worktree.path;
           }
           try {
@@ -1245,7 +1291,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
           },
           execute: async () => {
             const baseTree = await treeHash(rt.cwd);
-            const { ref: snapRef } = await gitHandle.snapshot();
+            // Rollback snapshot must include untracked files (stash-create cannot):
+            // a user's pre-existing untracked file that a patch collides with is
+            // restored on skip/abort, never deleted as patch-created.
+            const snapRef = await integrationBaseCommit(rt.cwd);
             const patchText = await rt.host.blobs.getText(patch.ref);
             const applied = await applyPatchToTree({ repoRoot: rt.cwd, patch: patchText });
             if (applied.ok) {

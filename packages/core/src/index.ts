@@ -26,7 +26,7 @@ export {
   priceFor,
   resolveConfig,
 } from "./config.ts";
-export { treeHash } from "./ctx.ts";
+export { integrationBaseCommit, treeHash } from "./ctx.ts";
 export type {
   EngineOptions,
   ResumeOptions,

@@ -327,3 +327,107 @@ describe("review regressions: semantics", () => {
     expect(Date.now() - started).toBeGreaterThan(400);
   });
 });
+
+describe("codex review findings (PR #1)", () => {
+  test("a later write agent's worktree sees patches an earlier integrate left uncommitted", async () => {
+    const FixResult = z.object({ summary: z.string() });
+    const t = testEngine();
+    t.builder.on(
+      { key: "fix:first" },
+      { summary: "v2" },
+      { writes: { "config.ts": "export const version = 2;\n" } },
+    );
+    // the second agent READS the file from its worktree and derives its edit from it
+    t.builder.on({ key: "fix:second" }, async (req) => {
+      const { readFile: rf, writeFile: wf } = await import("node:fs/promises");
+      const { join: j } = await import("node:path");
+      const seen = await rf(j(req.cwd, "config.ts"), "utf8");
+      await wf(j(req.cwd, "notes.md"), `saw: ${seen.trim()}\n`);
+      return { summary: `built on: ${seen.trim()}` };
+    });
+    const cwd = await tempRepo({ "config.ts": "export const version = 1;\n" });
+    const def = defineWorkflow(
+      { name: "rounds", description: "r", input: z.object({}), output: z.object({ second: z.string() }) },
+      async (ctx) => {
+        const first = await ctx.agent.detailed("bump", {
+          schema: FixResult,
+          key: "fix:first",
+          write: { paths: ["config.ts"] },
+        });
+        await ctx.integrate([first]);
+        // the tree now holds version 2, UNCOMMITTED — round two must build on it
+        const second = await ctx.agent.detailed("annotate", {
+          schema: FixResult,
+          key: "fix:second",
+          write: { paths: ["notes.md"] },
+        });
+        await ctx.integrate([second]);
+        return { second: second.value.summary };
+      },
+    );
+    const handle = await t.engine.start(def, { input: {}, cwd });
+    expect(await handle.result).toEqual({ second: "built on: export const version = 2;" });
+    const { readFile: rf } = await import("node:fs/promises");
+    const { join: j } = await import("node:path");
+    expect(await rf(j(cwd, "notes.md"), "utf8")).toBe("saw: export const version = 2;\n");
+  });
+
+  test("conflict rollback restores an untracked file instead of deleting it", async () => {
+    const FixResult = z.object({ summary: z.string() });
+    const t = testEngine();
+    t.builder.on(
+      { key: "fix:notes" },
+      { summary: "rewrote notes" },
+      { writes: { "NOTES.md": "the agent's notes\n" } },
+    );
+    const cwd = await tempRepo({ "code.ts": "x\n" });
+    // the user's own UNTRACKED file, present before the run
+    const { writeFile: wf, readFile: rf } = await import("node:fs/promises");
+    const { join: j } = await import("node:path");
+    await wf(j(cwd, "NOTES.md"), "v1 user notes\n");
+    const def = defineWorkflow(
+      { name: "collide", description: "c", input: z.object({}), output: z.object({ failed: z.boolean() }) },
+      async (ctx) => {
+        const fix = await ctx.agent.detailed("rewrite notes", {
+          schema: FixResult,
+          key: "fix:notes",
+          write: { paths: ["NOTES.md"] },
+        });
+        // the integration tree moves on AFTER capture: the patch's context (v1) no
+        // longer matches, so integrate must conflict and roll back to THIS state
+        await ctx.bash("printf 'v2 user notes\\n' > NOTES.md");
+        try {
+          await ctx.integrate([fix], { onConflict: "fail" });
+          return { failed: false };
+        } catch (err) {
+          if ((err as { code?: string }).code === "conflict") {
+            await ctx.discard([fix]);
+            return { failed: true };
+          }
+          throw err;
+        }
+      },
+    );
+    const handle = await t.engine.start(def, { input: {}, cwd });
+    expect(await handle.result).toEqual({ failed: true });
+    // the untracked file survived the rollback at its pre-integrate content —
+    // the old stash-create snapshot could not represent it and DELETED it here
+    expect(await rf(j(cwd, "NOTES.md"), "utf8")).toBe("v2 user notes\n");
+  });
+
+  test("a signal sent before the waiter registers is buffered, not lost", async () => {
+    const t = testEngine();
+    const def = defineWorkflow(
+      { name: "early-signal", description: "e", input: z.object({}), output: z.object({ sha: z.string() }) },
+      async (ctx) => {
+        await ctx.sleep(300); // busy in an earlier step while the webhook arrives
+        const payload = await ctx.signal("ci-done", z.object({ sha: z.string() }));
+        return { sha: payload.sha };
+      },
+    );
+    const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    await new Promise((r) => setTimeout(r, 60)); // mid-sleep: no waiter registered yet
+    await t.engine.signal(handle.runId, "ci-done", { sha: "abc123" });
+    expect(await handle.result).toEqual({ sha: "abc123" });
+  });
+});

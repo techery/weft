@@ -871,10 +871,18 @@ export class RunRuntime {
   // -- signals --------------------------------------------------------------
 
   private signalWaiters = new Map<string, Array<{ fire: (payload: unknown) => void; dispose: () => void }>>();
+  /** Signals delivered while the run was busy in earlier steps, before a waiter registered. */
+  private bufferedSignals = new Map<string, unknown[]>();
 
   takeOrAwaitSignal(name: string, io: StepIO): Promise<unknown> {
     const journaled = this.replay?.takeSignal(name);
     if (journaled) return Promise.resolve(structuredClone(journaled.payload));
+    const buffered = this.bufferedSignals.get(name);
+    if (buffered && buffered.length > 0) {
+      const payload = buffered.shift();
+      if (buffered.length === 0) this.bufferedSignals.delete(name);
+      return Promise.resolve(structuredClone(payload));
+    }
     io.markWaiting();
     this.setStatus("waiting_for_signal");
     return new Promise<unknown>((resolve, reject) => {
@@ -913,7 +921,14 @@ export class RunRuntime {
   deliverSignal(name: string, payload: unknown): boolean {
     const list = this.signalWaiters.get(name);
     const next = list?.shift();
-    if (!next) return false;
+    if (!next) {
+      // No waiter yet (the run is busy in earlier steps): buffer for the wait that
+      // arrives later — the launch-time replay index cannot see this record.
+      const buffered = this.bufferedSignals.get(name) ?? [];
+      buffered.push(payload);
+      this.bufferedSignals.set(name, buffered);
+      return false;
+    }
     if (list && list.length === 0) this.signalWaiters.delete(name);
     if (this.signalWaiters.size === 0 && this.status === "waiting_for_signal") this.setStatus("executing");
     next.fire(payload);
