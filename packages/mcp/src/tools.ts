@@ -69,9 +69,11 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
           .optional()
           .describe("Inline TypeScript exporting `default defineWorkflow({…}, run)`."),
         input: z
-          .record(z.string(), z.unknown())
+          .unknown()
           .optional()
-          .describe("Input object; validated against the workflow's input schema before the run starts."),
+          .describe(
+            "Any JSON value (object, array, string, number, null); validated against the workflow's input schema before the run starts.",
+          ),
         budget: z.string().optional().describe('Ceiling for the run: "500k" tokens, "$5", or "500k,$5".'),
         reuse: REUSE.optional().describe(
           '"content" (default) reuses a journaled step only when its inputs are byte-identical; ' +
@@ -258,7 +260,7 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
 interface RunArgs {
   workflow?: string;
   source?: string;
-  input?: Record<string, unknown>;
+  input?: unknown;
   budget?: string;
   reuse?: "content" | "key";
 }
@@ -273,7 +275,9 @@ async function startRun(weft: Weft, runs: RunStore, args: RunArgs): Promise<Trac
   const resolved = inline ?? (await resolveWorkflow(weft, args.workflow ?? ""));
 
   const handle = await weft.engine.start(resolved.def, {
-    input: args.input ?? {},
+    // Pass through verbatim: null, arrays, and scalars are valid inputs, and the
+    // engine defaults only an actually OMITTED input.
+    input: args.input,
     cwd: weft.cwd,
     ...(resolved.hash !== undefined ? { defHash: resolved.hash } : {}),
     ...(args.budget !== undefined ? { budget: parseBudget(args.budget) } : {}),

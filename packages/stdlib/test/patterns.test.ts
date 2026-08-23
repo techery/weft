@@ -285,6 +285,54 @@ describe("loopUntilDry", () => {
     expect(logs(records).join("\n")).toContain("2 dry round(s) in a row");
   });
 
+  test("non-finite round counts fall back to the finite defaults", async () => {
+    const h = harness();
+    // Every round finds something NEW: only the hard ceiling can stop the loops.
+    // Round 11 has NO fixture, so a loop exceeding the default cap fails the run.
+    for (let round = 1; round <= 10; round++) {
+      h.builder.on({ key: `nan:${round}` }, { items: [{ id: `n-${round}` }] });
+      h.builder.on({ key: `inf:${round}` }, { items: [{ id: `i-${round}` }] });
+    }
+    const def = defineWorkflow(
+      {
+        description: "runaway sweep",
+        input: z.object({}),
+        output: z.object({ nanRounds: z.number(), infRounds: z.number() }),
+      },
+      async (ctx) => {
+        const mkFind = (prefix: string, counter: { n: number }) => async (round: number) => {
+          counter.n = round;
+          const out = await ctx.agent(`${prefix} round ${round}: find leftovers`, {
+            schema: z.object({ items: z.array(Item) }),
+            key: `${prefix}:${round}`,
+          });
+          return out.items;
+        };
+        // NaN must not mean ZERO rounds…
+        const nan = { n: 0 };
+        await loopUntilDry(ctx, {
+          find: mkFind("nan", nan),
+          keyOf: (item) => item.id,
+          maxRounds: Number.NaN,
+          dryRounds: 1,
+        });
+        // …and Infinity must not remove the hard ceiling on paid rounds.
+        const inf = { n: 0 };
+        await loopUntilDry(ctx, {
+          find: mkFind("inf", inf),
+          keyOf: (item) => item.id,
+          maxRounds: Number.POSITIVE_INFINITY,
+          dryRounds: 1,
+        });
+        return { nanRounds: nan.n, infRounds: inf.n };
+      },
+    );
+    const { output } = await runWorkflow(h, def, {});
+    // Both fall back to DEFAULT_MAX_ROUNDS (10) — real rounds, finite ceiling.
+    expect(output.nanRounds).toBe(10);
+    expect(output.infRounds).toBe(10);
+  });
+
   test("a single dry round does not end a loop whose streak was broken", async () => {
     const h = harness();
     h.builder.on({ key: "find:1" }, { items: [{ id: "a" }] });

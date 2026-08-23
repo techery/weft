@@ -131,7 +131,7 @@ async function json<T>(s: Session, name: string, args: Record<string, unknown> =
 
 type WaitReply = {
   status?: string;
-  output?: { greeting?: string; at?: number; approved?: boolean; note?: string };
+  output?: { greeting?: string; at?: number; approved?: boolean; note?: string; isNull?: boolean };
   error?: { code?: string; message?: string };
   awaiting?: { id: string; kind: string; question: string; detail?: string; schema: Record<string, unknown> };
 };
@@ -170,6 +170,21 @@ describe("the weft MCP server", () => {
     const { report } = await json<{ report: string }>(s, "weft_report", { runId: started.runId });
     expect(report).toContain("hello");
     expect(report).toContain("complete");
+  });
+
+  it("accepts any JSON input — an explicit null reaches the workflow as itself", async () => {
+    const NULLIN = `import { defineWorkflow, z } from "@weft/sdk";
+export default defineWorkflow(
+  { description: "null input", input: z.null(), output: z.object({ isNull: z.boolean() }) },
+  async (_ctx, input) => ({ isNull: input === null }),
+);
+`;
+    const s = await session();
+    // The tool schema must not reject what the workflow's own schema accepts.
+    const started = await json<{ runId: string }>(s, "weft_run", { source: NULLIN, input: null });
+    const done = await json<WaitReply>(s, "weft_wait", { runId: started.runId, timeout: "10s" });
+    expect(done.status).toBe("complete");
+    expect(done.output?.isNull).toBe(true);
   });
 
   it("carries a pending approval out to the session and back in through weft_answer", async () => {

@@ -5,6 +5,7 @@
  * "the last round felt quiet".
  */
 import type { Ctx } from "@weft/sdk";
+import { positiveInt } from "./internal.ts";
 
 /** Consecutive empty rounds that end the loop. */
 export const DEFAULT_DRY_ROUNDS = 2;
@@ -33,8 +34,10 @@ export interface LoopUntilDryOptions<T> {
  * ```
  */
 export async function loopUntilDry<T>(ctx: Ctx, opts: LoopUntilDryOptions<T>): Promise<T[]> {
-  const dryRounds = Math.max(1, Math.trunc(opts.dryRounds ?? DEFAULT_DRY_ROUNDS));
-  const maxRounds = Math.max(1, Math.trunc(opts.maxRounds ?? DEFAULT_MAX_ROUNDS));
+  // Finite-positive like every other stdlib count: NaN would run ZERO rounds and
+  // Infinity would remove the hard ceiling on paid rounds entirely.
+  const dryRounds = positiveInt(opts.dryRounds, DEFAULT_DRY_ROUNDS);
+  const maxRounds = positiveInt(opts.maxRounds, DEFAULT_MAX_ROUNDS);
 
   const seen = new Set<string>();
   const collected: T[] = [];
