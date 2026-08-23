@@ -160,6 +160,13 @@ export class ReplayIndex {
           if (entry) entry.answer = { answer: ev.answer, answeredBy: ev.answeredBy, order: rec.i };
           break;
         }
+        case "human.rejected": {
+          // The owner refused this answer against the real schema: the request is open
+          // again, and only a later replacement answer (if any) counts.
+          const entry = index.humansById.get(ev.id);
+          if (entry) delete entry.answer;
+          break;
+        }
         case "signal.received": {
           const list = index.signalsByName.get(ev.name) ?? [];
           list.push({ name: ev.name, payload: ev.payload, order: rec.i, consumed: false });

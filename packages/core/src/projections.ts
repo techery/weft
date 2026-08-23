@@ -230,6 +230,15 @@ export function reduceState(records: JournalRecord[]): RunState {
         human.answeredBy = ev.answeredBy;
         break;
       }
+      case "human.rejected": {
+        // The answer failed the authoritative schema: the request is pending again.
+        const human = humansById.get(ev.id);
+        if (!human) break;
+        human.status = "pending";
+        delete human.answer;
+        delete human.answeredBy;
+        break;
+      }
       case "note":
         state.notes.push({
           kind: ev.kind,

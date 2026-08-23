@@ -137,11 +137,60 @@ export function structuralCheck(schemaJson: unknown, value: unknown, path = ""):
         issues.push(...structuralCheck(sub, (value as Record<string, unknown>)[k], joinPath(path, k)));
       }
     }
+    if (s.additionalProperties === false) {
+      for (const k of Object.keys(value as Record<string, unknown>)) {
+        if (!(k in props)) issues.push({ path: joinPath(path, k), message: "unexpected property" });
+      }
+    }
   }
   if (type === "array" && Array.isArray(value) && s.items) {
     value.forEach((item, i) => {
       issues.push(...structuralCheck(s.items, item, joinPath(path, String(i))));
     });
+  }
+  issues.push(...constraintCheck(s, value, path));
+  return issues;
+}
+
+/**
+ * The constraint keywords the wire schema can carry (what zod's JSON Schema output
+ * emits). A host validating an answer without the real schema must enforce these, or
+ * a journaled answer the authoritative validation later refuses poisons the run.
+ * `format` and refinements are NOT representable here — the owning runtime's real
+ * schema stays authoritative, and a rejected answer re-opens the request.
+ */
+function constraintCheck(s: Record<string, unknown>, value: unknown, path: string): SchemaIssue[] {
+  const issues: SchemaIssue[] = [];
+  const push = (message: string) => issues.push({ path, message });
+  if ("const" in s && !deepEqual(s.const, value)) push(`expected ${JSON.stringify(s.const)}`);
+  if (typeof value === "string") {
+    if (typeof s.minLength === "number" && value.length < s.minLength)
+      push(`expected at least ${s.minLength} character(s)`);
+    if (typeof s.maxLength === "number" && value.length > s.maxLength)
+      push(`expected at most ${s.maxLength} character(s)`);
+    if (typeof s.pattern === "string") {
+      try {
+        if (!new RegExp(s.pattern).test(value)) push(`does not match pattern ${s.pattern}`);
+      } catch {
+        // an unparseable pattern is the schema's problem, not the answer's
+      }
+    }
+  }
+  if (typeof value === "number") {
+    if (typeof s.minimum === "number" && value < s.minimum) push(`expected >= ${s.minimum}`);
+    if (typeof s.maximum === "number" && value > s.maximum) push(`expected <= ${s.maximum}`);
+    if (typeof s.exclusiveMinimum === "number" && value <= s.exclusiveMinimum)
+      push(`expected > ${s.exclusiveMinimum}`);
+    if (typeof s.exclusiveMaximum === "number" && value >= s.exclusiveMaximum)
+      push(`expected < ${s.exclusiveMaximum}`);
+    if (typeof s.multipleOf === "number" && s.multipleOf > 0 && value % s.multipleOf !== 0)
+      push(`expected a multiple of ${s.multipleOf}`);
+  }
+  if (Array.isArray(value)) {
+    if (typeof s.minItems === "number" && value.length < s.minItems)
+      push(`expected at least ${s.minItems} item(s)`);
+    if (typeof s.maxItems === "number" && value.length > s.maxItems)
+      push(`expected at most ${s.maxItems} item(s)`);
   }
   return issues;
 }

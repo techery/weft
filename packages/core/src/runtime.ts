@@ -211,6 +211,13 @@ export class RunRuntime {
   readonly patches = new Map<string, PatchState>();
   readonly requiredCheckFailures: string[] = [];
   readonly pendingWaits = new Map<string, PendingWait>();
+  /** Tailer-fed answers that arrived before their waiter registered (mirror of bufferedSignals). */
+  private readonly bufferedAnswers = new Map<
+    string,
+    { answer: unknown; answeredBy: HumanOutcome["answeredBy"] }
+  >();
+  /** Ids whose answer this process already delivered — makes tailer echoes no-ops. */
+  private readonly answeredIds = new Set<string>();
   waitingSteps = 0;
   readonly dry: boolean;
   hitCount = 0;
@@ -621,12 +628,18 @@ export class RunRuntime {
       if (entry.answer) {
         this.hitCount++;
         await this.delivery.deliver(entry.answer.order);
-        return this.settleAnswer(
-          entry.request,
-          spec.realSchema,
-          { answer: structuredClone(entry.answer.answer), answeredBy: entry.answer.answeredBy },
-          spec.wrapped ?? false,
-        );
+        this.answeredIds.add(entry.id);
+        try {
+          return await this.settleAnswer(
+            entry.request,
+            spec.realSchema,
+            { answer: structuredClone(entry.answer.answer), answeredBy: entry.answer.answeredBy },
+            spec.wrapped ?? false,
+          );
+        } catch (err) {
+          if (!(await this.rejectInvalidAnswer(entry.request, err, entry.answer.answeredBy))) throw err;
+          // rejected: fall through — the request re-surfaces and waits for a replacement
+        }
       }
       // Unanswered request re-surfaces with the same id — never duplicated.
       if (this.dry) {
@@ -673,6 +686,7 @@ export class RunRuntime {
 
     if (spec.auto) {
       const answer = { approved: true };
+      this.answeredIds.add(id); // the tailer will echo this append; never buffer it
       await this.append([request, { type: "human.answered", id, answer, answeredBy: "policy" }]);
       return { answer, answeredBy: "policy" };
     }
@@ -686,6 +700,46 @@ export class RunRuntime {
     realSchema: AnySchema | undefined,
     wrapped: boolean,
   ): Promise<HumanOutcome> {
+    // A step blocked on a human is a durable wait, not live work: without this, a
+    // conflict ask inside ctx.integrate (or an in-agent ask) would keep the run
+    // from ever reporting idle to its host.
+    const inStep = this.parentSeq() !== undefined;
+    if (inStep) {
+      this.inflightLive--;
+      this.waitingSteps++;
+    }
+    try {
+      // Loops on rejection: an answer that fails the authoritative schema re-opens
+      // the request instead of failing the run (the journal already says "answered",
+      // so failing here would leave a run nobody could ever answer again).
+      for (;;) {
+        const outcome = await this.nextAnswer(request, realSchema, wrapped);
+        try {
+          return await this.settleAnswer(request, realSchema, outcome, wrapped);
+        } catch (err) {
+          if (!(await this.rejectInvalidAnswer(request, err, outcome.answeredBy))) throw err;
+        }
+      }
+    } finally {
+      if (inStep) {
+        this.inflightLive++;
+        this.waitingSteps--;
+      }
+    }
+  }
+
+  /** One answer for the request: a buffered early delivery if the tailer beat the waiter here, else a fresh wait. */
+  private nextAnswer(
+    request: HumanRequestEvent,
+    realSchema: AnySchema | undefined,
+    wrapped: boolean,
+  ): Promise<HumanOutcome> {
+    const buffered = this.bufferedAnswers.get(request.id);
+    if (buffered) {
+      this.bufferedAnswers.delete(request.id);
+      this.answeredIds.add(request.id);
+      return Promise.resolve(buffered);
+    }
     this.setStatus("waiting_for_human");
     this.host.registerPending(this, {
       runId: this.runId,
@@ -699,44 +753,45 @@ export class RunRuntime {
       ...(request.deadline !== undefined ? { deadline: request.deadline } : {}),
       ...(request.confirmToken !== undefined ? { confirmToken: request.confirmToken } : {}),
     });
-
-    // A step blocked on a human is a durable wait, not live work: without this, a
-    // conflict ask inside ctx.integrate (or an in-agent ask) would keep the run
-    // from ever reporting idle to its host.
-    const inStep = this.parentSeq() !== undefined;
-    if (inStep) {
-      this.inflightLive--;
-      this.waitingSteps++;
-    }
-    try {
-      const outcome = await new Promise<HumanOutcome>((resolve, reject) => {
-        const wait: PendingWait = {
-          request,
-          resolve,
-          reject,
-          wrapped,
-          ...(realSchema !== undefined ? { realSchema } : {}),
-        };
-        this.pendingWaits.set(request.id, wait);
-        if (request.deadline !== undefined) {
-          const remaining = request.deadline - this.host.clock();
-          if (remaining <= 0) {
-            void this.applyHumanTimeout(request.id);
-          } else {
-            // ref'd on purpose: a one-shot process whose only pending work is this
-            // deadline must stay alive to apply the timeout policy (cleared on answer)
-            wait.timer = setTimeout(() => void this.applyHumanTimeout(request.id), remaining);
-          }
+    return new Promise<HumanOutcome>((resolve, reject) => {
+      const wait: PendingWait = {
+        request,
+        resolve,
+        reject,
+        wrapped,
+        ...(realSchema !== undefined ? { realSchema } : {}),
+      };
+      this.pendingWaits.set(request.id, wait);
+      if (request.deadline !== undefined) {
+        const remaining = request.deadline - this.host.clock();
+        if (remaining <= 0) {
+          void this.applyHumanTimeout(request.id);
+        } else {
+          // ref'd on purpose: a one-shot process whose only pending work is this
+          // deadline must stay alive to apply the timeout policy (cleared on answer)
+          wait.timer = setTimeout(() => void this.applyHumanTimeout(request.id), remaining);
         }
-        queueMicrotask(() => this.checkIdle());
-      });
-      return await this.settleAnswer(request, realSchema, outcome, wrapped);
-    } finally {
-      if (inStep) {
-        this.inflightLive++;
-        this.waitingSteps--;
       }
-    }
+      queueMicrotask(() => this.checkIdle());
+    });
+  }
+
+  /**
+   * A journaled answer failed the step's authoritative schema. Only a human's answer
+   * appended by a process without the real schema can get here (owner-validated and
+   * policy/timeout answers are checked before they are journaled): reject it on the
+   * record so the request re-opens and a replacement can be appended.
+   */
+  private async rejectInvalidAnswer(
+    request: HumanRequestEvent,
+    err: unknown,
+    answeredBy: HumanOutcome["answeredBy"],
+  ): Promise<boolean> {
+    if (!(err instanceof StepError) || err.code !== "invalid_answer" || answeredBy !== "human") return false;
+    this.answeredIds.delete(request.id);
+    await this.append([{ type: "human.rejected", id: request.id, reason: err.message }]);
+    this.log(`rejected the answer to ${request.id} (failed the step's schema); waiting for a replacement`);
+    return true;
   }
 
   private async settleAnswer(
@@ -779,8 +834,22 @@ export class RunRuntime {
     if (wait.timer) clearTimeout(wait.timer);
     this.host.resolvePending(this, id);
     if (this.pendingWaits.size === 0 && this.status === "waiting_for_human") this.setStatus("executing");
+    this.answeredIds.add(id);
     wait.resolve({ answer, answeredBy });
     return true;
+  }
+
+  /**
+   * Tailer-fed delivery: resolve the waiting step if it is registered, else buffer the
+   * answer until its waiter registers — a resume reads the journal before launching, so
+   * an answer appended in between is invisible to the replay index and this delivery is
+   * its only path in. Echoes of answers already delivered here are dropped.
+   */
+  deliverAnswer(id: string, answer: unknown, answeredBy: HumanOutcome["answeredBy"]): boolean {
+    if (this.resolveAnswer(id, answer, answeredBy)) return true;
+    if (this.answeredIds.has(id)) return false;
+    this.bufferedAnswers.set(id, { answer, answeredBy });
+    return false;
   }
 
   pendingWait(

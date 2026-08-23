@@ -68,6 +68,17 @@ export interface HumanAnsweredEvent {
   channel?: string;
 }
 
+/**
+ * The owning runtime refused a journaled answer: it passed the wire-schema check some
+ * other process ran, but failed the step's authoritative schema. The request is waiting
+ * again, and a replacement answer for the same id may follow.
+ */
+export interface HumanRejectedEvent {
+  type: "human.rejected";
+  id: string;
+  reason: string;
+}
+
 export type JournalEvent =
   // run lifecycle
   | {
@@ -116,6 +127,7 @@ export type JournalEvent =
   // humans & external
   | HumanRequestEvent
   | HumanAnsweredEvent
+  | HumanRejectedEvent
   | { type: "signal.received"; name: string; payload: unknown }
   | { type: "timer.fired"; seq: number; deadline: number }
   // patches

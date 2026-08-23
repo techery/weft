@@ -319,6 +319,33 @@ describe("the event stream", () => {
     expect(done).toBe(true);
     await reader.cancel();
   });
+
+  it("resumes from ?from= instead of replaying the whole journal", async () => {
+    const h = await open(await repo());
+    const runId = await seed(h);
+
+    const client = new AbortController();
+    const res = await h.app.request(`/api/runs/${runId}/events?from=2`, { signal: client.signal });
+    expect(res.status).toBe(200);
+
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error("the event stream has no body");
+    const decoder = new TextDecoder();
+    let buffered = "";
+    while (!buffered.includes("\n\n")) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffered += decoder.decode(chunk.value, { stream: true });
+    }
+    // The reconnect cursor holds: nothing below index 2 is replayed.
+    const first = buffered.split("\n").find((text) => text.startsWith("data: "));
+    expect(first, buffered).toBeTruthy();
+    const record = JSON.parse((first ?? "").slice("data: ".length)) as JournalRecord;
+    expect(record.i).toBe(2);
+
+    client.abort();
+    await reader.cancel().catch(() => undefined);
+  });
 });
 
 describe("the web UI", () => {

@@ -106,6 +106,14 @@ export function buildJournalView(records: JournalRecord[]): JournalView {
         view.output = ev.answer;
         break;
       }
+      case "human.rejected": {
+        // The answer failed the authoritative schema: the request is waiting again.
+        const view = humansById.get(ev.id);
+        if (!view) break;
+        view.status = "running";
+        delete view.output;
+        break;
+      }
       default:
         break;
     }

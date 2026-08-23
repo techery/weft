@@ -371,7 +371,7 @@ export class Engine implements EngineHost {
       for await (const rec of this.journal.watch(active.runtime.runId, { fromIndex, signal })) {
         const ev = rec.ev;
         if (ev.type === "human.answered") {
-          active.runtime.resolveAnswer(ev.id, structuredClone(ev.answer), ev.answeredBy);
+          active.runtime.deliverAnswer(ev.id, structuredClone(ev.answer), ev.answeredBy);
         } else if (ev.type === "signal.received") {
           active.runtime.deliverSignal(ev.name, structuredClone(ev.payload));
         } else if (ev.type === "run.cancelled") {
@@ -551,8 +551,14 @@ export class Engine implements EngineHost {
     if (records.length === 0) throw new Error(`run ${runId} not found`);
     const request = records.find((r) => r.ev.type === "human.requested" && r.ev.id === requestId)?.ev;
     if (request?.type !== "human.requested") throw new Error(`run ${runId}: no request ${requestId}`);
-    const answered = records.some((r) => r.ev.type === "human.answered" && r.ev.id === requestId);
-    if (answered) throw new Error(`run ${runId}: request ${requestId} is already answered`);
+    // An answer stands unless the owner journaled a rejection after it — then the
+    // request is open again and a replacement is expected.
+    let standing = false;
+    for (const r of records) {
+      if (r.ev.type === "human.answered" && r.ev.id === requestId) standing = true;
+      else if (r.ev.type === "human.rejected" && r.ev.id === requestId) standing = false;
+    }
+    if (standing) throw new Error(`run ${runId}: request ${requestId} is already answered`);
     const issues = structuralCheck(request.schema, answer);
     if (issues.length > 0) {
       throw new StepError(

@@ -159,6 +159,36 @@ describe("structuralCheck", () => {
     expect(structuralCheck(s, "x")).toEqual([]);
     expect(structuralCheck(s, true)).toHaveLength(1);
   });
+
+  test("enforces the constraint keywords the wire schema carries", () => {
+    const min = { type: "string", minLength: 3 };
+    expect(structuralCheck(min, "ab")).toHaveLength(1);
+    expect(structuralCheck(min, "abc")).toEqual([]);
+    expect(structuralCheck({ type: "string", maxLength: 2 }, "abc")).toHaveLength(1);
+    expect(structuralCheck({ type: "string", pattern: "^a+$" }, "bbb")).toHaveLength(1);
+    expect(structuralCheck({ type: "string", pattern: "^a+$" }, "aaa")).toEqual([]);
+    expect(structuralCheck({ type: "number", minimum: 5 }, 4)).toHaveLength(1);
+    expect(structuralCheck({ type: "number", maximum: 5 }, 6)).toHaveLength(1);
+    expect(structuralCheck({ type: "number", exclusiveMinimum: 5 }, 5)).toHaveLength(1);
+    expect(structuralCheck({ type: "number", exclusiveMaximum: 5 }, 5)).toHaveLength(1);
+    expect(structuralCheck({ type: "number", multipleOf: 2 }, 3)).toHaveLength(1);
+    expect(structuralCheck({ type: "array", minItems: 1 }, [])).toHaveLength(1);
+    expect(structuralCheck({ type: "array", maxItems: 1 }, [1, 2])).toHaveLength(1);
+    expect(structuralCheck({ const: "yes" }, "no")).toHaveLength(1);
+    expect(structuralCheck({ const: "yes" }, "yes")).toEqual([]);
+    const strict = { type: "object", properties: { a: { type: "number" } }, additionalProperties: false };
+    expect(structuralCheck(strict, { a: 1, extra: true })).toHaveLength(1);
+    expect(structuralCheck(strict, { a: 1 })).toEqual([]);
+    // Nested constraints ride along (the { value } wire wrapping for primitives).
+    const wired = {
+      type: "object",
+      properties: { value: { type: "string", minLength: 3 } },
+      required: ["value"],
+      additionalProperties: false,
+    };
+    expect(structuralCheck(wired, { value: "ab" })).toHaveLength(1);
+    expect(structuralCheck(wired, { value: "abc" })).toEqual([]);
+  });
 });
 
 describe("ReplayIndex", () => {

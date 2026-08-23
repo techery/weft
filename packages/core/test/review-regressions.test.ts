@@ -552,4 +552,125 @@ describe("codex review findings, round 3 (PR #1)", () => {
     await t.engine.answer(childId, pending!.id, { approved: true });
     expect(await h.result).toEqual({ ok: true });
   });
+
+  test("a non-owning answer is checked against the wire schema's constraints, not just types", async () => {
+    const def = defineWorkflow(
+      { name: "asky", description: "a", input: z.object({}), output: z.object({ name: z.string() }) },
+      async (ctx) => {
+        const a = await ctx.human.ask({ question: "name?", schema: z.object({ name: z.string().min(3) }) });
+        return { name: a.name };
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+    const id = o1.pending[0]!.id;
+    await t1.engine.cancel(h1.runId); // abandon: the answers below take the non-owning path
+
+    // minLength rides the wire schema; a host without the real schema must still enforce it
+    const t2 = reopen(t1);
+    await expect(t2.engine.answer(h1.runId, id, { name: "ab" })).rejects.toMatchObject({
+      code: "invalid_answer",
+    });
+    await t2.engine.answer(h1.runId, id, { name: "abc" });
+    const h2 = await reopen(t2).engine.resume(h1.runId, { def });
+    expect(await h2.result).toEqual({ name: "abc" });
+  });
+
+  test("an answer that fails the real schema re-opens the request instead of failing the run", async () => {
+    // .refine() is invisible to JSON Schema, so a non-owning host cannot catch this.
+    const magic = z.object({ name: z.string().refine((v) => v === "magic", "must be magic") });
+    const def = defineWorkflow(
+      { name: "refined", description: "r", input: z.object({}), output: z.object({ name: z.string() }) },
+      async (ctx) => {
+        const a = await ctx.human.ask({ question: "say the word", schema: magic });
+        return { name: a.name };
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+    const id = o1.pending[0]!.id;
+    await t1.engine.cancel(h1.runId);
+
+    const t2 = reopen(t1);
+    await t2.engine.answer(h1.runId, id, { name: "wrong" }); // passes the wire schema
+
+    // The resume must reject it on the record and wait again — never fail the run
+    // (the journal says "answered", so a failure here could never be re-answered).
+    const t3 = reopen(t2);
+    const h3 = await t3.engine.resume(h1.runId, { def });
+    const o3 = await h3.outcome();
+    expect(o3.status).toBe("waiting_for_human");
+    const recs = await records(t3.journal, h1.runId);
+    expect(recs.some((r) => r.ev.type === "human.rejected" && r.ev.id === id)).toBe(true);
+    const state = await t3.engine.state(h1.runId);
+    expect(state.humans.find((h) => h.id === id)?.status).toBe("pending");
+
+    // The rejection re-opens the answered-guard: a replacement completes the run.
+    await t3.engine.answer(h1.runId, id, { name: "magic" });
+    expect(await h3.result).toEqual({ name: "magic" });
+  });
+
+  test("a live run rejects a bad remote answer and accepts the replacement", async () => {
+    const magic = z.object({ word: z.string().refine((v) => v === "magic", "must be magic") });
+    const def = defineWorkflow(
+      { name: "live-refined", description: "r", input: z.object({}), output: z.object({ word: z.string() }) },
+      async (ctx) => {
+        const a = await ctx.human.ask({ question: "word?", schema: magic });
+        return { word: a.word };
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+    const id = o1.pending[0]!.id;
+
+    // A second engine (another process) answers with something the refine refuses;
+    // the owning engine's tailer delivers it, rejects it, and keeps waiting.
+    const t2 = reopen(t1);
+    await t2.engine.answer(h1.runId, id, { word: "wrong" });
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const recs = await records(t1.journal, h1.runId);
+      if (recs.some((r) => r.ev.type === "human.rejected" && r.ev.id === id)) break;
+      if (Date.now() > deadline) throw new Error("rejection never journaled");
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect((await h1.outcome()).status).toBe("waiting_for_human");
+
+    await t2.engine.answer(h1.runId, id, { word: "magic" });
+    expect(await h1.result).toEqual({ word: "magic" });
+  });
+
+  test("an answer landing while a resume is mid-replay is buffered, not dropped", async () => {
+    const def = defineWorkflow(
+      { name: "racy", description: "r", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        await ctx.agent("one", { schema: z.object({ ok: z.boolean() }), key: "a1" });
+        await ctx.agent("two", { schema: z.object({ ok: z.boolean() }), key: "a2" });
+        const g = await ctx.human.approve({ action: "ship it" });
+        return { ok: g.approved };
+      },
+    );
+    const t1 = testEngine();
+    t1.builder.on({ key: "*" }, { ok: true });
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+    const id = o1.pending[0]!.id;
+    await t1.engine.cancel(h1.runId);
+
+    // Resume, then answer immediately from ANOTHER engine: the answer lands after the
+    // resume read the journal, so only the owner's tailer can deliver it — usually
+    // before the replayed workflow re-registers the wait. It must be buffered until
+    // the waiter shows up, never dropped.
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    await reopen(t2).engine.answer(h1.runId, id, { approved: true });
+    expect(await h2.result).toEqual({ ok: true });
+  });
 });

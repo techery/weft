@@ -325,7 +325,10 @@ function streamJournal(
 
       void (async () => {
         try {
-          for await (const record of weft.engine.watch(runId, { signal: abort.signal })) {
+          for await (const record of weft.engine.watch(runId, {
+            signal: abort.signal,
+            ...(opts.fromIndex !== undefined ? { fromIndex: opts.fromIndex } : {}),
+          })) {
             if (closed) break;
             send(sseRecord(record));
           }
