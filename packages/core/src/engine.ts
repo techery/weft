@@ -91,6 +91,8 @@ interface ActiveRun {
   /** Cross-process ownership claim (stores that support one); released at terminal state. */
   lease?: RunLease;
   leaseTimer?: NodeJS.Timeout;
+  /** Serializes projection publication so an older reduction never overwrites a newer one. */
+  snapshotChain: Promise<unknown>;
 }
 
 export class Engine implements EngineHost {
@@ -253,6 +255,7 @@ export class Engine implements EngineHost {
       pending: new Map(),
       sinceSnapshot: 0,
       result: undefined as never,
+      snapshotChain: Promise.resolve(),
       ...(lease ? { lease } : {}),
     };
     this.active.set(runtime.runId, active);
@@ -313,12 +316,14 @@ export class Engine implements EngineHost {
       rt.setStatus("executing");
       const ctx = buildCtx(rt);
       const rawOutput = await def.run(ctx, input);
-      try {
-        structuredClone(rawOutput);
-      } catch {
+      // Structured-cloneable is not enough: the journal is JSONL, and a Map quietly
+      // becomes {}, a bigint makes stringify throw — the live handle would then
+      // disagree with state.json and replay, or a green run would fail at append.
+      const rawBad = jsonUnsafeAt(rawOutput);
+      if (rawBad !== undefined) {
         throw new StepError(
           "invalid_output",
-          "workflow result must be structured-cloneable; did you forget to await a step?",
+          `workflow result cannot be journaled as JSON at ${rawBad}; did you forget to await a step?`,
           { step: { kind: "workflow", runId: rt.runId } },
         );
       }
@@ -327,6 +332,15 @@ export class Engine implements EngineHost {
         throw new StepError(
           "invalid_output",
           `output failed the workflow's output schema: ${outputCheck.issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`,
+          { step: { kind: "workflow", runId: rt.runId } },
+        );
+      }
+      // Schema transforms run after the raw check and can re-introduce such values.
+      const checkedBad = jsonUnsafeAt(outputCheck.value);
+      if (checkedBad !== undefined) {
+        throw new StepError(
+          "invalid_output",
+          `workflow output cannot be journaled as JSON at ${checkedBad} (introduced by a schema transform?)`,
           { step: { kind: "workflow", runId: rt.runId } },
         );
       }
@@ -420,14 +434,21 @@ export class Engine implements EngineHost {
     }
   }
 
-  private async snapshot(active: ActiveRun): Promise<void> {
-    // Tailed external records can land out of order relative to in-process appends.
-    const state = reduceState([...active.records].sort((a, b) => a.i - b.i));
-    await this.journal.snapshot(active.runtime.runId, {
-      state,
-      tree: renderTree(state),
-      report: renderReport(state),
+  private snapshot(active: ActiveRun): Promise<void> {
+    // Serialized per run: parallel snapshot writers could publish an OLDER reduction
+    // after a newer one and leave projections stale. Each queued pass re-reduces the
+    // then-current records (index-sorted — tailed external records can land out of
+    // order), so later publications always cover at least what earlier ones did.
+    const next = active.snapshotChain.then(async () => {
+      const state = reduceState([...active.records].sort((a, b) => a.i - b.i));
+      await this.journal.snapshot(active.runtime.runId, {
+        state,
+        tree: renderTree(state),
+        report: renderReport(state),
+      });
     });
+    active.snapshotChain = next.catch(() => undefined);
+    return next;
   }
 
   registerPending(runtime: RunRuntime, request: PendingRequest): void {
@@ -677,6 +698,10 @@ export class Engine implements EngineHost {
     for (const active of actives) {
       if (active.leaseTimer) clearInterval(active.leaseTimer);
       active.tail?.abort();
+      // Human-deadline timers die with the process handover: the next owner re-arms
+      // them from the journal, and a live timer here would keep the process alive
+      // and could answer a run someone else now executes.
+      active.runtime.detach();
       // Releases are owner-checked, so drive()'s own later release stays a no-op
       // and can never evict whoever claims the run after us.
       await active.lease?.release().catch(() => undefined);
@@ -797,4 +822,41 @@ export class Engine implements EngineHost {
       completed,
     };
   }
+}
+
+/**
+ * The first path in a value the JSONL journal cannot faithfully hold, if any.
+ * Undefined OBJECT properties are tolerated (JSON drops them, and schemas treat
+ * absent and undefined alike); undefined array slots become null and are not.
+ */
+function jsonUnsafeAt(value: unknown, path = "$"): string | undefined {
+  if (value === null) return undefined;
+  const kind = typeof value;
+  if (kind === "string" || kind === "boolean") return undefined;
+  if (kind === "number") return Number.isFinite(value as number) ? undefined : `${path} (non-finite number)`;
+  if (kind === "undefined" || kind === "bigint" || kind === "function" || kind === "symbol") {
+    return `${path} (${kind})`;
+  }
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const bad = jsonUnsafeAt(value[i], `${path}[${i}]`);
+      if (bad !== undefined) return bad;
+    }
+    return undefined;
+  }
+  // Realm-tolerant plain-object test: workflow objects are built inside the vm
+  // context, whose Object.prototype is a different identity than the host's — but
+  // any realm's Object.prototype is the one whose own prototype is null.
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== null && Object.getPrototypeOf(proto) !== null) {
+    // Map, Set, Date, Promise, class instances: JSON silently loses or breaks them.
+    const name = (value as object).constructor?.name ?? "object";
+    return `${path} (${name})`;
+  }
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (entry === undefined) continue;
+    const bad = jsonUnsafeAt(entry, `${path}.${key}`);
+    if (bad !== undefined) return bad;
+  }
+  return undefined;
 }

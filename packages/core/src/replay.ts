@@ -175,8 +175,13 @@ export class ReplayIndex {
           break;
         }
         case "human.answered": {
+          // FIRST standing answer wins: two processes racing past the answered-guard
+          // can both append, and the owner delivered the first — replay must agree.
+          // A rejection clears the slot, so a post-rejection replacement still fills.
           const entry = index.humansById.get(ev.id);
-          if (entry) entry.answer = { answer: ev.answer, answeredBy: ev.answeredBy, order: rec.i };
+          if (entry && entry.answer === undefined) {
+            entry.answer = { answer: ev.answer, answeredBy: ev.answeredBy, order: rec.i };
+          }
           break;
         }
         case "human.rejected": {

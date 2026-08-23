@@ -854,3 +854,73 @@ describe("codex review findings, round 4 (PR #1)", () => {
     expect(sawAbort).toBe(true);
   });
 });
+
+describe("codex review findings, round 5 (PR #1)", () => {
+  test("shutdown disarms human deadline timers instead of leaving them to fire", async () => {
+    const def = defineWorkflow(
+      { name: "deadline", description: "d", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const go = await ctx.human.approve({
+          action: "soon?",
+          timeout: "200ms",
+          onTimeout: { default: { approved: false } },
+        });
+        return { ok: go.approved };
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+    await t1.engine.shutdown(); // the CLI exits; the NEXT owner re-arms the deadline
+
+    await new Promise((r) => setTimeout(r, 400));
+    const recs = await records(t1.journal, h1.runId);
+    // The detached process's timer must not answer a run it no longer owns.
+    expect(recs.some((r) => r.ev.type === "human.answered")).toBe(false);
+  });
+
+  test("of two racing answers, everyone uses the FIRST - projections and replay agree", async () => {
+    const def = defineWorkflow(
+      { name: "firstwins", description: "f", input: z.object({}), output: z.object({ note: z.string() }) },
+      async (ctx) => {
+        const go = await ctx.human.approve({ action: "which?" });
+        return { note: go.note ?? "" };
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+    const id = o1.pending[0]!.id;
+    await t1.engine.cancel(h1.runId);
+
+    // Two processes raced past the answered-guard: both appends landed.
+    await t1.journal.append(h1.runId, [
+      { type: "human.answered", id, answer: { approved: true, note: "first" }, answeredBy: "human" },
+    ]);
+    await t1.journal.append(h1.runId, [
+      { type: "human.answered", id, answer: { approved: true, note: "second" }, answeredBy: "human" },
+    ]);
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    expect(await h2.result).toEqual({ note: "first" });
+    const state = await t2.engine.state(h1.runId);
+    expect((state.humans[0]?.answer as { note?: string } | undefined)?.note).toBe("first");
+  });
+
+  test("a workflow output the journal cannot hold fails loudly, not silently", async () => {
+    const def = defineWorkflow(
+      { name: "mapout", description: "m", input: z.object({}), output: z.object({ m: z.any() }) },
+      async () => ({ m: new Map([["k", 1]]) }),
+    );
+    const t = testEngine();
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    // A Map would journal as {} and replay would disagree with the live handle.
+    await expect(h.result).rejects.toMatchObject({
+      code: "invalid_output",
+      message: expect.stringContaining("cannot be journaled as JSON"),
+    });
+  });
+});

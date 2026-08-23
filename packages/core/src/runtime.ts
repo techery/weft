@@ -218,6 +218,8 @@ export class RunRuntime {
   >();
   /** Ids whose answer this process already delivered — makes tailer echoes no-ops. */
   private readonly answeredIds = new Set<string>();
+  /** Set by detach(): the host is exiting and hands the run to whoever resumes it. */
+  private detachedFromHost = false;
   waitingSteps = 0;
   readonly dry: boolean;
   hitCount = 0;
@@ -838,6 +840,22 @@ export class RunRuntime {
     return outcome;
   }
 
+  /**
+   * Stop this runtime's local human-deadline timers WITHOUT journaling anything: the
+   * host is detaching (process exit) and the run's next owner re-arms deadlines from
+   * the journal. Without this, a closed CLI stays alive until the deadline and its
+   * timer could append a timeout answer to a run someone else now owns.
+   */
+  detach(): void {
+    this.detachedFromHost = true;
+    for (const wait of this.pendingWaits.values()) {
+      if (wait.timer) {
+        clearTimeout(wait.timer);
+        wait.timer = undefined;
+      }
+    }
+  }
+
   /** Deliver an answer to an in-process waiting step; the caller already appended the event. */
   resolveAnswer(id: string, answer: unknown, answeredBy: HumanOutcome["answeredBy"]): boolean {
     const wait = this.pendingWaits.get(id);
@@ -877,6 +895,7 @@ export class RunRuntime {
   }
 
   private async applyHumanTimeout(id: string): Promise<void> {
+    if (this.detachedFromHost) return; // the next owner applies deadlines, not us
     const wait = this.pendingWaits.get(id);
     if (!wait) return;
     const { request } = wait;

@@ -406,8 +406,31 @@ export class FsJournalStore implements JournalStore {
       } catch {
         // claims are written atomically, so unreadable means corrupt — treat as stale
       }
-      await writeClaim();
-      if (!(await mine())) return undefined; // lost a simultaneous steal to another process
+      // Exclusive steal: RENAME the expired claim aside (of N contenders exactly one
+      // rename succeeds), verify it really was the expired one, then take the lock
+      // through the same exclusive create everyone else uses — never a last-writer-
+      // wins overwrite that would hand two engines the same run.
+      const aside = `${path}.stale-${token.slice(0, 8)}`;
+      try {
+        await fs.rename(path, aside);
+      } catch {
+        return undefined; // another contender already stole it
+      }
+      try {
+        const grabbed = JSON.parse(await fs.readFile(aside, "utf8")) as { expiresAt?: number };
+        if (typeof grabbed.expiresAt === "number" && grabbed.expiresAt > Date.now()) {
+          await fs.rename(aside, path).catch(() => fs.rm(aside, { force: true }));
+          return undefined; // fresh after all (created inside our read window): hand it back
+        }
+      } catch {
+        // unreadable: stale either way
+      }
+      await fs.rm(aside, { force: true });
+      try {
+        await fs.writeFile(path, claim(), { flag: "wx" });
+      } catch {
+        return undefined; // lost the post-steal create to another contender
+      }
     }
     return {
       refresh: async () => {

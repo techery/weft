@@ -351,6 +351,22 @@ describe("acquireRun", () => {
     await second?.release();
   });
 
+  test("of two contenders for one expired claim, exactly one wins", async () => {
+    const dir = await tempDir();
+    const dead = new FsJournalStore(dir);
+    const short = await dead.acquireRun("run-a", { ttlMs: 10 });
+    expect(short).toBeTruthy();
+    await sleep(30);
+
+    // Both read the same expired claim; the rename-based steal admits only one.
+    const b = new FsJournalStore(dir);
+    const c = new FsJournalStore(dir);
+    const [x, y] = await Promise.all([b.acquireRun("run-a"), c.acquireRun("run-a")]);
+    expect([x, y].filter((lease) => lease !== undefined)).toHaveLength(1);
+    await x?.release();
+    await y?.release();
+  });
+
   test("an expired claim is stolen; the dead owner cannot release the thief's", async () => {
     const dir = await tempDir();
     const dead = new FsJournalStore(dir);

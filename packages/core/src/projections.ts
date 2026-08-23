@@ -238,8 +238,10 @@ export function reduceState(records: JournalRecord[]): RunState {
         break;
       }
       case "human.answered": {
+        // FIRST standing answer wins, matching replay and live delivery — a racing
+        // second append must not make projections disagree with what the run used.
         const human = humansById.get(ev.id);
-        if (!human) break;
+        if (!human || human.status === "answered") break;
         human.status = "answered";
         human.answer = ev.answer;
         human.answeredBy = ev.answeredBy;
