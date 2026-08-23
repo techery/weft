@@ -183,7 +183,10 @@ describe("replay & edit-tolerant resume", () => {
     if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
     await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
     const out1 = (await h1.result) as { values: string[] };
-    expect(out1.values.slice(0, 3)).toEqual(["fast", "mid", "slow"]); // completion order by delay
+    // The original completion order is wall-clock (mock delays under scheduler
+    // contention on slow machines) — the contract is only that replay REPRODUCES
+    // whatever order the journal recorded, asserted below.
+    expect([...out1.values.slice(0, 3)].sort()).toEqual(["fast", "mid", "slow"]);
 
     // Resume from scratch with no fixtures: cached completions must be delivered
     // in the journaled order, so the continuation order reproduces.

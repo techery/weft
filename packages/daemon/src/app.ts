@@ -116,10 +116,14 @@ export function createApp(weft: Weft): Hono {
         throw new Error("answer: requestId is required");
       }
       if (!("answer" in body)) throw new Error("answer: answer is required (use null for an empty answer)");
+      // Decide BEFORE answering: an in-process run may finish (and leave the active
+      // map) the moment the answer resolves its wait — that is delivery, not a
+      // suspended run needing a wake.
+      const heldHere = engine.isActive(runId);
       await engine.answer(runId, requestId, body["answer"], { channel: CHANNEL });
       // Refreshed before the wake, so the runs list never shows the pre-answer status.
       await refreshProjections(weft, runId);
-      return c.json({ ok: true, woke: wakeIfSuspended(weft, runId) });
+      return c.json({ ok: true, woke: heldHere ? false : wakeIfSuspended(weft, runId) });
     } catch (err) {
       return fail(c, err);
     }
@@ -131,9 +135,10 @@ export function createApp(weft: Weft): Hono {
       const body = await jsonBody(c);
       const name = body["name"];
       if (typeof name !== "string" || name === "") throw new Error("signal: name is required");
+      const heldHere = engine.isActive(runId);
       await engine.signal(runId, name, "payload" in body ? body["payload"] : null);
       await refreshProjections(weft, runId);
-      return c.json({ ok: true, woke: wakeIfSuspended(weft, runId) });
+      return c.json({ ok: true, woke: heldHere ? false : wakeIfSuspended(weft, runId) });
     } catch (err) {
       return fail(c, err);
     }
