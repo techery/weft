@@ -22,6 +22,11 @@
     "@types/node": "^26.2.0",
     "typescript": "~5.9.3",
     "vitest": "^4.1.11",
-    "tsx": "^4.23.12"
+    "tsx": "^4.23.12",
+    "@weft/core": "workspace:*",
+    "@weft/provider-mock": "workspace:*",
+    "@weft/sdk": "workspace:*",
+    "@weft/stdlib": "workspace:*",
+    "@weft/testing": "workspace:*"
   }
 }

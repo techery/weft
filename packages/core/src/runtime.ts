@@ -590,7 +590,8 @@ export class RunRuntime {
             stepAbort?.abort();
             reject(new StepError("timeout", `step timed out after ${timeoutMs}ms`, { step: ref }));
           }, timeoutMs);
-          timer.unref?.();
+          // ref'd on purpose: bounded, cleared in finally, and it must be able to
+          // fail the step even when a hung provider holds no handles of its own
         }),
       ]);
     } finally {
@@ -722,8 +723,9 @@ export class RunRuntime {
           if (remaining <= 0) {
             void this.applyHumanTimeout(request.id);
           } else {
+            // ref'd on purpose: a one-shot process whose only pending work is this
+            // deadline must stay alive to apply the timeout policy (cleared on answer)
             wait.timer = setTimeout(() => void this.applyHumanTimeout(request.id), remaining);
-            wait.timer.unref?.();
           }
         }
         queueMicrotask(() => this.checkIdle());
@@ -942,11 +944,12 @@ export class RunRuntime {
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new CancelledError());
+    // ref'd on purpose: a durable ctx.sleep must keep a one-shot process alive
+    // until its deadline (aborting clears it)
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
       resolve();
     }, ms);
-    timer.unref?.();
     const onAbort = () => {
       clearTimeout(timer);
       reject(new CancelledError());

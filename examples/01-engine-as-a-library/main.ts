@@ -1,7 +1,7 @@
 /**
- * inline-audit — Weft as a library, with no CLI, no filesystem, and no models.
+ * Weft as a library, with no CLI, no filesystem, and no models.
  *
- *   npx tsx examples/inline-audit.ts
+ *   npx tsx examples/01-engine-as-a-library/main.ts
  *
  * The engine is just a class: hand it a journal store, a blob store, and a provider
  * registry, and it will run a workflow definition you built in the same process. Here

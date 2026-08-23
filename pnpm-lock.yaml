@@ -14,6 +14,21 @@ importers:
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
+      '@weft/core':
+        specifier: workspace:*
+        version: link:packages/core
+      '@weft/provider-mock':
+        specifier: workspace:*
+        version: link:packages/provider-mock
+      '@weft/sdk':
+        specifier: workspace:*
+        version: link:packages/sdk
+      '@weft/stdlib':
+        specifier: workspace:*
+        version: link:packages/stdlib
+      '@weft/testing':
+        specifier: workspace:*
+        version: link:packages/testing
       tsx:
         specifier: ^4.23.12
         version: 4.23.12

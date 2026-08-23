@@ -63,12 +63,14 @@ pnpm -C packages/cli link --global
 The engine is also usable directly as a library — no CLI, no filesystem, no models:
 
 ```bash
-npx tsx examples/inline-audit.ts
+npx tsx examples/01-engine-as-a-library/main.ts
 ```
 
 That example builds an `Engine` over in-memory stores and the mock provider, runs an inline workflow, and
 prints the `report.md` projection it produced. It is the same assembly the CLI performs, with the fs stores
-and a real vendor adapter swapped in.
+and a real vendor adapter swapped in. Six more runnable tours live alongside it — durable human gates,
+write-step patches and scopes, edit-tolerant resume, sub-workflow budgets, the stdlib patterns, and the
+testing harness. Start at [`examples/README.md`](./examples/README.md).
 
 ## A workflow, annotated
 
@@ -189,11 +191,9 @@ pnpm format           # biome format --write .
 Node 22.12 or newer, pnpm 10, ESM everywhere, TypeScript strict. Relative imports inside a package carry an
 explicit `.ts` extension (`allowImportingTsExtensions`), including in `.weft/workflows/`.
 
-`.weft/workflows/` and `examples/` import workspace packages by name (`@weft/sdk`, `@weft/core`), but the
-workspace root does not depend on them, so neither directory can resolve those specifiers through the root
-`node_modules`. Each therefore keeps a small `node_modules/@weft/*` symlink tree pointing back at
-`packages/`, which is what makes `pnpm typecheck` and `npx tsx examples/…` work. Listing `@weft/sdk` and
-`@weft/core` as root devDependencies would make the shim unnecessary.
+`.weft/workflows/` and `examples/` import workspace packages by name (`@weft/sdk`, `@weft/core`, …). The
+workspace root lists those packages as `workspace:*` devDependencies, so both directories resolve them
+through the root `node_modules` — `pnpm install` once and `npx tsx examples/…` works from a fresh clone.
 
 ## Testing workflows
 
