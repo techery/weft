@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { closeSync, existsSync, promises as fs, fsyncSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import type {
@@ -5,6 +6,7 @@ import type {
   JournalRecord,
   JournalStore,
   Projections,
+  RunLease,
   RunListFilter,
   RunStatus,
   RunSummary,
@@ -234,7 +236,9 @@ export class FsJournalStore implements JournalStore {
     await fs.mkdir(dir, { recursive: true });
     const writes: Array<Promise<void>> = [];
     const writeAtomic = async (file: string, content: string) => {
-      const tmp = join(dir, `.${file}.tmp`);
+      // Unique per write: concurrent snapshots of the same run must not rename
+      // each other's temp file out from under themselves (ENOENT / torn mixes).
+      const tmp = join(dir, `.${file}.${randomUUID().slice(0, 8)}.tmp`);
       await fs.writeFile(tmp, content);
       await fs.rename(tmp, join(dir, file));
     };
@@ -276,6 +280,47 @@ export class FsJournalStore implements JournalStore {
 
   async exists(runId: string): Promise<boolean> {
     return existsSync(this.journalPath(runId));
+  }
+
+  /**
+   * Cross-process ownership: an owner.json claim with a TTL. A live claim refuses a
+   * second owner (a daemon must not wake a run a CLI is executing); a claim whose
+   * owner died expires on its own and can be stolen. Best-effort — a simultaneous
+   * steal race is possible but the loser detects it by re-reading its own claim.
+   */
+  async acquireRun(runId: string, opts: { ttlMs?: number } = {}): Promise<RunLease | undefined> {
+    const ttl = opts.ttlMs ?? 15_000;
+    const path = join(this.runDir(runId), "owner.json");
+    await fs.mkdir(this.runDir(runId), { recursive: true });
+    const token = randomUUID();
+    const claim = () => JSON.stringify({ owner: token, pid: process.pid, expiresAt: Date.now() + ttl });
+    const mine = async (): Promise<boolean> => {
+      try {
+        return (JSON.parse(await fs.readFile(path, "utf8")) as { owner?: string }).owner === token;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      await fs.writeFile(path, claim(), { flag: "wx" });
+    } catch {
+      try {
+        const prev = JSON.parse(await fs.readFile(path, "utf8")) as { expiresAt?: number };
+        if (typeof prev.expiresAt === "number" && prev.expiresAt > Date.now()) return undefined;
+      } catch {
+        // an unreadable claim counts as stale
+      }
+      await fs.writeFile(path, claim());
+      if (!(await mine())) return undefined; // lost a simultaneous steal to another process
+    }
+    return {
+      refresh: async () => {
+        if (await mine()) await fs.writeFile(path, claim());
+      },
+      release: async () => {
+        if (await mine()) await fs.rm(path, { force: true });
+      },
+    };
   }
 
   /** Rebuild a run's projections from its journal (used by `weft doctor`/repair). */

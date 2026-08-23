@@ -574,6 +574,25 @@ describe("sandbox", () => {
     );
   });
 
+  it("blocks the raw constructor reachable through instances", async () => {
+    // new Date(0).constructor and Date.prototype.constructor both land on the
+    // guarded proxy, not the raw callable Date (which would read the clock).
+    const viaInstance = await loadProbe({
+      top: `const D: any = Date;`,
+      body: `const t = new D(0).constructor();`,
+    });
+    await expect(viaInstance.def.run(stubCtx, {})).rejects.toThrow(
+      "Date() is unavailable in workflow code - use ctx.now()",
+    );
+    const viaProto = await loadProbe({
+      top: `const D: any = Date;`,
+      body: `const t = D.prototype.constructor();`,
+    });
+    await expect(viaProto.def.run(stubCtx, {})).rejects.toThrow(
+      "Date() is unavailable in workflow code - use ctx.now()",
+    );
+  });
+
   it("keeps Date.parse and the rest of Math working", async () => {
     const { def } = await loadProbe({
       body: [

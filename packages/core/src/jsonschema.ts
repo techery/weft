@@ -25,14 +25,17 @@ export function toWireSchema(schema: AnySchema): WireSchema {
     try {
       json = z.toJSONSchema(schema as never, { io: "input", reused: "inline" }) as Record<string, unknown>;
     } catch (err) {
-      lints.push(`z.toJSONSchema failed (${(err as Error).message}); using permissive schema`);
-      json = { type: "object", additionalProperties: true };
+      lints.push(`z.toJSONSchema failed (${(err as Error).message}); using permissive wrapper`);
+      return { json: permissiveWrapper(), wrapped: true, lints };
     }
   } else {
+    // The real value can be ANY shape (a valibot string, say) — an object-typed
+    // fallback would refuse legitimate primitive answers before the authoritative
+    // schema ever ran. A wrapped { value } carrier holds anything.
     lints.push(
       `non-zod schema (vendor: ${schema["~standard"].vendor}); provider receives a permissive schema`,
     );
-    json = { type: "object", additionalProperties: true };
+    return { json: permissiveWrapper(), wrapped: true, lints };
   }
   delete json.$schema;
 
@@ -48,6 +51,11 @@ export function toWireSchema(schema: AnySchema): WireSchema {
   if (depthOf(json) > 8)
     lints.push("schema nests deeper than 8 levels; native structured output may reject it");
   return { json, wrapped, lints };
+}
+
+/** A { value } carrier that admits any JSON value — for schemas nothing can convert. */
+function permissiveWrapper(): Record<string, unknown> {
+  return { type: "object", properties: { value: {} }, required: ["value"], additionalProperties: false };
 }
 
 export function unwrapWireValue(value: unknown, wrapped: boolean): unknown {

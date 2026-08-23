@@ -91,7 +91,10 @@ async function seed(h: Harness): Promise<string> {
 /** A repo whose only run is suspended on disk, and a daemon that never saw it start. */
 async function suspendedElsewhere(): Promise<{ app: Hono; runId: string; weft: Weft }> {
   const cwd = await repo();
-  const runId = await seed(await open(cwd));
+  const first = await open(cwd);
+  const runId = await seed(first);
+  // The starting process is gone: detach so its ownership claim is released.
+  await first.weft.engine.shutdown();
   const fresh = await open(cwd);
   return { app: fresh.app, runId, weft: fresh.weft };
 }

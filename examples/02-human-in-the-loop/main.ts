@@ -68,6 +68,10 @@ console.log(`           (risk ${request.risk}; detail: ${request.detail})`);
 // -- process 2: answer against the journal ----------------------------------
 await engineWith().answer(h1.runId, request.id, { approved: true, note: "ship it" });
 console.log(`answered:  ${request.id} → approved`);
+// The starting engine is still alive here (unlike a real crash), so its journal
+// tailer delivers the answer and finishes the run — wait for it to release its
+// ownership claim before another engine may take the run.
+await h1.result;
 
 // -- process 3: resume; zero provider calls ---------------------------------
 const h2 = await engineWith().resume(h1.runId, { def: releaseGate });

@@ -61,6 +61,10 @@ console.log(
 );
 
 await engineWith(mock()).answer(h1.runId, o1.pending[0]!.id, { approved: true });
+// The starting engine is still alive here (unlike a real crash), so its journal
+// tailer delivers the answer and finishes the run — wait for it to release its
+// ownership claim before another engine may take the run.
+await h1.result;
 
 // -- resume unchanged: everything serves, zero provider calls ----------------
 const b2 = mock(); // no fixtures — any provider call would throw

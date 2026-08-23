@@ -1,7 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { JournalRecord } from "@weft/core";
+import { integrationBaseCommit, type JournalRecord } from "@weft/core";
 import { defineWorkflow, z } from "@weft/sdk";
+import { execa } from "execa";
 import { afterAll, describe, expect, test } from "vitest";
 import { cleanupRepos, tempRepo, testEngine } from "./helpers.ts";
 
@@ -157,6 +158,23 @@ describe("write steps, patches, integration", () => {
     await expect(handle.result).rejects.toMatchObject({ code: "conflict" });
     // first patch landed, then the conflicting one was rolled back
     expect(await readFile(join(cwd, "shared.txt"), "utf8")).toBe("agent one\n");
+  });
+});
+
+describe("integrationBaseCommit", () => {
+  test("keeps tracked files that .gitignore also matches", async () => {
+    const cwd = await tempRepo({ "config/local.env": "tracked=1\n", "src/app.ts": "export {};\n" });
+    // Ignore the tracked file AFTER it was committed, then modify it: an empty
+    // temp index would treat it as untracked and drop it from the snapshot tree.
+    await writeFile(join(cwd, ".gitignore"), "config/local.env\n");
+    await writeFile(join(cwd, "config/local.env"), "tracked=2\n");
+
+    const sha = await integrationBaseCommit(cwd);
+    const shown = await execa("git", ["show", `${sha}:config/local.env`], { cwd });
+    expect(shown.stdout.trim()).toBe("tracked=2");
+    // The fresh untracked .gitignore itself is captured too.
+    const ignore = await execa("git", ["show", `${sha}:.gitignore`], { cwd });
+    expect(ignore.stdout).toContain("config/local.env");
   });
 });
 

@@ -213,6 +213,7 @@ describe("replay & edit-tolerant resume", () => {
     const firstId = o1.pending[0]!.id;
 
     // Resume without answering: same request id, still exactly one human.requested.
+    await t1.engine.shutdown(); // the first process dies, releasing its claim
     const t2 = reopen(t1);
     const h2 = await t2.engine.resume(h1.runId, { def });
     const o2 = await h2.outcome();
@@ -295,6 +296,7 @@ describe("replay & edit-tolerant resume", () => {
     expect(childRun).toBeDefined();
 
     // New process: answer the child's request, resume the PARENT; it resumes the child.
+    await t1.engine.shutdown(); // the first process dies, releasing parent + child claims
     const t2 = reopen(t1);
     const childPending = await t2.engine.pending(childRun!.runId);
     expect(childPending).toHaveLength(1);

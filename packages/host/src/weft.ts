@@ -42,7 +42,11 @@ export interface Weft {
   mockBuilder?: MockAgentBuilder;
   /** Open (once) and rebuild the local run index from the journal store. */
   reindex(): Promise<RunIndex>;
-  /** Release the run index if one was opened. Optional: process exit does the same. */
+  /**
+   * Detach from held runs (releasing their ownership claims so another process can
+   * take them immediately) and release the run index. Call before process exit — a
+   * claim left behind blocks resumes elsewhere until it expires.
+   */
   close(): Promise<void>;
 }
 
@@ -116,6 +120,9 @@ export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
       return idx;
     },
     async close(): Promise<void> {
+      // Detach from held runs first: the process is going away, and a stale
+      // ownership claim would block `weft answer && weft resume` for its TTL.
+      await engine.shutdown();
       const pending = index;
       index = undefined;
       if (pending) (await pending).close();

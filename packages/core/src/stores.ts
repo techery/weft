@@ -27,6 +27,13 @@ export interface Projections {
   report?: string;
 }
 
+/** A live claim on a run. The holder refreshes it while executing and releases it at the end. */
+export interface RunLease {
+  /** Extend the claim; called periodically while the run stays active. */
+  refresh(): Promise<void>;
+  release(): Promise<void>;
+}
+
 export interface JournalStore {
   /** Atomic append of a batch; assigns monotonic indices; returns the appended records. */
   append(runId: string, events: JournalEvent[]): Promise<JournalRecord[]>;
@@ -40,6 +47,14 @@ export interface JournalStore {
   readSnapshot?(runId: string): Promise<Projections | undefined>;
   /** True when the run has at least one journal record. */
   exists(runId: string): Promise<boolean>;
+  /**
+   * Best-effort single-owner coordination: claim a run before EXECUTING it (appending
+   * answers/signals needs no claim). Returns undefined while another live claim holds,
+   * so a second process cannot wake a run into concurrent double execution. Claims
+   * expire on their own if the owner dies. Optional: a store without it relies on its
+   * host to not double-run.
+   */
+  acquireRun?(runId: string, opts?: { ttlMs?: number }): Promise<RunLease | undefined>;
 }
 
 export interface BlobMeta {
@@ -71,10 +86,24 @@ interface MemoryRun {
 
 export class MemoryJournalStore implements JournalStore {
   private runs = new Map<string, MemoryRun>();
+  private owners = new Map<string, symbol>();
   private now: () => number;
 
   constructor(opts: { now?: () => number } = {}) {
     this.now = opts.now ?? Date.now;
+  }
+
+  /** In one process a claim never goes stale, so it holds until released. */
+  async acquireRun(runId: string): Promise<RunLease | undefined> {
+    if (this.owners.has(runId)) return undefined;
+    const token = Symbol(runId);
+    this.owners.set(runId, token);
+    return {
+      refresh: async () => {},
+      release: async () => {
+        if (this.owners.get(runId) === token) this.owners.delete(runId);
+      },
+    };
   }
 
   private runFor(runId: string): MemoryRun {

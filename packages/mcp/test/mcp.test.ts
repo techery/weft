@@ -292,6 +292,10 @@ describe("the weft MCP server", () => {
       requestId,
       answer: { approved: true, note: "from elsewhere" },
     });
+    // The starting session still lives: its journal tailer delivers the answer and
+    // finishes the run, releasing its ownership claim — only then may another
+    // session's resume take the run (it replays and serves the settled result).
+    await expect.poll(() => listIds(other, { status: "complete" }), { timeout: 10_000 }).toContain(runId);
     const resumed = await json<{ runId: string; status: string }>(other, "weft_resume", { runId });
     expect(resumed).toEqual({ runId, status: "resumed" });
 

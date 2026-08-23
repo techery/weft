@@ -674,3 +674,29 @@ describe("codex review findings, round 3 (PR #1)", () => {
     expect(await h2.result).toEqual({ ok: true });
   });
 });
+
+describe("codex review findings, round 4 (PR #1)", () => {
+  test("a run held by one engine cannot be woken into a second runtime by another", async () => {
+    const def = defineWorkflow(
+      { name: "held-run", description: "h", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const go = await ctx.human.approve({ action: "go?" });
+        return { ok: go.approved };
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+
+    // Another process may answer, but must never EXECUTE the run concurrently.
+    const t2 = reopen(t1);
+    await expect(t2.engine.resume(h1.runId, { def })).rejects.toThrow(/active in another process/);
+
+    await t2.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    expect(await h1.result).toEqual({ ok: true });
+    // The terminal run released its claim: a later engine replays freely.
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    expect(await h2.result).toEqual({ ok: true });
+  });
+});

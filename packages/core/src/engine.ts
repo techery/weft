@@ -29,7 +29,7 @@ import {
   RunRuntime,
   type SharedRunResources,
 } from "./runtime.ts";
-import type { BlobStore, JournalStore, RunListFilter, RunSummary } from "./stores.ts";
+import type { BlobStore, JournalStore, RunLease, RunListFilter, RunSummary } from "./stores.ts";
 
 const tracer = trace.getTracer("weft");
 
@@ -86,6 +86,9 @@ interface ActiveRun {
   sinceSnapshot: number;
   /** Stops the external-event tailer when the run reaches a terminal state. */
   tail?: AbortController;
+  /** Cross-process ownership claim (stores that support one); released at terminal state. */
+  lease?: RunLease;
+  leaseTimer?: NodeJS.Timeout;
 }
 
 export class Engine implements EngineHost {
@@ -157,6 +160,7 @@ export class Engine implements EngineHost {
       ...(opts.baseRef !== undefined ? { baseRef: opts.baseRef } : {}),
       ...(def.meta.defaults !== undefined ? { workflowDefaults: def.meta.defaults } : {}),
     });
+    const lease = await this.claimRun(runId);
     // The appended records flow into launch as the projection seed: the run is not
     // in the active map yet, so onRecords would otherwise drop run.created and the
     // first snapshots (and list filters) would miss the run's identity.
@@ -172,7 +176,7 @@ export class Engine implements EngineHost {
         ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
       },
     ]);
-    return this.launch(runtime, def, inputCheck.value, created);
+    return this.launch(runtime, def, inputCheck.value, created, lease);
   }
 
   async resume(runId: string, opts: ResumeOptions = {}): Promise<RunHandle> {
@@ -198,6 +202,9 @@ export class Engine implements EngineHost {
       );
     }
 
+    // The claim comes before the runtime exists: waking a run a daemon or CLI is
+    // still executing would run it twice.
+    const lease = await this.claimRun(runId);
     const replay = ReplayIndex.fromRecords(records);
     const shared: SharedRunResources = {
       // The journaled ceiling survives resume; spend restores from journaled usage.
@@ -218,7 +225,15 @@ export class Engine implements EngineHost {
       ...(created.baseRef !== undefined ? { baseRef: created.baseRef } : {}),
       ...(def.meta.defaults !== undefined ? { workflowDefaults: def.meta.defaults } : {}),
     });
-    return this.launch(runtime, def, created.input, records);
+    return this.launch(runtime, def, created.input, records, lease);
+  }
+
+  /** Claim a run before executing it; throws when another live process owns it. */
+  private async claimRun(runId: string): Promise<RunLease | undefined> {
+    if (!this.journal.acquireRun) return undefined;
+    const lease = await this.journal.acquireRun(runId);
+    if (!lease) throw new Error(`run ${runId} is active in another process`);
+    return lease;
   }
 
   private launch(
@@ -226,6 +241,7 @@ export class Engine implements EngineHost {
     def: WorkflowDefinition,
     input: unknown,
     priorRecords: JournalRecord[] = [],
+    lease?: RunLease,
   ): RunHandle {
     const active: ActiveRun = {
       runtime,
@@ -234,8 +250,14 @@ export class Engine implements EngineHost {
       pending: new Map(),
       sinceSnapshot: 0,
       result: undefined as never,
+      ...(lease ? { lease } : {}),
     };
     this.active.set(runtime.runId, active);
+    if (lease) {
+      // unref'd: the claim guards a run whose own work keeps the process alive.
+      active.leaseTimer = setInterval(() => void lease.refresh().catch(() => undefined), 5_000);
+      active.leaseTimer.unref?.();
+    }
     // The owning engine consumes events other processes append to this run's journal
     // (answers, signals, cancellation) — without this, a CLI answering or cancelling
     // a daemon-owned run would append events nobody ever delivers.
@@ -335,6 +357,10 @@ export class Engine implements EngineHost {
       throw stepError;
     } finally {
       span.end();
+      // Release inside this finally (not the detached cleanup chain) so anything that
+      // awaited result — a cancel, a test about to resume elsewhere — sees it free.
+      if (active.leaseTimer) clearInterval(active.leaseTimer);
+      await active.lease?.release().catch(() => undefined);
       await this.snapshot(active).catch(() => undefined);
     }
   }
@@ -480,7 +506,8 @@ export class Engine implements EngineHost {
       ]);
       records.push(...created);
     }
-    const handle = this.launch(runtime, def, input, records);
+    const lease = await this.claimRun(childId);
+    const handle = this.launch(runtime, def, input, records, lease);
     const childActive = this.active.get(childId);
     try {
       const output = await handle.result;
@@ -605,6 +632,26 @@ export class Engine implements EngineHost {
       { type: "run.cancelled" },
       { type: "run.status", status: "cancelled" },
     ]);
+  }
+
+  /**
+   * Detach from every active run WITHOUT ending it: release ownership claims, stop
+   * journal tailers, forget the in-memory handles. The runs stay resumable — this is
+   * what a host calls right before its process exits (a CLI whose run just suspended,
+   * a daemon stopping), and what a test uses to simulate a crashed owner. In-flight
+   * step work is not awaited: callers shut down when their runs are suspended, or
+   * exit immediately after.
+   */
+  async shutdown(): Promise<void> {
+    const actives = [...this.active.values()];
+    this.active.clear();
+    for (const active of actives) {
+      if (active.leaseTimer) clearInterval(active.leaseTimer);
+      active.tail?.abort();
+      // Releases are owner-checked, so drive()'s own later release stays a no-op
+      // and can never evict whoever claims the run after us.
+      await active.lease?.release().catch(() => undefined);
+    }
   }
 
   // -- inspection -----------------------------------------------------------

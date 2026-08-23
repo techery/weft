@@ -7,6 +7,7 @@ import {
   ReplayIndex,
   Semaphore,
   structuralCheck,
+  toWireSchema,
 } from "@weft/core";
 import { StepError } from "@weft/sdk";
 import { describe, expect, test } from "vitest";
@@ -188,6 +189,28 @@ describe("structuralCheck", () => {
     };
     expect(structuralCheck(wired, { value: "ab" })).toHaveLength(1);
     expect(structuralCheck(wired, { value: "abc" })).toEqual([]);
+  });
+});
+
+describe("toWireSchema", () => {
+  test("a non-zod Standard Schema travels as a wrapped { value } carrier", () => {
+    // A stand-in for e.g. a valibot string schema — its real value is a primitive.
+    const custom = {
+      "~standard": {
+        version: 1,
+        vendor: "custom",
+        validate: (v: unknown) =>
+          typeof v === "string" ? { value: v } : { issues: [{ message: "expected string" }] },
+      },
+    };
+    const wire = toWireSchema(custom as never);
+    expect(wire.wrapped).toBe(true);
+    expect(wire.lints.some((l) => l.includes("non-zod"))).toBe(true);
+    // The wrapper admits ANY value inside { value } — including primitives an
+    // object-typed fallback would have refused before the real schema ever ran.
+    expect(structuralCheck(wire.json, { value: "hi" })).toEqual([]);
+    expect(structuralCheck(wire.json, { value: 42 })).toEqual([]);
+    expect(structuralCheck(wire.json, "bare")).toHaveLength(1);
   });
 });
 

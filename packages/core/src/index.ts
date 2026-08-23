@@ -74,6 +74,7 @@ export type {
   BlobStore,
   JournalStore,
   Projections,
+  RunLease,
   RunListFilter,
   RunSummary,
 } from "./stores.ts";

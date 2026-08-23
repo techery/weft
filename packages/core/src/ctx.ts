@@ -149,6 +149,9 @@ export async function integrationBaseCommit(cwd: string): Promise<string> {
     GIT_COMMITTER_EMAIL: "engine@weft.invalid",
   };
   try {
+    // Seed from HEAD first: on an empty index a tracked file that .gitignore also
+    // matches would look untracked to `add -A` and silently drop out of the tree.
+    await execa("git", ["read-tree", "HEAD"], { cwd, env });
     await execa("git", ["add", "-A", "."], { cwd, env });
     const tree = (await execa("git", ["write-tree"], { cwd, env })).stdout.trim();
     const head = (await execa("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();

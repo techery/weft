@@ -145,12 +145,27 @@ function sandboxMath(): typeof Math {
   });
 }
 
-/** `new Date(value)` is a pure conversion and stays; anything that reads the clock does not. */
+/**
+ * `new Date(value)` is a pure conversion and stays; anything that reads the clock does
+ * not. Instances get a shimmed prototype whose `constructor` is the guarded proxy, so
+ * `new Date(0).constructor()` and `Date.prototype.constructor()` cannot reach the raw
+ * callable Date (which would return the wall clock). Digging further down the chain
+ * (`Object.getPrototypeOf` twice) stays possible — this is a determinism fence for our
+ * own agents' code, not a security boundary.
+ */
 function sandboxDate(): DateConstructor {
-  return new Proxy(Date, {
-    construct(target, args, newTarget) {
+  const safeProto = Object.create(Date.prototype) as object;
+  // The proxy wraps a plain shim, not Date itself: Date's own `prototype` is
+  // non-configurable, so a proxy over it could never report safeProto without
+  // violating the proxy invariants. A function's `prototype` is writable.
+  const shim = function weftDate() {} as unknown as DateConstructor;
+  (shim as { prototype: object }).prototype = safeProto;
+  const guarded = new Proxy(shim, {
+    construct(_target, args) {
       if (args.length === 0) throw new Error("new Date() is unavailable in workflow code - use ctx.now()");
-      return Reflect.construct(target, args, newTarget);
+      const instance = new Date(...(args as ConstructorParameters<DateConstructor>));
+      Object.setPrototypeOf(instance, safeProto);
+      return instance;
     },
     // Plain Date() (no `new`) also reads the wall clock — same guidance.
     apply() {
@@ -158,9 +173,16 @@ function sandboxDate(): DateConstructor {
     },
     get(target, prop, receiver) {
       if (prop === "now") throw new Error("Date.now() is unavailable in workflow code - use ctx.now()");
-      return Reflect.get(target, prop, receiver);
+      if (prop === "prototype") return safeProto;
+      // Statics (parse, UTC) come from the real Date.
+      return prop in Date ? Reflect.get(Date, prop) : Reflect.get(target, prop, receiver);
+    },
+    has(target, prop) {
+      return prop in Date || Reflect.has(target, prop);
     },
   });
+  Object.defineProperty(safeProto, "constructor", { value: guarded, writable: true, configurable: true });
+  return guarded as DateConstructor;
 }
 
 function sandboxProcessEnv(): Record<string, string> {

@@ -231,6 +231,17 @@ describe("projections", () => {
     expect(await store.readSnapshot("run-a")).toEqual({ report: "# just a report" });
   });
 
+  test("concurrent snapshots never clobber each other's temp files", async () => {
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    await store.append("run-a", [runCreated("run-a", "audit")]);
+    // Same-name temp files would make these rename each other away (ENOENT) or
+    // interleave revisions; unique temp names make every write land whole.
+    await Promise.all(Array.from({ length: 8 }, (_, i) => store.snapshot("run-a", { report: `# rev ${i}` })));
+    const report = await readFile(join(dir, "run-a", "report.md"), "utf8");
+    expect(report).toMatch(/^# rev \d$/);
+  });
+
   test("rebuildProjections re-derives state.json from the journal", async () => {
     const dir = await tempDir();
     const store = new FsJournalStore(dir);
@@ -245,6 +256,41 @@ describe("projections", () => {
     // Rebuilding a run that never journaled anything is a no-op, not a crash.
     await expect(store.rebuildProjections("ghost")).resolves.toBeUndefined();
     expect(await store.readSnapshot("ghost")).toBeUndefined();
+  });
+});
+
+describe("acquireRun", () => {
+  test("a live claim refuses a second owner; release frees it", async () => {
+    const dir = await tempDir();
+    const daemon = new FsJournalStore(dir);
+    const cli = new FsJournalStore(dir);
+
+    const lease = await daemon.acquireRun("run-a");
+    expect(lease).toBeTruthy();
+    expect(await cli.acquireRun("run-a")).toBeUndefined();
+    await lease?.refresh(); // keeps the same claim; still exclusive
+    expect(await cli.acquireRun("run-a")).toBeUndefined();
+
+    await lease?.release();
+    const second = await cli.acquireRun("run-a");
+    expect(second).toBeTruthy();
+    await second?.release();
+  });
+
+  test("an expired claim is stolen; the dead owner cannot release the thief's", async () => {
+    const dir = await tempDir();
+    const dead = new FsJournalStore(dir);
+    const successor = new FsJournalStore(dir);
+
+    const short = await dead.acquireRun("run-a", { ttlMs: 10 });
+    expect(short).toBeTruthy();
+    await sleep(30);
+    const stolen = await successor.acquireRun("run-a");
+    expect(stolen).toBeTruthy();
+
+    await short?.release(); // no longer theirs: must not remove the new claim
+    expect(await dead.acquireRun("run-a")).toBeUndefined();
+    await stolen?.release();
   });
 });
 
