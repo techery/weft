@@ -221,6 +221,11 @@ export class FsJournalStore implements JournalStore {
     cached.watchers.add(listener);
     const poll = setInterval(() => wake?.(), 400);
     poll.unref?.();
+    // One abort listener for the whole watch: registering inside the loop would leave
+    // an unfired closure behind on every poll wake-up, growing for as long as the
+    // watched run stays suspended.
+    const onAbort = () => wake?.();
+    opts.signal?.addEventListener("abort", onAbort);
     try {
       while (!opts.signal?.aborted) {
         // Out-of-process writers: pick up lines beyond our cache. The append cache is
@@ -240,11 +245,12 @@ export class FsJournalStore implements JournalStore {
         }
         await new Promise<void>((resolve) => {
           wake = resolve;
-          opts.signal?.addEventListener("abort", () => resolve(), { once: true });
+          if (opts.signal?.aborted) resolve(); // aborted inside this iteration
         });
         wake = undefined;
       }
     } finally {
+      opts.signal?.removeEventListener("abort", onAbort);
       clearInterval(poll);
       cached.watchers.delete(listener);
     }

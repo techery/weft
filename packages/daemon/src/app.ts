@@ -21,7 +21,7 @@ import type {
   RunSummary,
   Weft,
 } from "@weft/host";
-import { inlineDefOf, reduceState, renderReport, renderTree } from "@weft/host";
+import { persistedDefOf, reduceState, renderReport, renderTree } from "@weft/host";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { INDEX_HTML } from "./ui.ts";
@@ -273,7 +273,7 @@ async function refreshProjections(weft: Weft, runId: string): Promise<RunState |
  */
 function wakeIfSuspended(weft: Weft, runId: string): boolean {
   if (weft.engine.isActive(runId)) return false;
-  void inlineDefOf(weft, runId)
+  void persistedDefOf(weft, runId)
     .then((def) => weft.engine.resume(runId, def !== undefined ? { def } : {}))
     .then((handle) => handle.outcome())
     .catch((err: unknown) => {

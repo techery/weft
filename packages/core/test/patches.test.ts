@@ -430,6 +430,46 @@ describe("side-effect steps", () => {
     }
   });
 
+  test("fetch: a lowercase 'post' answered with 302 still rewrites to GET", async () => {
+    let seenMethod = "unset";
+    const second = createServer((req, res) => {
+      seenMethod = req.method ?? "none";
+      res.writeHead(200, { "content-type": "text/plain" }).end("ok");
+    });
+    await new Promise<void>((r) => second.listen(0, "127.0.0.1", r));
+    const secondPort = (second.address() as { port: number }).port;
+    const first = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(302, { location: `http://127.0.0.1:${secondPort}/done` }).end();
+      });
+    });
+    await new Promise<void>((r) => first.listen(0, "127.0.0.1", r));
+    const firstPort = (first.address() as { port: number }).port;
+
+    try {
+      const t = testEngine({ config: { fetchAllow: ["127.0.0.1"] } });
+      const def = defineWorkflow(
+        { description: "post302", input: z.object({}), output: z.object({ status: z.number() }) },
+        async (ctx) => {
+          // Lowercase spelling: the wire sends a POST either way, and the rewrite
+          // rules must see it as one.
+          const res = await ctx.fetch(`http://127.0.0.1:${firstPort}/submit`, {
+            method: "post",
+            body: "payload",
+          });
+          return { status: res.status };
+        },
+      );
+      const handle = await t.engine.start(def, { input: {}, cwd: await tempRepo() });
+      expect(await handle.result).toEqual({ status: 200 });
+      expect(seenMethod).toBe("GET");
+    } finally {
+      first.close();
+      second.close();
+    }
+  });
+
   test("a merge agent's 'resolved' claim is verified against the files", async () => {
     const t = testEngine();
     t.builder.on({ key: "fix:c" }, { summary: "edit" }, { writes: { "a.txt": "AGENT\n" } });

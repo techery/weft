@@ -251,6 +251,21 @@ describe("applyPatchToTree", () => {
     expect(staged.stdout.trim()).toBe("");
   });
 
+  test("3-way merges a tracked file that .gitignore also matches", async () => {
+    const repo = await initRepo();
+    await seed(repo, { "tracked.txt": "one\ntwo\nthree\nfour\nfive\n" }, "init");
+    await seed(repo, { ".gitignore": "tracked.txt\n" }, "ignore it later");
+    const handle = await addWorktree({ repoRoot: repo.cwd, dir: await worktreePath() });
+    await writeIn(handle.path, "tracked.txt", "one\ntwo\nthree\nfour\nFIVE\n");
+    const { patch } = await capturePatch({ worktreePath: handle.path });
+    // Drift so the clean apply fails and the 3-way (with its temp index) must run —
+    // an index staged without HEAD seeding would not contain the ignored file at all.
+    await seed(repo, { "tracked.txt": "zero\none\ntwo\nthree\nfour\nfive\n" }, "prepend");
+
+    expect(await applyPatchToTree({ repoRoot: repo.cwd, patch })).toEqual({ ok: true });
+    expect(await readIn(repo.cwd, "tracked.txt")).toBe("zero\none\ntwo\nthree\nfour\nFIVE\n");
+  });
+
   test("reports conflicts when both sides changed the same line", async () => {
     const repo = await initRepo();
     await seed(repo, { "a.txt": "one\ntwo\nthree\n" }, "init");

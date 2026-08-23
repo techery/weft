@@ -900,7 +900,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
     }
     const journalSafe = journalSecretMap(init?.headers);
     const timeoutMs = toMs(init?.timeout, config.limits.fetchTimeoutMs);
-    const method = init?.method ?? "GET";
+    // Normalized once: redirect rewriting compares against "POST", and native fetch
+    // treats lowercase spellings as the same method anyway.
+    const method = (init?.method ?? "GET").toUpperCase();
     const reviveTyped = async (raw: { status: number; headers: Record<string, string>; body: string }) => {
       if (!init?.schema) return raw;
       if (raw.status < 200 || raw.status >= 300) {

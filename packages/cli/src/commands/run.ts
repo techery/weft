@@ -4,9 +4,11 @@
  * it, so a saved JSON blob can be tweaked from the shell without re-typing it.
  */
 import {
+  isWorkflowPathRef,
   loadWorkflow,
   parseBudget,
   persistInlineScript,
+  persistWorkflowRef,
   resolveWorkflow,
   type Weft,
   type WorkflowDefinition,
@@ -50,9 +52,11 @@ export function runCommand(io: CliIo): Command {
           ...(budget !== undefined ? { budget } : {}),
           ...(reuse !== undefined ? { reuse } : {}),
         });
-        // An inline script has no file to be found again by: persist the bundled
-        // source with the run, so a later `weft resume` can reconstruct it.
+        // Provenance rides with the run: inline scripts persist their bundled source,
+        // and path refs record the path — a later `weft resume` re-resolves either.
+        // Registry names need nothing; the journaled name finds them.
         if (code !== undefined) await persistInlineScript(weft, handle.runId, code);
+        else if (isWorkflowPathRef(ref)) await persistWorkflowRef(weft, handle.runId, ref);
         io.out(`${pc.bold(name)}  ${pc.dim("run")} ${handle.runId}`);
 
         const outcome = opts.watch ? await watchRun(io, weft, handle, name) : await handle.outcome();

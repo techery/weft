@@ -12,10 +12,12 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
-  inlineDefOf,
+  isWorkflowPathRef,
   loadWorkflow,
   parseBudget,
+  persistedDefOf,
   persistInlineScript,
+  persistWorkflowRef,
   type RunListFilter,
   resolveWorkflow,
   type Weft,
@@ -133,7 +135,7 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
         // still owns the run, the claim is refused and its tailer delivers instead.
         if (!weft.engine.isActive(args.runId)) {
           const tracked = runs.get(args.runId);
-          void Promise.resolve(tracked?.def ?? inlineDefOf(weft, args.runId))
+          void Promise.resolve(tracked?.def ?? persistedDefOf(weft, args.runId))
             .then((def) => weft.engine.resume(args.runId, def !== undefined ? { def } : {}))
             .then((handle) => {
               runs.track({
@@ -177,7 +179,7 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
         const def =
           ref !== undefined
             ? (await resolveWorkflow(weft, ref)).def
-            : (tracked?.def ?? (await inlineDefOf(weft, args.runId)));
+            : (tracked?.def ?? (await persistedDefOf(weft, args.runId)));
         const handle = await weft.engine.resume(args.runId, {
           ...(def !== undefined ? { def } : {}),
           ...(args.reuse !== undefined ? { reuse: args.reuse } : {}),
@@ -277,9 +279,12 @@ async function startRun(weft: Weft, runs: RunStore, args: RunArgs): Promise<Trac
     ...(args.budget !== undefined ? { budget: parseBudget(args.budget) } : {}),
     ...(args.reuse !== undefined ? { reuse: args.reuse } : {}),
   });
-  // Inline source has no file a later process could resolve: its bundled script
-  // rides with the run so any host can reconstruct the definition.
+  // Provenance rides with the run: inline source persists its bundled script, a
+  // path ref records the path — any later host can reconstruct the definition.
   if (inline?.code !== undefined) await persistInlineScript(weft, handle.runId, inline.code);
+  else if (args.workflow !== undefined && isWorkflowPathRef(args.workflow)) {
+    await persistWorkflowRef(weft, handle.runId, args.workflow);
+  }
   return runs.track({
     handle,
     ...(args.workflow !== undefined ? { ref: args.workflow } : { def: resolved.def }),

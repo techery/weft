@@ -57,6 +57,9 @@ export async function applyPatchToTree(opts: { repoRoot: string; patch: string }
   const indexFile = join(tmpdir(), `weft-apply-${randomUUID()}`);
   const env = { GIT_INDEX_FILE: indexFile };
   try {
+    // Seed from HEAD first: on an empty index `add -A` skips a tracked file that
+    // .gitignore also matches, and the 3-way would then say it is not in the index.
+    await git.raw(["read-tree", "HEAD"], { env });
     await git.raw(["add", "-A", "."], { env });
     const threeWay = await git.raw(["apply", "--3way"], { allowFailure: true, input, env });
     if (threeWay.exitCode === 0) return { ok: true };

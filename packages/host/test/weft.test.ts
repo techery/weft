@@ -5,8 +5,11 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   createWeft,
   inlineDefOf,
+  isWorkflowPathRef,
   loadWorkflow,
+  persistedDefOf,
   persistInlineScript,
+  persistWorkflowRef,
   resolveWorkflow,
   type Weft,
 } from "../src/index.ts";
@@ -73,6 +76,41 @@ export default defineWorkflow(
 
     // Registry runs persist nothing; the fallback stays quiet for them.
     expect(await inlineDefOf(weft, "no-such-run")).toBeUndefined();
+  });
+
+  it("records a path ref with its run and re-resolves it for a later resume", async () => {
+    const { weft, root } = await mockWeft();
+    // A workflow FILE outside the registry: only its recorded ref can find it later.
+    await write(
+      root,
+      "flows/gate.ts",
+      `import { defineWorkflow, z } from "@weft/sdk";
+export default defineWorkflow(
+  { description: "path gate", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+  async (ctx) => {
+    const go = await ctx.human.approve({ action: "ship?" });
+    return { ok: go.approved };
+  },
+);
+`,
+    );
+    const { def } = await resolveWorkflow(weft, "./flows/gate.ts");
+    const run = await weft.engine.start(def, { input: {}, cwd: weft.cwd });
+    const outcome = await run.outcome();
+    if (outcome.status !== "waiting_for_human") throw new Error("expected suspension");
+    expect(isWorkflowPathRef("./flows/gate.ts")).toBe(true);
+    await persistWorkflowRef(weft, run.runId, "./flows/gate.ts");
+    await weft.engine.shutdown();
+
+    // A later process re-resolves the recorded path — no registry entry involved.
+    const persisted = await persistedDefOf(weft, run.runId);
+    expect(persisted?.meta.description).toBe("path gate");
+    if (persisted === undefined) throw new Error("path ref not reconstructed");
+    const resumed = await weft.engine.resume(run.runId, { def: persisted });
+    const again = await resumed.outcome();
+    if (again.status !== "waiting_for_human") throw new Error("expected suspension again");
+    await weft.engine.answer(run.runId, again.pending[0]!.id, { approved: true });
+    expect(await resumed.result).toEqual({ ok: true });
   });
 
   it("runs a registry workflow end to end and leaves the run on disk", async () => {

@@ -148,6 +148,41 @@ export async function persistInlineScript(weft: Weft, runId: string, code: strin
   await writeFile(join(dir, "script.ts"), code, "utf8");
 }
 
+/** True when a workflow ref is a file path rather than a registry name. */
+export function isWorkflowPathRef(ref: string): boolean {
+  return looksLikePath(ref);
+}
+
+/**
+ * Record the path a run's workflow was started from. Registry names need nothing (the
+ * journaled name finds them again) and inline source persists its bundled script, but
+ * an arbitrary path like `./flows/review.ts` is recoverable only if it rides along —
+ * a later resume re-resolves it from disk, so file edits land the way they do for
+ * registry workflows.
+ */
+export async function persistWorkflowRef(weft: Weft, runId: string, ref: string): Promise<void> {
+  const dir = join(weft.runsDir, runId);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "workflow.json"), JSON.stringify({ ref }), "utf8");
+}
+
+/**
+ * The definition persisted with a run: a recorded path ref re-resolved from disk, or
+ * an inline run's bundled script. Undefined for registry runs — the engine's registry
+ * lookup by the journaled name covers those.
+ */
+export async function persistedDefOf(weft: Weft, runId: string): Promise<WorkflowDefinition | undefined> {
+  try {
+    const raw = JSON.parse(await readFile(join(weft.runsDir, runId, "workflow.json"), "utf8")) as {
+      ref?: string;
+    };
+    if (typeof raw.ref === "string") return (await resolveWorkflow(weft, raw.ref)).def;
+  } catch {
+    // absent, or the file moved away: fall through to a persisted script
+  }
+  return inlineDefOf(weft, runId);
+}
+
 /**
  * The definition persisted with an inline run, or undefined when the run came from
  * the registry (resume then falls back to the name the run journaled).

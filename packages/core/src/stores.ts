@@ -146,6 +146,10 @@ export class MemoryJournalStore implements JournalStore {
       wake?.();
     };
     run.watchers.add(listener);
+    // One abort listener for the whole watch: one per loop iteration would pile up
+    // an unfired closure every time a record (not the abort) woke the wait.
+    const onAbort = () => wake?.();
+    opts.signal?.addEventListener("abort", onAbort);
     try {
       while (!opts.signal?.aborted) {
         while (cursor < run.records.length) yield run.records[cursor++]!;
@@ -158,14 +162,12 @@ export class MemoryJournalStore implements JournalStore {
         }
         await new Promise<void>((resolve) => {
           wake = resolve;
-          if (opts.signal) {
-            const onAbort = () => resolve();
-            opts.signal.addEventListener("abort", onAbort, { once: true });
-          }
+          if (opts.signal?.aborted) resolve(); // aborted inside this iteration
         });
         wake = undefined;
       }
     } finally {
+      opts.signal?.removeEventListener("abort", onAbort);
       run.watchers.delete(listener);
     }
   }
