@@ -1,0 +1,24 @@
+{
+  "name": "@weft/provider-codex",
+  "version": "0.1.0",
+  "description": "AgentProvider over the OpenAI Codex SDK.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@weft/core": "workspace:*",
+    "@openai/codex-sdk": "^0.149.0",
+    "picomatch": "^4.0.5"
+  },
+  "devDependencies": {
+    "@types/picomatch": "^4.0.2"
+  }
+}

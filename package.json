@@ -1,0 +1,27 @@
+{
+  "name": "weft-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Weft: durable, journaled, schema-validated multi-agent coding workflows in TypeScript.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.10",
+    "@types/node": "^26.2.0",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.11",
+    "tsx": "^4.23.12"
+  }
+}

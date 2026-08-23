@@ -1,0 +1,22 @@
+{
+  "name": "@weft/mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing weft.run/wait/answer/resume/list/report/types.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@weft/host": "workspace:*",
+    "@weft/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.4.3"
+  }
+}

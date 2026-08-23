@@ -1,0 +1,1309 @@
+/**
+ * buildCtx: the full authoring surface, implemented over RunRuntime.runStep().
+ * Every call here is a journaled step — executed by the engine, served on replay.
+ */
+import { createHash, randomUUID } from "node:crypto";
+import { promises as nodeFs } from "node:fs";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import {
+  type AgentFn,
+  type AgentOptions,
+  type AnySchema,
+  type CheckOptions,
+  type CheckResult,
+  type Ctx,
+  type DetailedAgentResult,
+  type Duration,
+  type ExecOptions,
+  type ExecResult,
+  type FetchOptions,
+  type GitApi,
+  type GitRange,
+  type GitWriteOpts,
+  type InferOut,
+  isCancellation,
+  type IntegrateOptions,
+  type IntegrationLedger,
+  type NoteInput,
+  parseDuration,
+  type ParallelOptions,
+  type ParallelTask,
+  type PatchRef,
+  type Pipeline,
+  type Risk,
+  type SecretHandle,
+  type Settled,
+  StepError,
+  type SubWorkflowOptions,
+  type Usage,
+  validateSchema,
+  type WorkflowDefinitionLike,
+} from "@weft/sdk";
+import { GIT_WRITE_RISK, type Git, type GitWriteOp, createGit } from "@weft/git";
+import { addWorktree, applyPatchToTree, capturePatch, checkScope, removeWorktree } from "@weft/isolation";
+import { execa } from "execa";
+import picomatch from "picomatch";
+import { glob as tinyGlob } from "tinyglobby";
+import * as z from "zod";
+import { priceFor } from "./config.ts";
+import type { BlobRefJson } from "./events.ts";
+import { toWireSchema, unwrapWireValue } from "./jsonschema.ts";
+import { mapWithConcurrency } from "./limiter.ts";
+import type { AgentRequest, AgentResult } from "./provider.ts";
+import type { RunRuntime, StepIO } from "./runtime.ts";
+
+const RISK_ORDER: Risk[] = ["low", "medium", "high", "irreversible"];
+
+function maxRisk(a: Risk, b: Risk | undefined): Risk {
+  if (!b) return a;
+  return RISK_ORDER.indexOf(b) > RISK_ORDER.indexOf(a) ? b : a;
+}
+
+function toMs(d: Duration | undefined, fallback: number): number {
+  return d === undefined ? fallback : parseDuration(d);
+}
+
+function tail(s: string, n: number): string {
+  return s.length > n ? `…${s.slice(-n)}` : s;
+}
+
+// ---------------------------------------------------------------------------
+// Secrets
+// ---------------------------------------------------------------------------
+
+function isSecretHandle(v: unknown): v is SecretHandle {
+  return typeof v === "object" && v !== null && typeof (v as SecretHandle).__weftSecret === "string";
+}
+
+/** Resolve secret handles engine-side; the journal only ever sees `<redacted:NAME>`. */
+function resolveSecretMap(
+  map: Record<string, string | SecretHandle> | undefined,
+  ref: { key?: string; kind?: string },
+): { resolved: Record<string, string>; journalSafe: Record<string, string> } {
+  const resolved: Record<string, string> = {};
+  const journalSafe: Record<string, string> = {};
+  for (const [k, v] of Object.entries(map ?? {})) {
+    if (isSecretHandle(v)) {
+      const name = v.__weftSecret;
+      const value = process.env[name];
+      if (value === undefined) {
+        throw new StepError("invalid_input", `secret "${name}" is not set in the engine environment`, { step: ref });
+      }
+      resolved[k] = value;
+      journalSafe[k] = `<redacted:${name}>`;
+    } else {
+      resolved[k] = v;
+      journalSafe[k] = v;
+    }
+  }
+  return { resolved, journalSafe };
+}
+
+// ---------------------------------------------------------------------------
+// Tree hashing (patch idempotency)
+// ---------------------------------------------------------------------------
+
+/** Content hash of the full working tree (tracked + untracked, minus ignored). */
+export async function treeHash(cwd: string): Promise<string> {
+  const indexFile = join(tmpdir(), `weft-index-${randomUUID()}`);
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  try {
+    await execa("git", ["add", "-A", "."], { cwd, env });
+    const { stdout } = await execa("git", ["write-tree"], { cwd, env });
+    return stdout.trim();
+  } finally {
+    await nodeFs.rm(indexFile, { force: true }).catch(() => undefined);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// buildCtx
+// ---------------------------------------------------------------------------
+
+export function buildCtx(rt: RunRuntime): Ctx {
+  const config = rt.host.config;
+  const gitHandle: Git = createGit(rt.cwd);
+
+  const resolveInCwd = (p: string): string => (isAbsolute(p) ? p : resolvePath(rt.cwd, p));
+
+  // ---- agent --------------------------------------------------------------
+
+  async function agentImpl<S extends AnySchema>(
+    prompt: string,
+    opts: AgentOptions<S>,
+    mode: { detailed: boolean; writeInPlace?: boolean },
+  ): Promise<unknown> {
+    if (!opts || !opts.schema) {
+      throw new StepError("invalid_input", "ctx.agent: 'schema' is required on every step", {
+        step: { kind: "agent" },
+      });
+    }
+    const wire = toWireSchema(opts.schema);
+    const providerId = opts.provider ?? rt.workflowDefaults.provider ?? config.defaults.provider;
+    const model =
+      opts.model ?? (providerId === config.defaults.provider ? (rt.workflowDefaults.model ?? config.defaults.model) : undefined);
+    const effort = opts.effort ?? rt.workflowDefaults.effort ?? config.defaults.effort;
+    const maxTurns = opts.maxTurns ?? config.limits.maxTurns;
+    const timeoutMs = toMs(opts.timeout, config.limits.stepTimeoutMs);
+    const repairMax = opts.repair ?? config.limits.repair;
+    const useWorktree = !mode.writeInPlace && (opts.isolation === "worktree" || opts.write !== undefined);
+    const ordinal = rt.nextAgentOrdinal();
+    const label = opts.label ?? opts.key ?? `${rt.currentPhase ?? "run"}/agent#${ordinal}`;
+    const scope = opts.write
+      ? { paths: opts.write.paths, ...(opts.write.also ? { also: opts.write.also } : {}), mode: opts.write.mode ?? ("warn" as const) }
+      : undefined;
+
+    const payload = {
+      prompt,
+      provider: providerId,
+      model: model ?? null,
+      effort: effort ?? null,
+      maxTurns,
+      timeoutMs,
+      isolation: useWorktree ? "worktree" : "none",
+      write: scope ?? null,
+    };
+
+    const stepRef = { kind: "agent", key: opts.key, label, runId: rt.runId };
+
+    const reviveDetailed = async (journaled: unknown, entry?: { usage?: Usage; sessionId?: string; attempts?: number }) => {
+      const out = journaled as { value: unknown; files: string[]; patch: PatchRef | null };
+      const check = await validateSchema(opts.schema, out.value);
+      if (!check.ok) {
+        throw new StepError("invalid_output", `journaled output no longer satisfies the schema for ${label}`, {
+          step: stepRef,
+        });
+      }
+      const detailed: DetailedAgentResult<InferOut<S>> = {
+        value: check.value,
+        usage: entry?.usage ?? { input: 0, output: 0 },
+        files: out.files ?? [],
+        ...(out.patch ? { patch: out.patch } : {}),
+        attempts: entry?.attempts ?? 1,
+        ...(entry?.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
+      };
+      return detailed;
+    };
+
+    const run = () =>
+      rt.runStep<DetailedAgentResult<InferOut<S>>>({
+        kind: "agent",
+        ...(opts.key !== undefined ? { key: opts.key } : {}),
+        label,
+        payload,
+        schemaJson: wire.json,
+        ...(opts.retry
+          ? { retry: { attempts: opts.retry.attempts, backoffMs: toMs(opts.retry.backoff, 1_000) } }
+          : {}),
+        timeoutMs: timeoutMs + 10_000,
+        route: { provider: providerId, ...(model ? { model } : {}), ...(effort ? { effort } : {}) },
+        ...(scope ? { scope } : {}),
+        revive: (journaled, entry) => reviveDetailed(journaled, entry),
+        onSettle: (value) => {
+          if (value.patch) {
+            rt.patches.set(value.patch.key, {
+              key: value.patch.key,
+              ref: value.patch.ref,
+              files: value.patch.files,
+              quarantined: value.patch.quarantined ?? false,
+              outOfScope: value.patch.outOfScope ?? [],
+              integrated: false,
+              discarded: false,
+            });
+          }
+        },
+        execute: async (io) => {
+          rt.budget.checkBeforeStep(stepRef);
+          rt.bumpAgentCount(stepRef);
+
+          let workCwd = rt.cwd;
+          let worktree: { path: string; base: string } | undefined;
+          if (useWorktree) {
+            const dir = join(tmpdir(), "weft-worktrees", rt.runId, `${io.seq}`);
+            worktree = await addWorktree({ repoRoot: rt.cwd, dir });
+            workCwd = worktree.path;
+          }
+          try {
+            let finalPrompt = prompt;
+            if (scope) {
+              const also = scope.also?.length ? `\nAlso allowed (incidental files): ${scope.also.join(", ")}` : "";
+              finalPrompt +=
+                `\n\n## Write scope\nYou may modify only files matching: ${scope.paths.join(", ")}.${also}` +
+                `\nYou are not alone in the codebase: other agents work in parallel scopes — confine every edit to yours.`;
+            } else if (!mode.writeInPlace) {
+              finalPrompt += `\n\nThis is a read-only step: do not modify any files.`;
+            }
+
+            const provider = rt.host.providers.get(providerId);
+            const req: AgentRequest = {
+              prompt: finalPrompt,
+              cwd: workCwd,
+              schema: wire.json,
+              label,
+              ...(opts.key !== undefined ? { key: opts.key } : {}),
+              ...(model !== undefined ? { model } : {}),
+              ...(effort !== undefined ? { effort: effort as never } : {}),
+              maxTurns,
+              timeoutMs,
+              onMaxTurns: opts.onMaxTurns ?? "finalize",
+              tools: { allowEdits: scope !== undefined || mode.writeInPlace === true },
+              ...(scope ? { writeScope: { paths: scope.paths, mode: scope.mode, ...(scope.also ? { also: scope.also } : {}) } } : {}),
+              hitl: {
+                onPermission: async (permReq) => {
+                  const risk = permReq.risk;
+                  if (risk === "high" || risk === "irreversible") {
+                    const gate = await rt.gateStep({
+                      action: `agent tool ${permReq.tool} (${label})`,
+                      risk,
+                      detail: JSON.stringify(permReq.input).slice(0, 500),
+                    });
+                    return gate.approved ? { behavior: "allow" } : { behavior: "deny", message: gate.note ?? "denied" };
+                  }
+                  return { behavior: "allow" };
+                },
+                onAsk: async (question, schemaJson) => {
+                  const outcome = await rt.runHuman({
+                    kind: "ask",
+                    question,
+                    schemaJson: schemaJson ?? { type: "object", additionalProperties: true },
+                  });
+                  return outcome.answer;
+                },
+              },
+            };
+
+            const result = await rt.host.globalLimiter.with(
+              () => rt.host.providerLimiter(providerId).with(() => runProviderWithRepair(provider, req, io), io.signal),
+              io.signal,
+            );
+
+            const usage: Usage = { ...result.result.usage };
+            if (usage.usd === undefined) {
+              const price = priceFor(config, providerId, model);
+              if (price) {
+                usage.usd = (usage.input / 1e6) * price.inputPer1M + (usage.output / 1e6) * price.outputPer1M;
+              }
+            }
+            rt.budget.charge(usage);
+            void rt.append([{ type: "budget.sampled", tokens: rt.budget.spentTokens(), usd: rt.budget.spentUsd() }]);
+
+            let transcriptRef: BlobRefJson | undefined;
+            if (result.result.transcript) {
+              const blob = await rt.host.blobs.put(result.result.transcript, { kind: "transcript" });
+              transcriptRef = { $blob: blob.hash, size: blob.size };
+            }
+
+            let patch: PatchRef | null = null;
+            let files: string[] = result.result.filesTouched ?? [];
+            if (worktree && scope) {
+              const captured = await capturePatch({ worktreePath: worktree.path });
+              files = captured.files;
+              if (captured.patch.length > 0) {
+                const blob = await rt.host.blobs.put(captured.patch, { kind: "patch" });
+                const { outOfScope } = checkScope(captured.files, scope);
+                const quarantined = scope.mode === "strict" && outOfScope.length > 0;
+                const patchKey = opts.key ?? label;
+                patch = {
+                  ref: blob.hash,
+                  key: patchKey,
+                  files: captured.files,
+                  ...(quarantined ? { quarantined } : {}),
+                  ...(outOfScope.length > 0 ? { outOfScope } : {}),
+                };
+                await rt.append([
+                  {
+                    type: "patch.captured",
+                    seq: io.seq,
+                    key: patchKey,
+                    ref: blob.hash,
+                    files: captured.files,
+                    ...(outOfScope.length > 0 ? { outOfScope } : {}),
+                  },
+                  ...(outOfScope.length > 0
+                    ? [{ type: "scope.violation", seq: io.seq, key: patchKey, files: outOfScope, mode: scope.mode } as const]
+                    : []),
+                ]);
+              }
+            }
+
+            // Journal the RAW wire value; both live and replay paths validate from raw,
+            // so schema transforms apply exactly once.
+            const journalOutput = { value: result.raw, files, patch };
+            const detailed: DetailedAgentResult<InferOut<S>> = {
+              value: result.validated as InferOut<S>,
+              usage,
+              files,
+              ...(patch ? { patch } : {}),
+              attempts: result.attempts,
+              ...(result.result.sessionId !== undefined ? { sessionId: result.result.sessionId } : {}),
+            };
+            return {
+              value: detailed,
+              journalOutput,
+              usage,
+              ...(result.result.sessionId !== undefined ? { sessionId: result.result.sessionId } : {}),
+              ...(transcriptRef !== undefined ? { transcriptRef } : {}),
+              ...(patch ? { patchRef: patch.ref } : {}),
+              attempts: result.attempts,
+            };
+          } finally {
+            if (worktree) await removeWorktree({ repoRoot: rt.cwd, path: worktree.path });
+          }
+        },
+      });
+
+    async function runProviderWithRepair(
+      provider: ReturnType<typeof rt.host.providers.get>,
+      req: AgentRequest,
+      io: StepIO,
+    ): Promise<{ result: AgentResult; raw: unknown; validated: unknown; attempts: number }> {
+      let attempts = 1;
+      let result: AgentResult;
+      try {
+        result = await provider.run(req, { signal: io.signal });
+      } catch (err) {
+        if (isCancellation(err) || err instanceof StepError) throw err;
+        throw new StepError("provider_error", `${providerId}: ${(err as Error).message}`, {
+          step: stepRef,
+          cause: err,
+        });
+      }
+      for (;;) {
+        const value = unwrapWireValue(result.output, wire.wrapped);
+        const check = await validateSchema(opts.schema, value);
+        if (check.ok) return { result, raw: value, validated: check.value, attempts };
+        if (attempts > repairMax) {
+          throw new StepError(
+            "schema_repair_exhausted",
+            `${label} — schema repair exhausted (${repairMax} attempts): ${check.issues
+              .map((i) => `${i.path}: ${i.message}`)
+              .join("; ")}`,
+            { step: stepRef, attempts },
+          );
+        }
+        attempts++;
+        await io.appendAttempt(`schema repair ${attempts - 1}/${repairMax}`);
+        try {
+          result = await provider.repair(result.sessionId, req, check.issues, { signal: io.signal });
+        } catch (err) {
+          if (isCancellation(err) || err instanceof StepError) throw err;
+          throw new StepError("provider_error", `${providerId} repair: ${(err as Error).message}`, {
+            step: stepRef,
+            cause: err,
+          });
+        }
+      }
+    }
+
+    try {
+      const detailed = await run();
+      return mode.detailed ? detailed : detailed.value;
+    } catch (err) {
+      if (opts.onError === "null" && err instanceof StepError && !isCancellation(err)) {
+        rt.recordDrop(err);
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  const agent = (<S extends AnySchema>(prompt: string, opts: AgentOptions<S>) =>
+    agentImpl(prompt, opts, { detailed: false })) as AgentFn;
+  agent.detailed = <S extends AnySchema>(prompt: string, opts: AgentOptions<S>) =>
+    agentImpl(prompt, opts, { detailed: true }) as Promise<DetailedAgentResult<InferOut<S>>>;
+
+  // ---- fan-out ------------------------------------------------------------
+
+  async function toSettled<T>(task: ParallelTask<T>): Promise<Settled<T>> {
+    try {
+      const value = await (typeof task === "function" ? Promise.resolve().then(task) : task);
+      return { ok: true, value };
+    } catch (err) {
+      return { ok: false, error: StepError.from(err) };
+    }
+  }
+
+  async function parallel<T>(tasks: ReadonlyArray<ParallelTask<T>>, opts?: ParallelOptions): Promise<Settled<T>[]> {
+    if (tasks.length > config.limits.fanoutMax) {
+      throw new StepError("invalid_input", `parallel: ${tasks.length} items exceeds the cap of ${config.limits.fanoutMax}`);
+    }
+    let settled: Settled<T>[];
+    if (opts?.concurrency && tasks.every((t) => typeof t === "function")) {
+      settled = await mapWithConcurrency(tasks, opts.concurrency, (t) => toSettled(t));
+    } else {
+      settled = await Promise.all(tasks.map((t) => toSettled(t)));
+    }
+    const cancelled = settled.find((s) => !s.ok && isCancellation(s.error));
+    if (cancelled && !cancelled.ok) throw cancelled.error;
+    return settled;
+  }
+
+  function pipeline<I>(items: ReadonlyArray<I>): Pipeline<I, I> {
+    if (items.length > config.limits.fanoutMax) {
+      throw new StepError("invalid_input", `pipeline: ${items.length} items exceeds the cap of ${config.limits.fanoutMax}`);
+    }
+    type Stage = { type: "step" | "filter" | "map"; fn: (prev: unknown, item: unknown, i: number) => unknown };
+    const stages: Stage[] = [];
+    const makeBuilder = (): Pipeline<I, unknown> => ({
+      step(fn) {
+        stages.push({ type: "step", fn: fn as Stage["fn"] });
+        return makeBuilder() as never;
+      },
+      filter(fn) {
+        stages.push({ type: "filter", fn: fn as Stage["fn"] });
+        return makeBuilder() as never;
+      },
+      map(fn) {
+        stages.push({ type: "map", fn: fn as Stage["fn"] });
+        return makeBuilder() as never;
+      },
+      async run(opts?: { concurrency?: number }) {
+        const lanes = await mapWithConcurrency(items, opts?.concurrency ?? (items.length || 1), async (item, i) => {
+          let prev: unknown = item;
+          try {
+            for (const stage of stages) {
+              if (stage.type === "filter") {
+                if (!(await stage.fn(prev, item, i))) return { filtered: true } as const;
+              } else {
+                prev = await stage.fn(prev, item, i);
+              }
+            }
+            return { ok: true, value: prev } as const;
+          } catch (err) {
+            return { ok: false, error: StepError.from(err) } as const;
+          }
+        });
+        const cancelled = lanes.find((l) => "ok" in l && !l.ok && isCancellation(l.error));
+        if (cancelled && "error" in cancelled) throw cancelled.error;
+        return lanes.filter((l): l is Exclude<typeof l, { filtered: true }> => !("filtered" in l)) as Settled<unknown>[];
+      },
+    });
+    return makeBuilder() as Pipeline<I, I>;
+  }
+
+  function ok<T>(settled: ReadonlyArray<Settled<T>>): T[] {
+    const values: T[] = [];
+    for (const s of settled) {
+      if (s.ok) values.push(s.value);
+      else rt.recordDrop(s.error);
+    }
+    return values;
+  }
+
+  // ---- sub-workflows ------------------------------------------------------
+
+  async function workflow(
+    defOrName: WorkflowDefinitionLike<unknown, unknown> | string,
+    input: unknown,
+    opts: SubWorkflowOptions = {},
+  ): Promise<unknown> {
+    const name = typeof defOrName === "string" ? defOrName : (defOrName.meta.name ?? "inline");
+    if (rt.depth + 1 > config.limits.maxDepth) {
+      throw new StepError("depth_exceeded", `sub-workflow depth limit (${config.limits.maxDepth}) exceeded at "${name}"`, {
+        step: { kind: "workflow", key: opts.key ?? name, runId: rt.runId },
+      });
+    }
+    return rt.runStep<unknown>({
+      kind: "workflow",
+      ...(opts.key !== undefined ? { key: opts.key } : {}),
+      label: opts.label ?? `workflow:${name}`,
+      payload: { workflow: name, input: input ?? null, budget: opts.budget ?? null },
+      reuseIncomplete: true,
+      newChildRunId: () => randomUUID().slice(0, 8),
+      revive: (journaled) => (journaled as { output: unknown }).output,
+      execute: async (io) => {
+        const childRunId = io.childRunId ?? randomUUID().slice(0, 8);
+        const output = await rt.host.executeChildRun({
+          parent: rt,
+          name,
+          ...(typeof defOrName === "string" ? {} : { def: defOrName }),
+          input,
+          childRunId,
+          ...(opts.key !== undefined ? { key: opts.key } : {}),
+          ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
+        });
+        return { value: output, journalOutput: { childRunId, output } };
+      },
+    });
+  }
+
+  // ---- side effects -------------------------------------------------------
+
+  const fs: Ctx["fs"] = {
+    read: (path) =>
+      rt.runStep({
+        kind: "fs",
+        payload: { op: "fs.read", path },
+        label: `read:${path}`,
+        execute: async () => {
+          const bytes = await nodeFs.readFile(resolveInCwd(path));
+          const content = bytes.toString("utf8");
+          return {
+            value: { content, sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.byteLength },
+          };
+        },
+      }),
+    glob: (patterns, opts) =>
+      rt.runStep({
+        kind: "fs",
+        payload: { op: "fs.glob", patterns, cwd: opts?.cwd ?? null },
+        label: `glob:${Array.isArray(patterns) ? patterns.join(",") : patterns}`,
+        execute: async () => {
+          const paths = await tinyGlob(Array.isArray(patterns) ? patterns : [patterns], {
+            cwd: opts?.cwd ? resolveInCwd(opts.cwd) : rt.cwd,
+            ignore: ["**/node_modules/**", "**/.git/**"],
+          });
+          return { value: { paths: paths.sort() } };
+        },
+      }),
+    stat: (path) =>
+      rt.runStep<import("@weft/sdk").FsStatResult>({
+        kind: "fs",
+        payload: { op: "fs.stat", path },
+        label: `stat:${path}`,
+        execute: async () => {
+          try {
+            const s = await nodeFs.stat(resolveInCwd(path));
+            return {
+              value: { exists: true, size: s.size, mtimeMs: s.mtimeMs, isFile: s.isFile(), isDirectory: s.isDirectory() },
+            };
+          } catch {
+            return { value: { exists: false } };
+          }
+        },
+      }),
+  };
+
+  async function execStep(
+    kind: "exec" | "bash" | "check",
+    payload: Record<string, unknown>,
+    label: string,
+    spawn: () => ReturnType<typeof execa>,
+    opts: (ExecOptions & { schema?: AnySchema }) | undefined,
+    checkName?: string,
+  ): Promise<unknown> {
+    const ref = { kind, key: opts?.key, label, runId: rt.runId };
+    if (opts?.risk) {
+      const gate = await rt.gateStep({ action: `${kind}: ${label}`, risk: opts.risk });
+      if (!gate.approved) {
+        throw new StepError("gate_denied", `${kind} "${label}" denied${gate.note ? `: ${gate.note}` : ""}`, { step: ref });
+      }
+    }
+    const reviveTyped = async (raw: ExecResult): Promise<unknown> => {
+      if (!opts?.schema) return raw;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw.stdout);
+      } catch {
+        throw new StepError("exec_failed", `${label}: stdout is not valid JSON (exit ${raw.exitCode}): ${tail(raw.stderr || raw.stdout, 300)}`, {
+          step: ref,
+        });
+      }
+      const check = await validateSchema(opts.schema, parsed);
+      if (!check.ok) {
+        throw new StepError(
+          "invalid_output",
+          `${label}: output failed schema validation: ${check.issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`,
+          { step: ref },
+        );
+      }
+      return check.value;
+    };
+    return rt.runStep<unknown>({
+      kind,
+      ...(opts?.key !== undefined ? { key: opts.key } : {}),
+      label,
+      payload: checkName ? { name: checkName, ...payload } : payload,
+      ...(opts?.schema ? { schemaJson: toWireSchema(opts.schema).json } : {}),
+      revive: (journaled) => reviveTyped(journaled as ExecResult),
+      execute: async () => {
+        const hooks = rt.host.testHooks;
+        if (hooks) {
+          const stubbed =
+            kind === "bash"
+              ? await hooks.bash?.(String(payload.command))
+              : await hooks.exec?.(String(payload.file ?? payload.name), (payload.args as string[]) ?? []);
+          if (stubbed !== undefined) {
+            return { value: await reviveTyped(stubbed), journalOutput: stubbed };
+          }
+        }
+        const result = await spawn();
+        if (result.timedOut) {
+          throw new StepError("timeout", `${label} timed out`, { step: ref });
+        }
+        if (result.failed && result.exitCode === undefined) {
+          throw new StepError("exec_failed", `${label}: ${tail(String(result.stderr || result.shortMessage || "spawn failed"), 400)}`, {
+            step: ref,
+          });
+        }
+        const raw: ExecResult = {
+          exitCode: result.exitCode ?? 0,
+          stdout: String(result.stdout ?? ""),
+          stderr: String(result.stderr ?? ""),
+        };
+        return { value: await reviveTyped(raw), journalOutput: raw };
+      },
+    });
+  }
+
+  const exec = ((file: string, args: string[] = [], opts?: ExecOptions & { schema?: AnySchema }) => {
+    const { resolved, journalSafe } = resolveSecretMap(opts?.env, { kind: "exec" });
+    const timeoutMs = toMs(opts?.timeout, config.limits.execTimeoutMs);
+    const cwd = opts?.cwd ? resolveInCwd(opts.cwd) : rt.cwd;
+    return execStep(
+      "exec",
+      { op: "exec", file, args, cwd: opts?.cwd ?? null, env: journalSafe, timeoutMs },
+      `${file} ${args.join(" ")}`.trim(),
+      () => execa(file, args, { cwd, env: { ...process.env, ...resolved }, timeout: timeoutMs, reject: false }),
+      opts,
+    );
+  }) as Ctx["exec"];
+
+  const bash = ((command: string, opts?: ExecOptions & { schema?: AnySchema }) => {
+    const { resolved, journalSafe } = resolveSecretMap(opts?.env, { kind: "bash" });
+    const timeoutMs = toMs(opts?.timeout, config.limits.execTimeoutMs);
+    const cwd = opts?.cwd ? resolveInCwd(opts.cwd) : rt.cwd;
+    return execStep(
+      "bash",
+      { op: "bash", command, cwd: opts?.cwd ?? null, env: journalSafe, timeoutMs },
+      command,
+      () =>
+        execa(command, {
+          cwd,
+          env: { ...process.env, ...resolved },
+          timeout: timeoutMs,
+          reject: false,
+          shell: "/bin/bash",
+        }),
+      opts,
+    );
+  }) as Ctx["bash"];
+
+  const fetchFn = ((url: string, init?: FetchOptions & { schema?: AnySchema }) => {
+    const ref = { kind: "fetch", key: init?.key, runId: rt.runId };
+    let hostname: string;
+    try {
+      hostname = new URL(url).hostname;
+    } catch {
+      throw new StepError("invalid_input", `ctx.fetch: invalid URL "${url}"`, { step: ref });
+    }
+    if (config.fetchAllow && !config.fetchAllow.some((pattern) => picomatch.isMatch(hostname, pattern))) {
+      throw new StepError("fetch_denied", `host "${hostname}" is not in the fetch allow-list`, { step: ref });
+    }
+    const { resolved, journalSafe } = resolveSecretMap(init?.headers, ref);
+    const timeoutMs = toMs(init?.timeout, config.limits.fetchTimeoutMs);
+    const method = init?.method ?? "GET";
+    const reviveTyped = async (raw: { status: number; headers: Record<string, string>; body: string }) => {
+      if (!init?.schema) return raw;
+      if (raw.status < 200 || raw.status >= 300) {
+        throw new StepError("fetch_failed", `${method} ${url} → ${raw.status} (schema requested)`, { step: ref });
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw.body);
+      } catch {
+        throw new StepError("fetch_failed", `${method} ${url}: body is not valid JSON`, { step: ref });
+      }
+      const check = await validateSchema(init.schema, parsed);
+      if (!check.ok) {
+        throw new StepError(
+          "invalid_output",
+          `${method} ${url}: body failed schema validation: ${check.issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`,
+          { step: ref },
+        );
+      }
+      return check.value;
+    };
+    return rt.runStep<unknown>({
+      kind: "fetch",
+      ...(init?.key !== undefined ? { key: init.key } : {}),
+      label: `${method} ${url}`,
+      payload: { op: "fetch", url, method, headers: journalSafe, body: init?.body ?? null, timeoutMs },
+      ...(init?.schema ? { schemaJson: toWireSchema(init.schema).json } : {}),
+      revive: (journaled) => reviveTyped(journaled as never),
+      execute: async (io) => {
+        const stubbed = await rt.host.testHooks?.fetch?.(url, method);
+        if (stubbed !== undefined) {
+          return { value: await reviveTyped(stubbed as never), journalOutput: stubbed };
+        }
+        let response: Response;
+        try {
+          response = await globalThis.fetch(url, {
+            method,
+            headers: resolved,
+            ...(init?.body !== undefined ? { body: init.body } : {}),
+            signal: AbortSignal.any([AbortSignal.timeout(timeoutMs), io.signal]),
+          });
+        } catch (err) {
+          throw new StepError("fetch_failed", `${method} ${url}: ${(err as Error).message}`, { step: ref, cause: err });
+        }
+        const body = await response.text();
+        const headers: Record<string, string> = {};
+        response.headers.forEach((v, k) => {
+          headers[k] = v;
+        });
+        const raw = { status: response.status, headers, body };
+        return { value: await reviveTyped(raw), journalOutput: raw };
+      },
+    });
+  }) as Ctx["fetch"];
+
+  const env: Ctx["env"] = {
+    get: (name) =>
+      rt.runStep({
+        kind: "env",
+        payload: { op: "env.get", name },
+        label: `env:${name}`,
+        execute: async () => {
+          const value = rt.host.testHooks?.env ? (rt.host.testHooks.env(name) ?? null) : (process.env[name] ?? null);
+          return { value: { value }, journalOutput: { value } };
+        },
+        revive: (j) => j as { value: string | null },
+      }).then((r) => (r as { value: string | null }).value ?? undefined),
+  };
+
+  // ---- git ----------------------------------------------------------------
+
+  async function gitHooked<T>(op: string, args: unknown, run: () => Promise<T>): Promise<T> {
+    const hook = rt.host.testHooks?.git;
+    if (hook) {
+      const hooked = await hook(op, args);
+      if (hooked !== undefined) return hooked as T;
+    }
+    return run();
+  }
+
+  function gitRead<T>(op: string, args: unknown, run: () => Promise<T>): Promise<T> {
+    return rt.runStep<T>({
+      kind: "git",
+      label: `git.${op}`,
+      payload: { op: `git.${op}`, args: args ?? null },
+      execute: async () => ({ value: await gitHooked(op, args, run) }),
+    });
+  }
+
+  async function gitWrite<T>(
+    op: GitWriteOp,
+    action: string,
+    args: unknown,
+    opts: GitWriteOpts | undefined,
+    run: () => Promise<T>,
+    verifyServe?: (journaled: T) => Promise<boolean>,
+  ): Promise<T> {
+    const risk = maxRisk(GIT_WRITE_RISK[op], opts?.risk);
+    const gate = await rt.gateStep({ action, risk });
+    if (!gate.approved) {
+      throw new StepError("gate_denied", `${action} denied${gate.note ? `: ${gate.note}` : ""}`, {
+        step: { kind: "git", key: op, runId: rt.runId },
+      });
+    }
+    return rt.runStep<T>({
+      kind: "git",
+      label: action,
+      payload: { op: `git.${op}`, args: args ?? null },
+      ...(verifyServe && !rt.host.testHooks ? { verifyServe: (j) => verifyServe(j as T) } : {}),
+      execute: async () => ({ value: await gitHooked(op, args, run) }),
+    });
+  }
+
+  const git: GitApi = {
+    status: () => gitRead("status", null, () => gitHandle.status()),
+    head: () => gitRead("head", null, () => gitHandle.head()),
+    branches: () => gitRead("branches", null, () => gitHandle.branches()),
+    mergeBase: (a, b) => gitRead("mergeBase", { a, b }, () => gitHandle.mergeBase(a, b)),
+    changedSince: (ref) => gitRead("changedSince", { ref }, () => gitHandle.changedSince(ref)),
+    diff: async (range?: GitRange) => {
+      const result = await gitRead("diff", range ?? null, () => gitHandle.diff(range));
+      return result;
+    },
+    log: (opts) => gitRead("log", opts ?? null, () => gitHandle.log(opts)),
+    show: (ref) => gitRead("show", { ref }, () => gitHandle.show(ref)),
+    blame: (path, opts) => gitRead("blame", { path, ...opts }, () => gitHandle.blame(path, opts)),
+    fileAt: (ref, path) => gitRead("fileAt", { ref, path }, () => gitHandle.fileAt(ref, path)),
+    snapshot: () => gitRead("snapshot", null, () => gitHandle.snapshot()),
+
+    add: (opts) => gitWrite("add", "git.add", { paths: opts.paths }, opts, () => gitHandle.add({ paths: opts.paths })),
+    commit: (opts) =>
+      gitWrite(
+        "commit",
+        "git.commit",
+        { message: opts.message, paths: opts.paths ?? null },
+        opts,
+        () => gitHandle.commit({ message: opts.message, ...(opts.paths ? { paths: opts.paths } : {}) }),
+        async (journaled) => (await gitHandle.revParse(journaled.sha)) !== null,
+      ),
+    checkout: (ref, opts) =>
+      gitWrite(
+        opts?.discard ? "checkout.discard" : "checkout",
+        `git.checkout ${ref}${opts?.discard ? " --discard" : ""}`,
+        { ref, discard: opts?.discard ?? false },
+        opts,
+        () => gitHandle.checkout(ref, opts?.discard ? { discard: true } : {}),
+      ),
+    fetch: (opts) =>
+      gitWrite("fetch", `git.fetch ${opts?.remote ?? "origin"}`, { remote: opts?.remote ?? "origin" }, opts, () =>
+        gitHandle.fetchRemote(opts?.remote ? { remote: opts.remote } : {}),
+      ),
+    pull: (opts) =>
+      gitWrite(
+        "pull",
+        `git.pull ${opts?.remote ?? "origin"}${opts?.rebase ? " --rebase" : ""}`,
+        { remote: opts?.remote ?? null, branch: opts?.branch ?? null, rebase: opts?.rebase ?? false },
+        opts,
+        () => gitHandle.pull(opts ?? {}),
+      ),
+    push: (opts) =>
+      gitWrite(
+        opts?.force ? "push.force" : "push",
+        `git.push ${opts?.remote ?? "origin"}/${opts?.branch ?? "HEAD"}${opts?.force ? " --force" : ""}`,
+        { remote: opts?.remote ?? null, branch: opts?.branch ?? null, setUpstream: opts?.setUpstream ?? false, force: opts?.force ?? false },
+        opts,
+        () => gitHandle.push(opts ?? {}),
+      ),
+    reset: (opts) =>
+      gitWrite(
+        opts.mode === "hard" ? "reset.hard" : "reset",
+        `git.reset --${opts.mode ?? "mixed"} ${opts.to}`,
+        { to: opts.to, mode: opts.mode ?? "mixed" },
+        opts,
+        () => gitHandle.reset({ to: opts.to, mode: opts.mode ?? "mixed" }),
+      ),
+    apply: (opts) =>
+      gitWrite("apply", "git.apply", { patch: sha256Of(opts.patch), threeWay: opts.threeWay ?? false }, opts, () =>
+        gitHandle.applyPatch({ patch: opts.patch, threeWay: opts.threeWay ?? false }),
+      ),
+    tag: (name, opts) =>
+      gitWrite(
+        "tag",
+        `git.tag ${name}`,
+        { name, ref: opts?.ref ?? null },
+        opts,
+        () => gitHandle.tag(name, opts?.ref ? { ref: opts.ref } : {}),
+        async () => (await gitHandle.revParse(name)) !== null,
+      ),
+    branch: {
+      create: (name, opts) =>
+        gitWrite(
+          "branch.create",
+          `git.branch.create ${name}`,
+          { name, from: opts?.from ?? null, checkout: opts?.checkout ?? false },
+          opts,
+          () => gitHandle.branchCreate(name, opts ?? {}),
+          async () => (await gitHandle.revParse(name)) !== null,
+        ),
+      delete: (name, opts) =>
+        gitWrite("branch.delete", `git.branch.delete ${name}`, { name, force: opts?.force ?? false }, opts, () =>
+          gitHandle.branchDelete(name, opts ?? {}),
+        ),
+    },
+    stash: {
+      push: (opts) =>
+        gitWrite("stash.push", "git.stash.push", { message: opts?.message ?? null }, opts, () =>
+          gitHandle.stashPush(opts?.message ? { message: opts.message } : {}),
+        ),
+      pop: (opts) => gitWrite("stash.pop", "git.stash.pop", null, opts, () => gitHandle.stashPop()),
+      drop: (opts) => gitWrite("stash.drop", "git.stash.drop", null, opts, () => gitHandle.stashDrop()),
+    },
+    clean: (opts) =>
+      gitWrite("clean", "git.clean", { force: opts?.force ?? false }, opts, () => gitHandle.clean(opts ?? {})),
+  };
+
+  function sha256Of(s: string): string {
+    return createHash("sha256").update(s).digest("hex");
+  }
+
+  // ---- humans -------------------------------------------------------------
+
+  const human: Ctx["human"] = {
+    ask: async (opts) => {
+      const wire = toWireSchema(opts.schema);
+      const outcome = await rt.runHuman({
+        kind: "ask",
+        question: opts.question,
+        ...(opts.detail !== undefined ? { detail: opts.detail } : {}),
+        schemaJson: wire.json,
+        realSchema: opts.schema,
+        ...(opts.timeout !== undefined ? { timeoutMs: parseDuration(opts.timeout) } : {}),
+        ...(timeoutSpec(opts.onTimeout) ?? {}),
+      });
+      return outcome.answer as never;
+    },
+    approve: async (opts) => {
+      const outcome = await rt.runHuman({
+        kind: "approve",
+        question: opts.action,
+        ...(opts.detail !== undefined ? { detail: opts.detail } : {}),
+        schemaJson: {
+          type: "object",
+          properties: { approved: { type: "boolean" }, note: { type: "string" } },
+          required: ["approved"],
+        },
+        ...(opts.timeout !== undefined ? { timeoutMs: parseDuration(opts.timeout) } : {}),
+        ...(timeoutSpec(opts.onTimeout) ?? {}),
+      });
+      const raw = outcome.answer as { approved?: boolean; note?: string };
+      return { approved: raw.approved === true, ...(raw.note !== undefined ? { note: raw.note } : {}) };
+    },
+    review: async (opts) => {
+      const blob = await rt.host.blobs.put(opts.artifact, { kind: "artifact" });
+      const wire = toWireSchema(opts.schema);
+      const outcome = await rt.runHuman({
+        kind: "review",
+        question: opts.question ?? "Review the attached artifact",
+        schemaJson: wire.json,
+        realSchema: opts.schema,
+        artifactRef: { $blob: blob.hash, size: blob.size, preview: opts.artifact.slice(0, 200) },
+        ...(opts.timeout !== undefined ? { timeoutMs: parseDuration(opts.timeout) } : {}),
+        ...(timeoutSpec(opts.onTimeout) ?? {}),
+      });
+      return outcome.answer as never;
+    },
+  };
+
+  function timeoutSpec(
+    onTimeout: "deny" | "escalate" | { default: unknown } | undefined,
+  ): { onTimeout: "deny" | "escalate" | "default"; timeoutDefault?: unknown } | undefined {
+    if (onTimeout === undefined) return undefined;
+    if (onTimeout === "deny" || onTimeout === "escalate") return { onTimeout };
+    return { onTimeout: "default", timeoutDefault: onTimeout.default };
+  }
+
+  // ---- checks, integration, ledger ---------------------------------------
+
+  async function check(name: string, opts: CheckOptions): Promise<CheckResult> {
+    const normalize = (v: boolean | CheckResult): CheckResult =>
+      typeof v === "boolean" ? { status: v ? "pass" : "fail" } : v;
+    const required = opts.required ?? false;
+    const settle = (value: CheckResult & { required?: boolean }) => {
+      if (required && value.status === "fail") rt.requiredCheckFailures.push(name);
+    };
+    if (opts.trustPrior) {
+      return rt.runStep<CheckResult>({
+        kind: "check",
+        label: `check:${name}`,
+        payload: { name, trustPrior: opts.trustPrior, required },
+        onSettle: settle,
+        execute: async () => ({
+          value: { status: "trust-prior", evidence: `run ${opts.trustPrior!.run}: ${opts.trustPrior!.reason}` },
+        }),
+      });
+    }
+    if (opts.exec) {
+      const [file, ...args] = opts.exec;
+      const timeoutMs = toMs(opts.timeout, config.limits.execTimeoutMs);
+      return rt.runStep<CheckResult>({
+        kind: "check",
+        label: `check:${name}`,
+        payload: { name, exec: opts.exec, required },
+        onSettle: settle,
+        execute: async () => {
+          const stubbed = await rt.host.testHooks?.exec?.(file, args);
+          const result = stubbed ?? (await execa(file, args, { cwd: rt.cwd, timeout: timeoutMs, reject: false }));
+          const pass = result.exitCode === 0 && !("timedOut" in result && result.timedOut);
+          return {
+            value: {
+              status: pass ? "pass" : "fail",
+              evidence: tail(`${String(result.stdout ?? "")}\n${String(result.stderr ?? "")}`.trim(), 2_000),
+            },
+          };
+        },
+      });
+    }
+    if (opts.fn) {
+      return rt.runStep<CheckResult>({
+        kind: "check",
+        label: `check:${name}`,
+        payload: { name, fn: true, required },
+        onSettle: settle,
+        execute: async () => ({ value: normalize(await opts.fn!()) }),
+      });
+    }
+    return rt.runStep<CheckResult>({
+      kind: "check",
+      label: `check:${name}`,
+      payload: { name, skipped: true, required },
+      onSettle: settle,
+      execute: async () => ({ value: { status: "skipped" } }),
+    });
+  }
+
+  const ResolutionSchema = z.object({
+    resolution: z.enum(["skip", "keep-conflicts", "abort"]),
+    note: z.string().optional(),
+  });
+
+  async function restorePatchFiles(snapRef: string, files: string[]): Promise<void> {
+    for (const file of files) {
+      const inSnap = await gitHandle
+        .raw(["cat-file", "-e", `${snapRef}:${file}`], { allowFailure: true })
+        .then((r) => r.exitCode === 0);
+      if (inSnap) {
+        await gitHandle.raw(["checkout", snapRef, "--", file], { allowFailure: true });
+      } else {
+        await nodeFs.rm(resolveInCwd(file), { force: true }).catch(() => undefined);
+      }
+    }
+  }
+
+  async function integrate(
+    results: ReadonlyArray<DetailedAgentResult<unknown> | PatchRef>,
+    opts: IntegrateOptions = {},
+  ): Promise<IntegrationLedger> {
+    const onConflict = opts.onConflict ?? "ask";
+    const ledger: IntegrationLedger = { merged: [], conflicts: [], quarantined: [], skipped: [] };
+    rt.setStatus("integrating");
+    try {
+      for (const result of results) {
+        const patch: PatchRef | undefined = "ref" in result ? (result as PatchRef) : (result as DetailedAgentResult<unknown>).patch;
+        if (!patch) {
+          ledger.skipped.push("(no patch)");
+          continue;
+        }
+        if (patch.quarantined) {
+          ledger.quarantined.push(patch.key);
+          rt.log(`patch ${patch.key} is quarantined (out-of-scope files: ${patch.outOfScope?.join(", ")}) — not merged`);
+          continue;
+        }
+        const outcome = await rt.runStep<{ applied: boolean; conflicted?: boolean; baseTree: string; resultTree: string }>({
+          kind: "sideeffect",
+          label: `integrate:${patch.key}`,
+          payload: { op: "patch.apply", key: patch.key, ref: patch.ref, onConflict },
+          verifyServe: async (journaled) => {
+            const j = journaled as { applied: boolean; resultTree: string };
+            return j.applied ? (await treeHash(rt.cwd)) === j.resultTree : true;
+          },
+          onSettle: (value) => {
+            const state = rt.patches.get(patch.key);
+            if (state && value.applied) state.integrated = true;
+            if (state && !value.applied) state.discarded = true;
+          },
+          execute: async () => {
+            const baseTree = await treeHash(rt.cwd);
+            const { ref: snapRef } = await gitHandle.snapshot();
+            const patchText = await rt.host.blobs.getText(patch.ref);
+            const applied = await applyPatchToTree({ repoRoot: rt.cwd, patch: patchText });
+            if (applied.ok) {
+              const resultTree = await treeHash(rt.cwd);
+              await rt.append([{ type: "patch.merged", key: patch.key, ref: patch.ref, baseTree, resultTree }]);
+              return { value: { applied: true, baseTree, resultTree } };
+            }
+            const conflictList = applied.conflicts.join(", ") || "(unknown files)";
+            if (onConflict === "fail") {
+              await restorePatchFiles(snapRef, patch.files);
+              throw new StepError("conflict", `patch ${patch.key} conflicts on ${conflictList}`, {
+                step: { kind: "sideeffect", key: patch.key, runId: rt.runId },
+              });
+            }
+            if (onConflict === "agent") {
+              const resolved = await agentImpl(
+                `A patch (${patch.key}) was applied with 3-way merge and left conflict markers in: ${conflictList}.\n` +
+                  `Resolve every conflict marker in those files, keeping both intents where possible. ` +
+                  `Do not touch any other file.`,
+                { schema: z.object({ resolved: z.boolean(), notes: z.string() }), key: `merge:${patch.key}`, write: { paths: applied.conflicts, mode: "warn" } },
+                { detailed: false, writeInPlace: true },
+              );
+              const r = resolved as { resolved: boolean; notes: string };
+              if (r.resolved) {
+                const resultTree = await treeHash(rt.cwd);
+                await rt.append([{ type: "patch.merged", key: patch.key, ref: patch.ref, baseTree, resultTree, conflicted: true }]);
+                return { value: { applied: true, conflicted: true, baseTree, resultTree } };
+              }
+              await restorePatchFiles(snapRef, [...patch.files, ...applied.conflicts]);
+              throw new StepError("conflict", `merge agent could not resolve ${patch.key}: ${r.notes}`, {
+                step: { kind: "sideeffect", key: patch.key, runId: rt.runId },
+              });
+            }
+            // onConflict === "ask"
+            const wire = toWireSchema(ResolutionSchema);
+            const answer = await rt.runHuman({
+              kind: "ask",
+              question: `Patch ${patch.key} conflicts on ${conflictList}. Resolve how?`,
+              detail: `skip: drop this patch · keep-conflicts: land it with markers for later fixing · abort: fail the integration`,
+              schemaJson: wire.json,
+              realSchema: ResolutionSchema,
+            });
+            const res = (answer.answer as z.infer<typeof ResolutionSchema>).resolution;
+            if (res === "keep-conflicts") {
+              const resultTree = await treeHash(rt.cwd);
+              await rt.append([{ type: "patch.merged", key: patch.key, ref: patch.ref, baseTree, resultTree, conflicted: true }]);
+              return { value: { applied: true, conflicted: true, baseTree, resultTree } };
+            }
+            await restorePatchFiles(snapRef, [...patch.files, ...applied.conflicts]);
+            if (res === "abort") {
+              throw new StepError("conflict", `integration aborted at ${patch.key}`, {
+                step: { kind: "sideeffect", key: patch.key, runId: rt.runId },
+              });
+            }
+            return { value: { applied: false, baseTree, resultTree: baseTree } };
+          },
+        });
+        if (!outcome.applied) ledger.skipped.push(patch.key);
+        else if (outcome.conflicted) ledger.conflicts.push(patch.key);
+        else ledger.merged.push(patch.key);
+      }
+      return ledger;
+    } finally {
+      rt.setStatus("executing");
+    }
+  }
+
+  async function discard(results: ReadonlyArray<DetailedAgentResult<unknown> | PatchRef>): Promise<void> {
+    const patches = results
+      .map((r) => ("ref" in r ? (r as PatchRef) : (r as DetailedAgentResult<unknown>).patch))
+      .filter((p): p is PatchRef => p !== undefined);
+    if (patches.length === 0) return;
+    await rt.runStep<{ keys: string[] }>({
+      kind: "sideeffect",
+      label: `discard:${patches.map((p) => p.key).join(",")}`,
+      payload: { op: "patch.discard", keys: patches.map((p) => p.key), refs: patches.map((p) => p.ref) },
+      onSettle: () => {
+        for (const p of patches) {
+          const state = rt.patches.get(p.key);
+          if (state) state.discarded = true;
+        }
+      },
+      execute: async () => {
+        await rt.append(patches.map((p) => ({ type: "patch.discarded", key: p.key, ref: p.ref }) as const));
+        return { value: { keys: patches.map((p) => p.key) } };
+      },
+    });
+  }
+
+  async function note(n: NoteInput): Promise<void> {
+    await rt.runStep<NoteInput>({
+      kind: "sideeffect",
+      label: `note:${n.kind}`,
+      payload: { op: "note", ...n },
+      execute: async () => {
+        await rt.append([{ type: "note", kind: n.kind, text: n.text, ...(n.evidence !== undefined ? { evidence: n.evidence } : {}) }]);
+        return { value: n };
+      },
+    });
+  }
+
+  // ---- durable waits & journaled randomness -------------------------------
+
+  const signalFn = (<S extends AnySchema>(name: string, schema: S, opts?: { timeout?: Duration }) => {
+    const wire = toWireSchema(schema);
+    return rt.runStep<InferOut<S>>({
+      kind: "signal",
+      label: `signal:${name}`,
+      payload: { op: "signal", name },
+      schemaJson: wire.json,
+      ...(opts?.timeout !== undefined ? { timeoutMs: parseDuration(opts.timeout) } : {}),
+      revive: async (journaled) => {
+        const check = await validateSchema(schema, journaled);
+        if (!check.ok) {
+          throw new StepError("invalid_output", `signal ${name}: payload failed schema validation`, {
+            step: { kind: "signal", key: name, runId: rt.runId },
+          });
+        }
+        return check.value;
+      },
+      execute: async (io) => {
+        const payload = await rt.takeOrAwaitSignal(name, io);
+        const check = await validateSchema(schema, payload);
+        if (!check.ok) {
+          throw new StepError(
+            "invalid_output",
+            `signal ${name}: payload failed schema validation: ${check.issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`,
+            { step: { kind: "signal", key: name, runId: rt.runId } },
+          );
+        }
+        return { value: check.value, journalOutput: payload };
+      },
+    });
+  }) as Ctx["signal"];
+
+  async function sleepFn(duration: Duration): Promise<void> {
+    const ms = parseDuration(duration);
+    await rt.runStep<{ firedAt: number }>({
+      kind: "sleep",
+      label: `sleep:${duration}`,
+      payload: { op: "sleep", ms },
+      reuseIncomplete: true,
+      execute: async (io) => {
+        const deadline = io.scheduledAt + ms;
+        const remaining = deadline - rt.host.clock();
+        if (remaining > 0) {
+          io.markWaiting();
+          const { sleep } = await import("./runtime.ts");
+          await sleep(remaining, io.signal);
+        }
+        await rt.append([{ type: "timer.fired", seq: io.seq, deadline }]);
+        return { value: { firedAt: rt.host.clock() } };
+      },
+    });
+  }
+
+  const nowFn = () =>
+    rt
+      .runStep<{ value: number }>({
+        kind: "sideeffect",
+        label: "now",
+        payload: { op: "now" },
+        execute: async () => ({ value: { value: rt.host.clock() } }),
+      })
+      .then((r) => r.value);
+
+  const randomFn = () =>
+    rt
+      .runStep<{ value: number }>({
+        kind: "sideeffect",
+        label: "random",
+        payload: { op: "random" },
+        execute: async () => ({ value: { value: Math.random() } }),
+      })
+      .then((r) => r.value);
+
+  const uuidFn = () =>
+    rt
+      .runStep<{ value: string }>({
+        kind: "sideeffect",
+        label: "uuid",
+        payload: { op: "uuid" },
+        execute: async () => ({ value: { value: randomUUID() } }),
+      })
+      .then((r) => r.value);
+
+  // ---- assemble -----------------------------------------------------------
+
+  const ctx: Ctx = {
+    agent,
+    parallel,
+    pipeline,
+    ok,
+    workflow: workflow as Ctx["workflow"],
+    gate: (req) => rt.gateStep(req),
+    human,
+    fs,
+    exec,
+    bash,
+    fetch: fetchFn,
+    env,
+    secret: (name) => ({ __weftSecret: name }),
+    git,
+    check,
+    integrate,
+    discard,
+    note,
+    signal: signalFn,
+    sleep: sleepFn,
+    now: nowFn,
+    random: randomFn,
+    uuid: uuidFn,
+    phase: (name) => rt.phase(name),
+    log: (message) => rt.log(message),
+    get budget() {
+      return rt.budget.view();
+    },
+    run: {
+      id: rt.runId,
+      cwd: rt.cwd,
+      ...(rt.baseRef !== undefined ? { baseRef: rt.baseRef } : {}),
+      depth: rt.depth,
+    },
+  };
+  return ctx;
+}

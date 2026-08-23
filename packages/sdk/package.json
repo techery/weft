@@ -1,0 +1,19 @@
+{
+  "name": "@weft/sdk",
+  "version": "0.1.0",
+  "description": "Weft authoring SDK: defineWorkflow, ctx types, Zod re-export.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}

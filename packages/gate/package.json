@@ -1,0 +1,22 @@
+{
+  "name": "@weft/gate",
+  "version": "0.1.0",
+  "description": "Workflow gate: AST rules, esbuild bundling, sandboxed loader.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@weft/sdk": "workspace:*",
+    "esbuild": "^0.28.2",
+    "typescript": "~5.9.3",
+    "zod": "^4.4.3"
+  }
+}

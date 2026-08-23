@@ -1,0 +1,19 @@
+{
+  "name": "@weft/store-fs",
+  "version": "0.1.0",
+  "description": "Filesystem JournalStore and BlobStore (JSONL + content-addressed blobs).",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@weft/core": "workspace:*"
+  }
+}
