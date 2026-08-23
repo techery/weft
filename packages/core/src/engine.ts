@@ -16,7 +16,7 @@ import {
 import { Budget } from "./budget.ts";
 import { type EngineConfig, type EngineConfigInput, resolveConfig } from "./config.ts";
 import { buildCtx } from "./ctx.ts";
-import type { JournalRecord, RunStatus } from "./events.ts";
+import type { JournalRecord } from "./events.ts";
 import { structuralCheck } from "./jsonschema.ts";
 import { Semaphore } from "./limiter.ts";
 import { type RunState, reduceState, renderReport, renderTree } from "./projections.ts";
@@ -183,7 +183,7 @@ export class Engine implements EngineHost {
     for await (const rec of this.journal.read(runId)) records.push(rec);
     if (records.length === 0) throw new Error(`run ${runId} not found`);
     const created = records.find((r) => r.ev.type === "run.created")?.ev;
-    if (!created || created.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
+    if (created?.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
 
     let def = opts.def;
     if (!def && this.registry) def = await this.registry.get(created.workflow.name);
@@ -512,8 +512,7 @@ export class Engine implements EngineHost {
     for await (const rec of this.journal.read(runId)) records.push(rec);
     if (records.length === 0) throw new Error(`run ${runId} not found`);
     const request = records.find((r) => r.ev.type === "human.requested" && r.ev.id === requestId)?.ev;
-    if (!request || request.type !== "human.requested")
-      throw new Error(`run ${runId}: no request ${requestId}`);
+    if (request?.type !== "human.requested") throw new Error(`run ${runId}: no request ${requestId}`);
     const answered = records.some((r) => r.ev.type === "human.answered" && r.ev.id === requestId);
     if (answered) throw new Error(`run ${runId}: request ${requestId} is already answered`);
     const issues = structuralCheck(request.schema, answer);
@@ -632,7 +631,7 @@ export class Engine implements EngineHost {
     for await (const rec of this.journal.read(runId)) records.push(rec);
     if (records.length === 0) throw new Error(`run ${runId} not found`);
     const created = records.find((r) => r.ev.type === "run.created")?.ev;
-    if (!created || created.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
+    if (created?.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
     let def = opts.def;
     if (!def && this.registry) def = await this.registry.get(created.workflow.name);
     if (!def) throw new Error(`run ${runId}: no definition for "${created.workflow.name}"`);

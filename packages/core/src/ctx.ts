@@ -146,7 +146,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     opts: AgentOptions<S>,
     mode: { detailed: boolean; writeInPlace?: boolean },
   ): Promise<unknown> {
-    if (!opts || !opts.schema) {
+    if (!opts?.schema) {
       throw new StepError("invalid_input", "ctx.agent: 'schema' is required on every step", {
         step: { kind: "agent" },
       });

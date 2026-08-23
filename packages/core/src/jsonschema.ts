@@ -139,7 +139,9 @@ export function structuralCheck(schemaJson: unknown, value: unknown, path = ""):
     }
   }
   if (type === "array" && Array.isArray(value) && s.items) {
-    value.forEach((item, i) => issues.push(...structuralCheck(s.items, item, joinPath(path, String(i)))));
+    value.forEach((item, i) => {
+      issues.push(...structuralCheck(s.items, item, joinPath(path, String(i))));
+    });
   }
   return issues;
 }
