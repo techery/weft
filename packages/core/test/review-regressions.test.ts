@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import {
+  type AgentProvider,
   Engine,
   type JournalEvent,
   type JournalRecord,
@@ -1242,5 +1244,124 @@ describe("codex review findings, round 8 (PR #1)", () => {
     expect(carried).toMatchObject({ input: 800, output: 200 });
     // ...and a resume's budget restore counts it.
     expect(ReplayIndex.fromRecords(recs).totalUsage.tokens).toBe(1_000);
+  });
+});
+
+describe("codex review findings, round 9 (PR #1)", () => {
+  test("fetch: a 304 with a stray Location header is returned, never followed", async () => {
+    let secondHit = false;
+    const second = createServer((_req, res) => {
+      secondHit = true;
+      res.writeHead(200, { "content-type": "text/plain" }).end("should never be reached");
+    });
+    await new Promise<void>((r) => second.listen(0, "127.0.0.1", r));
+    const secondPort = (second.address() as { port: number }).port;
+    const first = createServer((_req, res) => {
+      // A conditional-request answer that (incorrectly) carries a Location:
+      // Fetch redirects only on 301/302/303/307/308, so this must come back as-is.
+      res.writeHead(304, { location: `http://127.0.0.1:${secondPort}/elsewhere` }).end();
+    });
+    await new Promise<void>((r) => first.listen(0, "127.0.0.1", r));
+    const firstPort = (first.address() as { port: number }).port;
+
+    try {
+      const t = testEngine({ config: { fetchAllow: ["127.0.0.1"] } });
+      const def = defineWorkflow(
+        { description: "cond", input: z.object({}), output: z.object({ status: z.number() }) },
+        async (ctx) => {
+          const res = await ctx.fetch(`http://127.0.0.1:${firstPort}/cached`, {
+            headers: { "if-none-match": '"etag"' },
+          });
+          return { status: res.status };
+        },
+      );
+      const handle = await t.engine.start(def, { input: {}, cwd: await tempRepo() });
+      expect(await handle.result).toEqual({ status: 304 });
+      expect(secondHit).toBe(false);
+    } finally {
+      first.close();
+      second.close();
+    }
+  });
+
+  test("an explicit null input is preserved through start, journal, and resume", async () => {
+    const def = defineWorkflow(
+      { name: "nullin", description: "n", input: z.null(), output: z.object({ isNull: z.boolean() }) },
+      async (ctx, input) => {
+        const go = await ctx.human.approve({ action: "check" });
+        if (!go.approved) throw new Error("denied");
+        return { isNull: input === null };
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: null, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+    await t1.engine.shutdown();
+
+    const recs = await records(t1.journal, h1.runId);
+    const created = recs.find((r) => r.ev.type === "run.created")?.ev;
+    if (created?.type !== "run.created") throw new Error("missing run.created");
+    // null is a VALUE, not an omission: journaled as itself, never as {}.
+    expect(created.input).toBeNull();
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected re-suspension");
+    await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    expect(await h2.result).toEqual({ isNull: true });
+  });
+
+  test("a timed-out attempt is aborted and DRAINED before the timeout surfaces", async () => {
+    let settledAt = 0;
+    const hanging: AgentProvider = {
+      id: "claude",
+      capabilities: () => ({
+        structured: "tool",
+        permissionHook: false,
+        sessionResume: false,
+        reportsUsd: true,
+      }),
+      run: (_req, ctl) =>
+        new Promise((_, reject) => {
+          // Hangs until aborted; settles 100ms after the abort lands — the step
+          // must wait for that settle, not fail while the attempt still runs.
+          ctl.signal.addEventListener(
+            "abort",
+            () => {
+              setTimeout(() => {
+                settledAt = Date.now();
+                reject(new Error("aborted"));
+              }, 100);
+            },
+            { once: true },
+          );
+        }),
+      repair: () => Promise.reject(new Error("no session to repair")),
+    };
+    const providers = new ProviderRegistry();
+    providers.register(hanging);
+    const engine = new Engine({
+      journal: new MemoryJournalStore(),
+      blobs: new MemoryBlobStore(),
+      providers,
+    });
+    const def = defineWorkflow(
+      { name: "hangstep", description: "h", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("never returns", {
+          schema: z.object({ ok: z.boolean() }),
+          key: "hang",
+          timeout: "300ms",
+        });
+        return {};
+      },
+    );
+    const h = await engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(h.result).rejects.toMatchObject({ code: "timeout" });
+    // The losing execution settled BEFORE the failure was published: a retry (or
+    // a terminal outcome releasing ownership) never overlaps a live attempt.
+    expect(settledAt).not.toBe(0);
   });
 });

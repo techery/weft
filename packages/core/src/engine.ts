@@ -143,7 +143,9 @@ export class Engine implements EngineHost {
     // The RAW input is what gets journaled, so it must survive the JSONL round
     // trip; the schema is reapplied to it on every execution (below and on each
     // resume), so a transform's output — a Date, a class — never needs to.
-    const rawInput = opts.input ?? {};
+    // Only an OMITTED input defaults to {}: an explicit null is a valid value
+    // for schemas that accept it, and must round-trip as itself.
+    const rawInput = opts.input === undefined ? {} : opts.input;
     const rawInputBad = jsonUnsafeAt(rawInput);
     if (rawInputBad !== undefined) {
       throw new StepError(
@@ -222,7 +224,7 @@ export class Engine implements EngineHost {
 
     // The journal holds the RAW input; reapply the schema so a transform hands the
     // resumed execution the same shape (a Date, a default) the first one saw.
-    const inputCheck = await validateSchema(def.meta.input, created.input ?? {});
+    const inputCheck = await validateSchema(def.meta.input, created.input === undefined ? {} : created.input);
     if (!inputCheck.ok) {
       throw new StepError(
         "invalid_input",
@@ -546,13 +548,13 @@ export class Engine implements EngineHost {
     // Journaled raw, validated on EVERY execution (mirrors start/resume): the
     // journal's JSON can't hold a transform's output faithfully, so a resumed
     // child must see the schema reapplied, not the serialized residue.
-    let rawInput = spec.input ?? {};
+    let rawInput = spec.input === undefined ? {} : spec.input;
     const records: JournalRecord[] = [];
     let replay: ReplayIndex | undefined;
     if (resuming) {
       for await (const rec of this.journal.read(childId)) records.push(rec);
       const created = records.find((r) => r.ev.type === "run.created")?.ev;
-      if (created?.type === "run.created") rawInput = created.input ?? {};
+      if (created?.type === "run.created") rawInput = created.input === undefined ? {} : created.input;
       replay = ReplayIndex.fromRecords(records);
       // The child's own journaled spend charges up the shared chain. The parent's
       // restore never saw it (a workflow step journals its usage only at
@@ -915,7 +917,7 @@ export class Engine implements EngineHost {
       ...(def.meta.defaults !== undefined ? { workflowDefaults: def.meta.defaults } : {}),
     });
     // Same input the real resume would hand the code: raw from the journal, schema reapplied.
-    const inputCheck = await validateSchema(def.meta.input, created.input ?? {});
+    const inputCheck = await validateSchema(def.meta.input, created.input === undefined ? {} : created.input);
     if (!inputCheck.ok) {
       throw new StepError(
         "invalid_input",

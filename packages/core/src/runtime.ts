@@ -612,18 +612,14 @@ export class RunRuntime {
     // When the timer wins the race, the losing execute() promise rejects later
     // (aborted provider); observe it so Node never sees an unhandled rejection.
     promise.catch(() => undefined);
+    const TIMED_OUT = Symbol("step-timeout");
     let timer: NodeJS.Timeout | undefined;
+    let winner: T | typeof TIMED_OUT;
     try {
-      return await Promise.race([
+      winner = await Promise.race([
         promise,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => {
-            // Reject BEFORE aborting: abort() synchronously rejects abort-aware
-            // waits with CancelledError, and cancellation is terminal — the
-            // timeout must be what wins the race (it retries; a cancel never does).
-            reject(new StepError("timeout", `step timed out after ${timeoutMs}ms`, { step: ref }));
-            stepAbort?.abort();
-          }, timeoutMs);
+        new Promise<typeof TIMED_OUT>((resolve) => {
+          timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
           // ref'd on purpose: bounded, cleared in finally, and it must be able to
           // fail the step even when a hung provider holds no handles of its own
         }),
@@ -631,6 +627,27 @@ export class RunRuntime {
     } finally {
       if (timer) clearTimeout(timer);
     }
+    if (winner !== TIMED_OUT) return winner;
+    // Timed out: abort the attempt, then DRAIN it (bounded) before the timeout
+    // surfaces. Failing the step while its execution still runs would let a retry
+    // recreate the worktree under the old attempt's feet, or publish a terminal
+    // outcome (and release the run's ownership) while the zombie can still edit
+    // files and append usage. The drain resolves how the losing promise settles
+    // (usually a cancellation from the abort) — the timeout error, which retries,
+    // is always what wins. An execution that ignores its abort signal past the
+    // drain window is unstoppable in-process; the bound keeps the run live.
+    stepAbort?.abort();
+    await Promise.race([
+      promise.then(
+        () => undefined,
+        () => undefined,
+      ),
+      new Promise<void>((resolve) => {
+        const drain = setTimeout(resolve, 5_000);
+        drain.unref?.();
+      }),
+    ]);
+    throw new StepError("timeout", `step timed out after ${timeoutMs}ms`, { step: ref });
   }
 
   // -- humans ---------------------------------------------------------------

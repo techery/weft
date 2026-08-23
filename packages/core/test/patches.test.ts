@@ -63,9 +63,9 @@ describe("write steps, patches, integration", () => {
     t.builder.on({ key: "fix" }, { summary: "done" }, { writes: { "src/a.ts": "fixed\n" } });
     const cwd = await tempRepo({ "src/a.ts": "orig\n" });
     // A previous process died between addWorktree() and its cleanup: the write
-    // step's seq-1 directory is still registered as a worktree of this repo.
+    // step's seq-1 attempt-1 directory is still registered as a worktree of this repo.
     const runId = "stalewt1";
-    const stale = join(tmpdir(), "weft-worktrees", runId, "1");
+    const stale = join(tmpdir(), "weft-worktrees", runId, "1.1");
     await mkdir(dirname(stale), { recursive: true });
     await execa("git", ["worktree", "add", "--detach", stale], { cwd });
 

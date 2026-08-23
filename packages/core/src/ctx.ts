@@ -299,7 +299,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
           const releaseCall = rt.budget.reserveCall(stepRef);
           try {
             if (useWorktree) {
-              const dir = join(tmpdir(), "weft-worktrees", rt.runId, `${io.seq}`);
+              // Per-ATTEMPT path: a retry after a timeout must never remove and
+              // recreate the directory a hung previous attempt may still write to.
+              const dir = join(tmpdir(), "weft-worktrees", rt.runId, `${io.seq}.${io.attempt}`);
               // A process killed mid-step leaves this seq's directory registered as a
               // worktree; without clearing it, every resume of the step would fail at
               // `git worktree add`. removeWorktree prunes and tolerates absence.
@@ -1028,7 +1030,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 redirect: "manual",
               });
               const location = res.headers.get("location");
-              if (res.status < 300 || res.status >= 400 || location === null) return res;
+              // Only the five statuses Fetch itself redirects on: a 304 (or any
+              // other 3xx) carrying a stray Location header is returned as-is —
+              // following it would contact an endpoint native fetch never would.
+              if (![301, 302, 303, 307, 308].includes(res.status) || location === null) return res;
               if (hop >= 5) throw new Error(`too many redirects (stopped after ${hop + 1})`);
               const next = new URL(location, target);
               if (!allowed(next.hostname)) {
