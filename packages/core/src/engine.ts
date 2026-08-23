@@ -712,6 +712,18 @@ export class Engine implements EngineHost {
   }
 
   async signal(runId: string, name: string, payload: unknown): Promise<void> {
+    // The payload rides the JSONL journal to its waiter: a bigint or cycle would
+    // make the append itself throw mid-batch, and a Map/Set/Date would journal
+    // lossily — a resumed run would then replay a different value than the live
+    // waiter saw. Refuse up front, before either append path.
+    const payloadBad = jsonUnsafeAt(payload ?? null);
+    if (payloadBad !== undefined) {
+      throw new StepError(
+        "invalid_input",
+        `signal "${name}" payload cannot be journaled as JSON at ${payloadBad}`,
+        { step: { kind: "signal", key: name, runId } },
+      );
+    }
     // Append only: the OWNING engine's journal tailer is the single delivery point
     // (buffering when no waiter is registered yet), whichever process appended.
     const active = this.active.get(runId);

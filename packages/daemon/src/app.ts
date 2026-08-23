@@ -168,7 +168,10 @@ export function createApp(weft: Weft): Hono {
   app.post("/api/runs/:id/resume", async (c) => {
     const runId = c.req.param("id");
     try {
-      const handle = await engine.resume(runId);
+      // Same fallback the wake paths use: an inline or path-ref run persisted its
+      // definition at start precisely so a registry-less resume can find it here.
+      const def = await persistedDefOf(weft, runId);
+      const handle = await engine.resume(runId, def !== undefined ? { def } : {});
       // The run continues in the background; the caller watches /events or polls the state.
       void handle.outcome().catch(() => undefined);
       return c.json({ ok: true, runId: handle.runId });

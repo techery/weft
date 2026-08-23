@@ -13,6 +13,8 @@ import path from "node:path";
 import {
   createWeft,
   type JournalRecord,
+  loadWorkflow,
+  persistInlineScript,
   type RunState,
   type RunSummary,
   resolveWorkflow,
@@ -273,6 +275,38 @@ describe("steering a run", () => {
     // Nothing answered it, so a resumed run parks on the same request rather than moving on.
     await expect
       .poll(async () => (await getJson<Array<{ id: string }>>(app, `/api/runs/${runId}/pending`)).length)
+      .toBe(1);
+  });
+
+  it("resumes an INLINE run through its persisted script — the registry has no entry for it", async () => {
+    const cwd = await repo();
+    const first = await open(cwd);
+    const source = `import { defineWorkflow, z } from "@weft/sdk";
+export default defineWorkflow(
+  { description: "inline gate", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+  async (ctx) => {
+    const go = await ctx.human.approve({ action: "ship?" });
+    return { ok: go.approved };
+  },
+);
+`;
+    const loaded = await loadWorkflow({ source, cwd });
+    const handle = await first.weft.engine.start(loaded.def, { input: {}, cwd });
+    const outcome = await handle.outcome();
+    expect(outcome.status).toBe("waiting_for_human");
+    await persistInlineScript(first.weft, handle.runId, loaded.code);
+    await first.weft.engine.shutdown();
+
+    // The daemon that serves the Resume click never saw the script — only script.ts.
+    const fresh = await open(cwd);
+    const res = await post(fresh.app, `/api/runs/${handle.runId}/resume`, {});
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, runId: handle.runId });
+    await expect
+      .poll(
+        async () =>
+          (await getJson<Array<{ id: string }>>(fresh.app, `/api/runs/${handle.runId}/pending`)).length,
+      )
       .toBe(1);
   });
 

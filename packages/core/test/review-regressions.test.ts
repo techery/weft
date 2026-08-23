@@ -1085,3 +1085,40 @@ describe("codex review findings, round 6 (PR #1)", () => {
     expect(recs.some((r) => r.ev.type === "run.cancelled")).toBe(false);
   });
 });
+
+describe("codex review findings, round 7 (PR #1)", () => {
+  test("a signal payload the journal cannot hold is refused before either append path", async () => {
+    const def = defineWorkflow(
+      { name: "sigjson", description: "s", input: z.object({}), output: z.object({ n: z.number() }) },
+      async (ctx) => {
+        const got = await ctx.signal("go", z.object({ n: z.number() }));
+        return { n: got.n };
+      },
+    );
+    const t = testEngine();
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    await h.outcome(); // waiting on the signal
+
+    // ACTIVE path: a Map would journal as {} — the live waiter and a resumed
+    // replay would then disagree about what the signal carried.
+    await expect(t.engine.signal(h.runId, "go", { n: new Map() })).rejects.toMatchObject({
+      code: "invalid_input",
+      message: expect.stringContaining("cannot be journaled as JSON"),
+    });
+    let recs = await records(t.journal, h.runId);
+    expect(recs.some((r) => r.ev.type === "signal.received")).toBe(false);
+
+    // A journal-safe payload still flows through to completion.
+    await t.engine.signal(h.runId, "go", { n: 7 });
+    expect(await h.result).toEqual({ n: 7 });
+
+    // NON-ACTIVE path (a CLI signalling a parked run): a bigint would make the
+    // filesystem append itself throw mid-batch.
+    const t2 = reopen(t);
+    await expect(t2.engine.signal(h.runId, "later", { size: 10n })).rejects.toMatchObject({
+      code: "invalid_input",
+    });
+    recs = await records(t2.journal, h.runId);
+    expect(recs.filter((r) => r.ev.type === "signal.received")).toHaveLength(1);
+  });
+});
