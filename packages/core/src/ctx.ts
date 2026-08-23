@@ -12,6 +12,7 @@ import {
   type AgentFn,
   type AgentOptions,
   type AnySchema,
+  CancelledError,
   type CheckOptions,
   type CheckResult,
   type Ctx,
@@ -320,8 +321,15 @@ export function buildCtx(rt: RunRuntime): Ctx {
             // no patch capture — so its declared scope needs its own record:
             // snapshot the tree now and diff after the dispatch to see what was
             // REALLY touched (a sandbox like Codex's permits the whole repo).
+            // Ignored paths are invisible to the snapshots (standard excludes), so
+            // list them separately: a resolver dropping a NEW ignored file out of
+            // scope must still be caught.
             let inPlaceSnap: string | undefined;
-            if (mode.writeInPlace && scope) inPlaceSnap = await integrationBaseCommit(workCwd);
+            let ignoredBefore: Set<string> | undefined;
+            if (mode.writeInPlace && scope) {
+              inPlaceSnap = await integrationBaseCommit(workCwd);
+              ignoredBefore = new Set(await listIgnoredFiles());
+            }
             let finalPrompt = prompt;
             if (scope) {
               const also = scope.also?.length
@@ -373,6 +381,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 : {}),
               hitl: {
                 onPermission: async (permReq) => {
+                  // A zombie attempt (abandoned after its timeout) must not open
+                  // gates: the step already failed and the run may have moved on.
+                  if (io.signal.aborted) return { behavior: "deny", message: "attempt aborted" };
                   const risk = permReq.risk;
                   if (risk === "high" || risk === "irreversible") {
                     const gate = await rt.gateStep({
@@ -387,6 +398,11 @@ export function buildCtx(rt: RunRuntime): Ctx {
                   return { behavior: "allow" };
                 },
                 onAsk: async (question, schemaJson) => {
+                  // Same fence as onPermission: an abandoned attempt must not
+                  // journal a human request the run will never answer.
+                  if (io.signal.aborted) {
+                    throw new CancelledError(`${label}: attempt aborted`, stepRef);
+                  }
                   const outcome = await rt.runHuman({
                     kind: "ask",
                     question,
@@ -397,7 +413,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
               },
             };
 
-            const chargeUsage = (u: Usage): Usage => {
+            const chargeUsage = (u: Usage, opts: { journal?: boolean } = {}): Usage => {
               const usage: Usage = { ...u };
               if (usage.usd === undefined) {
                 const price = priceFor(config, providerId, model);
@@ -407,9 +423,11 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 }
               }
               rt.budget.charge(usage);
-              void rt.append([
-                { type: "budget.sampled", tokens: rt.budget.spentTokens(), usd: rt.budget.spentUsd() },
-              ]);
+              if (opts.journal !== false) {
+                void rt.append([
+                  { type: "budget.sampled", tokens: rt.budget.spentTokens(), usd: rt.budget.spentUsd() },
+                ]);
+              }
               return usage;
             };
 
@@ -430,12 +448,22 @@ export function buildCtx(rt: RunRuntime): Ctx {
               const failed = err as { detail?: { usage?: Usage } };
               const carried = failed.detail?.usage;
               if (carried && (carried.input > 0 || carried.output > 0)) {
-                const priced = chargeUsage(carried);
+                // An aborted attempt may already be abandoned: charge, don't journal.
+                const priced = chargeUsage(carried, { journal: !io.signal.aborted });
                 failed.detail = { ...failed.detail, usage: priced };
               }
               throw err;
             }
 
+            // The attempt may have been ABANDONED: its timeout already failed the
+            // step (past the bounded drain) and the run has moved on — possibly to
+            // a retry or a terminal state whose lease is released. Nothing this
+            // zombie does may be observable: charge the spend in memory (the money
+            // is gone either way) but journal nothing, capture nothing, and stop.
+            if (io.signal.aborted) {
+              chargeUsage(result.usage, { journal: false });
+              throw new CancelledError(`${label}: attempt abandoned after its timeout`, stepRef);
+            }
             const usage = chargeUsage(result.usage);
 
             // Everything past the charge is bookkeeping on a PAID call: if any of
@@ -493,13 +521,20 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 // edits (the provider's self-report is advisory). Under a strict
                 // scope, stray edits are ROLLED BACK, not just reported — the
                 // declared scope is enforced, whatever the sandbox permitted.
+                // NEW ignored files come from the separate listing — the snapshots
+                // can't see them. (Edits INSIDE a pre-existing ignored file or
+                // directory stay out of reach of a tree diff.)
                 const afterSnap = await integrationBaseCommit(workCwd);
-                if (afterSnap !== inPlaceSnap) {
-                  const diff = await gitHandle.raw(["diff", "--name-only", inPlaceSnap, afterSnap]);
-                  files = diff.stdout
-                    .split("\n")
-                    .map((f) => f.trim())
-                    .filter((f) => f !== "");
+                const newIgnored = (await listIgnoredFiles()).filter((f) => !ignoredBefore?.has(f));
+                if (afterSnap !== inPlaceSnap || newIgnored.length > 0) {
+                  const changed =
+                    afterSnap !== inPlaceSnap
+                      ? (await gitHandle.raw(["diff", "--name-only", inPlaceSnap, afterSnap])).stdout
+                          .split("\n")
+                          .map((f) => f.trim())
+                          .filter((f) => f !== "")
+                      : [];
+                  files = [...changed, ...newIgnored];
                   const { outOfScope } = checkScope(files, scope);
                   if (outOfScope.length > 0) {
                     if (scope.mode === "strict") {
@@ -1452,7 +1487,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
   async function restorePatchFiles(snapRef: string, files: string[]): Promise<void> {
     for (const file of files) {
       const inSnap = await gitHandle
-        .raw(["cat-file", "-e", `${snapRef}:${file}`], { allowFailure: true })
+        .raw(["cat-file", "-e", `${snapRef}:${file.replace(/\/$/, "")}`], { allowFailure: true })
         .then((r) => r.exitCode === 0);
       if (inSnap) {
         // Worktree-only: `checkout <ref> -- <file>` would write the INDEX too,
@@ -1461,9 +1496,28 @@ export function buildCtx(rt: RunRuntime): Ctx {
           allowFailure: true,
         });
       } else {
-        await nodeFs.rm(resolveInCwd(file), { force: true }).catch(() => undefined);
+        // recursive: a NEW ignored directory entry (from the --directory listing)
+        // rolls back whole; on a plain file the flag is inert.
+        await nodeFs.rm(resolveInCwd(file), { recursive: true, force: true }).catch(() => undefined);
       }
     }
+  }
+
+  /**
+   * Untracked-IGNORED paths (standard excludes), ignored directories collapsed to
+   * one entry. The in-place scope capture diffs this listing across a dispatch:
+   * tree snapshots skip ignored paths entirely, so a new ignored file would
+   * otherwise change nothing the snapshots can see.
+   */
+  async function listIgnoredFiles(): Promise<string[]> {
+    const out = await gitHandle.raw(
+      ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"],
+      { allowFailure: true },
+    );
+    return out.stdout
+      .split("\n")
+      .map((f) => f.trim())
+      .filter((f) => f !== "");
   }
 
   async function integrate(

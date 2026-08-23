@@ -533,6 +533,9 @@ export class RunRuntime {
             ...(priorScheduledAt !== undefined ? { priorScheduledAt } : {}),
             ...(childRunId !== undefined ? { childRunId } : {}),
             appendAttempt: async (detail?: string) => {
+              // An ABANDONED attempt (timed out past the drain window, still
+              // running as a zombie) must not keep writing to the journal.
+              if (stepAbort.signal.aborted) return;
               await this.append([
                 { type: "step.attempt", seq, attempt, ...(detail !== undefined ? { detail } : {}) },
               ]);

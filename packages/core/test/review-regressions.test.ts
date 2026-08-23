@@ -1611,3 +1611,105 @@ describe("codex review findings, round 12 (PR #1)", () => {
     expect(await h2.result).toEqual({ got: "object" });
   });
 });
+
+describe("codex review findings, round 13 (PR #1)", () => {
+  test("a zombie attempt abandoned past the drain window cannot open human requests", async () => {
+    let sneaky = "not attempted";
+    const zombie: AgentProvider = {
+      id: "claude",
+      capabilities: () => ({
+        structured: "tool",
+        permissionHook: false,
+        sessionResume: false,
+        reportsUsd: true,
+      }),
+      run: (req, ctl) =>
+        new Promise(() => {
+          // Ignores its abort entirely — a hung SDK subprocess. Once aborted,
+          // the zombie tries to open a human request through its HITL seam.
+          ctl.signal.addEventListener(
+            "abort",
+            () => {
+              void req.hitl.onAsk("zombie asking", undefined).then(
+                () => {
+                  sneaky = "answered";
+                },
+                () => {
+                  sneaky = "refused";
+                },
+              );
+            },
+            { once: true },
+          );
+        }),
+      repair: () => Promise.reject(new Error("no session to repair")),
+    };
+    const journal = new MemoryJournalStore();
+    const providers = new ProviderRegistry();
+    providers.register(zombie);
+    const engine = new Engine({ journal, blobs: new MemoryBlobStore(), providers });
+    const def = defineWorkflow(
+      { name: "zombiestep", description: "z", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("never settles", {
+          schema: z.object({ ok: z.boolean() }),
+          key: "hang",
+          timeout: "300ms",
+        });
+        return {};
+      },
+    );
+    const cwd = await tempDir();
+    vi.useFakeTimers();
+    let runId: string;
+    try {
+      const h = await engine.start(def, { input: {}, cwd });
+      runId = h.runId;
+      await vi.advanceTimersByTimeAsync(1_300); // the engine-side timeout aborts the attempt
+      await vi.advanceTimersByTimeAsync(5_000); // the bounded drain gives up on the zombie
+      await expect(h.result).rejects.toMatchObject({ code: "timeout" });
+    } finally {
+      vi.useRealTimers();
+    }
+    // The zombie's ask was refused, and nothing of it reached the journal.
+    expect(sneaky).toBe("refused");
+    const recs = await records(journal, runId);
+    expect(recs.some((r) => r.ev.type === "human.requested")).toBe(false);
+  });
+
+  test("a conflict resolver's IGNORED stray file is still caught and rolled back", async () => {
+    const FixResult = z.object({ summary: z.string() });
+    const t = testEngine();
+    t.builder.on({ key: "fix:i" }, { summary: "edit" }, { writes: { "a.txt": "AGENT\n" } });
+    // The resolver fixes the conflict file but drops a file the SNAPSHOTS cannot
+    // see: it matches .gitignore, so only the ignored-file listing catches it.
+    t.builder.on(
+      { key: "merge:fix:i" },
+      { resolved: true, notes: "fixed" },
+      { writes: { "a.txt": "RESOLVED\n", "stray.log": "oops\n" } },
+    );
+    const cwd = await tempRepo({ ".gitignore": "stray.log\n", "a.txt": "base\n" });
+    const def = defineWorkflow(
+      { description: "mi", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        const fix = await ctx.agent.detailed("fix", {
+          schema: FixResult,
+          key: "fix:i",
+          write: { paths: ["a.txt"] },
+        });
+        await ctx.bash("printf 'MAIN\\n' > a.txt");
+        await ctx.integrate([fix], { onConflict: "agent" });
+        return {};
+      },
+    );
+    const handle = await t.engine.start(def, { input: {}, cwd });
+    expect(await handle.result).toEqual({});
+    expect(await readFile(join(cwd, "a.txt"), "utf8")).toBe("RESOLVED\n");
+    expect(existsSync(join(cwd, "stray.log"))).toBe(false);
+    const recs = await records(t.journal, handle.runId);
+    const violation = recs.find((r) => r.ev.type === "scope.violation")?.ev;
+    if (violation?.type !== "scope.violation") throw new Error("missing scope.violation");
+    expect(violation.files).toEqual(["stray.log"]);
+    expect(violation.mode).toBe("strict");
+  });
+});
