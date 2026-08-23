@@ -144,8 +144,11 @@ export function isReadOnlyCommand(command: string): boolean {
       if (/\s-(?:delete|exec|execdir|ok|okdir|fprint\w*)\b/.test(seg)) return false;
       continue;
     }
-    // sort reads — unless -o/--output turns it into a file writer.
-    if (name === "sort" && /\s(?:-o\b|--output\b)/.test(seg)) return false;
+    // sort reads — unless -o/--output turns it into a file writer. Every spelling
+    // counts: separated (-o FILE), attached (-oFILE), clustered (-ro FILE), long
+    // (--output FILE, --output=FILE) — a short-option group ending in o takes the
+    // next word as its output file.
+    if (name === "sort" && /\s(?:-[a-zA-Z]*o|--output)/.test(seg)) return false;
     if (!READ_COMMANDS.has(name)) return false;
   }
   return true;

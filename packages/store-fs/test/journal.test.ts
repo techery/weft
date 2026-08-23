@@ -4,7 +4,7 @@
  * processes; watch() serves the backlog before anything live; projections are
  * rebuildable from the JSONL alone.
  */
-import { appendFile, readFile, utimes, writeFile } from "node:fs/promises";
+import { appendFile, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JournalRecord, RunState, TreePhase } from "@weft/core";
 import { reduceState, renderReport, renderTree } from "@weft/core";
@@ -89,6 +89,30 @@ describe("append", () => {
     await utimes(lock, past, past);
 
     const appended = await store.append("run-a", [logged("after the crash")]);
+    expect(appended.map((r) => r.i)).toEqual([1]);
+  });
+
+  test("an ACTIVE holder renews its lock, so a slow append can never be stolen mid-write", async () => {
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    await store.append("run-a", [runCreated("run-a", "audit")]);
+    const lock = join(dir, "run-a", "journal.lock");
+    const locked = store as unknown as {
+      withFileLock<T>(lockPath: string, what: string, fn: () => Promise<T>): Promise<T>;
+    };
+    await locked.withFileLock(lock, "run run-a", async () => {
+      // The critical section has (apparently) run long enough to look stale —
+      // exactly the window where a contender used to steal a LIVE holder's lock
+      // and enter the same critical section.
+      const past = new Date(Date.now() - 60_000);
+      await utimes(lock, past, past);
+      // The holder's periodic renewal must freshen it before the threshold matters.
+      await sleep(3_000);
+      const age = Date.now() - (await stat(lock)).mtimeMs;
+      expect(age).toBeLessThan(3_000);
+    });
+    // Released normally afterwards: the next append proceeds unhindered.
+    const appended = await store.append("run-a", [logged("after the slow append")]);
     expect(appended.map((r) => r.i)).toEqual([1]);
   });
 

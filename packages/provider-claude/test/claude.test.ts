@@ -292,6 +292,9 @@ describe("the tool gate", () => {
       "xargs rm",
       "env bash -c 'touch changed'", // a launcher smuggles any command
       "sort -o clobbered input.txt", // an allow-listed reader with a write flag
+      "sort -oclobbered input.txt", // ...in its ATTACHED spelling
+      "sort -ro clobbered input.txt", // ...clustered: the trailing o still takes a file
+      "sort --output=clobbered input.txt",
     ]) {
       expect(await ask(options, "Bash", { command }), command).toEqual({
         behavior: "deny",
@@ -305,6 +308,9 @@ describe("the tool gate", () => {
       behavior: "allow",
     });
     expect(await ask(options, "Bash", { command: "find src -name '*.ts'" })).toEqual({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: "sort -u -r input.txt | head" })).toEqual({
+      behavior: "allow",
+    });
     expect(await ask(options, "Grep", { pattern: "todo" })).toEqual({ behavior: "allow" });
   });
 
@@ -384,12 +390,19 @@ describe("the tool gate", () => {
       `printf x > "$HOME/.config/tool"`,
       "cp secrets.txt /tmp/exfil.txt",
       "touch ~/marker",
+      // Relative traversal escapes just as surely as an absolute path.
+      "printf x > ../../outside",
+      "cp secrets.txt ../sibling.txt",
+      "mv notes.txt ..",
     ]) {
       const denial = await ask(options, "Bash", { command });
       expect(denial.behavior, command).toBe("deny");
     }
-    // Relative writes land in the worktree, get captured, and stay allowed.
+    // Traversal-free relative writes land in the worktree, get captured, and stay allowed.
     expect(await ask(options, "Bash", { command: "printf x > notes.txt" })).toEqual({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: "printf x > sub/dir/notes.txt" })).toEqual({
+      behavior: "allow",
+    });
     expect(await ask(options, "Bash", { command: "pnpm test > /dev/null 2>&1" })).toEqual({
       behavior: "allow",
     });

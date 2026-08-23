@@ -125,9 +125,13 @@ export class FsJournalStore implements JournalStore {
 
   /**
    * A tiny cross-process mutex (exclusive-create of the lock file) held for the
-   * few milliseconds an append or a lease operation takes. A lock whose holder
-   * crashed goes stale and is stolen after 10s; acquisition gives up loudly
-   * after 30s rather than hanging.
+   * few milliseconds an append or a lease operation takes. A holder RENEWS the
+   * lock's mtime every 2.5s while it works, so staleness (10s) only ever expires
+   * a holder whose process died — never one merely slowed by a huge reconcile or
+   * sluggish storage. (A process frozen whole — SIGSTOP, VM pause — longer than
+   * the renewal slack can still be expired; the owner-checked release below keeps
+   * even that from cascading.) Acquisition gives up loudly after 30s rather than
+   * hanging.
    */
   private async withFileLock<T>(lockPath: string, what: string, fn: () => Promise<T>): Promise<T> {
     const token = randomUUID();
@@ -166,9 +170,17 @@ export class FsJournalStore implements JournalStore {
         await new Promise((resolve) => setTimeout(resolve, 5 + Math.random() * 15));
       }
     }
+    // Keep the held lock visibly alive: contenders judge staleness by mtime, and
+    // without renewal a slow critical section would get "stolen" mid-write.
+    const renew = setInterval(() => {
+      const now = new Date();
+      void fs.utimes(lockPath, now, now).catch(() => undefined);
+    }, 2_500);
+    renew.unref?.();
     try {
       return await fn();
     } finally {
+      clearInterval(renew);
       // Owner-checked release: if this append overran the stale threshold and lost
       // the lock to a contender, removing by pathname would delete the NEW owner's
       // lock and let a third writer in — remove only a lock that is still ours.

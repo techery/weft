@@ -24,6 +24,16 @@ export const READ_ONLY_MESSAGE = "this is a read-only step";
 /** An absolute or home-anchored path anywhere in a command (except /dev/null). */
 const OUT_OF_TREE_PATH = /(?:^|[\s='"`])(?:\/(?!dev\/null\b)|~\/|\$HOME\b)/;
 
+/**
+ * A `..` path segment anywhere in a command: relative traversal climbs out of the
+ * worktree just as surely as an absolute path (`> ../../outside`), and patch
+ * capture cannot see or quarantine what lands beyond the tree. Deliberately
+ * coarse — an in-tree `foo/../bar` is also refused; strict scope prefers a false
+ * deny over an unquarantined write. Range spellings like HEAD..main don't match
+ * (`..` must border a separator on both sides).
+ */
+const PARENT_TRAVERSAL = /(?:^|[\s='"`/])\.\.(?:[/\s'"`]|$)/;
+
 export interface ToolGateOptions {
   req: AgentRequest;
   /** Called with the workspace-relative path of every edit the gate lets through. */
@@ -78,10 +88,15 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
       // deny-by-default there: only commands known not to write may run.
       if (!allowEdits && !isReadOnlyCommand(command)) return deny(READ_ONLY_MESSAGE);
       // A STRICT write scope relies on worktree patch capture, which only sees the
-      // worktree: a shell write aimed at an absolute or home-anchored path would
-      // escape both the scope check and quarantine — deny it up front. Relative
-      // writes stay allowed (they land in the worktree and are captured).
-      if (scope?.mode === "strict" && isWriteCommand(command) && OUT_OF_TREE_PATH.test(command)) {
+      // worktree: a shell write aimed at an absolute or home-anchored path — or a
+      // relative one that traverses out through `..` — would escape both the scope
+      // check and quarantine — deny it up front. Traversal-free relative writes
+      // stay allowed (they land in the worktree and are captured).
+      if (
+        scope?.mode === "strict" &&
+        isWriteCommand(command) &&
+        (OUT_OF_TREE_PATH.test(command) || PARENT_TRAVERSAL.test(command))
+      ) {
         return deny(`shell writes outside the worktree are ${scopeMessage}`);
       }
       if (isRiskyCommand(command)) {
