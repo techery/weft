@@ -863,8 +863,15 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 isDirectory: s.isDirectory(),
               },
             };
-          } catch {
-            return { value: { exists: false } };
+          } catch (err) {
+            // Absence is a VALUE; anything else (EACCES, ELOOP, ENAMETOOLONG…)
+            // is a FAILURE — a journaled { exists: false } would replay the
+            // false premise on every resume.
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code === "ENOENT" || code === "ENOTDIR") return { value: { exists: false } };
+            throw new StepError("exec_failed", `stat ${path}: ${(err as Error).message}`, {
+              step: { kind: "fs", key: path, runId: rt.runId },
+            });
           }
         },
       }),

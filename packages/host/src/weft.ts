@@ -16,6 +16,7 @@ import { isAbsolute, join, resolve, sep } from "node:path";
 import { Engine, ProviderRegistry } from "@weft/core";
 import {
   createWorkflowRegistry,
+  DEFAULT_ALLOW_BARE,
   type FileWorkflowRegistry,
   GateError,
   instantiateBundle,
@@ -65,13 +66,24 @@ export interface CreateWeftOptions {
   providers?: "real" | "mock";
 }
 
+/**
+ * Config allowBare entries EXTEND the default bare imports (@weft/sdk, zod) —
+ * they never replace them: enabling lodash must not make every Zod-based
+ * workflow fail to load.
+ */
+function mergedAllowBare(config: WeftConfig): string[] | undefined {
+  const extra = config.workflows?.allowBare;
+  if (!extra || extra.length === 0) return undefined;
+  return [...new Set([...DEFAULT_ALLOW_BARE, ...extra])];
+}
+
 export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
   const cwd = resolve(opts.cwd);
   const config = opts.config ?? (await loadConfig(cwd));
   const weftDir = join(cwd, WEFT_DIR);
   const stores = createFsStores(weftDir);
 
-  const allowBare = config.workflows?.allowBare;
+  const allowBare = mergedAllowBare(config);
   const registry = createWorkflowRegistry({
     dir: workflowsDir(cwd, weftDir, config),
     ...(allowBare ? { allowBare } : {}),
@@ -195,7 +207,7 @@ export async function inlineDefOf(weft: Weft, runId: string): Promise<WorkflowDe
   } catch {
     return undefined;
   }
-  const allowBare = weft.config.workflows?.allowBare;
+  const allowBare = mergedAllowBare(weft.config);
   return instantiateBundle(code, { filename: file, ...(allowBare ? { allowBare } : {}) });
 }
 
@@ -242,7 +254,7 @@ export async function resolveWorkflow(weft: Weft, ref: string): Promise<Resolved
 
   const file = isAbsolute(ref) ? ref : resolve(weft.cwd, ref);
   if (!existsSync(file)) throw await unknownRef(weft, ref, file);
-  const allowBare = weft.config.workflows?.allowBare;
+  const allowBare = mergedAllowBare(weft.config);
   const loaded = await loadWorkflow({ entry: file, ...(allowBare ? { allowBare } : {}) });
   return { def: named(loaded.def, loaded.name), name: loaded.name, hash: loaded.hash };
 }

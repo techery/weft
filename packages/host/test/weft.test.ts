@@ -6,6 +6,7 @@ import {
   createWeft,
   inlineDefOf,
   isWorkflowPathRef,
+  loadConfig,
   loadWorkflow,
   persistedDefOf,
   persistInlineScript,
@@ -314,5 +315,31 @@ describe("reindex", () => {
     const again = await weft.reindex();
     expect(again).toBe(index);
     expect(again.stats().runs).toBe(2);
+  });
+});
+
+describe("config hardening (codex review round 15, PR #1)", () => {
+  it("config allowBare entries EXTEND the default bare imports rather than replacing them", async () => {
+    const root = await tempRoot();
+    await write(root, ".weft/workflows/hello.ts", HELLO_WORKFLOW);
+    const weft = await createWeft({
+      cwd: root,
+      providers: "mock",
+      config: { workflows: { allowBare: ["left-pad"] } },
+    });
+    opened.push(weft);
+    // HELLO imports zod: the default allowance must survive the extension.
+    const { def } = await resolveWorkflow(weft, "hello");
+    expect(def.meta.description).toBeTruthy();
+  });
+
+  it("rejects a typo inside a known config section instead of silently ignoring it", async () => {
+    const root = await tempRoot();
+    // A misspelled limit silently falling back to the default defeats validation.
+    await write(root, ".weft/config.json", JSON.stringify({ limits: { stepTimoutMs: 5 } }));
+    await expect(loadConfig(root)).rejects.toThrow(/stepTimoutMs|nrecognized/);
+    // Top-level unknown keys stay forward-compatible on purpose.
+    await write(root, ".weft/config.json", JSON.stringify({ futureSetting: true }));
+    await expect(loadConfig(root)).resolves.toBeTruthy();
   });
 });

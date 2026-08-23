@@ -372,6 +372,29 @@ describe("projections", () => {
   });
 });
 
+describe("list freshness", () => {
+  test("a projection older than the journal is not trusted: the journal folds instead", async () => {
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    await store.append("run-a", [runCreated("run-a", "audit")]);
+    // The snapshot lands, then the run completes but its FOLLOW-UP snapshot is
+    // lost (a crash between fsync and state.json): the stale projection says
+    // the run never finished.
+    await store.snapshot("run-a", { state: reduceState(await drain(store, "run-a")) });
+    await sleep(20); // distinct mtimes
+    await store.append("run-a", [{ type: "run.completed", output: { ok: true } }]);
+
+    const [summary] = await store.list();
+    expect(summary?.status).toBe("complete");
+
+    // A snapshot written AFTER the append is fresh again and served directly.
+    await sleep(20);
+    await store.snapshot("run-a", { state: reduceState(await drain(store, "run-a")) });
+    const [fresh] = await store.list();
+    expect(fresh?.status).toBe("complete");
+  });
+});
+
 describe("acquireRun", () => {
   test("a live claim refuses a second owner; release frees it", async () => {
     const dir = await tempDir();

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, symlink } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import {
@@ -1739,5 +1739,35 @@ describe("codex review findings, round 14 (PR #1)", () => {
     expect(state.status).toBe("executing");
     expect(state.error).toBeUndefined();
     expect(state.output).toBeUndefined();
+  });
+});
+
+describe("codex review findings, round 15 (PR #1)", () => {
+  test("fs.stat surfaces real filesystem failures; only absence is a value", async () => {
+    const t = testEngine();
+    const cwd = await tempDir();
+    await symlink("loop", join(cwd, "loop")); // self-referential: stat fails with ELOOP
+    const failing = defineWorkflow(
+      { name: "statloop", description: "s", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        // Reporting { exists: false } here would journal a false premise forever.
+        await ctx.fs.stat("loop");
+        return {};
+      },
+    );
+    const h1 = await t.engine.start(failing, { input: {}, cwd });
+    await expect(h1.result).rejects.toMatchObject({ code: "exec_failed" });
+
+    const missing = defineWorkflow(
+      {
+        name: "statmissing",
+        description: "s",
+        input: z.object({}),
+        output: z.object({ exists: z.boolean() }),
+      },
+      async (ctx) => ({ exists: (await ctx.fs.stat("definitely-not-there.txt")).exists }),
+    );
+    const h2 = await t.engine.start(missing, { input: {}, cwd });
+    expect(await h2.result).toEqual({ exists: false });
   });
 });

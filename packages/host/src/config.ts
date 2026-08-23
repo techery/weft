@@ -40,17 +40,20 @@ const Effort = z.enum(["low", "medium", "high", "xhigh", "max"]);
 const Risk = z.enum(["low", "medium", "high", "irreversible"]);
 const ApprovalMode = z.enum(["auto", "ask"]);
 
-const ModelPrice = z.object({
+// Nested sections are STRICT: a typo like `limits.stepTimoutMs` silently falling
+// back to the default timeout defeats the point of validating at all. Forward
+// compatibility lives at the TOP level only (see ConfigSchema's .loose()).
+const ModelPrice = z.strictObject({
   inputPer1M: z.number().nonnegative(),
   outputPer1M: z.number().nonnegative(),
 });
 
-const ProviderConfig = z.object({
+const ProviderConfig = z.strictObject({
   concurrency: z.number().int().positive().optional(),
   prices: z.record(z.string(), ModelPrice).optional(),
 });
 
-const Limits = z.object({
+const Limits = z.strictObject({
   concurrency: z.number().int().positive().optional(),
   maxTurns: z.number().int().positive().optional(),
   stepTimeoutMs: z.number().int().positive().optional(),
@@ -71,7 +74,7 @@ const Limits = z.object({
 const ConfigSchema = z
   .object({
     defaults: z
-      .object({
+      .strictObject({
         provider: z.string().optional(),
         model: z.string().optional(),
         effort: Effort.optional(),
@@ -79,7 +82,7 @@ const ConfigSchema = z
       .optional(),
     providers: z.record(z.string(), ProviderConfig).optional(),
     approvalPolicy: z
-      .object({
+      .strictObject({
         tiers: z.partialRecord(Risk, ApprovalMode).optional(),
         actions: z.record(z.string(), ApprovalMode).optional(),
       })
@@ -87,7 +90,7 @@ const ConfigSchema = z
     fetchAllow: z.array(z.string()).optional(),
     limits: Limits.optional(),
     workflows: z
-      .object({
+      .strictObject({
         dir: z.string().optional(),
         allowBare: z.array(z.string()).optional(),
       })

@@ -319,19 +319,26 @@ export class FsJournalStore implements JournalStore {
   }
 
   private async summarize(runId: string): Promise<RunSummary | undefined> {
-    // Prefer the state.json projection; fall back to scanning the journal.
+    // Prefer the state.json projection — while it is FRESH. An append can land
+    // (fsynced) with its follow-up snapshot lost to a crash, and a stale
+    // projection would then report a terminal run as executing forever. A
+    // journal newer than the projection folds the journal instead; that costs a
+    // read only for runs whose journal moved past their last snapshot.
     try {
-      const raw = await fs.readFile(join(this.runDir(runId), "state.json"), "utf8");
-      const state = JSON.parse(raw) as RunState;
-      const stat = await fs.stat(this.journalPath(runId));
-      return {
-        runId,
-        workflow: state.workflow,
-        status: state.status,
-        createdAt: state.createdAt,
-        updatedAt: Math.max(state.updatedAt, stat.mtimeMs),
-        ...(state.parentRunId ? { parentRunId: state.parentRunId } : {}),
-      };
+      const statePath = join(this.runDir(runId), "state.json");
+      const [projStat, jStat] = await Promise.all([fs.stat(statePath), fs.stat(this.journalPath(runId))]);
+      if (jStat.mtimeMs <= projStat.mtimeMs) {
+        const raw = await fs.readFile(statePath, "utf8");
+        const state = JSON.parse(raw) as RunState;
+        return {
+          runId,
+          workflow: state.workflow,
+          status: state.status,
+          createdAt: state.createdAt,
+          updatedAt: Math.max(state.updatedAt, jStat.mtimeMs),
+          ...(state.parentRunId ? { parentRunId: state.parentRunId } : {}),
+        };
+      }
     } catch {
       // fall through to journal scan
     }
