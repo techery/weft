@@ -617,9 +617,14 @@ export function buildCtx(rt: RunRuntime): Ctx {
         result = await provider.run(req, { signal: io.signal });
       } catch (err) {
         if (isCancellation(err) || err instanceof StepError) throw err;
+        // A provider that failed AFTER burning turns (say, no structured output
+        // ever arrived) reports the spend on the error — fold it in so the
+        // failure record carries what this call really cost.
+        addUsage((err as { usage?: Usage }).usage);
         throw new StepError("provider_error", `${providerId}: ${(err as Error).message}`, {
           step: stepRef,
           cause: err,
+          ...(used.input > 0 || used.output > 0 ? { detail: { usage: { ...used } } } : {}),
         });
       }
       addUsage(result.usage);
@@ -642,10 +647,12 @@ export function buildCtx(rt: RunRuntime): Ctx {
           result = await provider.repair(result.sessionId, req, check.issues, { signal: io.signal });
         } catch (err) {
           if (isCancellation(err) || err instanceof StepError) throw err;
+          // The failing repair turn's own spend rides the error too.
+          addUsage((err as { usage?: Usage }).usage);
           throw new StepError("provider_error", `${providerId} repair: ${(err as Error).message}`, {
             step: stepRef,
             cause: err,
-            detail: { usage: used },
+            detail: { usage: { ...used } },
           });
         }
         addUsage(result.usage);

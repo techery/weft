@@ -602,3 +602,30 @@ describe("finalize, repair and abort", () => {
     expect(controller?.signal.aborted).toBe(false);
   });
 });
+
+describe("usage on failure (codex review round 16, PR #1)", () => {
+  test("a step that never produced structured output still reports its spend on the error", async () => {
+    const { fn } = fakeQuery([
+      {
+        messages: [
+          assistantText("hmm"),
+          resultMessage({
+            subtype: "error_max_turns",
+            usage: { input_tokens: 700, output_tokens: 300 },
+            total_cost_usd: 0.001,
+          }),
+        ],
+      },
+      // The finalize turn ALSO yields nothing — both turns were paid for.
+      {
+        messages: [
+          resultMessage({ usage: { input_tokens: 100, output_tokens: 50 }, total_cost_usd: 0.0005 }),
+        ],
+      },
+    ]);
+    const provider = createClaudeProvider({ queryFn: fn });
+    await expect(provider.run(request({ onMaxTurns: "finalize" }), control())).rejects.toMatchObject({
+      usage: { input: 800, output: 350 },
+    });
+  });
+});

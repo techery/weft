@@ -250,7 +250,7 @@ export class Engine implements EngineHost {
       agentCounter: { count: 0, warned: false },
       reuse: opts.reuse ?? "content",
     };
-    shared.budget.restore(replay.totalUsage.tokens, replay.totalUsage.usd);
+    shared.budget.restore(replay.totalUsage.tokens, replay.totalUsage.usd, replay.totalUsage.samples);
     const runtime = new RunRuntime({
       host: this,
       runId,
@@ -635,7 +635,7 @@ export class Engine implements EngineHost {
       // The child's own journaled spend charges up the shared chain. The parent's
       // restore never saw it (a workflow step journals its usage only at
       // completion, and a completed child is served, not resumed) — no double count.
-      shared.budget.restore(replay.totalUsage.tokens, replay.totalUsage.usd);
+      shared.budget.restore(replay.totalUsage.tokens, replay.totalUsage.usd, replay.totalUsage.samples);
     } else {
       const rawBad = jsonUnsafeAt(rawInput);
       if (rawBad !== undefined) {

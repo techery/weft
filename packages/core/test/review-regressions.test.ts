@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import {
   type AgentProvider,
+  Budget,
   Engine,
   type JournalEvent,
   type JournalRecord,
@@ -1769,5 +1770,24 @@ describe("codex review findings, round 15 (PR #1)", () => {
     );
     const h2 = await t.engine.start(missing, { input: {}, cwd });
     expect(await h2.result).toEqual({ exists: false });
+  });
+});
+
+describe("codex review findings, round 16 (PR #1)", () => {
+  test("a resumed budget knows how many calls its restored spend came from", () => {
+    // Two prior calls averaged 100 tokens; plenty of budget remains.
+    const resumed = new Budget({ tokens: 1_000 });
+    resumed.restore(200, 0, 2);
+    // With the samples restored, TWO concurrent reservations fit the average.
+    // With them lost, the first call counts as an unpriced probe and the second
+    // would be refused despite being easily affordable.
+    const r1 = resumed.reserveCall({ kind: "agent" });
+    const r2 = resumed.reserveCall({ kind: "agent" });
+    r1();
+    r2();
+    // The observed-average gate still enforces: a tight remainder refuses.
+    const tight = new Budget({ tokens: 700 });
+    tight.restore(600, 0, 2); // avg 300, remaining 100
+    expect(() => tight.reserveCall({ kind: "agent" })).toThrow(/budget/);
   });
 });

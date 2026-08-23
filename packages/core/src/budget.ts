@@ -52,11 +52,18 @@ export class Budget {
     else this.chargedCalls++; // one cost sample per charged call, counted once at the root
   }
 
-  /** Restore journaled spend on resume without re-charging parents twice. */
-  restore(tokens: number, usd: number): void {
+  /**
+   * Restore journaled spend on resume without re-charging parents twice.
+   * `samples` is the number of charged calls the spend came from: without it,
+   * reserveCall would treat the first resumed call as an unpriced probe and then
+   * divide ALL historical spend by the new sample count alone, refusing calls
+   * the budget can actually afford.
+   */
+  restore(tokens: number, usd: number, samples = 0): void {
     this.tokens += tokens;
     this.usd += usd;
-    this.parent?.restore(tokens, usd);
+    if (this.parent) this.parent.restore(tokens, usd, samples);
+    else this.chargedCalls += samples;
   }
 
   spentTokens(): number {

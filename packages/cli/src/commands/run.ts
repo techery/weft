@@ -3,6 +3,9 @@
  * ways and they compose: `--args '{…}'` first, then the dynamic `--flag value` pairs over
  * it, so a saved JSON blob can be tweaked from the shell without re-typing it.
  */
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import {
   isWorkflowPathRef,
   loadWorkflow,
@@ -45,18 +48,30 @@ export function runCommand(io: CliIo): Command {
         const reuse = parseReuse(opts.reuse);
         const budget = opts.budget === undefined ? undefined : parseBudget(opts.budget);
 
-        const handle = await weft.engine.start(def, {
-          input,
-          cwd: weft.cwd,
-          ...(hash !== undefined ? { defHash: hash } : {}),
-          ...(budget !== undefined ? { budget } : {}),
-          ...(reuse !== undefined ? { reuse } : {}),
-        });
         // Provenance rides with the run: inline scripts persist their bundled source,
         // and path refs record the path — a later `weft resume` re-resolves either.
-        // Registry names need nothing; the journaled name finds them.
-        if (code !== undefined) await persistInlineScript(weft, handle.runId, code);
-        else if (isWorkflowPathRef(ref)) await persistWorkflowRef(weft, handle.runId, ref);
+        // Registry names need nothing; the journaled name finds them. Persisted
+        // BEFORE the run launches: a crash after start() must never leave a
+        // durable run no other process can find a definition for.
+        const runId = randomUUID().slice(0, 8);
+        if (code !== undefined) await persistInlineScript(weft, runId, code);
+        else if (isWorkflowPathRef(ref)) await persistWorkflowRef(weft, runId, ref);
+        const handle = await weft.engine
+          .start(def, {
+            runId,
+            input,
+            cwd: weft.cwd,
+            ...(hash !== undefined ? { defHash: hash } : {}),
+            ...(budget !== undefined ? { budget } : {}),
+            ...(reuse !== undefined ? { reuse } : {}),
+          })
+          .catch(async (err: unknown) => {
+            // Startup failed before any journal record: the reserved provenance is litter.
+            if (!(await weft.engine.journal.exists(runId))) {
+              await rm(join(weft.runsDir, runId), { recursive: true, force: true }).catch(() => undefined);
+            }
+            throw err;
+          });
         io.out(`${pc.bold(name)}  ${pc.dim("run")} ${handle.runId}`);
 
         const outcome = opts.watch ? await watchRun(io, weft, handle, name) : await handle.outcome();

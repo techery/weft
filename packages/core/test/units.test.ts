@@ -322,7 +322,7 @@ describe("ReplayIndex", () => {
     // failed steps are never indexed
     expect(idx.matchStep(3, "h2", "bash", undefined, "content")).toBeUndefined();
     // usage restored
-    expect(idx.totalUsage).toEqual({ tokens: 15, usd: 0 });
+    expect(idx.totalUsage).toEqual({ tokens: 15, usd: 0, samples: 1 });
     // signals FIFO
     expect(idx.takeSignal("go")?.payload).toEqual({ n: 1 });
     expect(idx.takeSignal("go")).toBeUndefined();

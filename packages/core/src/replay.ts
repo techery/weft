@@ -67,8 +67,12 @@ export class ReplayIndex {
   readonly humansById = new Map<string, HumanEntry>();
   readonly scheduledByHash = new Map<string, ScheduledEntry[]>();
   readonly signalsByName = new Map<string, SignalEntry[]>();
-  /** Total journaled usage, restored into the budget on resume. */
-  totalUsage = { tokens: 0, usd: 0 };
+  /**
+   * Total journaled usage, restored into the budget on resume. `samples` counts
+   * the charged calls it came from, so reserveCall's observed-average gate keeps
+   * an honest denominator after a resume.
+   */
+  totalUsage = { tokens: 0, usd: 0, samples: 0 };
   /**
    * baseTree of every journaled patch.merged. A resultTree found in here was
    * CONSUMED by a later journaled merge — that later patch may edit the very
@@ -146,6 +150,7 @@ export class ReplayIndex {
           if (ev.usage) {
             index.totalUsage.tokens += (ev.usage.input ?? 0) + (ev.usage.output ?? 0);
             index.totalUsage.usd += ev.usage.usd ?? 0;
+            index.totalUsage.samples++;
           }
           index.entryCount++;
           break;
@@ -156,6 +161,7 @@ export class ReplayIndex {
           if (ev.usage) {
             index.totalUsage.tokens += (ev.usage.input ?? 0) + (ev.usage.output ?? 0);
             index.totalUsage.usd += ev.usage.usd ?? 0;
+            index.totalUsage.samples++;
           }
           break;
         }
@@ -166,6 +172,7 @@ export class ReplayIndex {
           if (usage) {
             index.totalUsage.tokens += (usage.input ?? 0) + (usage.output ?? 0);
             index.totalUsage.usd += usage.usd ?? 0;
+            index.totalUsage.samples++;
           }
           break;
         }

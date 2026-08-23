@@ -3,7 +3,7 @@
  * way Claude Code or Codex would, and every assertion is made against the JSON a session
  * would parse — never against prose.
  */
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -185,6 +185,19 @@ export default defineWorkflow(
     const done = await json<WaitReply>(s, "weft_wait", { runId: started.runId, timeout: "10s" });
     expect(done.status).toBe("complete");
     expect(done.output?.isNull).toBe(true);
+  });
+
+  it("a failed start leaves no orphaned provenance behind", async () => {
+    const s = await session();
+    // The input fails hello's schema, so engine.start throws AFTER the inline
+    // script was persisted — the reservation must be cleaned up, not leaked.
+    const res = await s.client.callTool({
+      name: "weft_run",
+      arguments: { source: HELLO, input: { name: 42 } },
+    });
+    expect(res.isError).toBe(true);
+    const dirs = await readdir(path.join(s.cwd, ".weft", "runs")).catch(() => [] as string[]);
+    expect(dirs).toEqual([]);
   });
 
   it("carries a pending approval out to the session and back in through weft_answer", async () => {

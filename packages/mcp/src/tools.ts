@@ -9,6 +9,9 @@
  * message: an answer that fails the request schema tells the session what to fix, and the
  * session can fix it without a person.
  */
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
@@ -274,21 +277,33 @@ async function startRun(weft: Weft, runs: RunStore, args: RunArgs): Promise<Trac
   const inline = args.workflow === undefined ? await loadInline(weft, args.source ?? "") : undefined;
   const resolved = inline ?? (await resolveWorkflow(weft, args.workflow ?? ""));
 
-  const handle = await weft.engine.start(resolved.def, {
-    // Pass through verbatim: null, arrays, and scalars are valid inputs, and the
-    // engine defaults only an actually OMITTED input.
-    input: args.input,
-    cwd: weft.cwd,
-    ...(resolved.hash !== undefined ? { defHash: resolved.hash } : {}),
-    ...(args.budget !== undefined ? { budget: parseBudget(args.budget) } : {}),
-    ...(args.reuse !== undefined ? { reuse: args.reuse } : {}),
-  });
   // Provenance rides with the run: inline source persists its bundled script, a
   // path ref records the path — any later host can reconstruct the definition.
-  if (inline?.code !== undefined) await persistInlineScript(weft, handle.runId, inline.code);
+  // Persisted BEFORE the run launches: a crash after start() must never leave a
+  // durable run no other process can find a definition for.
+  const runId = randomUUID().slice(0, 8);
+  if (inline?.code !== undefined) await persistInlineScript(weft, runId, inline.code);
   else if (args.workflow !== undefined && isWorkflowPathRef(args.workflow)) {
-    await persistWorkflowRef(weft, handle.runId, args.workflow);
+    await persistWorkflowRef(weft, runId, args.workflow);
   }
+  const handle = await weft.engine
+    .start(resolved.def, {
+      runId,
+      // Pass through verbatim: null, arrays, and scalars are valid inputs, and the
+      // engine defaults only an actually OMITTED input.
+      input: args.input,
+      cwd: weft.cwd,
+      ...(resolved.hash !== undefined ? { defHash: resolved.hash } : {}),
+      ...(args.budget !== undefined ? { budget: parseBudget(args.budget) } : {}),
+      ...(args.reuse !== undefined ? { reuse: args.reuse } : {}),
+    })
+    .catch(async (err: unknown) => {
+      // Startup failed before any journal record: the reserved provenance is litter.
+      if (!(await weft.engine.journal.exists(runId))) {
+        await rm(join(weft.runsDir, runId), { recursive: true, force: true }).catch(() => undefined);
+      }
+      throw err;
+    });
   return runs.track({
     handle,
     ...(args.workflow !== undefined ? { ref: args.workflow } : { def: resolved.def }),

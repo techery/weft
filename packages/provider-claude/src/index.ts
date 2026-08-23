@@ -118,7 +118,7 @@ class ClaudeProvider implements AgentProvider {
       // One forced turn in the same session: the step is worth more than the turn budget.
       await this.stream(req, ctl, turn, FINALIZE_PROMPT, turn.sessionId);
     }
-    if (!turn.captured) throw new Error(NO_OUTPUT);
+    if (!turn.captured) throw noOutput(turn);
     return toResult(turn);
   }
 
@@ -131,7 +131,7 @@ class ClaudeProvider implements AgentProvider {
     if (sessionId === undefined) return this.run(req, ctl);
     const turn = newTurn();
     await this.stream(req, ctl, turn, repairPrompt(req, errors), sessionId);
-    if (!turn.captured) throw new Error(NO_OUTPUT);
+    if (!turn.captured) throw noOutput(turn);
     return toResult(turn);
   }
 
@@ -236,13 +236,26 @@ function absorb(message: SDKMessage, turn: Turn): void {
   }
 }
 
-function toResult(turn: Turn): AgentResult {
+function usageOf(turn: Turn): Usage {
   const usage: Usage = { input: turn.input, output: turn.output };
   if (turn.cacheRead > 0) usage.cacheRead = turn.cacheRead;
   if (turn.usdSeen) usage.usd = turn.usd;
+  return usage;
+}
+
+/**
+ * The turns already cost money even though no structured output ever arrived:
+ * the spend rides the error (a duck-typed `usage` the engine folds into the
+ * failure record) so a resume's budget restore still counts this paid call.
+ */
+function noOutput(turn: Turn): Error {
+  return Object.assign(new Error(NO_OUTPUT), { usage: usageOf(turn) });
+}
+
+function toResult(turn: Turn): AgentResult {
   return {
     output: turn.captured?.value,
-    usage,
+    usage: usageOf(turn),
     ...(turn.sessionId !== undefined ? { sessionId: turn.sessionId } : {}),
     transcript: turn.transcript.join("\n"),
     filesTouched: turn.files,
