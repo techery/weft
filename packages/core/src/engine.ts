@@ -645,6 +645,17 @@ export class Engine implements EngineHost {
     answer: unknown,
     opts: { channel?: string } = {},
   ): Promise<void> {
+    // Same contract as signal payloads: the answer rides the JSONL journal, so a
+    // Map/Date would replay differently than the live waiter saw it, and a
+    // bigint or cycle would blow up the append itself. Refuse before either path.
+    const answerBad = jsonUnsafeAt(answer ?? null);
+    if (answerBad !== undefined) {
+      throw new StepError(
+        "invalid_answer",
+        `answer to ${requestId} cannot be journaled as JSON at ${answerBad}`,
+        { step: { kind: "human", key: requestId, runId } },
+      );
+    }
     const active = this.active.get(runId);
     if (active) {
       const wait = active.runtime.pendingWait(requestId);
@@ -952,8 +963,10 @@ export class Engine implements EngineHost {
 
 /**
  * The first path in a value the JSONL journal cannot faithfully hold, if any.
- * Undefined OBJECT properties are tolerated (JSON drops them, and schemas treat
- * absent and undefined alike); undefined array slots become null and are not.
+ * A PRESENT property whose value is undefined is flagged too: JSON drops it, so
+ * the journal would replay a different shape than the live value — and a schema
+ * that distinguishes absent from present-undefined would flip on resume. Omit
+ * the key instead of writing undefined into it.
  */
 function jsonUnsafeAt(value: unknown, path = "$"): string | undefined {
   if (value === null) return undefined;
@@ -980,7 +993,6 @@ function jsonUnsafeAt(value: unknown, path = "$"): string | undefined {
     return `${path} (${name})`;
   }
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (entry === undefined) continue;
     const bad = jsonUnsafeAt(entry, `${path}.${key}`);
     if (bad !== undefined) return bad;
   }

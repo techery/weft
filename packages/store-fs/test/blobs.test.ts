@@ -2,7 +2,7 @@
  * Blobs are content-addressed: the ref *is* the sha256 of the bytes, so writing
  * the same patch twice costs one file and journals can share refs across runs.
  */
-import { readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { sha256Hex } from "@weft/core";
 import { afterEach, describe, expect, test } from "vitest";
@@ -60,6 +60,25 @@ describe("FsBlobStore", () => {
     expect(JSON.parse(await readFile(meta, "utf8"))).toEqual({ kind: "patch", contentType: "text/x-diff" });
     // Metadata never changes the ref, and the blob itself is untouched by it.
     expect(await store.getText(ref.hash)).toBe("PATCH");
+  });
+
+  test("a torn blob from a crashed writer is repaired, never accepted as stored", async () => {
+    const dir = await tempDir();
+    const store = new FsBlobStore(dir);
+    const payload = "a patch whose torn prefix must never be served under its full hash";
+    const hash = sha256Hex(payload);
+    // A previous process crashed mid-write: the hash-named file exists TRUNCATED.
+    const path = join(dir, hash.slice(0, 2), hash);
+    await mkdir(join(dir, hash.slice(0, 2)), { recursive: true });
+    await writeFile(path, payload.slice(0, 10));
+
+    // put() must land the complete bytes over the torn leftover — an
+    // exists-means-stored shortcut would associate the hash with corruption forever.
+    const ref = await store.put(payload);
+    expect(ref.hash).toBe(hash);
+    expect(await store.getText(hash)).toBe(payload);
+    // No stray temp files remain in the shard.
+    expect(await readdir(join(dir, hash.slice(0, 2)))).toEqual([hash]);
   });
 
   test("a missing blob throws and an unknown ref is not `has`", async () => {

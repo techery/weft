@@ -1365,3 +1365,64 @@ describe("codex review findings, round 9 (PR #1)", () => {
     expect(settledAt).not.toBe(0);
   });
 });
+
+describe("codex review findings, round 10 (PR #1)", () => {
+  test("an answer the journal cannot hold is refused on both append paths", async () => {
+    const def = defineWorkflow(
+      { name: "ansjson", description: "a", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const go = await ctx.human.approve({ action: "ship?" });
+        return { ok: go.approved };
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+    const id = o1.pending[0]!.id;
+
+    // ACTIVE path: a Date would journal as an ISO string — replay would then
+    // disagree with what the live waiter was handed.
+    await expect(t1.engine.answer(h1.runId, id, { approved: true, note: new Date() })).rejects.toMatchObject({
+      code: "invalid_answer",
+      message: expect.stringContaining("cannot be journaled as JSON"),
+    });
+    let recs = await records(t1.journal, h1.runId);
+    expect(recs.some((r) => r.ev.type === "human.answered")).toBe(false);
+    await t1.engine.shutdown();
+
+    // NON-ACTIVE path (a CLI answering a parked run): a bigint would make the
+    // filesystem append itself throw after its cached count advanced.
+    const t2 = reopen(t1);
+    await expect(t2.engine.answer(h1.runId, id, { approved: true, extra: 10n })).rejects.toMatchObject({
+      code: "invalid_answer",
+    });
+    recs = await records(t2.journal, h1.runId);
+    expect(recs.some((r) => r.ev.type === "human.answered")).toBe(false);
+
+    // A journal-safe answer still lands and the resumed run completes on it.
+    await t2.engine.answer(h1.runId, id, { approved: true });
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    expect(await h2.result).toEqual({ ok: true });
+  });
+
+  test("a PRESENT-but-undefined output property fails loudly instead of silently vanishing", async () => {
+    const def = defineWorkflow(
+      {
+        name: "undef",
+        description: "u",
+        input: z.object({}),
+        output: z.object({ ok: z.boolean(), note: z.string().optional() }),
+      },
+      // The key exists with value undefined: JSON drops it, so the journal would
+      // replay a different shape than the live handle returned.
+      async () => ({ ok: true, note: undefined }),
+    );
+    const t = testEngine();
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(h.result).rejects.toMatchObject({
+      code: "invalid_output",
+      message: expect.stringContaining("$.note (undefined)"),
+    });
+  });
+});

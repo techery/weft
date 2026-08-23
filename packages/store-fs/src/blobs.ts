@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { dirname, join } from "node:path";
 import type { BlobMeta, BlobRef, BlobStore } from "@weft/core";
@@ -21,11 +21,15 @@ export class FsBlobStore implements BlobStore {
     const hash = createHash("sha256").update(data).digest("hex");
     const path = this.pathFor(hash);
     await fs.mkdir(dirname(path), { recursive: true });
-    try {
-      await fs.writeFile(path, data, { flag: "wx" });
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-    }
+    // Write-then-rename: the hash-named file must only ever exist COMPLETE. A
+    // direct write that crashed partway would leave a truncated file whose
+    // pathname promises this hash — every later put of the same content would
+    // see it "already stored" and the corruption would become permanent. The
+    // rename lands whole bytes over any such torn leftover (same content, same
+    // path: replacing an intact copy with identical bytes is harmless).
+    const tmp = `${path}.${randomUUID().slice(0, 8)}.tmp`;
+    await fs.writeFile(tmp, data);
+    await fs.rename(tmp, path);
     if (meta && (meta.kind || meta.contentType)) {
       await fs.writeFile(`${path}.meta.json`, JSON.stringify(meta)).catch(() => undefined);
     }
