@@ -146,6 +146,30 @@ describe("capturePatch", () => {
     expect((await repo.status()).clean).toBe(true);
   });
 
+  test("carries binary files from capture through apply", async () => {
+    const repo = await initRepo();
+    const original = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+    await writeFile(path.join(repo.cwd, "logo.png"), original);
+    await repo.add({ paths: ["logo.png"] });
+    await repo.commit({ message: "binary seed" });
+    const handle = await addWorktree({ repoRoot: repo.cwd, dir: await worktreePath() });
+
+    const edited = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0x42]);
+    const added = Buffer.from([0x00, 0x01, 0x02, 0x03, 0xff]);
+    await writeFile(path.join(handle.path, "logo.png"), edited);
+    await writeFile(path.join(handle.path, "raw.bin"), added);
+
+    const { patch, files } = await capturePatch({ worktreePath: handle.path });
+    expect([...files].sort()).toEqual(["logo.png", "raw.bin"]);
+    // --binary embeds the content itself, not an unappliable "Binary files differ" stub.
+    expect(patch).toContain("GIT binary patch");
+    expect(patch).not.toContain("Binary files differ");
+
+    expect(await applyPatchToTree({ repoRoot: repo.cwd, patch })).toEqual({ ok: true });
+    expect(await readFile(path.join(repo.cwd, "logo.png"))).toEqual(edited);
+    expect(await readFile(path.join(repo.cwd, "raw.bin"))).toEqual(added);
+  });
+
   test("is empty when the worktree is untouched", async () => {
     const repo = await initRepo();
     await seed(repo, { "a.txt": "one\n" }, "init");

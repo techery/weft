@@ -499,3 +499,57 @@ describe("codex review findings, round 2 (PR #1)", () => {
     expect(state.output).toBeUndefined(); // never records complete
   });
 });
+
+describe("codex review findings, round 3 (PR #1)", () => {
+  test("run.created reaches active-run projections for fresh starts and children", async () => {
+    const child = defineWorkflow(
+      { name: "child-state", description: "c", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        await ctx.human.approve({ action: "child gate" });
+        return { ok: true };
+      },
+    );
+    const def = defineWorkflow(
+      {
+        name: "parent-state",
+        description: "p",
+        input: z.object({ tag: z.string() }),
+        output: z.object({ ok: z.boolean() }),
+      },
+      async (ctx, input) => {
+        await ctx.human.approve({ action: "parent gate" });
+        const r = (await ctx.workflow(child, {})) as { ok: boolean };
+        return { ok: r.ok && input.tag === "t" };
+      },
+    );
+    const t = testEngine();
+    const h = await t.engine.start(def, { input: { tag: "t" }, cwd: await tempDir() });
+    const o1 = await h.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+
+    // The run was started, not resumed: state() reduces the in-memory records,
+    // which must include the seeded run.created or the run has no identity.
+    const parentState = await t.engine.state(h.runId);
+    expect(parentState).toMatchObject({ runId: h.runId, workflow: "parent-state", input: { tag: "t" } });
+    expect(parentState.createdAt).toBeGreaterThan(0);
+
+    await t.engine.answer(h.runId, o1.pending[0]!.id, { approved: true });
+    // The child gets its own journal; find it once it suspends on its gate.
+    let childId: string | undefined;
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const runs = await t.journal.list();
+      childId = runs.find((r) => r.parentRunId === h.runId)?.runId;
+      if (childId && (await t.engine.state(childId)).status === "waiting_for_human") break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    if (!childId) throw new Error("child run never appeared");
+    const childState = await t.engine.state(childId);
+    expect(childState).toMatchObject({ runId: childId, workflow: "child-state", parentRunId: h.runId });
+    expect(childState.createdAt).toBeGreaterThan(0);
+
+    const [pending] = await t.engine.pending(childId);
+    await t.engine.answer(childId, pending!.id, { approved: true });
+    expect(await h.result).toEqual({ ok: true });
+  });
+});

@@ -44,6 +44,24 @@ describe("append", () => {
     expect(lines.map((l) => (JSON.parse(l) as JournalRecord).i)).toEqual([0, 1, 2, 3]);
   });
 
+  test("two live instances over the same file never duplicate indices", async () => {
+    const dir = await tempDir();
+    const daemon = new FsJournalStore(dir);
+    const cli = new FsJournalStore(dir);
+    // Both instances hold a cache while the other appends (a CLI answering a
+    // daemon-owned run): each append must fold the other's on-disk growth into
+    // its cache before assigning the next index, or the indices duplicate.
+    const first = await daemon.append("run-a", [runCreated("run-a", "audit"), logged("one")]);
+    const answered = await cli.append("run-a", [logged("answer from the CLI")]);
+    const caught = await daemon.append("run-a", [logged("daemon"), logged("again")]);
+    const closing = await cli.append("run-a", [logged("cli again")]);
+    expect(first.map((r) => r.i)).toEqual([0, 1]);
+    expect(answered.map((r) => r.i)).toEqual([2]);
+    expect(caught.map((r) => r.i)).toEqual([3, 4]);
+    expect(closing.map((r) => r.i)).toEqual([5]);
+    expect((await drain(daemon, "run-a")).map((r) => r.i)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
   test("records carry a wall-clock stamp and the event verbatim", async () => {
     const store = new FsJournalStore(await tempDir());
     const before = Date.now();

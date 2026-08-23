@@ -23,7 +23,9 @@ export async function capturePatch(opts: { worktreePath: string }): Promise<{
   const names = await git.raw([...RAW_PATHS, "diff", "--cached", "--name-only"]);
   const files = splitLines(names.stdout);
   if (files.length === 0) return { patch: "", files: [] };
-  const { stdout } = await git.raw(["diff", "--cached"]);
+  // --binary embeds full content for binary files (images, archives); without it
+  // the patch says only "Binary files differ" and can never be applied.
+  const { stdout } = await git.raw(["diff", "--cached", "--binary"]);
   return { patch: stdout, files };
 }
 

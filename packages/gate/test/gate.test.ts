@@ -566,6 +566,14 @@ describe("sandbox", () => {
     await expect(allowed.def.run(stubCtx, {})).resolves.toEqual({ ok: true });
   });
 
+  it("blocks plain Date() without new", async () => {
+    // Date() as a call returns the current time as a string — a clock read too.
+    const { def } = await loadProbe({ top: `const D: any = Date;`, body: `const s = D();` });
+    await expect(def.run(stubCtx, {})).rejects.toThrow(
+      "Date() is unavailable in workflow code - use ctx.now()",
+    );
+  });
+
   it("keeps Date.parse and the rest of Math working", async () => {
     const { def } = await loadProbe({
       body: [

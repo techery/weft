@@ -157,7 +157,10 @@ export class Engine implements EngineHost {
       ...(opts.baseRef !== undefined ? { baseRef: opts.baseRef } : {}),
       ...(def.meta.defaults !== undefined ? { workflowDefaults: def.meta.defaults } : {}),
     });
-    await runtime.append([
+    // The appended records flow into launch as the projection seed: the run is not
+    // in the active map yet, so onRecords would otherwise drop run.created and the
+    // first snapshots (and list filters) would miss the run's identity.
+    const created = await runtime.append([
       {
         type: "run.created",
         runId,
@@ -169,7 +172,7 @@ export class Engine implements EngineHost {
         ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
       },
     ]);
-    return this.launch(runtime, def, inputCheck.value);
+    return this.launch(runtime, def, inputCheck.value, created);
   }
 
   async resume(runId: string, opts: ResumeOptions = {}): Promise<RunHandle> {
@@ -461,7 +464,9 @@ export class Engine implements EngineHost {
       ...(def.meta.defaults !== undefined ? { workflowDefaults: def.meta.defaults } : {}),
     });
     if (!resuming) {
-      await runtime.append([
+      // Seed launch with the appended record for the same reason start() does: the
+      // child is not in the active map yet, so onRecords drops run.created otherwise.
+      const created = await runtime.append([
         {
           type: "run.created",
           runId: childId,
@@ -473,6 +478,7 @@ export class Engine implements EngineHost {
           ...(parent.baseRef !== undefined ? { baseRef: parent.baseRef } : {}),
         },
       ]);
+      records.push(...created);
     }
     const handle = this.launch(runtime, def, input, records);
     const childActive = this.active.get(childId);

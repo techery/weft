@@ -152,6 +152,10 @@ function sandboxDate(): DateConstructor {
       if (args.length === 0) throw new Error("new Date() is unavailable in workflow code - use ctx.now()");
       return Reflect.construct(target, args, newTarget);
     },
+    // Plain Date() (no `new`) also reads the wall clock — same guidance.
+    apply() {
+      throw new Error("Date() is unavailable in workflow code - use ctx.now()");
+    },
     get(target, prop, receiver) {
       if (prop === "now") throw new Error("Date.now() is unavailable in workflow code - use ctx.now()");
       return Reflect.get(target, prop, receiver);

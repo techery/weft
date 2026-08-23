@@ -58,6 +58,7 @@ export class FsJournalStore implements JournalStore {
   async append(runId: string, events: JournalEvent[]): Promise<JournalRecord[]> {
     const cached = await this.loadCache(runId);
     await fs.mkdir(this.runDir(runId), { recursive: true });
+    await this.reconcile(runId, cached);
     const at = Date.now();
     const records = events.map((ev) => {
       const rec: JournalRecord = { i: cached.count++, at, ev };
@@ -74,6 +75,34 @@ export class FsJournalStore implements JournalStore {
     cached.byteOffset += Buffer.byteLength(payload);
     for (const w of cached.watchers) w(records);
     return records;
+  }
+
+  /**
+   * Another live store instance (a CLI answering a run a daemon owns) may have
+   * appended since this one cached: fold on-disk growth into count/byteOffset so
+   * the indices assigned next continue theirs instead of duplicating them. Only
+   * newline-terminated lines count — a torn trailing write is not a record yet.
+   */
+  private async reconcile(runId: string, cached: RunCache): Promise<void> {
+    let size = 0;
+    try {
+      size = (await fs.stat(this.journalPath(runId))).size;
+    } catch {
+      return; // no journal yet
+    }
+    if (size <= cached.byteOffset) return;
+    const fh = await fs.open(this.journalPath(runId), "r");
+    try {
+      const buf = Buffer.alloc(size - cached.byteOffset);
+      await fh.read(buf, 0, buf.length, cached.byteOffset);
+      const lines = buf.toString("utf8").split("\n");
+      for (let i = 0; i < lines.length - 1; i++) {
+        cached.byteOffset += Buffer.byteLength(lines[i]!) + 1;
+        if (lines[i]!.trim().length > 0) cached.count++;
+      }
+    } finally {
+      await fh.close();
+    }
   }
 
   async *read(runId: string, fromIndex = 0): AsyncIterable<JournalRecord> {

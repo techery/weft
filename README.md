@@ -236,15 +236,12 @@ This repository implements the design in the two design documents. Where it does
    up yet, so every Claude step pays for the SDK-MCP tool round trip even when its schema would fit the
    native path. The schema lint that flags what the native path would reject exists; the native branch does
    not.
-3. **Binary files inside write-step patches are unsupported.** Patch capture runs `git diff` without
-   `--binary`, so a step that adds or changes a binary file produces a patch that does not carry it. Keep
-   write scopes to text files for now.
-4. **The web UI is a single-file page served by the daemon, not a Vite + React app.** It covers the run
+3. **The web UI is a single-file page served by the daemon, not a Vite + React app.** It covers the run
    list, live tree, report, and answering pending requests over SSE, but it is one hand-written HTML file
    rather than the component-based UI the design describes.
-5. **TypeScript is pinned to 5.9.** The gate needs the in-process compiler API to parse workflow scripts and
+4. **TypeScript is pinned to 5.9.** The gate needs the in-process compiler API to parse workflow scripts and
    apply its AST rules; the native 7.x compiler does not expose it yet. Unpinning waits on that API.
-6. **OpenTelemetry spans cover runs, not steps.** One span per run, with the run id as the trace id. The
+5. **OpenTelemetry spans cover runs, not steps.** One span per run, with the run id as the trace id. The
    per-step spans the design describes are not emitted yet, so step-level latency has to come from the
    journal.
 
