@@ -635,26 +635,41 @@ export class RunRuntime {
       ...(request.confirmToken !== undefined ? { confirmToken: request.confirmToken } : {}),
     });
 
-    const outcome = await new Promise<HumanOutcome>((resolve, reject) => {
-      const wait: PendingWait = {
-        request,
-        resolve,
-        reject,
-        ...(realSchema !== undefined ? { realSchema } : {}),
-      };
-      this.pendingWaits.set(request.id, wait);
-      if (request.deadline !== undefined) {
-        const remaining = request.deadline - this.host.clock();
-        if (remaining <= 0) {
-          void this.applyHumanTimeout(request.id);
-        } else {
-          wait.timer = setTimeout(() => void this.applyHumanTimeout(request.id), remaining);
-          wait.timer.unref?.();
+    // A step blocked on a human is a durable wait, not live work: without this, a
+    // conflict ask inside ctx.integrate (or an in-agent ask) would keep the run
+    // from ever reporting idle to its host.
+    const inStep = this.parentSeq() !== undefined;
+    if (inStep) {
+      this.inflightLive--;
+      this.waitingSteps++;
+    }
+    try {
+      const outcome = await new Promise<HumanOutcome>((resolve, reject) => {
+        const wait: PendingWait = {
+          request,
+          resolve,
+          reject,
+          ...(realSchema !== undefined ? { realSchema } : {}),
+        };
+        this.pendingWaits.set(request.id, wait);
+        if (request.deadline !== undefined) {
+          const remaining = request.deadline - this.host.clock();
+          if (remaining <= 0) {
+            void this.applyHumanTimeout(request.id);
+          } else {
+            wait.timer = setTimeout(() => void this.applyHumanTimeout(request.id), remaining);
+            wait.timer.unref?.();
+          }
         }
+        queueMicrotask(() => this.checkIdle());
+      });
+      return await this.settleAnswer(request, realSchema, outcome);
+    } finally {
+      if (inStep) {
+        this.inflightLive++;
+        this.waitingSteps--;
       }
-      queueMicrotask(() => this.checkIdle());
-    });
-    return this.settleAnswer(request, realSchema, outcome);
+    }
   }
 
   private async settleAnswer(

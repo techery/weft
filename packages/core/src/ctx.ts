@@ -51,7 +51,7 @@ import type { BlobRefJson } from "./events.ts";
 import { toWireSchema, unwrapWireValue } from "./jsonschema.ts";
 import { mapWithConcurrency } from "./limiter.ts";
 import type { AgentRequest, AgentResult } from "./provider.ts";
-import type { RunRuntime, StepIO } from "./runtime.ts";
+import { sleep as sleepMs, type RunRuntime, type StepIO } from "./runtime.ts";
 
 const RISK_ORDER: Risk[] = ["low", "medium", "high", "irreversible"];
 
@@ -1228,8 +1228,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         const remaining = deadline - rt.host.clock();
         if (remaining > 0) {
           io.markWaiting();
-          const { sleep } = await import("./runtime.ts");
-          await sleep(remaining, io.signal);
+          await sleepMs(remaining, io.signal);
         }
         await rt.append([{ type: "timer.fired", seq: io.seq, deadline }]);
         return { value: { firedAt: rt.host.clock() } };

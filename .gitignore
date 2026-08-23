@@ -6,3 +6,5 @@ dist/
 .DS_Store
 coverage/
 .turbo/
+.weft/blobs/
+.weft/index.sqlite
