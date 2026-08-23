@@ -545,7 +545,9 @@ describe("resume across engine instances", () => {
     expect(outcome.status).toBe("waiting_for_human");
     const reqId = outcome.status === "waiting_for_human" ? outcome.pending[0]!.id : "";
 
-    // "Process exits." Answer lands from the CLI against a fresh engine (no active run).
+    // "Process exits" — release the claim so a later process can really resume.
+    await t1.engine.shutdown();
+    // Answer lands from the CLI against a fresh engine (no active run).
     const t2 = reopen(t1);
     await t2.engine.answer(h1.runId, reqId, { approved: true, note: "ship it" });
 

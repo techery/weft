@@ -1519,3 +1519,95 @@ describe("codex review findings, round 11 (PR #1)", () => {
     });
   });
 });
+
+describe("codex review findings, round 12 (PR #1)", () => {
+  test("a cancellation committed in the tailer's blind spot outranks the owner's completion", async () => {
+    class CancelRacingStore extends MemoryJournalStore {
+      raced = false;
+      override async appendIf(runId: string, expected: number, events: JournalEvent[]) {
+        if (!this.raced && events.some((ev) => ev.type === "run.completed")) {
+          this.raced = true;
+          // A CLI's cancel CAS lands while the owner's tailer has not seen it.
+          await this.append(runId, [{ type: "run.cancelled" }, { type: "run.status", status: "cancelled" }]);
+        }
+        return super.appendIf(runId, expected, events);
+      }
+    }
+    const journal = new CancelRacingStore();
+    const engine = new Engine({
+      journal,
+      blobs: new MemoryBlobStore(),
+      providers: new ProviderRegistry(),
+    });
+    const def = defineWorkflow(
+      { name: "fastdone", description: "f", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async () => ({ ok: true }),
+    );
+    const h = await engine.start(def, { input: {}, cwd: await tempDir() });
+    // The committed cancellation wins: never a "complete" over it.
+    await expect(h.result).rejects.toMatchObject({ code: "cancelled" });
+    const recs = await records(journal, h.runId);
+    expect(recs.some((r) => r.ev.type === "run.completed")).toBe(false);
+    expect(recs.filter((r) => r.ev.type === "run.cancelled")).toHaveLength(1);
+    expect((await engine.state(h.runId)).status).toBe("cancelled");
+  });
+
+  test("an undefined timeout default is rejected at the request — it cannot ride the journal", async () => {
+    const def = defineWorkflow(
+      { name: "tdefundef", description: "t", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.human.ask({
+          question: "note?",
+          // The schema ACCEPTS undefined — but the journaled request cannot hold
+          // it, and the deadline would reconstruct it as null and reject it.
+          schema: z.string().optional(),
+          timeout: "1h",
+          onTimeout: { default: undefined },
+        });
+        return {};
+      },
+    );
+    const t = testEngine();
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(h.result).rejects.toMatchObject({
+      code: "invalid_input",
+      message: expect.stringContaining("onTimeout.default"),
+    });
+  });
+
+  test("child step identity distinguishes an explicit null input from an omitted one", async () => {
+    const child = defineWorkflow(
+      {
+        name: "nullchild",
+        description: "c",
+        input: z.union([z.null(), z.object({})]),
+        output: z.object({ got: z.string() }),
+      },
+      async (_ctx, input) => ({ got: input === null ? "null" : "object" }),
+    );
+    const mkParent = (childInput: null | undefined) =>
+      defineWorkflow(
+        { name: "nullparent", description: "p", input: z.object({}), output: z.object({ got: z.string() }) },
+        async (ctx) => {
+          // Cast: the typed overload demands the child input; the omission scenario is an edit.
+          const r = (await ctx.workflow(child, childInput as never, { key: "child" })) as { got: string };
+          await ctx.human.approve({ action: "done?" });
+          return { got: r.got };
+        },
+      );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(mkParent(null), { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+    await t1.engine.shutdown();
+
+    // The edited code now OMITS the input. If null and omission hashed alike,
+    // replay would serve the old child's output for what is a different call.
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def: mkParent(undefined) });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected re-suspension");
+    await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    expect(await h2.result).toEqual({ got: "object" });
+  });
+});

@@ -660,8 +660,10 @@ export class RunRuntime {
       // must hold JSON and it must validate NOW. A deadline (live, or armed by
       // a later owner after a resume) is the wrong moment to learn the fallback
       // was never acceptable, and a lossy default would answer differently
-      // depending on which process applied it.
-      const bad = jsonUnsafeAt(spec.timeoutDefault ?? null);
+      // depending on which process applied it. Checked DIRECTLY — an undefined
+      // default would vanish from the journaled request and come back as null
+      // at the deadline, so it is unjournalable even where the schema takes it.
+      const bad = jsonUnsafeAt(spec.timeoutDefault);
       if (bad !== undefined) {
         throw new StepError("invalid_input", `onTimeout.default cannot be journaled as JSON at ${bad}`, {
           step: { kind: "human", key: spec.question.slice(0, 60), runId: this.runId },

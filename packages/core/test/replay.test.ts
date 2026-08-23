@@ -67,6 +67,8 @@ describe("replay & edit-tolerant resume", () => {
     const h1 = await t1.engine.start(mkDef(["a", "b", "c"]), { input: {}, cwd });
     const o1 = await h1.outcome();
     if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+    // The first process exits (releasing its claim); the run stays suspended on disk.
+    await t1.engine.shutdown();
     // Suspended run; edit reorders the loop. Resume with NO fixtures: any provider call throws.
     const t2 = reopen(t1);
     await t2.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });

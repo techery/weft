@@ -91,6 +91,12 @@ interface ActiveRun {
   /** Cross-process ownership claim (stores that support one); released at terminal state. */
   lease?: RunLease;
   leaseTimer?: NodeJS.Timeout;
+  /**
+   * Records present when this execution launched. A run.cancelled BEFORE this
+   * boundary is history a resume legitimately re-executes past; one at or after
+   * it is a standing order this execution's terminal must yield to.
+   */
+  seedCount: number;
   /** Serializes projection publication so an older reduction never overwrites a newer one. */
   snapshotChain: Promise<unknown>;
 }
@@ -279,6 +285,7 @@ export class Engine implements EngineHost {
       def,
       records: [...priorRecords],
       seen: new Set(priorRecords.map((r) => r.i)),
+      seedCount: priorRecords.length,
       pending: new Map(),
       sinceSnapshot: 0,
       result: undefined as never,
@@ -324,6 +331,63 @@ export class Engine implements EngineHost {
       result: active.result,
       outcome: () => this.outcomeOf(active),
     };
+  }
+
+  /**
+   * Land a terminal event CONDITIONALLY. Another process can commit run.cancelled
+   * (through the cancel CAS) while this owner's journal tailer — a 400ms poll on
+   * filesystem stores — has not seen it yet; an unconditional run.completed or
+   * run.failed would then land AFTER it and override a committed cancellation in
+   * every projection. The record count is checked under the store's append lock;
+   * a lost race re-reads — a cancellation found there converts the outcome
+   * (returns false), anything else (a late answer or signal) retries with the
+   * new count. A run.cancelled of our own is deduped against an external one.
+   */
+  private async appendTerminal(active: ActiveRun, events: JournalEvent[]): Promise<boolean> {
+    const rt = active.runtime;
+    if (rt.fenced) throw rt.fenced;
+    if (!this.journal.appendIf) {
+      await rt.append(events);
+      return true;
+    }
+    // Everything this runtime already issued must be on disk before counting.
+    await rt.flushAppends();
+    const standingCancel = (i: number, type: string) => type === "run.cancelled" && i >= active.seedCount;
+    for (;;) {
+      // A cancel this execution already KNOWS about (the tailer delivered it, or
+      // a raced read below folded it) is just as standing as an unseen one.
+      if (active.records.some((r) => standingCancel(r.i, r.ev.type))) {
+        return events.some((ev) => ev.type === "run.cancelled");
+      }
+      // Fast path: when this runtime has seen a CONTIGUOUS prefix of the journal
+      // there is nothing unseen to yield to — CAS at our own count, no re-read.
+      let maxIdx = -1;
+      for (const i of active.seen) if (i > maxIdx) maxIdx = i;
+      if (active.seen.size === maxIdx + 1) {
+        const appended = await this.journal.appendIf(rt.runId, maxIdx + 1, events);
+        if (appended) {
+          this.onRecords(rt, appended);
+          return true;
+        }
+      }
+      // Records we have not seen stand between us and the terminal: fold them.
+      let count = 0;
+      let cancelled = false;
+      for await (const rec of this.journal.read(rt.runId)) {
+        count++;
+        if (standingCancel(rec.i, rec.ev.type)) cancelled = true;
+      }
+      if (cancelled) {
+        // Committed in the tailer's blind spot: our own cancel echo has nothing
+        // to add, and any other terminal must yield to it.
+        return events.some((ev) => ev.type === "run.cancelled");
+      }
+      const appended = await this.journal.appendIf(rt.runId, count, events);
+      if (appended) {
+        this.onRecords(rt, appended);
+        return true;
+      }
+    }
   }
 
   /** The run's ownership claim now belongs to another process: stop this copy. */
@@ -411,7 +475,10 @@ export class Engine implements EngineHost {
           { step: { kind: "workflow", runId: rt.runId } },
         );
       }
-      await rt.append([{ type: "run.completed", output: outputCheck.value }]);
+      const landed = await this.appendTerminal(active, [
+        { type: "run.completed", output: outputCheck.value },
+      ]);
+      if (!landed) throw new CancelledError(`run ${rt.runId} was cancelled`);
       rt.status = "complete";
       return outputCheck.value;
     } catch (err) {
@@ -421,12 +488,21 @@ export class Engine implements EngineHost {
       // run.cancelled either. The fence is the cause; the unwind error is its echo.
       if (rt.fenced) throw rt.fenced;
       if (isCancellation(err)) {
-        await rt.append([{ type: "run.cancelled" }]);
+        // appendTerminal dedupes: an external cancel already committed its
+        // run.cancelled, and a second one would just be noise.
+        await this.appendTerminal(active, [{ type: "run.cancelled" }]);
         rt.status = "cancelled";
         throw err;
       }
       const stepError = StepError.from(err, { kind: "workflow", runId: rt.runId });
-      await rt.append([{ type: "run.failed", error: stepError.serialize() }]);
+      const landedFail = await this.appendTerminal(active, [
+        { type: "run.failed", error: stepError.serialize() },
+      ]);
+      if (!landedFail) {
+        // A committed cancellation outranks the local failure.
+        rt.status = "cancelled";
+        throw new CancelledError(`run ${rt.runId} was cancelled`);
+      }
       rt.status = "failed";
       throw stepError;
     } finally {

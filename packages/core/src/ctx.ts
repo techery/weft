@@ -751,7 +751,14 @@ export function buildCtx(rt: RunRuntime): Ctx {
       kind: "workflow",
       ...(opts.key !== undefined ? { key: opts.key } : {}),
       label: opts.label ?? `workflow:${name}`,
-      payload: { workflow: name, input: input ?? null, budget: opts.budget ?? null },
+      // An OMITTED input must hash differently from an explicit null: the child
+      // validates {} for the former and null for the latter, so collapsing them
+      // would serve a completed child's output across a real input change.
+      payload: {
+        workflow: name,
+        input: input === undefined ? { $omitted: true } : input,
+        budget: opts.budget ?? null,
+      },
       reuseIncomplete: true,
       newChildRunId: () => randomUUID().slice(0, 8),
       revive: (journaled) => (journaled as { output: unknown }).output,
