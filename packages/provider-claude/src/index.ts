@@ -108,7 +108,7 @@ class ClaudeProvider implements AgentProvider {
   ) {}
 
   capabilities(): ProviderCapabilities {
-    return { structured: "tool", permissionHook: true, sessionResume: true };
+    return { structured: "tool", permissionHook: true, sessionResume: true, reportsUsd: true };
   }
 
   async run(req: AgentRequest, ctl: RunControl): Promise<AgentResult> {

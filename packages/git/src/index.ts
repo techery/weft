@@ -52,7 +52,10 @@ export class GitError extends Error {
 export interface Git {
   readonly cwd: string;
   /** Run raw git args. Throws GitError on non-zero exit unless allowFailure. */
-  raw(args: string[], opts?: { allowFailure?: boolean; input?: string }): Promise<RawResult>;
+  raw(
+    args: string[],
+    opts?: { allowFailure?: boolean; input?: string; env?: Record<string, string> },
+  ): Promise<RawResult>;
 
   // -- reads ---------------------------------------------------------------
   status(): Promise<GitStatusResult>;

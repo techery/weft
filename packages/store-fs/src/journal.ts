@@ -47,8 +47,14 @@ export class FsJournalStore implements JournalStore {
     let byteOffset = 0;
     try {
       const raw = await fs.readFile(this.journalPath(runId), "utf8");
-      byteOffset = Buffer.byteLength(raw);
-      count = raw.split("\n").filter((l) => l.trim().length > 0).length;
+      // Only newline-terminated lines are committed records: a writer killed
+      // mid-write leaves a torn tail, which must never count (or the next append
+      // would allocate past it and glue new JSON onto the fragment).
+      const lines = raw.split("\n");
+      for (let i = 0; i < lines.length - 1; i++) {
+        byteOffset += Buffer.byteLength(lines[i] as string) + 1;
+        if ((lines[i] as string).trim().length > 0) count++;
+      }
     } catch {
       // no journal yet
     }
@@ -61,6 +67,15 @@ export class FsJournalStore implements JournalStore {
     const cached = await this.loadCache(runId);
     await fs.mkdir(this.runDir(runId), { recursive: true });
     await this.reconcile(runId, cached);
+    // Anything on disk past the committed offset is a crashed writer's torn tail
+    // (reconcile consumed every complete line): cut it or this append corrupts it
+    // into an unparseable record that blocks resume and repair forever.
+    try {
+      const { size } = await fs.stat(this.journalPath(runId));
+      if (size > cached.byteOffset) await fs.truncate(this.journalPath(runId), cached.byteOffset);
+    } catch {
+      // no journal yet
+    }
     const at = Date.now();
     const records = events.map((ev) => {
       const rec: JournalRecord = { i: cached.count++, at, ev };
@@ -115,7 +130,11 @@ export class FsJournalStore implements JournalStore {
     } catch {
       return;
     }
-    for (const line of raw.split("\n")) {
+    // The final element is "" when the file ends with \n, or a crashed writer's
+    // torn fragment — either way, never a committed record.
+    const lines = raw.split("\n");
+    for (let i = 0; i < lines.length - 1; i++) {
+      const line = lines[i] as string;
       if (!line.trim()) continue;
       const rec = JSON.parse(line) as JournalRecord;
       if (rec.i >= fromIndex) yield rec;

@@ -180,6 +180,7 @@ describe("createClaudeProvider", () => {
       structured: "tool",
       permissionHook: true,
       sessionResume: true,
+      reportsUsd: true,
     });
     expect(createClaudeProvider({ id: "claude-fast" }).id).toBe("claude-fast");
   });

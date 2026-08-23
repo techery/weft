@@ -327,6 +327,21 @@ export function buildCtx(rt: RunRuntime): Ctx {
             }
 
             const provider = rt.host.providers.get(providerId);
+            // A USD-only ceiling with no way to price this call would charge $0 per
+            // call forever — refuse the dispatch instead of silently unbounding it.
+            if (
+              rt.budget.remainingUsd() !== null &&
+              rt.budget.remainingTokens() === null &&
+              !provider.capabilities().reportsUsd &&
+              priceFor(config, providerId, model) === undefined
+            ) {
+              throw new StepError(
+                "invalid_input",
+                `${label}: the run has a USD budget, but provider "${providerId}" reports no cost and ` +
+                  `no price is configured for ${model ?? "its default model"} — configure pricing or add a token ceiling`,
+                { step: stepRef },
+              );
+            }
             const req: AgentRequest = {
               prompt: finalPrompt,
               cwd: workCwd,
@@ -1254,12 +1269,33 @@ export function buildCtx(rt: RunRuntime): Ctx {
       });
     }
     if (opts.fn) {
+      // The same public timeout bound as exec checks — a hanging fn would
+      // otherwise leave the whole run executing forever. Like exec, a timeout
+      // is a FAILED check, not an aborted step.
+      const timeoutMs = toMs(opts.timeout, config.limits.execTimeoutMs);
+      const TIMED_OUT = Symbol("check-timeout");
       return rt.runStep<CheckResult>({
         kind: "check",
         label: `check:${name}`,
         payload: { name, fn: true, required },
         onSettle: settle,
-        execute: async () => ({ value: normalize(await opts.fn!()) }),
+        execute: async () => {
+          let timer: NodeJS.Timeout | undefined;
+          try {
+            const outcome = await Promise.race([
+              Promise.resolve().then(() => opts.fn!()),
+              new Promise<typeof TIMED_OUT>((resolve) => {
+                timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
+              }),
+            ]);
+            if (outcome === TIMED_OUT) {
+              return { value: { status: "fail", evidence: `check timed out after ${timeoutMs}ms` } };
+            }
+            return { value: normalize(outcome) };
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
+        },
       });
     }
     return rt.runStep<CheckResult>({

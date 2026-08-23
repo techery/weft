@@ -43,12 +43,15 @@ export class GitCli implements Git {
     this.cwd = cwd;
   }
 
-  async raw(args: string[], opts: { allowFailure?: boolean; input?: string } = {}): Promise<RawResult> {
+  async raw(
+    args: string[],
+    opts: { allowFailure?: boolean; input?: string; env?: Record<string, string> } = {},
+  ): Promise<RawResult> {
     const result = await execa("git", args, {
       cwd: this.cwd,
       reject: false,
       stripFinalNewline: false,
-      env: GIT_ENV,
+      env: opts.env ? { ...GIT_ENV, ...opts.env } : GIT_ENV,
       input: opts.input,
     });
     const stdout = typeof result.stdout === "string" ? result.stdout : "";

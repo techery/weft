@@ -90,7 +90,7 @@ export class MockProvider implements AgentProvider {
   ) {}
 
   capabilities(): ProviderCapabilities {
-    return { structured: "tool", permissionHook: true, sessionResume: true };
+    return { structured: "tool", permissionHook: true, sessionResume: true, reportsUsd: true };
   }
 
   private findRule(req: AgentRequest, forRepair: boolean): MockRule {

@@ -65,6 +65,8 @@ export interface ProviderCapabilities {
   structured: "native" | "tool";
   permissionHook: boolean;
   sessionResume: boolean;
+  /** True when run() reports usage.usd itself; false means pricing config is the only cost source. */
+  reportsUsd: boolean;
 }
 
 export interface AgentProvider {

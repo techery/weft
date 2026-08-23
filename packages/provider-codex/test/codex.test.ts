@@ -112,6 +112,7 @@ describe("createCodexProvider", () => {
       structured: "native",
       permissionHook: false,
       sessionResume: true,
+      reportsUsd: false,
     });
     expect(createCodexProvider({ id: "codex-alt" }).id).toBe("codex-alt");
   });

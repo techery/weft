@@ -774,4 +774,56 @@ describe("codex review findings, round 4 (PR #1)", () => {
     expect(state.status).toBe("complete");
     expect(state.output).toEqual({ ok: true });
   });
+
+  test("a USD-only budget refuses a call whose cost cannot be known", async () => {
+    const t = testEngine();
+    t.builder.on({ key: "c" }, { ok: true }, { usage: { input: 100, output: 50 } });
+    // Stand-in for the real Codex adapter: tokens only, no self-reported cost.
+    const base = t.builder.provider("codex");
+    t.engine.registerProvider({
+      id: "codex",
+      capabilities: () => ({ ...base.capabilities(), reportsUsd: false }),
+      run: base.run.bind(base),
+      repair: base.repair.bind(base),
+    });
+    const def = defineWorkflow(
+      { name: "usd", description: "u", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const r = await ctx.agent("c", {
+          schema: z.object({ ok: z.boolean() }),
+          key: "c",
+          provider: "codex",
+        });
+        return { ok: r.ok };
+      },
+    );
+    // No price configured and no token ceiling: every call would charge $0 forever.
+    const h1 = await t.engine.start(def, { input: {}, cwd: await tempDir(), budget: { usd: 5 } });
+    await expect(h1.result).rejects.toMatchObject({ code: "invalid_input" });
+    // A token ceiling backing the same USD budget makes the dispatch legal again.
+    const h2 = await t.engine.start(def, {
+      input: {},
+      cwd: await tempDir(),
+      budget: { usd: 5, tokens: 10_000 },
+    });
+    expect(await h2.result).toEqual({ ok: true });
+  });
+
+  test("a fn check honours its timeout instead of hanging the run", async () => {
+    const def = defineWorkflow(
+      { name: "hangcheck", description: "h", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.check("stuck", { fn: () => new Promise(() => undefined), timeout: "150ms" });
+        return {};
+      },
+    );
+    const t = testEngine();
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    // Like an exec check, the timeout records a FAILED check; the run itself finishes.
+    expect(await h.result).toEqual({});
+    const state = await t.engine.state(h.runId);
+    expect(state.checks).toEqual([
+      { name: "stuck", status: "fail", required: false, evidence: "check timed out after 150ms" },
+    ]);
+  });
 });

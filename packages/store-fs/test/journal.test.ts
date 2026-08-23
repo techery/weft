@@ -4,7 +4,7 @@
  * processes; watch() serves the backlog before anything live; projections are
  * rebuildable from the JSONL alone.
  */
-import { readFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JournalRecord, RunState, TreePhase } from "@weft/core";
 import { reduceState, renderReport, renderTree } from "@weft/core";
@@ -60,6 +60,26 @@ describe("append", () => {
     expect(caught.map((r) => r.i)).toEqual([3, 4]);
     expect(closing.map((r) => r.i)).toEqual([5]);
     expect((await drain(daemon, "run-a")).map((r) => r.i)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  test("a torn trailing record from a crashed writer is ignored and cut", async () => {
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    await store.append("run-a", [runCreated("run-a", "audit"), logged("one")]);
+    // A writer died mid-write: half a record, no terminating newline.
+    await appendFile(join(dir, "run-a", "journal.jsonl"), '{"i":2,"at":9,"ev":{"type":"log","mess');
+
+    // A fresh instance reads only committed records...
+    const fresh = new FsJournalStore(dir);
+    expect((await drain(fresh, "run-a")).map((r) => r.i)).toEqual([0, 1]);
+    // ...and the next append truncates the fragment instead of gluing onto it.
+    const appended = await fresh.append("run-a", [logged("two")]);
+    expect(appended.map((r) => r.i)).toEqual([2]);
+    expect((await drain(fresh, "run-a")).map((r) => r.i)).toEqual([0, 1, 2]);
+    // The instance that had the run cached recovers too.
+    const more = await store.append("run-a", [logged("three")]);
+    expect(more.map((r) => r.i)).toEqual([3]);
+    expect((await drain(store, "run-a")).map((r) => r.i)).toEqual([0, 1, 2, 3]);
   });
 
   test("records carry a wall-clock stamp and the event verbatim", async () => {

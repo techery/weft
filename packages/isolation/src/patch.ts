@@ -2,6 +2,10 @@
  * Patch capture and application. A worktree's work leaves it as one patch; the
  * engine journals that patch and replays it against the integration tree here.
  */
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createGit } from "@weft/git";
 import type { ApplyOutcome } from "./index.ts";
 
@@ -45,15 +49,27 @@ export async function applyPatchToTree(opts: { repoRoot: string; patch: string }
     return { ok: true };
   }
 
-  // Context drifted: fall back to a 3-way merge using the patch's blob ids.
-  const threeWay = await git.raw(["apply", "--3way"], { allowFailure: true, input });
-  if (threeWay.exitCode === 0) return { ok: true };
+  // Context drifted: fall back to a 3-way merge using the patch's blob ids. --3way
+  // implies --index, which would silently stage the result (and any pre-existing
+  // user edits in those files) into the CALLER's index — so the merge runs against
+  // a throwaway index staged from the working tree (stat-fresh, so apply treats the
+  // tree as clean), and only the working tree keeps the result.
+  const indexFile = join(tmpdir(), `weft-apply-${randomUUID()}`);
+  const env = { GIT_INDEX_FILE: indexFile };
+  try {
+    await git.raw(["add", "-A", "."], { env });
+    const threeWay = await git.raw(["apply", "--3way"], { allowFailure: true, input, env });
+    if (threeWay.exitCode === 0) return { ok: true };
 
-  // --3way implies --index, so conflict markers come with unmerged index entries.
-  const unmerged = await git.unmergedPaths();
-  if (unmerged.length > 0) return { ok: false, conflicts: unmerged };
-  const reported = filesFromStderr(`${threeWay.stderr}\n${check.stderr}`);
-  return { ok: false, conflicts: reported.length > 0 ? reported : filesFromPatch(opts.patch) };
+    // Conflict markers come with unmerged entries — in the throwaway index.
+    const unmerged = await git.raw([...RAW_PATHS, "diff", "--name-only", "--diff-filter=U"], { env });
+    const conflicted = splitLines(unmerged.stdout);
+    if (conflicted.length > 0) return { ok: false, conflicts: conflicted };
+    const reported = filesFromStderr(`${threeWay.stderr}\n${check.stderr}`);
+    return { ok: false, conflicts: reported.length > 0 ? reported : filesFromPatch(opts.patch) };
+  } finally {
+    await rm(indexFile, { force: true }).catch(() => undefined);
+  }
 }
 
 /** Restore files from a snapshot ref (undo a conflicted application). */

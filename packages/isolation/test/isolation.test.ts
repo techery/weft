@@ -246,6 +246,9 @@ describe("applyPatchToTree", () => {
 
     expect(await applyPatchToTree({ repoRoot: repo.cwd, patch })).toEqual({ ok: true });
     expect(await readIn(repo.cwd, "a.txt")).toBe("zero\none\ntwo\nthree\nfour\nFIVE\n");
+    // The merge ran against a throwaway index: nothing was staged behind the user's back.
+    const staged = await repo.raw(["diff", "--cached", "--name-only"]);
+    expect(staged.stdout.trim()).toBe("");
   });
 
   test("reports conflicts when both sides changed the same line", async () => {
@@ -263,7 +266,9 @@ describe("applyPatchToTree", () => {
     const conflicted = await readIn(repo.cwd, "a.txt");
     expect(conflicted).toContain("<<<<<<<");
     expect(conflicted).toContain("WORKTREE");
-    expect(await repo.unmergedPaths()).toEqual(["a.txt"]);
+    // Markers live in the working tree only; the user's real index carries no
+    // unmerged entries (the 3-way ran against a throwaway index).
+    expect(await repo.unmergedPaths()).toEqual([]);
   });
 
   test("reports a conflict when both sides created the same file", async () => {

@@ -195,7 +195,9 @@ class CodexProvider implements AgentProvider {
   ) {}
 
   capabilities(): ProviderCapabilities {
-    return { structured: "native", permissionHook: false, sessionResume: true };
+    // reportsUsd false: the Codex SDK reports tokens only, so USD cost exists only
+    // when the host configures a price for the model.
+    return { structured: "native", permissionHook: false, sessionResume: true, reportsUsd: false };
   }
 
   async run(req: AgentRequest, ctl: RunControl): Promise<AgentResult> {
