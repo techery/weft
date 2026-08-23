@@ -16,7 +16,8 @@
   "dependencies": {
     "@weft/core": "workspace:*",
     "@openai/codex-sdk": "^0.149.0",
-    "picomatch": "^4.0.5"
+    "picomatch": "^4.0.5",
+    "@weft/sdk": "workspace:*"
   },
   "devDependencies": {
     "@types/picomatch": "^4.0.2"

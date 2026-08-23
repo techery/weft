@@ -40,7 +40,8 @@ export interface AgentRequest {
   /** Milliseconds. */
   timeoutMs?: number;
   onMaxTurns?: "finalize" | "fail";
-  tools?: ToolPolicy;
+  /** Always populated by the engine; read-only steps get { allowEdits: false }. */
+  tools: ToolPolicy;
   writeScope?: Required<Pick<WriteScope, "paths" | "mode">> & Pick<WriteScope, "also">;
   hitl: ProviderHitl;
 }

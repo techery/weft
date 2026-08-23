@@ -27,7 +27,11 @@ export function sha256Hex(data: string | Uint8Array): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-/** Identity hash for a step: kind + canonical payload (+ schema when present). */
-export function hashStep(kind: string, payload: unknown, schemaJson?: unknown): string {
-  return sha256Hex(canonicalJson({ kind, payload, schema: schemaJson ?? null }));
+/**
+ * Identity hash for a step: kind + canonical payload (+ schema and explicit key
+ * when present). Including the key keeps two same-content steps with different
+ * keys from serving each other's journal entries on salvage.
+ */
+export function hashStep(kind: string, payload: unknown, schemaJson?: unknown, key?: string): string {
+  return sha256Hex(canonicalJson({ kind, payload, schema: schemaJson ?? null, key: key ?? null }));
 }

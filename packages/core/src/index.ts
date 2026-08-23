@@ -78,3 +78,7 @@ export type { CheckState, HumanState, RunState, StepState, TreeNode, TreePhase }
 export type { PendingRequest } from "./runtime.ts";
 export type { TestHooks } from "./hooks.ts";
 export { treeHash } from "./ctx.ts";
+
+// Types that appear in @weft/core's own public surface (AgentProvider, events),
+// re-exported so adapter packages need no second workspace dependency.
+export type { Effort, Risk, SchemaIssue, Usage, WriteScope } from "@weft/sdk";

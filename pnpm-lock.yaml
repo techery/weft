@@ -218,6 +218,9 @@ importers:
       '@weft/core':
         specifier: workspace:*
         version: link:../core
+      '@weft/sdk':
+        specifier: workspace:*
+        version: link:../sdk
       picomatch:
         specifier: ^4.0.5
         version: 4.0.5
@@ -237,6 +240,9 @@ importers:
       '@weft/core':
         specifier: workspace:*
         version: link:../core
+      '@weft/sdk':
+        specifier: workspace:*
+        version: link:../sdk
       picomatch:
         specifier: ^4.0.5
         version: 4.0.5

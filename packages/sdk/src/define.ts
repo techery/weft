@@ -54,10 +54,15 @@ export function defineWorkflow<InS extends AnySchema, OutS extends AnySchema>(
 }
 
 export function isWorkflowDefinition(value: unknown): value is WorkflowDefinition {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as { kind?: unknown; run?: unknown; meta?: unknown };
+  if (v.kind !== "weft.workflow" || typeof v.run !== "function") return false;
+  const meta = v.meta as { description?: unknown; input?: unknown; output?: unknown } | undefined;
   return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { kind?: unknown }).kind === "weft.workflow" &&
-    typeof (value as { run?: unknown }).run === "function"
+    typeof meta === "object" &&
+    meta !== null &&
+    typeof meta.description === "string" &&
+    meta.input !== undefined &&
+    meta.output !== undefined
   );
 }

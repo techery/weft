@@ -76,9 +76,10 @@ export class FsJournalStore implements JournalStore {
   }
 
   async *read(runId: string, fromIndex = 0): AsyncIterable<JournalRecord> {
+    const path = this.journalPath(runId); // validates runId; must throw, not yield nothing
     let raw: string;
     try {
-      raw = await fs.readFile(this.journalPath(runId), "utf8");
+      raw = await fs.readFile(path, "utf8");
     } catch {
       return;
     }

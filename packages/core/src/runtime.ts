@@ -206,6 +206,7 @@ export class RunRuntime {
 
   private dryIndex = 0;
   private seqCounter = 0;
+  private readonly seenKeys = new Set<string>();
   private humanCounter = 0;
   private agentOrdinal = 0;
   private inflightLive = 0;
@@ -325,6 +326,11 @@ export class RunRuntime {
     if (this.inflightLive === 0 && this.hasPendingWaits()) queueMicrotask(listener);
   }
 
+  offIdle(listener: () => void): void {
+    const idx = this.idleListeners.indexOf(listener);
+    if (idx >= 0) this.idleListeners.splice(idx, 1);
+  }
+
   private checkIdle(): void {
     if (this.inflightLive === 0 && this.hasPendingWaits()) {
       const listeners = this.idleListeners;
@@ -359,8 +365,14 @@ export class RunRuntime {
     if (this.signal.aborted) {
       throw new CancelledError("run cancelled", { kind: spec.kind, key: spec.key, runId: this.runId });
     }
-    const hash = hashStep(spec.kind, spec.payload, spec.schemaJson);
+    const hash = hashStep(spec.kind, spec.payload, spec.schemaJson, spec.key);
     const seq = ++this.seqCounter;
+    if (spec.key !== undefined) {
+      if (this.seenKeys.has(spec.key)) {
+        this.log(`duplicate step key "${spec.key}" — give each call a unique key for exact replay identity`);
+      }
+      this.seenKeys.add(spec.key);
+    }
     const ref: StepRef = {
       seq,
       kind: spec.kind,
@@ -421,6 +433,13 @@ export class RunRuntime {
       childRunId ??= spec.newChildRunId?.();
     }
 
+    // Per-step abort: a step timeout aborts the step's own signal so providers
+    // tear down their sessions instead of running on after the engine gave up.
+    const stepAbort = new AbortController();
+    const onRunAbort = () => stepAbort.abort();
+    if (this.signal.aborted) stepAbort.abort();
+    else this.signal.addEventListener("abort", onRunAbort, { once: true });
+
     this.inflightLive++;
     let waiting = false;
     const markWaiting = () => {
@@ -466,7 +485,7 @@ export class RunRuntime {
           const io: StepIO = {
             seq,
             attempt,
-            signal: this.signal,
+            signal: stepAbort.signal,
             scheduledAt,
             ...(childRunId !== undefined ? { childRunId } : {}),
             appendAttempt: async (detail?: string) => {
@@ -477,7 +496,7 @@ export class RunRuntime {
             markWaiting,
           };
           const outcome = await this.stepContext.run({ seq }, () =>
-            this.withTimeout(spec.execute(io), spec.timeoutMs, ref),
+            this.withTimeout(spec.execute(io), spec.timeoutMs, ref, stepAbort),
           );
           unmarkWaiting();
           if (this.signal.aborted) throw new CancelledError("run cancelled", ref);
@@ -518,23 +537,29 @@ export class RunRuntime {
         }
       }
     } finally {
+      this.signal.removeEventListener("abort", onRunAbort);
       if (waiting) this.waitingSteps--;
       else this.inflightLive--;
       this.checkIdle();
     }
   }
 
-  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number | undefined, ref: StepRef): Promise<T> {
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number | undefined,
+    ref: StepRef,
+    stepAbort?: AbortController,
+  ): Promise<T> {
     if (!timeoutMs) return promise;
     let timer: NodeJS.Timeout | undefined;
     try {
       return await Promise.race([
         promise,
         new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () => reject(new StepError("timeout", `step timed out after ${timeoutMs}ms`, { step: ref })),
-            timeoutMs,
-          );
+          timer = setTimeout(() => {
+            stepAbort?.abort();
+            reject(new StepError("timeout", `step timed out after ${timeoutMs}ms`, { step: ref }));
+          }, timeoutMs);
           timer.unref?.();
         }),
       ]);

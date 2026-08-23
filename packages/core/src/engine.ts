@@ -238,18 +238,21 @@ export class Engine implements EngineHost {
 
   private outcomeOf(active: ActiveRun): Promise<RunOutcome> {
     return new Promise<RunOutcome>((resolve) => {
-      active.runtime.onIdle(() => {
+      const onIdle = () => {
         const status = active.runtime.status;
         if (status === "waiting_for_human" || status === "waiting_for_signal") {
+          active.runtime.offIdle(onIdle);
           resolve({ status, pending: [...active.pending.values()] });
         }
-      });
+      };
+      active.runtime.onIdle(onIdle);
       active.result
         .then((output) => resolve({ status: "complete", output }))
         .catch((err) => {
           if (isCancellation(err)) resolve({ status: "cancelled" });
           else resolve({ status: "failed", error: StepError.from(err) });
-        });
+        })
+        .finally(() => active.runtime.offIdle(onIdle));
     });
   }
 
