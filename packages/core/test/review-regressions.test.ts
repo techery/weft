@@ -14,6 +14,7 @@ import {
 } from "@weft/core";
 import { mock } from "@weft/provider-mock";
 import { defineWorkflow, z } from "@weft/sdk";
+import { execa } from "execa";
 import { afterAll, describe, expect, test, vi } from "vitest";
 import { cleanupRepos, reopen, tempDir, tempRepo, testEngine } from "./helpers.ts";
 
@@ -1423,6 +1424,98 @@ describe("codex review findings, round 10 (PR #1)", () => {
     await expect(h.result).rejects.toMatchObject({
       code: "invalid_output",
       message: expect.stringContaining("$.note (undefined)"),
+    });
+  });
+});
+
+describe("codex review findings, round 11 (PR #1)", () => {
+  const FixResult = z.object({ summary: z.string() });
+
+  test("conflict rollback restores the WORKING TREE only — the caller's staged state survives", async () => {
+    const t = testEngine();
+    t.builder.on({ key: "fix:s" }, { summary: "edit" }, { writes: { "a.txt": "AGENT\n" } });
+    const cwd = await tempRepo({ "a.txt": "base\n" });
+    const def = defineWorkflow(
+      { description: "s", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        const fix = await ctx.agent.detailed("fix", {
+          schema: FixResult,
+          key: "fix:s",
+          write: { paths: ["a.txt"] },
+        });
+        // The caller stages one version, then drifts the working tree past it —
+        // the patch will 3-way conflict and roll back.
+        await ctx.bash("printf 'STAGED\\n' > a.txt && git add a.txt && printf 'MAIN\\n' > a.txt");
+        await ctx.integrate([fix], { onConflict: "fail" });
+        return {};
+      },
+    );
+    const handle = await t.engine.start(def, { input: {}, cwd });
+    await expect(handle.result).rejects.toMatchObject({ code: "conflict" });
+    // Working tree rolled back; the index is not ours to touch.
+    expect(await readFile(join(cwd, "a.txt"), "utf8")).toBe("MAIN\n");
+    const staged = await execa("git", ["show", ":a.txt"], { cwd });
+    expect(staged.stdout).toBe("STAGED");
+  });
+
+  test("a transformed schema's timeout default is journaled RAW and transformed on apply", async () => {
+    const def = defineWorkflow(
+      { name: "tdefault", description: "t", input: z.object({}), output: z.object({ time: z.number() }) },
+      async (ctx) => {
+        const when = await ctx.human.ask({
+          question: "when?",
+          schema: z.string().transform((s) => new Date(s)),
+          timeout: "150ms",
+          onTimeout: { default: "2026-03-04T05:06:07.000Z" },
+        });
+        // The deadline's fallback flows through the schema like any answer:
+        // the workflow receives the TRANSFORMED value, live and after resume alike.
+        return { time: when.getTime() };
+      },
+    );
+    const t = testEngine();
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    expect(await h.result).toEqual({ time: Date.parse("2026-03-04T05:06:07.000Z") });
+  });
+
+  test("an unusable timeout default fails at the REQUEST, never at the deadline", async () => {
+    // Not JSON: the journal could not even hold it with the request.
+    const bigintDef = defineWorkflow(
+      { name: "tdefbig", description: "t", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.human.ask({
+          question: "size?",
+          schema: z.any(),
+          timeout: "1h",
+          onTimeout: { default: 10n },
+        });
+        return {};
+      },
+    );
+    const t = testEngine();
+    const h1 = await t.engine.start(bigintDef, { input: {}, cwd: await tempDir() });
+    await expect(h1.result).rejects.toMatchObject({
+      code: "invalid_input",
+      message: expect.stringContaining("onTimeout.default"),
+    });
+
+    // JSON, but the schema would reject it when the deadline fired.
+    const mismatchDef = defineWorkflow(
+      { name: "tdefbad", description: "t", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.human.ask({
+          question: "name?",
+          schema: z.string(),
+          timeout: "1h",
+          onTimeout: { default: 42 as unknown as string },
+        });
+        return {};
+      },
+    );
+    const h2 = await t.engine.start(mismatchDef, { input: {}, cwd: await tempDir() });
+    await expect(h2.result).rejects.toMatchObject({
+      code: "invalid_input",
+      message: expect.stringContaining("failed the request schema"),
     });
   });
 });

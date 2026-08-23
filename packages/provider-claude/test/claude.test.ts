@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRequest, PermissionDecision, PermissionRequest } from "@weft/core";
 import { describe, expect, test } from "vitest";
@@ -406,6 +409,39 @@ describe("the tool gate", () => {
     expect(await ask(options, "Bash", { command: "pnpm test > /dev/null 2>&1" })).toEqual({
       behavior: "allow",
     });
+  });
+
+  test("a strict write scope denies writes through a symlink that escapes the worktree", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "weft-gate-"));
+    const outside = await mkdtemp(join(tmpdir(), "weft-outside-"));
+    await symlink(join(outside, "target"), join(cwd, "link"));
+    await mkdir(join(cwd, "sub"));
+    await symlink(outside, join(cwd, "sub", "esc"), "dir");
+    try {
+      const options = await gateContext(
+        request({ cwd, tools: { allowEdits: true }, writeScope: { paths: ["**"], mode: "strict" } }),
+      );
+      // Lexically in-tree (no absolute path, no ..) — physically outside.
+      expect((await ask(options, "Bash", { command: "printf x > link" })).behavior).toBe("deny");
+      expect((await ask(options, "Bash", { command: "cp notes.txt sub/esc/stolen" })).behavior).toBe("deny");
+      // The Edit tool goes through the same resolution.
+      const edit = await ask(options, "Edit", {
+        file_path: join(cwd, "link"),
+        old_string: "a",
+        new_string: "b",
+      });
+      expect(edit.behavior).toBe("deny");
+      // Ordinary relative writes — including files that do not exist yet — stay allowed.
+      expect(await ask(options, "Bash", { command: "printf x > notes.txt" })).toEqual({
+        behavior: "allow",
+      });
+      expect(await ask(options, "Bash", { command: "printf x > sub/notes.txt" })).toEqual({
+        behavior: "allow",
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await rm(outside, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
   });
 
   test("tools.deny removes a tool outright", async () => {

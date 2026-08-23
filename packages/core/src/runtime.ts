@@ -29,7 +29,7 @@ import type {
   RunStatus,
   StepKind,
 } from "./events.ts";
-import { unwrapWireValue, wrapWireValue } from "./jsonschema.ts";
+import { jsonUnsafeAt, unwrapWireValue, wrapWireValue } from "./jsonschema.ts";
 import type { Semaphore } from "./limiter.ts";
 import type { ProviderRegistry } from "./provider.ts";
 import { type CompletedEntry, OrderedDelivery, type ReplayIndex, type ReuseMode } from "./replay.ts";
@@ -654,6 +654,30 @@ export class RunRuntime {
 
   async runHuman(spec: HumanSpec): Promise<HumanOutcome> {
     if (this.signal.aborted) throw new CancelledError("run cancelled", { kind: "human", runId: this.runId });
+    if (spec.onTimeout === "default") {
+      // The default is journaled RAW with the request and, when the deadline
+      // fires, replayed through the schema exactly like a human answer — so it
+      // must hold JSON and it must validate NOW. A deadline (live, or armed by
+      // a later owner after a resume) is the wrong moment to learn the fallback
+      // was never acceptable, and a lossy default would answer differently
+      // depending on which process applied it.
+      const bad = jsonUnsafeAt(spec.timeoutDefault ?? null);
+      if (bad !== undefined) {
+        throw new StepError("invalid_input", `onTimeout.default cannot be journaled as JSON at ${bad}`, {
+          step: { kind: "human", key: spec.question.slice(0, 60), runId: this.runId },
+        });
+      }
+      if (spec.realSchema) {
+        const check = await validateSchema(spec.realSchema, spec.timeoutDefault);
+        if (!check.ok) {
+          throw new StepError(
+            "invalid_input",
+            `onTimeout.default failed the request schema: ${check.issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`,
+            { step: { kind: "human", key: spec.question.slice(0, 60), runId: this.runId } },
+          );
+        }
+      }
+    }
     const payload = {
       kind: spec.kind,
       question: spec.question,

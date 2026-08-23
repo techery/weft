@@ -1448,7 +1448,11 @@ export function buildCtx(rt: RunRuntime): Ctx {
         .raw(["cat-file", "-e", `${snapRef}:${file}`], { allowFailure: true })
         .then((r) => r.exitCode === 0);
       if (inSnap) {
-        await gitHandle.raw(["checkout", snapRef, "--", file], { allowFailure: true });
+        // Worktree-only: `checkout <ref> -- <file>` would write the INDEX too,
+        // silently destroying whatever the caller had staged for this file.
+        await gitHandle.raw(["restore", "--worktree", "--source", snapRef, "--", file], {
+          allowFailure: true,
+        });
       } else {
         await nodeFs.rm(resolveInCwd(file), { force: true }).catch(() => undefined);
       }

@@ -4,7 +4,8 @@
  * them (warn), screens Bash writes"), and shell commands that publish work off the
  * machine are routed to the HITL broker instead of being decided here.
  */
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { promises as fs } from "node:fs";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { CanUseTool, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRequest } from "@weft/core";
 import picomatch from "picomatch";
@@ -33,6 +34,61 @@ const OUT_OF_TREE_PATH = /(?:^|[\s='"`])(?:\/(?!dev\/null\b)|~\/|\$HOME\b)/;
  * (`..` must border a separator on both sides).
  */
 const PARENT_TRAVERSAL = /(?:^|[\s='"`/])\.\.(?:[/\s'"`]|$)/;
+
+/**
+ * True when the cwd-relative target's deepest EXISTING ancestor resolves outside
+ * the worktree: a committed symlink (allowed/link → /etc) turns a lexically
+ * in-tree write into an outside one that patch capture never sees. A tail that
+ * does not exist yet is fine — it gets created inside its (checked) parent.
+ */
+async function resolvesOutsideWorktree(cwd: string, target: string, depth = 0): Promise<boolean> {
+  if (depth > 8) return true; // a symlink loop resolves nowhere safe
+  let root: string;
+  try {
+    root = await fs.realpath(cwd);
+  } catch {
+    return false;
+  }
+  let probe = resolve(cwd, target);
+  for (;;) {
+    // A DANGLING symlink still redirects a write (creating its target), but
+    // realpath refuses to resolve what does not exist yet — follow it by hand.
+    const link = await fs.readlink(probe).catch(() => undefined);
+    if (link !== undefined) {
+      return resolvesOutsideWorktree(cwd, resolve(dirname(probe), link), depth + 1);
+    }
+    try {
+      const real = await fs.realpath(probe);
+      return real !== root && !real.startsWith(root + sep);
+    } catch {
+      const parent = dirname(probe);
+      if (parent === probe) return false;
+      probe = parent;
+    }
+  }
+}
+
+/**
+ * Screen a strict-scope write command's path-shaped words for symlink escapes.
+ * Lexical screening (absolute paths, `..`) cannot see where a RELATIVE path
+ * really lands — only resolving it can. Deliberately conservative: any literal
+ * word that resolves out of the worktree denies the command, even one that is
+ * only read. This is a screen, not a sandbox: a path the shell computes at run
+ * time is invisible here, which is why write agents normally get a worktree.
+ */
+async function commandEscapesWorktree(cwd: string, command: string): Promise<boolean> {
+  for (const raw of command.split(/\s+/)) {
+    const token = raw
+      .replace(/^\d*>{1,2}/, "") // attached redirections: >f, 2>f, >>f
+      .replace(/^<{1,3}/, "")
+      .replace(/^["'`]+/, "")
+      .replace(/["'`;|&]+$/g, "");
+    if (token === "" || token.startsWith("-") || token.startsWith("/") || token.startsWith("~")) continue;
+    if (/[$*?<>(){}[\]\\]/.test(token)) continue; // globs/expansions: not a literal path
+    if (await resolvesOutsideWorktree(cwd, token)) return true;
+  }
+  return false;
+}
 
 export interface ToolGateOptions {
   req: AgentRequest;
@@ -78,6 +134,10 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
         // "warn" lands the edit and lets the post-hoc patch capture flag it.
         if (scope.mode === "strict") return deny(`${path} is ${scopeMessage}`);
       }
+      // An in-scope PATH can still be an out-of-tree FILE via a committed symlink.
+      if (scope?.mode === "strict" && (await resolvesOutsideWorktree(req.cwd, target))) {
+        return deny(`${path} resolves outside the worktree and is ${scopeMessage}`);
+      }
       onEdit(path);
       return allow;
     }
@@ -95,7 +155,9 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
       if (
         scope?.mode === "strict" &&
         isWriteCommand(command) &&
-        (OUT_OF_TREE_PATH.test(command) || PARENT_TRAVERSAL.test(command))
+        (OUT_OF_TREE_PATH.test(command) ||
+          PARENT_TRAVERSAL.test(command) ||
+          (await commandEscapesWorktree(req.cwd, command)))
       ) {
         return deny(`shell writes outside the worktree are ${scopeMessage}`);
       }

@@ -4,7 +4,7 @@
  */
 import type { Duration } from "./duration.ts";
 import type { StepError } from "./errors.ts";
-import type { AnySchema, InferOut } from "./schema.ts";
+import type { AnySchema, InferIn, InferOut } from "./schema.ts";
 import type { Settled } from "./settled.ts";
 
 // ---------------------------------------------------------------------------
@@ -143,6 +143,12 @@ export interface GateResult {
   answeredBy: "human" | "policy" | "timeout";
 }
 
+/**
+ * What a passed deadline does. `default` carries the schema's INPUT (raw JSON)
+ * value: it is journaled with the request and applied through the schema like a
+ * human answer, so a transform's output (a Date, a class) is produced from it —
+ * never stored in it.
+ */
 export type HumanTimeoutPolicy<T> = "deny" | "escalate" | { default: T };
 
 export interface HumanAskOptions<S extends AnySchema> {
@@ -150,7 +156,7 @@ export interface HumanAskOptions<S extends AnySchema> {
   schema: S;
   detail?: string;
   timeout?: Duration;
-  onTimeout?: HumanTimeoutPolicy<InferOut<S>>;
+  onTimeout?: HumanTimeoutPolicy<InferIn<S>>;
 }
 
 export interface HumanApproveOptions {
@@ -166,7 +172,7 @@ export interface HumanReviewOptions<S extends AnySchema> {
   question?: string;
   schema: S;
   timeout?: Duration;
-  onTimeout?: HumanTimeoutPolicy<InferOut<S>>;
+  onTimeout?: HumanTimeoutPolicy<InferIn<S>>;
 }
 
 export interface HumanApi {

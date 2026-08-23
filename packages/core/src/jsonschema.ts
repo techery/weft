@@ -218,3 +218,41 @@ function valueType(v: unknown): string {
 function deepEqual(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
+
+/**
+ * The first path in a value the JSONL journal cannot faithfully hold, if any.
+ * A PRESENT property whose value is undefined is flagged too: JSON drops it, so
+ * the journal would replay a different shape than the live value — and a schema
+ * that distinguishes absent from present-undefined would flip on resume. Omit
+ * the key instead of writing undefined into it.
+ */
+export function jsonUnsafeAt(value: unknown, path = "$"): string | undefined {
+  if (value === null) return undefined;
+  const kind = typeof value;
+  if (kind === "string" || kind === "boolean") return undefined;
+  if (kind === "number") return Number.isFinite(value as number) ? undefined : `${path} (non-finite number)`;
+  if (kind === "undefined" || kind === "bigint" || kind === "function" || kind === "symbol") {
+    return `${path} (${kind})`;
+  }
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const bad = jsonUnsafeAt(value[i], `${path}[${i}]`);
+      if (bad !== undefined) return bad;
+    }
+    return undefined;
+  }
+  // Realm-tolerant plain-object test: workflow objects are built inside the vm
+  // context, whose Object.prototype is a different identity than the host's — but
+  // any realm's Object.prototype is the one whose own prototype is null.
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== null && Object.getPrototypeOf(proto) !== null) {
+    // Map, Set, Date, Promise, class instances: JSON silently loses or breaks them.
+    const name = (value as object).constructor?.name ?? "object";
+    return `${path} (${name})`;
+  }
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    const bad = jsonUnsafeAt(entry, `${path}.${key}`);
+    if (bad !== undefined) return bad;
+  }
+  return undefined;
+}
