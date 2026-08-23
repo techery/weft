@@ -149,6 +149,15 @@ export function isReadOnlyCommand(command: string): boolean {
     // (--output FILE, --output=FILE) — a short-option group ending in o takes the
     // next word as its output file.
     if (name === "sort" && /\s(?:-[a-zA-Z]*o|--output)/.test(seg)) return false;
+    // uniq reads — unless a SECOND positional argument names its output file
+    // (`uniq input output` WRITES output). Conservative: two option-free words
+    // refuse the command, a separated flag argument (-f 2) included; `-` counts
+    // (it is stdin, and whatever follows it is the output).
+    if (name === "uniq") {
+      const positional = words.slice(i + 1).filter((w) => !(w.startsWith("-") && w.length > 1));
+      if (positional.length > 1) return false;
+      continue;
+    }
     if (!READ_COMMANDS.has(name)) return false;
   }
   return true;
@@ -185,10 +194,15 @@ const RISKY_PATTERNS: readonly RegExp[] = [
 ];
 
 export function isRiskyCommand(command: string): boolean {
-  if (RISKY_PATTERNS.some((re) => re.test(command))) return true;
+  // The shell resolves quoting BEFORE the program sees its words — `git p'u'sh`
+  // runs `git push` — so classification must match against the unquoted text.
+  // Stripping is for MATCHING only and errs toward the stricter reading: a
+  // "push" inside a quoted string routes to approval rather than sailing past.
+  const resolved = command.replace(/['"]/g, "");
+  if (RISKY_PATTERNS.some((re) => re.test(resolved))) return true;
   // `git -C . push` is still a push: resolve the effective subcommand per segment
   // instead of trusting adjacency in the raw string.
-  for (const raw of command.replace(/\d*>&\d+/g, " ").split(/\|\||&&|[;|\n&]/)) {
+  for (const raw of resolved.replace(/\d*>&\d+/g, " ").split(/\|\||&&|[;|\n&]/)) {
     const words = raw.trim().split(/\s+/);
     let i = 0;
     while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] as string)) i++;

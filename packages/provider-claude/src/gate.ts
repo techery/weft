@@ -15,7 +15,6 @@ import {
   editTargetPath,
   isReadOnlyCommand,
   isRiskyCommand,
-  isWriteCommand,
   STRUCTURED_OUTPUT_TOOL,
 } from "./tools.ts";
 
@@ -148,18 +147,18 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
       // deny-by-default there: only commands known not to write may run.
       if (!allowEdits && !isReadOnlyCommand(command)) return deny(READ_ONLY_MESSAGE);
       // A STRICT write scope relies on worktree patch capture, which only sees the
-      // worktree: a shell write aimed at an absolute or home-anchored path — or a
-      // relative one that traverses out through `..` — would escape both the scope
-      // check and quarantine — deny it up front. Traversal-free relative writes
-      // stay allowed (they land in the worktree and are captured).
+      // worktree — and EVERY command can write, not just a recognized writer
+      // (`python -c 'open("/tmp/out","w")'`, an unknown binary). So the boundary
+      // applies to the whole shell surface: an absolute or home-anchored path, a
+      // `..` traversal, or a path resolving out through a symlink is denied up
+      // front, whatever the command. Traversal-free relative work stays allowed.
       if (
         scope?.mode === "strict" &&
-        isWriteCommand(command) &&
         (OUT_OF_TREE_PATH.test(command) ||
           PARENT_TRAVERSAL.test(command) ||
           (await commandEscapesWorktree(req.cwd, command)))
       ) {
-        return deny(`shell writes outside the worktree are ${scopeMessage}`);
+        return deny(`shell access outside the worktree is ${scopeMessage}`);
       }
       if (isRiskyCommand(command)) {
         const decision = await req.hitl.onPermission({ tool: toolName, input, risk: "high" });

@@ -298,6 +298,8 @@ describe("the tool gate", () => {
       "sort -oclobbered input.txt", // ...in its ATTACHED spelling
       "sort -ro clobbered input.txt", // ...clustered: the trailing o still takes a file
       "sort --output=clobbered input.txt",
+      "uniq input.txt clobbered", // the second positional IS uniq's output file
+      "uniq - clobbered", // stdin in, still a written output
     ]) {
       expect(await ask(options, "Bash", { command }), command).toEqual({
         behavior: "deny",
@@ -314,6 +316,10 @@ describe("the tool gate", () => {
     expect(await ask(options, "Bash", { command: "sort -u -r input.txt | head" })).toEqual({
       behavior: "allow",
     });
+    expect(await ask(options, "Bash", { command: "sort input.txt | uniq -c" })).toEqual({
+      behavior: "allow",
+    });
+    expect(await ask(options, "Bash", { command: "uniq input.txt" })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Grep", { pattern: "todo" })).toEqual({ behavior: "allow" });
   });
 
@@ -375,11 +381,22 @@ describe("the tool gate", () => {
       behavior: "deny",
       message: "release needs a human",
     });
+    // Quoting must not smuggle a push past the broker: the shell resolves
+    // `git p'u'sh` to `git push` before git ever sees it.
+    expect(await ask(options, "Bash", { command: "git p'u'sh origin main" })).toEqual({
+      behavior: "allow",
+    });
+    expect(await ask(options, "Bash", { command: 'git "push" origin main' })).toEqual({
+      behavior: "allow",
+    });
+    expect(await ask(options, "Bash", { command: "git -C . 'pu'sh origin HEAD:main" })).toEqual({
+      behavior: "allow",
+    });
     // Ordinary commands never reach the broker.
     expect(await ask(options, "Bash", { command: "pnpm test" })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Bash", { command: "git commit -m x" })).toEqual({ behavior: "allow" });
 
-    expect(seen).toHaveLength(3);
+    expect(seen).toHaveLength(6);
     expect(seen.every((r) => r.risk === "high")).toBe(true);
     expect(seen[0]?.tool).toBe("Bash");
   });
@@ -397,6 +414,9 @@ describe("the tool gate", () => {
       "printf x > ../../outside",
       "cp secrets.txt ../sibling.txt",
       "mv notes.txt ..",
+      // Writers isWriteCommand cannot recognize still get the boundary check.
+      `python -c 'open("/tmp/out","w").write("x")'`,
+      "unknown-tool --config /etc/passwd",
     ]) {
       const denial = await ask(options, "Bash", { command });
       expect(denial.behavior, command).toBe("deny");
