@@ -106,10 +106,16 @@ export class FsJournalStore implements JournalStore {
    */
   private async withAppendLock<T>(runId: string, fn: () => Promise<T>): Promise<T> {
     const lockPath = join(this.runDir(runId), "journal.lock");
+    const token = randomUUID();
     const started = Date.now();
     for (;;) {
       try {
-        closeSync(openSync(lockPath, "wx"));
+        const fd = openSync(lockPath, "wx");
+        try {
+          writeSync(fd, token);
+        } finally {
+          closeSync(fd);
+        }
         break;
       } catch {
         try {
@@ -139,7 +145,13 @@ export class FsJournalStore implements JournalStore {
     try {
       return await fn();
     } finally {
-      await fs.rm(lockPath, { force: true }).catch(() => undefined);
+      // Owner-checked release: if this append overran the stale threshold and lost
+      // the lock to a contender, removing by pathname would delete the NEW owner's
+      // lock and let a third writer in — remove only a lock that is still ours.
+      await fs
+        .readFile(lockPath, "utf8")
+        .then((held) => (held === token ? fs.rm(lockPath, { force: true }) : undefined))
+        .catch(() => undefined);
     }
   }
 

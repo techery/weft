@@ -14,11 +14,15 @@ import {
   editTargetPath,
   isReadOnlyCommand,
   isRiskyCommand,
+  isWriteCommand,
   STRUCTURED_OUTPUT_TOOL,
 } from "./tools.ts";
 
 /** Sent back to the agent for every denial on a read-only step, edits and shell writes alike. */
 export const READ_ONLY_MESSAGE = "this is a read-only step";
+
+/** An absolute or home-anchored path anywhere in a command (except /dev/null). */
+const OUT_OF_TREE_PATH = /(?:^|[\s='"`])(?:\/(?!dev\/null\b)|~\/|\$HOME\b)/;
 
 export interface ToolGateOptions {
   req: AgentRequest;
@@ -73,6 +77,13 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
       // Read-only steps run in the integration cwd, not a worktree, so the shell is
       // deny-by-default there: only commands known not to write may run.
       if (!allowEdits && !isReadOnlyCommand(command)) return deny(READ_ONLY_MESSAGE);
+      // A STRICT write scope relies on worktree patch capture, which only sees the
+      // worktree: a shell write aimed at an absolute or home-anchored path would
+      // escape both the scope check and quarantine — deny it up front. Relative
+      // writes stay allowed (they land in the worktree and are captured).
+      if (scope?.mode === "strict" && isWriteCommand(command) && OUT_OF_TREE_PATH.test(command)) {
+        return deny(`shell writes outside the worktree are ${scopeMessage}`);
+      }
       if (isRiskyCommand(command)) {
         const decision = await req.hitl.onPermission({ tool: toolName, input, risk: "high" });
         if (decision.behavior === "deny") return deny(decision.message ?? "denied by the approval policy");

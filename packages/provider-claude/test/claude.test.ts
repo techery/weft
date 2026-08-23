@@ -290,6 +290,8 @@ describe("the tool gate", () => {
       "ls $(echo anything)",
       "find src -name '*.tmp' -delete",
       "xargs rm",
+      "env bash -c 'touch changed'", // a launcher smuggles any command
+      "sort -o clobbered input.txt", // an allow-listed reader with a write flag
     ]) {
       expect(await ask(options, "Bash", { command }), command).toEqual({
         behavior: "deny",
@@ -356,16 +358,41 @@ describe("the tool gate", () => {
     );
 
     expect(await ask(options, "Bash", { command: "git push origin main" })).toEqual({ behavior: "allow" });
+    // Global git options must not smuggle a push past the broker.
+    expect(await ask(options, "Bash", { command: "git -C . push origin HEAD:main" })).toEqual({
+      behavior: "allow",
+    });
     expect(await ask(options, "Bash", { command: "npm publish --access public" })).toEqual({
       behavior: "deny",
       message: "release needs a human",
     });
     // Ordinary commands never reach the broker.
     expect(await ask(options, "Bash", { command: "pnpm test" })).toEqual({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: "git commit -m x" })).toEqual({ behavior: "allow" });
 
-    expect(seen).toHaveLength(2);
+    expect(seen).toHaveLength(3);
     expect(seen.every((r) => r.risk === "high")).toBe(true);
     expect(seen[0]?.tool).toBe("Bash");
+  });
+
+  test("a strict write scope denies shell writes aimed outside the worktree", async () => {
+    const options = await gateContext(
+      request({ tools: { allowEdits: true }, writeScope: { paths: ["src/**"], mode: "strict" } }),
+    );
+    // Patch capture sees only the worktree: an absolute/home-anchored write escapes it.
+    for (const command of [
+      `printf x > "$HOME/.config/tool"`,
+      "cp secrets.txt /tmp/exfil.txt",
+      "touch ~/marker",
+    ]) {
+      const denial = await ask(options, "Bash", { command });
+      expect(denial.behavior, command).toBe("deny");
+    }
+    // Relative writes land in the worktree, get captured, and stay allowed.
+    expect(await ask(options, "Bash", { command: "printf x > notes.txt" })).toEqual({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: "pnpm test > /dev/null 2>&1" })).toEqual({
+      behavior: "allow",
+    });
   });
 
   test("tools.deny removes a tool outright", async () => {

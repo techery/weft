@@ -62,6 +62,7 @@ const READ_COMMANDS: ReadonlySet<string> = new Set([
   "uniq",
   "cut",
   "tr",
+  // "env" is deliberately absent: with arguments it LAUNCHES another command.
   "echo",
   "printf",
   "pwd",
@@ -71,7 +72,6 @@ const READ_COMMANDS: ReadonlySet<string> = new Set([
   "stat",
   "du",
   "df",
-  "env",
   "printenv",
   "diff",
   "cmp",
@@ -144,9 +144,27 @@ export function isReadOnlyCommand(command: string): boolean {
       if (/\s-(?:delete|exec|execdir|ok|okdir|fprint\w*)\b/.test(seg)) return false;
       continue;
     }
+    // sort reads — unless -o/--output turns it into a file writer.
+    if (name === "sort" && /\s(?:-o\b|--output\b)/.test(seg)) return false;
     if (!READ_COMMANDS.has(name)) return false;
   }
   return true;
+}
+
+/**
+ * The effective git subcommand, skipping global options — `git -C . push` is still a
+ * push. The listed flags consume a separate argument; every other leading `-x` is a
+ * bare global flag.
+ */
+export function gitSubcommandOf(words: readonly string[]): string | undefined {
+  const takesArg = new Set(["-C", "-c", "--exec-path", "--git-dir", "--work-tree", "--namespace"]);
+  let i = 1;
+  while (i < words.length) {
+    const word = words[i] as string;
+    if (!word.startsWith("-")) return word;
+    i += takesArg.has(word) ? 2 : 1;
+  }
+  return undefined;
 }
 
 /** Commands that publish work outside the machine: these go to the HITL broker at risk "high". */
@@ -164,5 +182,17 @@ const RISKY_PATTERNS: readonly RegExp[] = [
 ];
 
 export function isRiskyCommand(command: string): boolean {
-  return RISKY_PATTERNS.some((re) => re.test(command));
+  if (RISKY_PATTERNS.some((re) => re.test(command))) return true;
+  // `git -C . push` is still a push: resolve the effective subcommand per segment
+  // instead of trusting adjacency in the raw string.
+  for (const raw of command.replace(/\d*>&\d+/g, " ").split(/\|\||&&|[;|\n&]/)) {
+    const words = raw.trim().split(/\s+/);
+    let i = 0;
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] as string)) i++;
+    const head = words[i];
+    if (head === undefined) continue;
+    if ((head.split("/").pop() ?? head) !== "git") continue;
+    if (gitSubcommandOf(words.slice(i)) === "push") return true;
+  }
+  return false;
 }
