@@ -826,10 +826,19 @@ describe("codex review findings, round 4 (PR #1)", () => {
   });
 
   test("a fn check honours its timeout instead of hanging the run", async () => {
+    let sawAbort = false;
     const def = defineWorkflow(
       { name: "hangcheck", description: "h", input: z.object({}), output: z.object({}) },
       async (ctx) => {
-        await ctx.check("stuck", { fn: () => new Promise(() => undefined), timeout: "150ms" });
+        await ctx.check("stuck", {
+          fn: (signal) =>
+            new Promise(() => {
+              signal.addEventListener("abort", () => {
+                sawAbort = true;
+              });
+            }),
+          timeout: "150ms",
+        });
         return {};
       },
     );
@@ -841,5 +850,7 @@ describe("codex review findings, round 4 (PR #1)", () => {
     expect(state.checks).toEqual([
       { name: "stuck", status: "fail", required: false, evidence: "check timed out after 150ms" },
     ]);
+    // The fn was told to stop: abort-aware callbacks do not keep working past the timeout.
+    expect(sawAbort).toBe(true);
   });
 });

@@ -960,8 +960,13 @@ export function buildCtx(rt: RunRuntime): Ctx {
             // validated — native fetch would silently carry an allowed host onto a
             // forbidden (or internal) one.
             let target = url;
+            let hopHeaders = resolved;
             for (let hop = 0; ; hop++) {
-              const res = await globalThis.fetch(target, { ...requestInit, redirect: "manual" });
+              const res = await globalThis.fetch(target, {
+                ...requestInit,
+                headers: hopHeaders,
+                redirect: "manual",
+              });
               const location = res.headers.get("location");
               if (res.status < 300 || res.status >= 400 || location === null) return res;
               if (hop >= 5) throw new Error(`too many redirects (stopped after ${hop + 1})`);
@@ -971,6 +976,16 @@ export function buildCtx(rt: RunRuntime): Ctx {
                   "fetch_denied",
                   `redirect to "${next.hostname}" is not in the fetch allow-list`,
                   { step: ref },
+                );
+              }
+              // Credentials are origin-bound: crossing origins drops them, the way
+              // native fetch strips authorization on cross-origin redirects.
+              if (next.origin !== new URL(target).origin) {
+                hopHeaders = Object.fromEntries(
+                  Object.entries(hopHeaders ?? {}).filter(
+                    ([name]) =>
+                      !["authorization", "cookie", "proxy-authorization"].includes(name.toLowerCase()),
+                  ),
                 );
               }
               target = next.toString();
@@ -1301,15 +1316,19 @@ export function buildCtx(rt: RunRuntime): Ctx {
         payload: { name, fn: true, required },
         onSettle: settle,
         execute: async () => {
+          const abort = new AbortController();
           let timer: NodeJS.Timeout | undefined;
           try {
             const outcome = await Promise.race([
-              Promise.resolve().then(() => opts.fn!()),
+              Promise.resolve().then(() => opts.fn!(abort.signal)),
               new Promise<typeof TIMED_OUT>((resolve) => {
                 timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
               }),
             ]);
             if (outcome === TIMED_OUT) {
+              // Best effort: JS cannot force-kill the callback, but an abort-aware fn
+              // stops here instead of appending work after the workflow moved on.
+              abort.abort();
               return { value: { status: "fail", evidence: `check timed out after ${timeoutMs}ms` } };
             }
             return { value: normalize(outcome) };

@@ -363,7 +363,11 @@ export interface CheckResult {
 
 export interface CheckOptions {
   exec?: [string, ...string[]];
-  fn?: () => Promise<boolean | CheckResult> | boolean | CheckResult;
+  /**
+   * The signal fires if the check times out — wire it into what the fn awaits, or
+   * work past the timeout keeps running in the background (JS cannot force-kill it).
+   */
+  fn?: (signal: AbortSignal) => Promise<boolean | CheckResult> | boolean | CheckResult;
   /** Record a deliberately skipped re-run, trusting a prior run's result. */
   trustPrior?: { run: string; reason: string };
   /** A failing required check gates run completion. */

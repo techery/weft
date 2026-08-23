@@ -11,7 +11,7 @@ import {
   structuralCheck,
   toWireSchema,
 } from "@weft/core";
-import { StepError } from "@weft/sdk";
+import { StepError, z } from "@weft/sdk";
 import { describe, expect, test } from "vitest";
 
 describe("canonical json & hashing", () => {
@@ -265,6 +265,15 @@ describe("reduceState terminal outcomes", () => {
 });
 
 describe("toWireSchema", () => {
+  test("a zod union root travels wrapped: providers demand an object root", () => {
+    const wire = toWireSchema(z.union([z.string(), z.number()]) as never);
+    expect(wire.wrapped).toBe(true);
+    expect((wire.json as { type?: string }).type).toBe("object");
+    expect(structuralCheck(wire.json, { value: "x" })).toEqual([]);
+    expect(structuralCheck(wire.json, { value: 4 })).toEqual([]);
+    expect(structuralCheck(wire.json, { value: true })).toHaveLength(1);
+  });
+
   test("a non-zod Standard Schema travels as a wrapped { value } carrier", () => {
     // A stand-in for e.g. a valibot string schema — its real value is a primitive.
     const custom = {

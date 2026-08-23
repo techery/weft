@@ -355,6 +355,42 @@ describe("side-effect steps", () => {
     }
   });
 
+  test("fetch: credentials do not follow a cross-origin redirect", async () => {
+    let secondAuth: string | null = "unset";
+    const second = createServer((req, res) => {
+      secondAuth = req.headers.authorization ?? null;
+      res.writeHead(200, { "content-type": "text/plain" }).end("ok");
+    });
+    await new Promise<void>((r) => second.listen(0, "127.0.0.1", r));
+    const secondPort = (second.address() as { port: number }).port;
+    const first = createServer((_req, res) => {
+      // Same machine, different origin: localhost vs 127.0.0.1.
+      res.writeHead(302, { location: `http://localhost:${secondPort}/next` }).end();
+    });
+    await new Promise<void>((r) => first.listen(0, "127.0.0.1", r));
+    const firstPort = (first.address() as { port: number }).port;
+
+    try {
+      const t = testEngine({ config: { fetchAllow: ["127.0.0.1", "localhost"] } });
+      const def = defineWorkflow(
+        { description: "authredir", input: z.object({}), output: z.object({ status: z.number() }) },
+        async (ctx) => {
+          const res = await ctx.fetch(`http://127.0.0.1:${firstPort}/start`, {
+            headers: { authorization: "Bearer origin-bound" },
+          });
+          return { status: res.status };
+        },
+      );
+      const handle = await t.engine.start(def, { input: {}, cwd: await tempRepo() });
+      expect(await handle.result).toEqual({ status: 200 });
+      // The token was for the FIRST origin; the hop across origins dropped it.
+      expect(secondAuth).toBeNull();
+    } finally {
+      first.close();
+      second.close();
+    }
+  });
+
   test("large step outputs are offloaded to the blob store transparently", async () => {
     const t = testEngine({ config: { limits: { blobThresholdBytes: 512 } } });
     const cwd = await tempRepo();

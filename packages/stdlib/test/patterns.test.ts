@@ -18,6 +18,29 @@ const Claim = z.object({ id: z.string(), text: z.string() });
 type Claim = z.infer<typeof Claim>;
 
 describe("adversarialVerify", () => {
+  test("an even panel needs a strict majority: a 1/2 tie never kills", async () => {
+    const h = harness();
+    h.builder.on({ key: "refute:0:0" }, { refuted: true, reason: "seems off" });
+    h.builder.on({ key: "refute:0:1" }, { refuted: false, reason: "checked, it holds" });
+
+    const def = defineWorkflow(
+      {
+        name: "verify-even",
+        description: "refute with an even panel",
+        input: z.object({ claims: z.array(Claim) }),
+        output: adversarialVerifyResultSchema(Claim),
+      },
+      async (ctx, input) =>
+        adversarialVerify<Claim>(ctx, { claims: input.claims, describe: (c) => c.text, refuters: 2 }),
+    );
+
+    const { output } = await runWorkflow(h, def, {
+      claims: [{ id: "a", text: "auth.ts:12 dereferences a null session" }],
+    });
+    expect(output.survived.map((c) => c.id)).toEqual(["a"]);
+    expect(output.refuted).toEqual([]);
+  });
+
   test("kills a claim at 2/3 refuted and keeps one at 1/3", async () => {
     const h = harness();
     // claim 0 — two refuters agree it is wrong

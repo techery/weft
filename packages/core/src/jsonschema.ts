@@ -39,7 +39,9 @@ export function toWireSchema(schema: AnySchema): WireSchema {
   }
   delete json.$schema;
 
-  const wrapped = json.type !== "object" && json.type !== undefined;
+  // Wrap unless the ROOT is guaranteed an object: a root anyOf (z.union) carries no
+  // `type` and may be primitive, and providers' structured output demands an object root.
+  const wrapped = json.type !== "object";
   if (wrapped) {
     json = {
       type: "object",

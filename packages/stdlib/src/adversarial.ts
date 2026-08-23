@@ -79,7 +79,8 @@ export async function adversarialVerify<T>(
   if (claims.length === 0) return { survived: [], refuted: [] };
 
   const refuters = positiveInt(opts.refuters, DEFAULT_REFUTERS);
-  const threshold = Math.ceil(refuters / 2);
+  // A STRICT majority: on an even panel a tie must not kill (1 of 2 refuting survives).
+  const threshold = Math.floor(refuters / 2) + 1;
   const keyFor =
     opts.keyFor ?? ((claimIndex: number, refuterIndex: number) => `refute:${claimIndex}:${refuterIndex}`);
   const route = routing(opts);
