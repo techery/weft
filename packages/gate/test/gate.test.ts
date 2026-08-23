@@ -595,6 +595,24 @@ describe("sandbox", () => {
     );
   });
 
+  it("gives Function-escapes the sandboxed globals, not the host's", async () => {
+    // Promise is a context-native intrinsic (not injected from the host), so code
+    // built via its .constructor evaluates against the SANDBOXED globals: the Date
+    // it reaches is the guarded stand-in, and process.env is the throwing proxy.
+    const clock = await loadProbe({
+      top: `const P: any = Promise;`,
+      body: `const t = P.constructor("return Date.now()")();`,
+    });
+    await expect(clock.def.run(stubCtx, {})).rejects.toThrow(
+      "Date.now() is unavailable in workflow code - use ctx.now()",
+    );
+    const env = await loadProbe({
+      top: `const P: any = Promise;`,
+      body: `const e = P.constructor("return process.env.HOME")();`,
+    });
+    await expect(env.def.run(stubCtx, {})).rejects.toThrow("process.env is unavailable");
+  });
+
   it("keeps Date.parse and the rest of Math working", async () => {
     const { def } = await loadProbe({
       body: [

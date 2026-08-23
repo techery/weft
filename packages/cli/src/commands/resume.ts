@@ -4,6 +4,7 @@
  * the file, and after the file changed: `content` (default) re-runs a step whose prompt or
  * options moved, `key` keeps it by identity for fast iteration.
  */
+import { inlineDefOf } from "@weft/host";
 import { Command } from "commander";
 import pc from "picocolors";
 import { openWeft, parseReuse } from "../context.ts";
@@ -26,7 +27,13 @@ export function resumeCommand(io: CliIo): Command {
       try {
         const reuse = parseReuse(opts.reuse);
         const before = await weft.engine.state(runId);
-        const handle = await weft.engine.resume(runId, { ...(reuse !== undefined ? { reuse } : {}) });
+        // An inline (stdin) run persisted its bundled script; registry runs have none
+        // here and fall through to the name the run journaled.
+        const inline = await inlineDefOf(weft, runId);
+        const handle = await weft.engine.resume(runId, {
+          ...(inline !== undefined ? { def: inline } : {}),
+          ...(reuse !== undefined ? { reuse } : {}),
+        });
         io.out(`${pc.dim("resuming")} ${pc.bold(before.workflow)} ${handle.runId}`);
         const outcome = opts.watch
           ? await watchRun(io, weft, handle, before.workflow)

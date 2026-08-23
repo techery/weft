@@ -809,6 +809,22 @@ describe("codex review findings, round 4 (PR #1)", () => {
     expect(await h2.result).toEqual({ ok: true });
   });
 
+  test("a signal wait with a timeout fails as a timeout, never as a cancellation", async () => {
+    const def = defineWorkflow(
+      { name: "sigtimeout", description: "s", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.signal("never-arrives", z.object({}), { timeout: "150ms" });
+        return {};
+      },
+    );
+    const t = testEngine();
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    // The timer's abort used to reject the wait with CancelledError first, which
+    // journaled the whole run as cancelled (and skipped retries).
+    await expect(h.result).rejects.toMatchObject({ code: "timeout" });
+    expect((await t.engine.state(h.runId)).status).toBe("failed");
+  });
+
   test("a fn check honours its timeout instead of hanging the run", async () => {
     const def = defineWorkflow(
       { name: "hangcheck", description: "h", input: z.object({}), output: z.object({}) },

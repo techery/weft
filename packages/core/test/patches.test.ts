@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { integrationBaseCommit, type JournalRecord, treeHash } from "@weft/core";
@@ -316,6 +317,42 @@ describe("side-effect steps", () => {
     );
     const handle = await t.engine.start(def, { input: {}, cwd });
     await expect(handle.result).rejects.toMatchObject({ code: "fetch_denied" });
+  });
+
+  test("fetch: a redirect off the allow-list is refused, not silently followed", async () => {
+    // The forbidden destination must never be reached at all.
+    let forbiddenHit = false;
+    const forbidden = createServer((_req, res) => {
+      forbiddenHit = true;
+      res.writeHead(200).end("secret");
+    });
+    await new Promise<void>((r) => forbidden.listen(0, "127.0.0.1", r));
+    const forbiddenPort = (forbidden.address() as { port: number }).port;
+    const allowed = createServer((_req, res) => {
+      res.writeHead(302, { location: `http://localhost:${forbiddenPort}/internal` }).end();
+    });
+    await new Promise<void>((r) => allowed.listen(0, "127.0.0.1", r));
+    const allowedPort = (allowed.address() as { port: number }).port;
+
+    try {
+      const t = testEngine({ config: { fetchAllow: ["127.0.0.1"] } });
+      const def = defineWorkflow(
+        { description: "redir", input: z.object({}), output: z.object({}) },
+        async (ctx) => {
+          await ctx.fetch(`http://127.0.0.1:${allowedPort}/start`);
+          return {};
+        },
+      );
+      const handle = await t.engine.start(def, { input: {}, cwd: await tempRepo() });
+      await expect(handle.result).rejects.toMatchObject({
+        code: "fetch_denied",
+        message: expect.stringContaining("redirect"),
+      });
+      expect(forbiddenHit).toBe(false);
+    } finally {
+      allowed.close();
+      forbidden.close();
+    }
   });
 
   test("large step outputs are offloaded to the blob store transparently", async () => {

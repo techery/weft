@@ -11,9 +11,16 @@
  * ```
  */
 import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { Engine, ProviderRegistry } from "@weft/core";
-import { createWorkflowRegistry, type FileWorkflowRegistry, GateError, loadWorkflow } from "@weft/gate";
+import {
+  createWorkflowRegistry,
+  type FileWorkflowRegistry,
+  GateError,
+  instantiateBundle,
+  loadWorkflow,
+} from "@weft/gate";
 import type { RunIndex } from "@weft/index-sqlite";
 import { type MockAgentBuilder, mock } from "@weft/provider-mock";
 import type { WorkflowDefinition } from "@weft/sdk";
@@ -128,6 +135,33 @@ export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
       if (pending) (await pending).close();
     },
   };
+}
+
+/**
+ * Persist an inline workflow's bundled script alongside its run. Inline source
+ * (stdin, MCP `source`) has no file the registry could find again — without this,
+ * a suspended inline run is unresumable from any later process.
+ */
+export async function persistInlineScript(weft: Weft, runId: string, code: string): Promise<void> {
+  const dir = join(weft.runsDir, runId);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "script.ts"), code, "utf8");
+}
+
+/**
+ * The definition persisted with an inline run, or undefined when the run came from
+ * the registry (resume then falls back to the name the run journaled).
+ */
+export async function inlineDefOf(weft: Weft, runId: string): Promise<WorkflowDefinition | undefined> {
+  const file = join(weft.runsDir, runId, "script.ts");
+  let code: string;
+  try {
+    code = await readFile(file, "utf8");
+  } catch {
+    return undefined;
+  }
+  const allowBare = weft.config.workflows?.allowBare;
+  return instantiateBundle(code, { filename: file, ...(allowBare ? { allowBare } : {}) });
 }
 
 /** `.weft/workflows` unless the config points elsewhere; relative paths are repo-relative. */

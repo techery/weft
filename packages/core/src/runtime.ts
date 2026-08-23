@@ -603,8 +603,11 @@ export class RunRuntime {
         promise,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
-            stepAbort?.abort();
+            // Reject BEFORE aborting: abort() synchronously rejects abort-aware
+            // waits with CancelledError, and cancellation is terminal — the
+            // timeout must be what wins the race (it retries; a cancel never does).
             reject(new StepError("timeout", `step timed out after ${timeoutMs}ms`, { step: ref }));
+            stepAbort?.abort();
           }, timeoutMs);
           // ref'd on purpose: bounded, cleared in finally, and it must be able to
           // fail the step even when a hung provider holds no handles of its own

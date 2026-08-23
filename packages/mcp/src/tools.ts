@@ -12,8 +12,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
+  inlineDefOf,
   loadWorkflow,
   parseBudget,
+  persistInlineScript,
   type RunListFilter,
   resolveWorkflow,
   type Weft,
@@ -131,8 +133,8 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
         // still owns the run, the claim is refused and its tailer delivers instead.
         if (!weft.engine.isActive(args.runId)) {
           const tracked = runs.get(args.runId);
-          void weft.engine
-            .resume(args.runId, { ...(tracked?.def !== undefined ? { def: tracked.def } : {}) })
+          void Promise.resolve(tracked?.def ?? inlineDefOf(weft, args.runId))
+            .then((def) => weft.engine.resume(args.runId, def !== undefined ? { def } : {}))
             .then((handle) => {
               runs.track({
                 handle,
@@ -172,7 +174,10 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
         // has no file, so the definition it loaded is what resume gets. Everything else
         // falls through to the engine's registry lookup by the name the run journaled.
         const ref = tracked?.ref;
-        const def = ref !== undefined ? (await resolveWorkflow(weft, ref)).def : tracked?.def;
+        const def =
+          ref !== undefined
+            ? (await resolveWorkflow(weft, ref)).def
+            : (tracked?.def ?? (await inlineDefOf(weft, args.runId)));
         const handle = await weft.engine.resume(args.runId, {
           ...(def !== undefined ? { def } : {}),
           ...(args.reuse !== undefined ? { reuse: args.reuse } : {}),
@@ -262,10 +267,8 @@ async function startRun(weft: Weft, runs: RunStore, args: RunArgs): Promise<Trac
       "weft_run: pass exactly one of workflow (a registry name or a path to a .ts file) or source (inline TypeScript)",
     );
   }
-  const resolved =
-    args.workflow !== undefined
-      ? await resolveWorkflow(weft, args.workflow)
-      : await loadInline(weft, args.source ?? "");
+  const inline = args.workflow === undefined ? await loadInline(weft, args.source ?? "") : undefined;
+  const resolved = inline ?? (await resolveWorkflow(weft, args.workflow ?? ""));
 
   const handle = await weft.engine.start(resolved.def, {
     input: args.input ?? {},
@@ -274,6 +277,9 @@ async function startRun(weft: Weft, runs: RunStore, args: RunArgs): Promise<Trac
     ...(args.budget !== undefined ? { budget: parseBudget(args.budget) } : {}),
     ...(args.reuse !== undefined ? { reuse: args.reuse } : {}),
   });
+  // Inline source has no file a later process could resolve: its bundled script
+  // rides with the run so any host can reconstruct the definition.
+  if (inline?.code !== undefined) await persistInlineScript(weft, handle.runId, inline.code);
   return runs.track({
     handle,
     ...(args.workflow !== undefined ? { ref: args.workflow } : { def: resolved.def }),
@@ -281,7 +287,10 @@ async function startRun(weft: Weft, runs: RunStore, args: RunArgs): Promise<Trac
 }
 
 /** Inline TypeScript through the same gate a file goes through, resolved against the repo root. */
-async function loadInline(weft: Weft, source: string): Promise<{ def: WorkflowDefinition; hash?: string }> {
+async function loadInline(
+  weft: Weft,
+  source: string,
+): Promise<{ def: WorkflowDefinition; hash?: string; code?: string }> {
   const allowBare = weft.config.workflows?.allowBare;
   const loaded = await loadWorkflow({
     source,
@@ -289,7 +298,7 @@ async function loadInline(weft: Weft, source: string): Promise<{ def: WorkflowDe
     name: "inline",
     ...(allowBare ? { allowBare } : {}),
   });
-  return { def: named(loaded.def, loaded.name), hash: loaded.hash };
+  return { def: named(loaded.def, loaded.name), hash: loaded.hash, code: loaded.code };
 }
 
 /**

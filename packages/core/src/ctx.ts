@@ -938,25 +938,46 @@ export function buildCtx(rt: RunRuntime): Ctx {
         }
         // Policy and secrets are live-path concerns: a journal-served fetch never
         // re-checks the allow-list or touches the environment.
-        if (config.fetchAllow && !config.fetchAllow.some((pattern) => picomatch.isMatch(hostname, pattern))) {
+        const allow = config.fetchAllow;
+        const allowed = (host: string) => !allow || allow.some((pattern) => picomatch.isMatch(host, pattern));
+        if (!allowed(hostname)) {
           throw new StepError("fetch_denied", `host "${hostname}" is not in the fetch allow-list`, {
             step: ref,
           });
         }
         const resolved = resolveSecretValues(init?.headers, ref);
+        const requestInit = {
+          method,
+          headers: resolved,
+          ...(init?.body !== undefined ? { body: init.body } : {}),
+          signal: AbortSignal.any([AbortSignal.timeout(timeoutMs), io.signal]),
+        };
         let response: Response;
         try {
-          response = await rt.host.globalLimiter.with(
-            () =>
-              globalThis.fetch(url, {
-                method,
-                headers: resolved,
-                ...(init?.body !== undefined ? { body: init.body } : {}),
-                signal: AbortSignal.any([AbortSignal.timeout(timeoutMs), io.signal]),
-              }),
-            io.signal,
-          );
+          response = await rt.host.globalLimiter.with(async () => {
+            if (!allow) return globalThis.fetch(url, requestInit);
+            // With an allow-list, redirects are followed by hand so EVERY hop is
+            // validated — native fetch would silently carry an allowed host onto a
+            // forbidden (or internal) one.
+            let target = url;
+            for (let hop = 0; ; hop++) {
+              const res = await globalThis.fetch(target, { ...requestInit, redirect: "manual" });
+              const location = res.headers.get("location");
+              if (res.status < 300 || res.status >= 400 || location === null) return res;
+              if (hop >= 5) throw new Error(`too many redirects (stopped after ${hop + 1})`);
+              const next = new URL(location, target);
+              if (!allowed(next.hostname)) {
+                throw new StepError(
+                  "fetch_denied",
+                  `redirect to "${next.hostname}" is not in the fetch allow-list`,
+                  { step: ref },
+                );
+              }
+              target = next.toString();
+            }
+          }, io.signal);
         } catch (err) {
+          if (err instanceof StepError) throw err;
           throw new StepError("fetch_failed", `${method} ${url}: ${(err as Error).message}`, {
             step: ref,
             cause: err,

@@ -131,13 +131,17 @@ export function reduceState(records: JournalRecord[]): RunState {
       case "run.status":
         state.status = ev.status;
         break;
+      // Terminal events clear their opposite: a resumed run that now completes must
+      // not keep reporting the failure an earlier pass recorded (and vice versa).
       case "run.completed":
         state.status = "complete";
         state.output = ev.output;
+        delete state.error;
         break;
       case "run.failed":
         state.status = "failed";
         state.error = ev.error;
+        delete state.output;
         break;
       case "run.cancelled":
         state.status = "cancelled";

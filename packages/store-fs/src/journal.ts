@@ -66,32 +66,72 @@ export class FsJournalStore implements JournalStore {
   async append(runId: string, events: JournalEvent[]): Promise<JournalRecord[]> {
     const cached = await this.loadCache(runId);
     await fs.mkdir(this.runDir(runId), { recursive: true });
-    await this.reconcile(runId, cached);
-    // Anything on disk past the committed offset is a crashed writer's torn tail
-    // (reconcile consumed every complete line): cut it or this append corrupts it
-    // into an unparseable record that blocks resume and repair forever.
-    try {
-      const { size } = await fs.stat(this.journalPath(runId));
-      if (size > cached.byteOffset) await fs.truncate(this.journalPath(runId), cached.byteOffset);
-    } catch {
-      // no journal yet
-    }
-    const at = Date.now();
-    const records = events.map((ev) => {
-      const rec: JournalRecord = { i: cached.count++, at, ev };
-      return rec;
+    // Reconcile → truncate → write must be atomic ACROSS PROCESSES: without the
+    // lock, a writer that reconciled before a peer's complete record landed would
+    // "recover" that committed record as a torn tail and truncate it away.
+    return this.withAppendLock(runId, async () => {
+      await this.reconcile(runId, cached);
+      // Anything on disk past the committed offset is a crashed writer's torn tail
+      // (reconcile consumed every complete line): cut it or this append corrupts it
+      // into an unparseable record that blocks resume and repair forever.
+      try {
+        const { size } = await fs.stat(this.journalPath(runId));
+        if (size > cached.byteOffset) await fs.truncate(this.journalPath(runId), cached.byteOffset);
+      } catch {
+        // no journal yet
+      }
+      const at = Date.now();
+      const records = events.map((ev) => {
+        const rec: JournalRecord = { i: cached.count++, at, ev };
+        return rec;
+      });
+      const payload = records.map((r) => JSON.stringify(r)).join("\n") + "\n";
+      const fd = openSync(this.journalPath(runId), "a");
+      try {
+        writeSync(fd, payload);
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      cached.byteOffset += Buffer.byteLength(payload);
+      for (const w of cached.watchers) w(records);
+      return records;
     });
-    const payload = records.map((r) => JSON.stringify(r)).join("\n") + "\n";
-    const fd = openSync(this.journalPath(runId), "a");
-    try {
-      writeSync(fd, payload);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
+  }
+
+  /**
+   * A tiny cross-process mutex (exclusive-create of journal.lock) held for the few
+   * milliseconds an append takes. A lock whose holder crashed goes stale and is
+   * stolen after 10s; acquisition gives up loudly after 30s rather than hanging.
+   */
+  private async withAppendLock<T>(runId: string, fn: () => Promise<T>): Promise<T> {
+    const lockPath = join(this.runDir(runId), "journal.lock");
+    const started = Date.now();
+    for (;;) {
+      try {
+        closeSync(openSync(lockPath, "wx"));
+        break;
+      } catch {
+        try {
+          const age = Date.now() - (await fs.stat(lockPath)).mtimeMs;
+          if (age > 10_000) {
+            await fs.rm(lockPath, { force: true });
+            continue; // stale holder: retry the exclusive create at once
+          }
+        } catch {
+          continue; // the holder released between our attempts: retry at once
+        }
+        if (Date.now() - started > 30_000) {
+          throw new Error(`run ${runId}: journal append lock held too long (journal.lock)`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5 + Math.random() * 15));
+      }
     }
-    cached.byteOffset += Buffer.byteLength(payload);
-    for (const w of cached.watchers) w(records);
-    return records;
+    try {
+      return await fn();
+    } finally {
+      await fs.rm(lockPath, { force: true }).catch(() => undefined);
+    }
   }
 
   /**

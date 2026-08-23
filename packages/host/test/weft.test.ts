@@ -2,7 +2,14 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { createWeft, resolveWorkflow, type Weft } from "../src/index.ts";
+import {
+  createWeft,
+  inlineDefOf,
+  loadWorkflow,
+  persistInlineScript,
+  resolveWorkflow,
+  type Weft,
+} from "../src/index.ts";
 import { cleanupRoots, HELLO_WORKFLOW, tempRoot, write } from "./helpers.ts";
 
 const opened: Weft[] = [];
@@ -34,6 +41,40 @@ async function mockWeft(): Promise<{ weft: Weft; root: string }> {
 }
 
 describe("createWeft", () => {
+  it("persists an inline script with its run and reconstructs it for a later resume", async () => {
+    const { weft } = await mockWeft();
+    const source = `import { defineWorkflow, z } from "@weft/sdk";
+export default defineWorkflow(
+  { description: "inline gate", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+  async (ctx) => {
+    const go = await ctx.human.approve({ action: "ship?" });
+    return { ok: go.approved };
+  },
+);
+`;
+    const loaded = await loadWorkflow({ source, cwd: weft.cwd });
+    const run = await weft.engine.start(loaded.def, { input: {}, cwd: weft.cwd });
+    const outcome = await run.outcome();
+    if (outcome.status !== "waiting_for_human") throw new Error("expected suspension");
+    // What `weft run -` does: the bundled source rides with the run, then the
+    // process goes away.
+    await persistInlineScript(weft, run.runId, loaded.code);
+    await weft.engine.shutdown();
+
+    // A later process has no registry entry for the inline script — only script.ts.
+    const def = await inlineDefOf(weft, run.runId);
+    expect(def?.meta.description).toBe("inline gate");
+    if (def === undefined) throw new Error("inline definition not reconstructed");
+    const resumed = await weft.engine.resume(run.runId, { def });
+    const again = await resumed.outcome();
+    if (again.status !== "waiting_for_human") throw new Error("expected suspension again");
+    await weft.engine.answer(run.runId, again.pending[0]!.id, { approved: true });
+    expect(await resumed.result).toEqual({ ok: true });
+
+    // Registry runs persist nothing; the fallback stays quiet for them.
+    expect(await inlineDefOf(weft, "no-such-run")).toBeUndefined();
+  });
+
   it("runs a registry workflow end to end and leaves the run on disk", async () => {
     const { weft, root } = await mockWeft();
 

@@ -11,8 +11,8 @@
 
 export type { BundleOptions, BundleResult } from "./bundle.ts";
 export { bundleWorkflow } from "./bundle.ts";
-export type { LoadedWorkflow, LoadOptions } from "./load.ts";
-export { loadWorkflow } from "./load.ts";
+export type { InstantiateOptions, LoadedWorkflow, LoadOptions } from "./load.ts";
+export { instantiateBundle, loadWorkflow } from "./load.ts";
 export type {
   FileWorkflowRegistry,
   RegistryLoadResult,

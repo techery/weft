@@ -23,7 +23,7 @@ export { parseBudget } from "./budget.ts";
 export type { WeftConfig } from "./config.ts";
 export { CONFIG_FILE, configPath, loadConfig, WEFT_DIR } from "./config.ts";
 export type { CreateWeftOptions, ResolvedWorkflow, Weft } from "./weft.ts";
-export { createWeft, INDEX_FILE, resolveWorkflow } from "./weft.ts";
+export { createWeft, INDEX_FILE, inlineDefOf, persistInlineScript, resolveWorkflow } from "./weft.ts";
 
 // --- re-exported for hosts, so a host depends on @weft/host and little else -----------
 

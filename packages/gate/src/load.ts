@@ -105,25 +105,24 @@ export async function instantiateBundle(
  * throwing stand-in that names its `ctx` equivalent, or absent from the context entirely
  * (Node's timers and `process` are not ECMAScript intrinsics, so a fresh vm context has
  * none of them to begin with).
+ *
+ * ECMAScript intrinsics (Promise, JSON, the Error family, Function itself…) are NOT
+ * injected: the vm context has its own, and that matters — `Promise.constructor("…")()`
+ * built from a context-native intrinsic evaluates against the SANDBOXED globals, whereas
+ * a host-realm Promise would hand back the host's Function and with it the host's Date
+ * and process. The host objects that must be injected (console, URL, the encoders, the
+ * Math/Date stand-ins) still expose host functions whose `.constructor` is the host
+ * Function — the documented limit of this fence; worker/isolate isolation is the
+ * upgrade path if untrusted scripts ever appear.
  */
 function createSandbox(): vm.Context {
   const sandbox: Record<string, unknown> = {
     console,
-    JSON,
     URL,
     URLSearchParams,
     TextEncoder,
     TextDecoder,
     structuredClone,
-    Promise,
-    Error,
-    TypeError,
-    RangeError,
-    SyntaxError,
-    ReferenceError,
-    EvalError,
-    URIError,
-    AggregateError,
     Math: sandboxMath(),
     Date: sandboxDate(),
     fetch: banned("fetch() is unavailable in workflow code - use ctx.fetch(url, { schema })"),

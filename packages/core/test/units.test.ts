@@ -237,6 +237,33 @@ describe("reduceState check metadata", () => {
   });
 });
 
+describe("reduceState terminal outcomes", () => {
+  test("a resumed terminal outcome clears its opposite's fields", () => {
+    const recs: JournalRecord[] = [
+      {
+        i: 0,
+        at: 1,
+        ev: { type: "run.created", runId: "r", workflow: { name: "w" }, input: {}, cwd: "/", depth: 0 },
+      },
+      {
+        i: 1,
+        at: 2,
+        ev: {
+          type: "run.failed",
+          error: { name: "StepError", code: "provider_error", message: "boom", step: {} },
+        },
+      },
+      // a later resume re-executes and completes
+      { i: 2, at: 3, ev: { type: "run.status", status: "executing" } },
+      { i: 3, at: 4, ev: { type: "run.completed", output: { ok: true } } },
+    ];
+    const state = reduceState(recs);
+    expect(state.status).toBe("complete");
+    expect(state.output).toEqual({ ok: true });
+    expect(state.error).toBeUndefined(); // the stale failure must not survive in reports
+  });
+});
+
 describe("toWireSchema", () => {
   test("a non-zod Standard Schema travels as a wrapped { value } carrier", () => {
     // A stand-in for e.g. a valibot string schema — its real value is a primitive.

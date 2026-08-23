@@ -62,6 +62,22 @@ describe("append", () => {
     expect((await drain(daemon, "run-a")).map((r) => r.i)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
+  test("concurrent appends from two live instances lose nothing", async () => {
+    const dir = await tempDir();
+    const a = new FsJournalStore(dir);
+    const b = new FsJournalStore(dir);
+    await a.append("run-a", [runCreated("run-a", "audit")]);
+    // Without the append lock, one writer's reconcile→truncate could cut the other
+    // writer's just-committed record as if it were a torn tail.
+    await Promise.all(
+      Array.from({ length: 10 }, (_, i) =>
+        Promise.all([a.append("run-a", [logged(`a${i}`)]), b.append("run-a", [logged(`b${i}`)])]),
+      ),
+    );
+    const indices = (await drain(a, "run-a")).map((r) => r.i);
+    expect(indices).toEqual([...Array.from({ length: 21 }, (_, i) => i)]);
+  });
+
   test("a torn trailing record from a crashed writer is ignored and cut", async () => {
     const dir = await tempDir();
     const store = new FsJournalStore(dir);

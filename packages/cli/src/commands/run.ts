@@ -3,7 +3,14 @@
  * ways and they compose: `--args '{…}'` first, then the dynamic `--flag value` pairs over
  * it, so a saved JSON blob can be tweaked from the shell without re-typing it.
  */
-import { loadWorkflow, parseBudget, resolveWorkflow, type Weft, type WorkflowDefinition } from "@weft/host";
+import {
+  loadWorkflow,
+  parseBudget,
+  persistInlineScript,
+  resolveWorkflow,
+  type Weft,
+  type WorkflowDefinition,
+} from "@weft/host";
 import { Command } from "commander";
 import pc from "picocolors";
 import { allowBareOf, openWeft, parseReuse } from "../context.ts";
@@ -32,7 +39,7 @@ export function runCommand(io: CliIo): Command {
       const weft = await openWeft(cmd);
       try {
         const input = { ...parseArgsJson(opts.args), ...parseDynamicFlags(cmd.args.slice(1)) };
-        const { def, name, hash } = await resolveRef(weft, ref, io);
+        const { def, name, hash, code } = await resolveRef(weft, ref, io);
         const reuse = parseReuse(opts.reuse);
         const budget = opts.budget === undefined ? undefined : parseBudget(opts.budget);
 
@@ -43,6 +50,9 @@ export function runCommand(io: CliIo): Command {
           ...(budget !== undefined ? { budget } : {}),
           ...(reuse !== undefined ? { reuse } : {}),
         });
+        // An inline script has no file to be found again by: persist the bundled
+        // source with the run, so a later `weft resume` can reconstruct it.
+        if (code !== undefined) await persistInlineScript(weft, handle.runId, code);
         io.out(`${pc.bold(name)}  ${pc.dim("run")} ${handle.runId}`);
 
         const outcome = opts.watch ? await watchRun(io, weft, handle, name) : await handle.outcome();
@@ -57,12 +67,14 @@ interface ResolvedRef {
   def: WorkflowDefinition;
   name: string;
   hash?: string;
+  /** The bundled source, present only for inline (stdin) scripts — persisted with the run. */
+  code?: string;
 }
 
 /**
  * `-` reads the script from stdin and gates it like any file. An inline script has no file
- * to be found again by, so it is named before it starts: the journal pins that name, and
- * `weft resume` needs a workflow of that name in the registry to replay against.
+ * to be found again by, so it is named before it starts and its bundled source rides with
+ * the run — `weft resume` reconstructs the definition from that script.
  */
 async function resolveRef(weft: Weft, ref: string, io: CliIo): Promise<ResolvedRef> {
   if (ref !== "-") return resolveWorkflow(weft, ref);
@@ -73,5 +85,5 @@ async function resolveRef(weft: Weft, ref: string, io: CliIo): Promise<ResolvedR
     loaded.def.meta.name === loaded.name
       ? loaded.def
       : { kind: loaded.def.kind, meta: { ...loaded.def.meta, name: loaded.name }, run: loaded.def.run };
-  return { def, name: loaded.name, hash: loaded.hash };
+  return { def, name: loaded.name, hash: loaded.hash, code: loaded.code };
 }
