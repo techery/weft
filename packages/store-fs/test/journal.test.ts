@@ -4,7 +4,7 @@
  * processes; watch() serves the backlog before anything live; projections are
  * rebuildable from the JSONL alone.
  */
-import { appendFile, readFile } from "node:fs/promises";
+import { appendFile, readFile, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JournalRecord, RunState, TreePhase } from "@weft/core";
 import { reduceState, renderReport, renderTree } from "@weft/core";
@@ -76,6 +76,20 @@ describe("append", () => {
     );
     const indices = (await drain(a, "run-a")).map((r) => r.i);
     expect(indices).toEqual([...Array.from({ length: 21 }, (_, i) => i)]);
+  });
+
+  test("a crashed appender's stale lock is stolen, not waited on", async () => {
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    await store.append("run-a", [runCreated("run-a", "audit")]);
+    // A writer died inside its critical section: journal.lock survives it.
+    const lock = join(dir, "run-a", "journal.lock");
+    await writeFile(lock, "");
+    const past = new Date(Date.now() - 60_000);
+    await utimes(lock, past, past);
+
+    const appended = await store.append("run-a", [logged("after the crash")]);
+    expect(appended.map((r) => r.i)).toEqual([1]);
   });
 
   test("a torn trailing record from a crashed writer is ignored and cut", async () => {

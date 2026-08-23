@@ -115,11 +115,20 @@ export class FsJournalStore implements JournalStore {
         try {
           const age = Date.now() - (await fs.stat(lockPath)).mtimeMs;
           if (age > 10_000) {
-            await fs.rm(lockPath, { force: true });
-            continue; // stale holder: retry the exclusive create at once
+            // Identity-safe steal: RENAME the stale file aside — of two contenders
+            // only one rename succeeds, so a plain rm can never delete the FRESH
+            // lock a faster contender just created at the same path. If what we
+            // grabbed turns out fresh after all (created inside our stat window),
+            // put it back for its owner.
+            const aside = `${lockPath}.stale-${randomUUID().slice(0, 8)}`;
+            await fs.rename(lockPath, aside);
+            const grabbedAge = Date.now() - (await fs.stat(aside)).mtimeMs;
+            if (grabbedAge > 10_000) await fs.rm(aside, { force: true });
+            else await fs.rename(aside, lockPath);
+            continue; // then retry the exclusive create at once
           }
         } catch {
-          continue; // the holder released between our attempts: retry at once
+          continue; // released or stolen between our attempts: retry at once
         }
         if (Date.now() - started > 30_000) {
           throw new Error(`run ${runId}: journal append lock held too long (journal.lock)`);

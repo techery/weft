@@ -960,11 +960,15 @@ export function buildCtx(rt: RunRuntime): Ctx {
             // validated — native fetch would silently carry an allowed host onto a
             // forbidden (or internal) one.
             let target = url;
+            let hopMethod = method;
+            let hopBody = init?.body;
             let hopHeaders = resolved;
             for (let hop = 0; ; hop++) {
               const res = await globalThis.fetch(target, {
-                ...requestInit,
+                method: hopMethod,
                 headers: hopHeaders,
+                ...(hopBody !== undefined ? { body: hopBody } : {}),
+                signal: requestInit.signal,
                 redirect: "manual",
               });
               const location = res.headers.get("location");
@@ -976,6 +980,21 @@ export function buildCtx(rt: RunRuntime): Ctx {
                   "fetch_denied",
                   `redirect to "${next.hostname}" is not in the fetch allow-list`,
                   { step: ref },
+                );
+              }
+              // Method rewriting, the way native fetch does it: 303 always becomes a
+              // GET, and so does a POST answered with 301/302 — endpoints using
+              // POST-then-303 must not receive a second POST.
+              if (
+                res.status === 303 ||
+                ((res.status === 301 || res.status === 302) && hopMethod === "POST")
+              ) {
+                hopMethod = "GET";
+                hopBody = undefined;
+                hopHeaders = Object.fromEntries(
+                  Object.entries(hopHeaders ?? {}).filter(
+                    ([name]) => !["content-type", "content-length"].includes(name.toLowerCase()),
+                  ),
                 );
               }
               // Credentials are origin-bound: crossing origins drops them, the way
@@ -1352,6 +1371,16 @@ export function buildCtx(rt: RunRuntime): Ctx {
     note: z.string().optional(),
   });
 
+  /** Files that still carry conflict markers — a merge agent's self-report is not proof. */
+  async function conflictMarkersIn(files: string[]): Promise<string[]> {
+    const marked: string[] = [];
+    for (const file of files) {
+      const content = await nodeFs.readFile(resolveInCwd(file), "utf8").catch(() => "");
+      if (/^<{7}(?: |$)/m.test(content)) marked.push(file);
+    }
+    return marked;
+  }
+
   async function restorePatchFiles(snapRef: string, files: string[]): Promise<void> {
     for (const file of files) {
       const inSnap = await gitHandle
@@ -1449,7 +1478,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 { detailed: false, writeInPlace: true },
               );
               const r = resolved as { resolved: boolean; notes: string };
-              if (r.resolved) {
+              // The model's self-report is schema-valid, not authoritative: accept it
+              // only when the conflicted files really carry no markers any more.
+              const stillMarked = r.resolved ? await conflictMarkersIn(applied.conflicts) : [];
+              if (r.resolved && stillMarked.length === 0) {
                 const resultTree = await treeHash(rt.cwd);
                 await rt.append([
                   {
@@ -1464,7 +1496,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 return { value: { applied: true, conflicted: true, baseTree, resultTree } };
               }
               await restorePatchFiles(snapRef, [...patch.files, ...applied.conflicts]);
-              throw new StepError("conflict", `merge agent could not resolve ${patch.key}: ${r.notes}`, {
+              const why = r.resolved
+                ? `merge agent reported ${patch.key} resolved, but conflict markers remain in ${stillMarked.join(", ")}`
+                : `merge agent could not resolve ${patch.key}: ${r.notes}`;
+              throw new StepError("conflict", why, {
                 step: { kind: "sideeffect", key: patch.key, runId: rt.runId },
               });
             }

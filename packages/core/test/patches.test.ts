@@ -391,6 +391,74 @@ describe("side-effect steps", () => {
     }
   });
 
+  test("fetch: a 303 redirect follows as GET, like native fetch", async () => {
+    let seenMethod = "unset";
+    const second = createServer((req, res) => {
+      seenMethod = req.method ?? "none";
+      res.writeHead(200, { "content-type": "text/plain" }).end("ok");
+    });
+    await new Promise<void>((r) => second.listen(0, "127.0.0.1", r));
+    const secondPort = (second.address() as { port: number }).port;
+    const first = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(303, { location: `http://127.0.0.1:${secondPort}/done` }).end();
+      });
+    });
+    await new Promise<void>((r) => first.listen(0, "127.0.0.1", r));
+    const firstPort = (first.address() as { port: number }).port;
+
+    try {
+      const t = testEngine({ config: { fetchAllow: ["127.0.0.1"] } });
+      const def = defineWorkflow(
+        { description: "post303", input: z.object({}), output: z.object({ status: z.number() }) },
+        async (ctx) => {
+          const res = await ctx.fetch(`http://127.0.0.1:${firstPort}/submit`, {
+            method: "POST",
+            body: "payload",
+          });
+          return { status: res.status };
+        },
+      );
+      const handle = await t.engine.start(def, { input: {}, cwd: await tempRepo() });
+      expect(await handle.result).toEqual({ status: 200 });
+      // POST-then-303 must not deliver a second POST.
+      expect(seenMethod).toBe("GET");
+    } finally {
+      first.close();
+      second.close();
+    }
+  });
+
+  test("a merge agent's 'resolved' claim is verified against the files", async () => {
+    const t = testEngine();
+    t.builder.on({ key: "fix:c" }, { summary: "edit" }, { writes: { "a.txt": "AGENT\n" } });
+    // The merge agent CLAIMS success but repairs nothing — the fixture writes no files.
+    t.builder.on({ key: "merge:fix:c" }, { resolved: true, notes: "all good (it was not)" });
+    const cwd = await tempRepo({ "a.txt": "base\n" });
+    const def = defineWorkflow(
+      { description: "m", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        const fix = await ctx.agent.detailed("fix", {
+          schema: FixResult,
+          key: "fix:c",
+          write: { paths: ["a.txt"] },
+        });
+        // Drift the integration tree so the patch 3-way conflicts.
+        await ctx.bash("printf 'MAIN\\n' > a.txt");
+        await ctx.integrate([fix], { onConflict: "agent" });
+        return {};
+      },
+    );
+    const handle = await t.engine.start(def, { input: {}, cwd });
+    await expect(handle.result).rejects.toMatchObject({
+      code: "conflict",
+      message: expect.stringContaining("markers remain"),
+    });
+    // The false claim rolled back like a refusal would: the tree is restored.
+    expect(await readFile(join(cwd, "a.txt"), "utf8")).toBe("MAIN\n");
+  });
+
   test("large step outputs are offloaded to the blob store transparently", async () => {
     const t = testEngine({ config: { limits: { blobThresholdBytes: 512 } } });
     const cwd = await tempRepo();
