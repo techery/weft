@@ -1,6 +1,14 @@
-import { type JournalRecord, ReplayIndex } from "@weft/core";
+import {
+  Engine,
+  type JournalEvent,
+  type JournalRecord,
+  MemoryBlobStore,
+  MemoryJournalStore,
+  ProviderRegistry,
+  ReplayIndex,
+} from "@weft/core";
 import { defineWorkflow, z } from "@weft/sdk";
-import { afterAll, describe, expect, test } from "vitest";
+import { afterAll, describe, expect, test, vi } from "vitest";
 import { cleanupRepos, reopen, tempDir, tempRepo, testEngine } from "./helpers.ts";
 
 afterAll(cleanupRepos);
@@ -922,5 +930,158 @@ describe("codex review findings, round 5 (PR #1)", () => {
       code: "invalid_output",
       message: expect.stringContaining("cannot be journaled as JSON"),
     });
+  });
+});
+
+describe("codex review findings, round 6 (PR #1)", () => {
+  test("a schema transform's input survives resume: the journal holds RAW input, re-validated on wake", async () => {
+    const def = defineWorkflow(
+      {
+        name: "when",
+        description: "w",
+        input: z.object({ when: z.string().transform((s) => new Date(s)) }),
+        output: z.object({ time: z.number() }),
+      },
+      async (ctx, input) => {
+        const go = await ctx.human.approve({ action: "proceed?" });
+        if (!go.approved) throw new Error("denied");
+        // .getTime() exists only on a real Date: a resume fed the journal's
+        // serialized string here (the old behavior) would crash.
+        return { time: input.when.getTime() };
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, {
+      input: { when: "2026-01-02T03:04:05.000Z" },
+      cwd: await tempDir(),
+    });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+    await t1.engine.shutdown(); // the owner dies; a new process resumes from the journal
+
+    const recs = await records(t1.journal, h1.runId);
+    const created = recs.find((r) => r.ev.type === "run.created")?.ev;
+    if (created?.type !== "run.created") throw new Error("missing run.created");
+    // Journaled raw: the transformed Date would have serialized into a lossy string.
+    expect(created.input).toEqual({ when: "2026-01-02T03:04:05.000Z" });
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    await t2.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    expect(await h2.result).toEqual({ time: Date.parse("2026-01-02T03:04:05.000Z") });
+  });
+
+  test("input that cannot round-trip through the journal is refused at start", async () => {
+    const def = defineWorkflow(
+      { name: "rawdate", description: "r", input: z.object({ when: z.date() }), output: z.object({}) },
+      async () => ({}),
+    );
+    const t = testEngine();
+    await expect(
+      t.engine.start(def, { input: { when: new Date() }, cwd: await tempDir() }),
+    ).rejects.toMatchObject({
+      code: "invalid_input",
+      message: expect.stringContaining("cannot be journaled as JSON"),
+    });
+  });
+
+  test("shutdown mid-step DRAINS the work before releasing ownership; the run stays resumable", async () => {
+    const def = defineWorkflow(
+      { name: "midstep", description: "m", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        await ctx.sleep(300);
+        return { ok: true };
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    let settled = false;
+    void h1.result.catch(() => {
+      settled = true;
+    });
+    await new Promise((r) => setTimeout(r, 50)); // the sleep step is live in-flight
+    await t1.engine.shutdown();
+    // Drained BEFORE shutdown returned: a claim released over still-running work
+    // would let another process execute the same run concurrently.
+    expect(settled).toBe(true);
+    await expect(h1.result).rejects.toMatchObject({ code: "detached" });
+    const recs = await records(t1.journal, h1.runId);
+    // No journaled outcome — the run is the next owner's to finish.
+    expect(recs.some((r) => ["run.completed", "run.failed", "run.cancelled"].includes(r.ev.type))).toBe(
+      false,
+    );
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    expect(await h2.result).toEqual({ ok: true });
+  });
+
+  test("a lost ownership claim STOPS the runtime instead of double-executing the run", async () => {
+    class LeaseLosingStore extends MemoryJournalStore {
+      override async acquireRun() {
+        // A claim another process takes over immediately: the first refresh reports the loss.
+        return { refresh: async () => false, release: async () => {} };
+      }
+    }
+    const def = defineWorkflow(
+      { name: "fencedrun", description: "f", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        await ctx.sleep(60_000);
+        return { ok: true };
+      },
+    );
+    const journal = new LeaseLosingStore();
+    const engine = new Engine({
+      journal,
+      blobs: new MemoryBlobStore(),
+      providers: new ProviderRegistry(),
+    });
+    const cwd = await tempDir();
+    vi.useFakeTimers();
+    let runId: string;
+    try {
+      const h = await engine.start(def, { input: {}, cwd });
+      runId = h.runId;
+      await vi.advanceTimersByTimeAsync(0); // the sleep step dispatches
+      await vi.advanceTimersByTimeAsync(5_000); // the refresh interval fires and reports the loss
+      await expect(h.result).rejects.toMatchObject({
+        code: "detached",
+        message: expect.stringContaining("ownership"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    const recs = await records(journal, runId);
+    // Fenced, not failed: the journal stays exactly as the new owner found it.
+    expect(recs.some((r) => ["run.completed", "run.failed", "run.cancelled"].includes(r.ev.type))).toBe(
+      false,
+    );
+  });
+
+  test("a cross-process cancel cannot overwrite a completion committed in its read/write gap", async () => {
+    class RacingStore extends MemoryJournalStore {
+      raced = false;
+      override async appendIf(runId: string, expected: number, events: JournalEvent[]) {
+        if (!this.raced) {
+          this.raced = true;
+          // The run's owner commits its outcome between the canceller's fold and append.
+          await this.append(runId, [{ type: "run.completed", output: { ok: true } }]);
+        }
+        return super.appendIf(runId, expected, events);
+      }
+    }
+    const journal = new RacingStore();
+    await journal.append("race-1", [
+      { type: "run.created", runId: "race-1", workflow: { name: "w" }, input: {}, cwd: "/", depth: 0 },
+    ]);
+    const engine = new Engine({
+      journal,
+      blobs: new MemoryBlobStore(),
+      providers: new ProviderRegistry(),
+    });
+    await expect(engine.cancel("race-1")).rejects.toThrow(/already complete/);
+    const recs = await records(journal, "race-1");
+    // The completed outcome stands; the stale cancel never landed.
+    expect(recs.some((r) => r.ev.type === "run.cancelled")).toBe(false);
   });
 });

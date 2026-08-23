@@ -16,7 +16,7 @@ import {
 import { Budget } from "./budget.ts";
 import { type EngineConfig, type EngineConfigInput, resolveConfig } from "./config.ts";
 import { buildCtx } from "./ctx.ts";
-import type { JournalRecord } from "./events.ts";
+import type { JournalEvent, JournalRecord } from "./events.ts";
 import { structuralCheck } from "./jsonschema.ts";
 import { Semaphore } from "./limiter.ts";
 import { type RunState, reduceState, renderReport, renderTree } from "./projections.ts";
@@ -140,7 +140,19 @@ export class Engine implements EngineHost {
       throw new Error(`run ${runId} already exists — use resume()`);
     }
     const name = def.meta.name ?? "workflow";
-    const inputCheck = await validateSchema(def.meta.input, opts.input ?? {});
+    // The RAW input is what gets journaled, so it must survive the JSONL round
+    // trip; the schema is reapplied to it on every execution (below and on each
+    // resume), so a transform's output — a Date, a class — never needs to.
+    const rawInput = opts.input ?? {};
+    const rawInputBad = jsonUnsafeAt(rawInput);
+    if (rawInputBad !== undefined) {
+      throw new StepError(
+        "invalid_input",
+        `input cannot be journaled as JSON at ${rawInputBad} — inputs are journaled raw and re-validated on resume`,
+        { step: { kind: "workflow", runId } },
+      );
+    }
+    const inputCheck = await validateSchema(def.meta.input, rawInput);
     if (!inputCheck.ok) {
       throw new StepError(
         "invalid_input",
@@ -173,7 +185,9 @@ export class Engine implements EngineHost {
         type: "run.created",
         runId,
         workflow: { name, ...(opts.defHash !== undefined ? { defHash: opts.defHash } : {}) },
-        input: inputCheck.value,
+        // Raw, not inputCheck.value: a transformed value (string → Date) would
+        // serialize lossily and hand a resumed execution a different input type.
+        input: rawInput,
         cwd: opts.cwd,
         depth: 0,
         ...(opts.baseRef !== undefined ? { baseRef: opts.baseRef } : {}),
@@ -206,6 +220,17 @@ export class Engine implements EngineHost {
       );
     }
 
+    // The journal holds the RAW input; reapply the schema so a transform hands the
+    // resumed execution the same shape (a Date, a default) the first one saw.
+    const inputCheck = await validateSchema(def.meta.input, created.input ?? {});
+    if (!inputCheck.ok) {
+      throw new StepError(
+        "invalid_input",
+        `input failed ${created.workflow.name}'s input schema on resume: ${inputCheck.issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`,
+        { step: { kind: "workflow", runId } },
+      );
+    }
+
     // The claim comes before the runtime exists: waking a run a daemon or CLI is
     // still executing would run it twice.
     const lease = await this.claimRun(runId);
@@ -229,7 +254,7 @@ export class Engine implements EngineHost {
       ...(created.baseRef !== undefined ? { baseRef: created.baseRef } : {}),
       ...(def.meta.defaults !== undefined ? { workflowDefaults: def.meta.defaults } : {}),
     });
-    return this.launch(runtime, def, created.input, records, lease);
+    return this.launch(runtime, def, inputCheck.value, records, lease);
   }
 
   /** Claim a run before executing it; throws when another live process owns it. */
@@ -261,7 +286,19 @@ export class Engine implements EngineHost {
     this.active.set(runtime.runId, active);
     if (lease) {
       // unref'd: the claim guards a run whose own work keeps the process alive.
-      active.leaseTimer = setInterval(() => void lease.refresh().catch(() => undefined), 5_000);
+      // A refresh that reports the claim LOST (this process stalled past the TTL
+      // and another took over) must stop this runtime, not merely stop renewing:
+      // the new owner is executing the same run against the same journal.
+      active.leaseTimer = setInterval(
+        () =>
+          void lease
+            .refresh()
+            .then((held) => {
+              if (held === false) this.fenceLostRun(active);
+            })
+            .catch(() => undefined),
+        5_000,
+      );
       active.leaseTimer.unref?.();
     }
     // The owning engine consumes events other processes append to this run's journal
@@ -285,6 +322,19 @@ export class Engine implements EngineHost {
       result: active.result,
       outcome: () => this.outcomeOf(active),
     };
+  }
+
+  /** The run's ownership claim now belongs to another process: stop this copy. */
+  private fenceLostRun(active: ActiveRun): void {
+    if (active.leaseTimer) clearInterval(active.leaseTimer);
+    active.tail?.abort();
+    active.runtime.fence(
+      new StepError(
+        "detached",
+        `run ${active.runtime.runId}: ownership claim lost to another process — stopping this copy without a journaled outcome`,
+        { step: { kind: "workflow", runId: active.runtime.runId } },
+      ),
+    );
   }
 
   private outcomeOf(active: ActiveRun): Promise<RunOutcome> {
@@ -363,6 +413,11 @@ export class Engine implements EngineHost {
       rt.status = "complete";
       return outputCheck.value;
     } catch (err) {
+      // Fenced BEFORE cancellation: the journal is not ours to write a terminal
+      // event into (its next owner resumes from the last committed record), and a
+      // fence-driven abort surfacing as a CancelledError must not journal
+      // run.cancelled either. The fence is the cause; the unwind error is its echo.
+      if (rt.fenced) throw rt.fenced;
       if (isCancellation(err)) {
         await rt.append([{ type: "run.cancelled" }]);
         rt.status = "cancelled";
@@ -378,7 +433,8 @@ export class Engine implements EngineHost {
       // awaited result — a cancel, a test about to resume elsewhere — sees it free.
       if (active.leaseTimer) clearInterval(active.leaseTimer);
       await active.lease?.release().catch(() => undefined);
-      await this.snapshot(active).catch(() => undefined);
+      // A fenced run's projections belong to its new owner — don't clobber them.
+      if (!rt.fenced) await this.snapshot(active).catch(() => undefined);
     }
   }
 
@@ -487,29 +543,40 @@ export class Engine implements EngineHost {
 
     const childId = spec.childRunId;
     const resuming = await this.journal.exists(childId);
-    let input = spec.input;
+    // Journaled raw, validated on EVERY execution (mirrors start/resume): the
+    // journal's JSON can't hold a transform's output faithfully, so a resumed
+    // child must see the schema reapplied, not the serialized residue.
+    let rawInput = spec.input ?? {};
     const records: JournalRecord[] = [];
     let replay: ReplayIndex | undefined;
     if (resuming) {
       for await (const rec of this.journal.read(childId)) records.push(rec);
       const created = records.find((r) => r.ev.type === "run.created")?.ev;
-      if (created?.type === "run.created") input = created.input;
+      if (created?.type === "run.created") rawInput = created.input ?? {};
       replay = ReplayIndex.fromRecords(records);
       // The child's own journaled spend charges up the shared chain. The parent's
       // restore never saw it (a workflow step journals its usage only at
       // completion, and a completed child is served, not resumed) — no double count.
       shared.budget.restore(replay.totalUsage.tokens, replay.totalUsage.usd);
     } else {
-      const check = await validateSchema(def.meta.input, input ?? {});
-      if (!check.ok) {
+      const rawBad = jsonUnsafeAt(rawInput);
+      if (rawBad !== undefined) {
         throw new StepError(
           "invalid_input",
-          `input failed ${spec.name}'s input schema: ${check.issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`,
+          `input for "${spec.name}" cannot be journaled as JSON at ${rawBad} — child inputs are journaled raw and re-validated on resume`,
           { step: { kind: "workflow", key: spec.key ?? spec.name, runId: parent.runId } },
         );
       }
-      input = check.value;
     }
+    const check = await validateSchema(def.meta.input, rawInput);
+    if (!check.ok) {
+      throw new StepError(
+        "invalid_input",
+        `input failed ${spec.name}'s input schema: ${check.issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`,
+        { step: { kind: "workflow", key: spec.key ?? spec.name, runId: parent.runId } },
+      );
+    }
+    const input = check.value;
 
     const runtime = new RunRuntime({
       host: this,
@@ -530,7 +597,7 @@ export class Engine implements EngineHost {
           type: "run.created",
           runId: childId,
           workflow: { name: def.meta.name ?? spec.name },
-          input,
+          input: rawInput,
           cwd: parent.cwd,
           depth: parent.depth + 1,
           parentRunId: parent.runId,
@@ -669,28 +736,44 @@ export class Engine implements EngineHost {
     if (!(await this.journal.exists(runId))) throw new Error(`run ${runId} not found`);
     // Fold the journal first: a stale cancel must never overwrite a recorded outcome
     // (a "cancelled" projection over a run.completed output misreports the run).
-    let status: "open" | "complete" | "failed" | "cancelled" = "open";
-    for await (const rec of this.journal.read(runId)) {
-      if (rec.ev.type === "run.completed") status = "complete";
-      else if (rec.ev.type === "run.failed") status = "failed";
-      else if (rec.ev.type === "run.cancelled") status = "cancelled";
-      else if (rec.ev.type === "run.status" && rec.ev.status !== "cancelled") status = "open";
+    // The fold and the append must be ONE atomic operation against other processes:
+    // the run's owner can commit run.completed inside the read/write gap, and an
+    // unconditional append would then flip that successful run's final projection
+    // to cancelled. appendIf re-checks the record count under the store's append
+    // lock; a lost race re-folds (and usually finds the terminal it lost to).
+    for (;;) {
+      let status: "open" | "complete" | "failed" | "cancelled" = "open";
+      let count = 0;
+      for await (const rec of this.journal.read(runId)) {
+        count++;
+        if (rec.ev.type === "run.completed") status = "complete";
+        else if (rec.ev.type === "run.failed") status = "failed";
+        else if (rec.ev.type === "run.cancelled") status = "cancelled";
+        else if (rec.ev.type === "run.status" && rec.ev.status !== "cancelled") status = "open";
+      }
+      if (status === "cancelled") return; // idempotent
+      if (status !== "open") throw new Error(`run ${runId} is already ${status}`);
+      const events: JournalEvent[] = [{ type: "run.cancelled" }, { type: "run.status", status: "cancelled" }];
+      if (!this.journal.appendIf) {
+        // No conditional append: accept the race (single-process hosts don't race themselves).
+        await this.journal.append(runId, events);
+        return;
+      }
+      if (await this.journal.appendIf(runId, count, events)) return;
     }
-    if (status === "cancelled") return; // idempotent
-    if (status !== "open") throw new Error(`run ${runId} is already ${status}`);
-    await this.journal.append(runId, [
-      { type: "run.cancelled" },
-      { type: "run.status", status: "cancelled" },
-    ]);
   }
 
   /**
-   * Detach from every active run WITHOUT ending it: release ownership claims, stop
-   * journal tailers, forget the in-memory handles. The runs stay resumable — this is
-   * what a host calls right before its process exits (a CLI whose run just suspended,
-   * a daemon stopping), and what a test uses to simulate a crashed owner. In-flight
-   * step work is not awaited: callers shut down when their runs are suspended, or
-   * exit immediately after.
+   * Detach from every active run WITHOUT ending it: stop tailers and deadline
+   * timers, abort and DRAIN in-flight work, then release ownership claims. The
+   * runs stay resumable (no terminal event is journaled) — this is what a host
+   * calls right before its process exits (a CLI whose run just suspended, a
+   * daemon stopping), and what a test uses to simulate a crashed owner. The
+   * drain must come before the release: a claim released while a step is still
+   * executing would let another process resume the run while this one keeps
+   * appending and mutating the repository. Each run's handle rejects with a
+   * "detached" StepError; a step that ignores its abort signal past the drain
+   * window forfeits the release and its claim TTL-expires instead.
    */
   async shutdown(): Promise<void> {
     const actives = [...this.active.values()];
@@ -698,12 +781,32 @@ export class Engine implements EngineHost {
     for (const active of actives) {
       if (active.leaseTimer) clearInterval(active.leaseTimer);
       active.tail?.abort();
-      // Human-deadline timers die with the process handover: the next owner re-arms
-      // them from the journal, and a live timer here would keep the process alive
-      // and could answer a run someone else now executes.
-      active.runtime.detach();
-      // Releases are owner-checked, so drive()'s own later release stays a no-op
-      // and can never evict whoever claims the run after us.
+      // Fencing rejects pending waits, disarms human-deadline timers (a live timer
+      // here would keep the process alive and could answer a run someone else now
+      // executes), aborts step work, and refuses every journal append from now on.
+      active.runtime.fence(
+        new StepError(
+          "detached",
+          `run ${active.runtime.runId}: the host shut down; the run stays resumable in another process`,
+          { step: { kind: "workflow", runId: active.runtime.runId } },
+        ),
+      );
+    }
+    for (const active of actives) {
+      const drained = await Promise.race([
+        active.result.then(
+          () => true,
+          () => true,
+        ),
+        new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => resolve(false), 5_000);
+          timer.unref?.();
+        }),
+      ]);
+      if (!drained) continue; // never release ownership over still-live work
+      await active.runtime.flushAppends();
+      // Releases are owner-checked, so drive()'s own release (already run by the
+      // time result settles) and this one can never evict the run's next claimant.
       await active.lease?.release().catch(() => undefined);
     }
   }
@@ -799,10 +902,19 @@ export class Engine implements EngineHost {
       ...(created.baseRef !== undefined ? { baseRef: created.baseRef } : {}),
       ...(def.meta.defaults !== undefined ? { workflowDefaults: def.meta.defaults } : {}),
     });
+    // Same input the real resume would hand the code: raw from the journal, schema reapplied.
+    const inputCheck = await validateSchema(def.meta.input, created.input ?? {});
+    if (!inputCheck.ok) {
+      throw new StepError(
+        "invalid_input",
+        `input failed ${created.workflow.name}'s input schema on replay: ${inputCheck.issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`,
+        { step: { kind: "workflow", runId } },
+      );
+    }
     let completed = false;
     try {
       const ctx = buildCtx(runtime);
-      await def.run(ctx, created.input);
+      await def.run(ctx, inputCheck.value);
       completed = true;
     } catch (err) {
       if (!isCancellation(err)) {

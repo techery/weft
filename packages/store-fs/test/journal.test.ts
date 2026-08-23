@@ -383,6 +383,58 @@ describe("acquireRun", () => {
     expect(await dead.acquireRun("run-a")).toBeUndefined();
     await stolen?.release();
   });
+
+  test("refresh is a CAS: it reports a lost claim instead of evicting the successor", async () => {
+    const dir = await tempDir();
+    const stalled = new FsJournalStore(dir);
+    const successor = new FsJournalStore(dir);
+
+    const short = await stalled.acquireRun("run-a", { ttlMs: 10 });
+    await sleep(30);
+    const taken = await successor.acquireRun("run-a");
+    expect(taken).toBeTruthy();
+
+    // The stalled owner wakes up mid-refresh: the identity check and the claim
+    // write are one atomic operation, so it LEARNS of the loss (and must stop
+    // executing) rather than writing its claim over the successor's.
+    expect(await short?.refresh()).toBe(false);
+    expect(await taken?.refresh()).toBe(true);
+    // Still exactly one live owner: the successor.
+    expect(await stalled.acquireRun("run-a")).toBeUndefined();
+    await taken?.release();
+  });
+});
+
+describe("appendIf", () => {
+  test("declines when records landed after the caller's read; appends when none did", async () => {
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    await store.append("run-a", [runCreated("run-a", "audit"), logged("one")]);
+
+    // Stale expectation (the caller read 1 record; there are 2): nothing is written.
+    expect(await store.appendIf("run-a", 1, [logged("late")])).toBeUndefined();
+    expect(await drain(store, "run-a")).toHaveLength(2);
+
+    const appended = await store.appendIf("run-a", 2, [logged("fresh")]);
+    expect(appended).toHaveLength(1);
+    expect(appended?.[0]?.i).toBe(2);
+    expect(await drain(store, "run-a")).toHaveLength(3);
+  });
+
+  test("counts a PEER instance's appends: the condition holds across processes", async () => {
+    const dir = await tempDir();
+    const canceller = new FsJournalStore(dir);
+    const owner = new FsJournalStore(dir);
+    await canceller.append("run-a", [runCreated("run-a", "audit")]);
+
+    // The owner (a separate store instance, as in a separate process) commits an
+    // outcome after the canceller folded 1 record — the conditional append must
+    // see it via reconcile and decline.
+    await owner.append("run-a", [{ type: "run.completed", output: { ok: true } }]);
+    expect(await canceller.appendIf("run-a", 1, [{ type: "run.cancelled" }])).toBeUndefined();
+    const recs = await drain(canceller, "run-a");
+    expect(recs.map((r) => r.ev.type)).toEqual(["run.created", "run.completed"]);
+  });
 });
 
 describe("exists & validation", () => {

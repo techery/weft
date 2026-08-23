@@ -220,6 +220,8 @@ export class RunRuntime {
   private readonly answeredIds = new Set<string>();
   /** Set by detach(): the host is exiting and hands the run to whoever resumes it. */
   private detachedFromHost = false;
+  /** Set by fence(): the journal is no longer this process's to write. */
+  private fencedWith: StepError | undefined;
   waitingSteps = 0;
   readonly dry: boolean;
   hitCount = 0;
@@ -279,6 +281,9 @@ export class RunRuntime {
       const at = this.host.clock();
       return Promise.resolve(events.map((ev) => ({ i: this.dryIndex++, at, ev })));
     }
+    // Fenced: another process may own this journal now — refuse the write so the
+    // step awaiting it unwinds instead of interleaving with the new owner.
+    if (this.fencedWith) return Promise.reject(this.fencedWith);
     const next = this.appendChain.then(async () => {
       const records = await this.host.journal.append(this.runId, events);
       this.host.onRecords(this, records);
@@ -288,8 +293,16 @@ export class RunRuntime {
     return next;
   }
 
+  /** Every append issued before now has hit the store (or failed) once this resolves. */
+  flushAppends(): Promise<void> {
+    return this.appendChain.then(
+      () => undefined,
+      () => undefined,
+    );
+  }
+
   setStatus(status: RunStatus): void {
-    if (this.status === status) return;
+    if (this.status === status || this.fencedWith) return;
     this.status = status;
     void this.append([{ type: "run.status", status }]);
   }
@@ -297,15 +310,15 @@ export class RunRuntime {
   phase(name: string): void {
     if (this.currentPhase === name) return;
     this.currentPhase = name;
-    if (!this.suppressCosmetic) void this.append([{ type: "phase", name }]);
+    if (!this.suppressCosmetic && !this.fencedWith) void this.append([{ type: "phase", name }]);
   }
 
   log(message: string): void {
-    if (!this.suppressCosmetic) void this.append([{ type: "log", message }]);
+    if (!this.suppressCosmetic && !this.fencedWith) void this.append([{ type: "log", message }]);
   }
 
   recordDrop(error: StepError): void {
-    if (this.suppressCosmetic) return;
+    if (this.suppressCosmetic || this.fencedWith) return;
     void this.append([
       {
         type: "drop",
@@ -854,6 +867,32 @@ export class RunRuntime {
         wait.timer = undefined;
       }
     }
+  }
+
+  get fenced(): StepError | undefined {
+    return this.fencedWith;
+  }
+
+  /**
+   * This process no longer owns the run's journal (the lease was lost to another
+   * process, or the host is shutting down mid-execution). Stop EVERYTHING without
+   * journaling a terminal event — the run must stay resumable for its next owner:
+   * refuse further appends, disarm deadline timers, reject pending waits, and
+   * abort in-flight step work so the workflow unwinds and result settles.
+   */
+  fence(err: StepError): void {
+    if (this.fencedWith) return;
+    this.fencedWith = err;
+    this.detachedFromHost = true;
+    for (const [id, wait] of [...this.pendingWaits]) {
+      this.pendingWaits.delete(id);
+      if (wait.timer) clearTimeout(wait.timer);
+      this.host.resolvePending(this, id);
+      wait.reject(err);
+    }
+    // Signal waiters and live steps listen on the shared signal; children share it
+    // too, and unwind with the parent (their journals stay just as resumable).
+    if (!this.signal.aborted) this.shared.abort.abort(err);
   }
 
   /** Deliver an answer to an in-process waiting step; the caller already appended the event. */

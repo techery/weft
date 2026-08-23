@@ -64,6 +64,22 @@ export class FsJournalStore implements JournalStore {
   }
 
   async append(runId: string, events: JournalEvent[]): Promise<JournalRecord[]> {
+    return (await this.appendLocked(runId, events)) as JournalRecord[];
+  }
+
+  async appendIf(
+    runId: string,
+    expectedCount: number,
+    events: JournalEvent[],
+  ): Promise<JournalRecord[] | undefined> {
+    return this.appendLocked(runId, events, expectedCount);
+  }
+
+  private async appendLocked(
+    runId: string,
+    events: JournalEvent[],
+    expectedCount?: number,
+  ): Promise<JournalRecord[] | undefined> {
     const cached = await this.loadCache(runId);
     await fs.mkdir(this.runDir(runId), { recursive: true });
     // Reconcile → truncate → write must be atomic ACROSS PROCESSES: without the
@@ -71,6 +87,10 @@ export class FsJournalStore implements JournalStore {
     // "recover" that committed record as a torn tail and truncate it away.
     return this.withAppendLock(runId, async () => {
       await this.reconcile(runId, cached);
+      // Conditional append (appendIf): the caller acted on a journal of
+      // expectedCount records; anything a peer committed since invalidates that
+      // read, so decline INSIDE the lock and let the caller re-fold.
+      if (expectedCount !== undefined && cached.count !== expectedCount) return undefined;
       // Anything on disk past the committed offset is a crashed writer's torn tail
       // (reconcile consumed every complete line): cut it or this append corrupts it
       // into an unparseable record that blocks resume and repair forever.
@@ -99,13 +119,17 @@ export class FsJournalStore implements JournalStore {
     });
   }
 
+  private withAppendLock<T>(runId: string, fn: () => Promise<T>): Promise<T> {
+    return this.withFileLock(join(this.runDir(runId), "journal.lock"), `run ${runId}`, fn);
+  }
+
   /**
-   * A tiny cross-process mutex (exclusive-create of journal.lock) held for the few
-   * milliseconds an append takes. A lock whose holder crashed goes stale and is
-   * stolen after 10s; acquisition gives up loudly after 30s rather than hanging.
+   * A tiny cross-process mutex (exclusive-create of the lock file) held for the
+   * few milliseconds an append or a lease operation takes. A lock whose holder
+   * crashed goes stale and is stolen after 10s; acquisition gives up loudly
+   * after 30s rather than hanging.
    */
-  private async withAppendLock<T>(runId: string, fn: () => Promise<T>): Promise<T> {
-    const lockPath = join(this.runDir(runId), "journal.lock");
+  private async withFileLock<T>(lockPath: string, what: string, fn: () => Promise<T>): Promise<T> {
     const token = randomUUID();
     const started = Date.now();
     for (;;) {
@@ -137,7 +161,7 @@ export class FsJournalStore implements JournalStore {
           continue; // released or stolen between our attempts: retry at once
         }
         if (Date.now() - started > 30_000) {
-          throw new Error(`run ${runId}: journal append lock held too long (journal.lock)`);
+          throw new Error(`${what}: lock held too long (${lockPath})`);
         }
         await new Promise((resolve) => setTimeout(resolve, 5 + Math.random() * 15));
       }
@@ -373,76 +397,56 @@ export class FsJournalStore implements JournalStore {
   /**
    * Cross-process ownership: an owner.json claim with a TTL. A live claim refuses a
    * second owner (a daemon must not wake a run a CLI is executing); a claim whose
-   * owner died expires on its own and can be stolen. Every write of the claim is an
-   * atomic rename, so a reader can never observe a truncated claim and mistake a live
-   * owner for a stale one; refreshes and steals verify their own token AFTER writing,
-   * so of two simultaneous writers exactly one keeps believing it owns the run.
+   * owner died expires on its own and can be taken over. EVERY claim operation —
+   * acquire, takeover, refresh, release — runs under the same owner.lock mutex, so
+   * each one is an atomic compare-and-swap on the claim: a refresh can never land
+   * over a takeover that happened after its ownership check, and vice versa. A
+   * refresh that finds a foreign token reports the loss (resolves false) so the
+   * holder stops executing instead of writing to a journal that is no longer its.
    */
   async acquireRun(runId: string, opts: { ttlMs?: number } = {}): Promise<RunLease | undefined> {
     const ttl = opts.ttlMs ?? 15_000;
     const path = join(this.runDir(runId), "owner.json");
+    const lockPath = join(this.runDir(runId), "owner.lock");
     await fs.mkdir(this.runDir(runId), { recursive: true });
     const token = randomUUID();
     const claim = () => JSON.stringify({ owner: token, pid: process.pid, expiresAt: Date.now() + ttl });
-    const mine = async (): Promise<boolean> => {
+    const readOwner = async (): Promise<{ owner?: string; expiresAt?: number } | undefined> => {
       try {
-        return (JSON.parse(await fs.readFile(path, "utf8")) as { owner?: string }).owner === token;
+        return JSON.parse(await fs.readFile(path, "utf8")) as { owner?: string; expiresAt?: number };
       } catch {
-        return false;
+        // absent, or corrupt (a crashed writer): either way nobody live holds it
+        return undefined;
       }
     };
     const writeClaim = async (): Promise<void> => {
+      // Atomic rename so a crash mid-write can never leave a torn claim behind.
       const tmp = `${path}.${token.slice(0, 8)}.tmp`;
       await fs.writeFile(tmp, claim());
       await fs.rename(tmp, path);
     };
-    try {
-      // Exclusive create settles the common fresh-run case atomically.
-      await fs.writeFile(path, claim(), { flag: "wx" });
-    } catch {
-      try {
-        const prev = JSON.parse(await fs.readFile(path, "utf8")) as { expiresAt?: number };
-        if (typeof prev.expiresAt === "number" && prev.expiresAt > Date.now()) return undefined;
-      } catch {
-        // claims are written atomically, so unreadable means corrupt — treat as stale
-      }
-      // Exclusive steal: RENAME the expired claim aside (of N contenders exactly one
-      // rename succeeds), verify it really was the expired one, then take the lock
-      // through the same exclusive create everyone else uses — never a last-writer-
-      // wins overwrite that would hand two engines the same run.
-      const aside = `${path}.stale-${token.slice(0, 8)}`;
-      try {
-        await fs.rename(path, aside);
-      } catch {
-        return undefined; // another contender already stole it
-      }
-      try {
-        const grabbed = JSON.parse(await fs.readFile(aside, "utf8")) as { expiresAt?: number };
-        if (typeof grabbed.expiresAt === "number" && grabbed.expiresAt > Date.now()) {
-          await fs.rename(aside, path).catch(() => fs.rm(aside, { force: true }));
-          return undefined; // fresh after all (created inside our read window): hand it back
-        }
-      } catch {
-        // unreadable: stale either way
-      }
-      await fs.rm(aside, { force: true });
-      try {
-        await fs.writeFile(path, claim(), { flag: "wx" });
-      } catch {
-        return undefined; // lost the post-steal create to another contender
-      }
-    }
+    const guard = <T>(fn: () => Promise<T>): Promise<T> => this.withFileLock(lockPath, `run ${runId}`, fn);
+    const acquired = await guard(async () => {
+      const prev = await readOwner();
+      if (prev && typeof prev.expiresAt === "number" && prev.expiresAt > Date.now()) return false;
+      await writeClaim(); // free, expired, or corrupt: safe to take under the mutex
+      return true;
+    });
+    if (!acquired) return undefined;
     return {
-      refresh: async () => {
-        if (!(await mine())) return; // the claim was stolen or released — never clobber it
-        // If a thief renames between the check and this rename, whoever landed LAST
-        // holds the file — the other side's next mine() is false and it stops renewing,
-        // so exactly one owner survives the race.
-        await writeClaim();
-      },
-      release: async () => {
-        if (await mine()) await fs.rm(path, { force: true });
-      },
+      refresh: () =>
+        guard(async () => {
+          // CAS: the expiry-based takeover above can move the claim to a new owner
+          // the moment ours expires, so re-check IDENTITY inside the mutex — an
+          // unconditional rewrite here would evict that owner mid-execution.
+          if ((await readOwner())?.owner !== token) return false; // lost: caller must stop
+          await writeClaim();
+          return true;
+        }),
+      release: () =>
+        guard(async () => {
+          if ((await readOwner())?.owner === token) await fs.rm(path, { force: true });
+        }),
     };
   }
 

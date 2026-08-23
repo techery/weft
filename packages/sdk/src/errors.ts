@@ -26,6 +26,7 @@ export type StepErrorCode =
   | "invalid_output"
   | "depth_exceeded"
   | "unintegrated_patches"
+  | "detached"
   | "internal";
 
 /** Identity of the step an error belongs to, for logs, reports, and tests. */

@@ -29,14 +29,32 @@ export interface Projections {
 
 /** A live claim on a run. The holder refreshes it while executing and releases it at the end. */
 export interface RunLease {
-  /** Extend the claim; called periodically while the run stays active. */
-  refresh(): Promise<void>;
+  /**
+   * Extend the claim; called periodically while the run stays active. Resolves
+   * false when the claim now belongs to someone else (it expired and was taken
+   * over) — the holder must STOP executing the run, not merely stop renewing:
+   * another process may already be appending to the journal.
+   */
+  refresh(): Promise<boolean>;
   release(): Promise<void>;
 }
 
 export interface JournalStore {
   /** Atomic append of a batch; assigns monotonic indices; returns the appended records. */
   append(runId: string, events: JournalEvent[]): Promise<JournalRecord[]>;
+  /**
+   * Conditional append for writers racing the run's owner: append only while the
+   * journal still holds exactly `expectedCount` records, otherwise write nothing
+   * and return undefined. Lets a non-owner (a CLI cancelling a daemon-owned run)
+   * re-check the folded status it acted on and the append land as one atomic
+   * step, so a terminal event committed in the read/write gap can never be
+   * overridden. Optional: a store without it accepts that (tiny) race.
+   */
+  appendIf?(
+    runId: string,
+    expectedCount: number,
+    events: JournalEvent[],
+  ): Promise<JournalRecord[] | undefined>;
   read(runId: string, fromIndex?: number): AsyncIterable<JournalRecord>;
   /** Live-follow a run's journal (yields records already present, then new ones). */
   watch(runId: string, opts?: { fromIndex?: number; signal?: AbortSignal }): AsyncIterable<JournalRecord>;
@@ -99,7 +117,7 @@ export class MemoryJournalStore implements JournalStore {
     const token = Symbol(runId);
     this.owners.set(runId, token);
     return {
-      refresh: async () => {},
+      refresh: async () => this.owners.get(runId) === token,
       release: async () => {
         if (this.owners.get(runId) === token) this.owners.delete(runId);
       },
@@ -125,6 +143,16 @@ export class MemoryJournalStore implements JournalStore {
     });
     for (const rec of appended) for (const w of run.watchers) w(rec);
     return appended;
+  }
+
+  async appendIf(
+    runId: string,
+    expectedCount: number,
+    events: JournalEvent[],
+  ): Promise<JournalRecord[] | undefined> {
+    // Single-threaded: length check and append share one synchronous section.
+    if (this.runFor(runId).records.length !== expectedCount) return undefined;
+    return this.append(runId, events);
   }
 
   async *read(runId: string, fromIndex = 0): AsyncIterable<JournalRecord> {
