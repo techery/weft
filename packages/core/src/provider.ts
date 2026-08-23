@@ -72,7 +72,12 @@ export interface AgentProvider {
   capabilities(): ProviderCapabilities;
   run(req: AgentRequest, ctl: RunControl): Promise<AgentResult>;
   /** Re-prompt the same session with validation errors; absent sessions may re-run. */
-  repair(sessionId: string | undefined, req: AgentRequest, errors: SchemaIssue[], ctl: RunControl): Promise<AgentResult>;
+  repair(
+    sessionId: string | undefined,
+    req: AgentRequest,
+    errors: SchemaIssue[],
+    ctl: RunControl,
+  ): Promise<AgentResult>;
 }
 
 export class ProviderRegistry {

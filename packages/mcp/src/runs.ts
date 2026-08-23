@@ -109,7 +109,10 @@ function terminalOf(state: RunState): WaitResult | undefined {
     case "complete":
       return { status: "complete", output: state.output };
     case "failed":
-      return { status: "failed", error: state.error ?? { message: "the run failed without a recorded error" } };
+      return {
+        status: "failed",
+        error: state.error ?? { message: "the run failed without a recorded error" },
+      };
     case "cancelled":
       return { status: "cancelled" };
     default:
@@ -167,7 +170,9 @@ const UNIT_MS: Record<string, number> = { ms: 1, s: 1_000, m: 60_000, h: 3_600_0
 export function parseTimeout(text: string): number {
   const match = DURATION.exec(text.trim());
   if (!match) {
-    throw new Error(`invalid timeout ${JSON.stringify(text)} — expected e.g. "10m", "2h", "90s", or a number of ms`);
+    throw new Error(
+      `invalid timeout ${JSON.stringify(text)} — expected e.g. "10m", "2h", "90s", or a number of ms`,
+    );
   }
   return Number(match[1]) * (match[2] ? (UNIT_MS[match[2]] ?? 1) : 1);
 }

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import type { Settled } from "@weft/sdk";
 import {
   BudgetExceededError,
   CancelledError,
@@ -13,7 +13,7 @@ import {
   validateSchema,
   z,
 } from "@weft/sdk";
-import type { Settled } from "@weft/sdk";
+import { describe, expect, test } from "vitest";
 
 describe("duration", () => {
   test("parses units and numbers", () => {

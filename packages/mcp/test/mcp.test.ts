@@ -250,9 +250,7 @@ describe("the weft MCP server", () => {
 
     expect((await listIds(s)).sort()).toEqual([finished.runId, suspended.runId].sort());
     expect(await listIds(s, { status: "complete" })).toEqual([finished.runId]);
-    await expect
-      .poll(() => listIds(s, { status: "waiting_for_human", limit: 5 }))
-      .toEqual([suspended.runId]);
+    await expect.poll(() => listIds(s, { status: "waiting_for_human", limit: 5 })).toEqual([suspended.runId]);
 
     const capped = await json<{ runs: unknown[] }>(s, "weft_list", { limit: 1 });
     expect(capped.runs).toHaveLength(1);
@@ -289,7 +287,11 @@ describe("the weft MCP server", () => {
     const pending = await json<WaitReply>(other, "weft_wait", { runId, timeout: "10s" });
     expect(pending.awaiting?.id).toBe(requestId);
 
-    await json(other, "weft_answer", { runId, requestId, answer: { approved: true, note: "from elsewhere" } });
+    await json(other, "weft_answer", {
+      runId,
+      requestId,
+      answer: { approved: true, note: "from elsewhere" },
+    });
     const resumed = await json<{ runId: string; status: string }>(other, "weft_resume", { runId });
     expect(resumed).toEqual({ runId, status: "resumed" });
 

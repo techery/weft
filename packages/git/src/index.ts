@@ -152,4 +152,5 @@ export const GIT_WRITE_RISK: Record<GitWriteOp, Risk> = {
 
 // Implementation lives in git.ts; the class is re-exported for DI in tests.
 import { GitCli } from "./git.ts";
+
 export { GitCli } from "./git.ts";

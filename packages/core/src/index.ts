@@ -2,17 +2,13 @@
  * @weft/core — the Weft engine: scheduler, replayer, journal model, budget,
  * HITL broker, projections. Hosts (CLI, MCP, daemon) are thin shells over Engine.
  */
-export { Engine } from "./engine.ts";
-export type {
-  EngineOptions,
-  ResumeOptions,
-  RunHandle,
-  RunOutcome,
-  StartOptions,
-  WorkflowRegistry,
-} from "./engine.ts";
 
-export { resolveConfig, defaultConcurrency, priceFor, DEFAULT_MODEL, DEFAULT_EFFORT, DEFAULT_PRICES } from "./config.ts";
+// Types that appear in @weft/core's own public surface (AgentProvider, events),
+// re-exported so adapter packages need no second workspace dependency.
+export type { Effort, Risk, SchemaIssue, Usage, WriteScope } from "@weft/sdk";
+export type { BudgetLimits } from "./budget.ts";
+export { Budget } from "./budget.ts";
+export { canonicalJson, hashStep, sha256Hex } from "./canonical.ts";
 export type {
   ApprovalMode,
   ApprovalPolicy,
@@ -22,7 +18,24 @@ export type {
   ModelPrice,
   ProviderConfig,
 } from "./config.ts";
-
+export {
+  DEFAULT_EFFORT,
+  DEFAULT_MODEL,
+  DEFAULT_PRICES,
+  defaultConcurrency,
+  priceFor,
+  resolveConfig,
+} from "./config.ts";
+export { treeHash } from "./ctx.ts";
+export type {
+  EngineOptions,
+  ResumeOptions,
+  RunHandle,
+  RunOutcome,
+  StartOptions,
+  WorkflowRegistry,
+} from "./engine.ts";
+export { Engine } from "./engine.ts";
 export type {
   BlobRefJson,
   HumanAnsweredEvent,
@@ -34,21 +47,12 @@ export type {
   StepKind,
 } from "./events.ts";
 export { isBlobRef, TERMINAL_STATUSES } from "./events.ts";
-
-export { canonicalJson, hashStep, sha256Hex } from "./canonical.ts";
-
-export { MemoryBlobStore, MemoryJournalStore } from "./stores.ts";
-export type {
-  BlobMeta,
-  BlobRef,
-  BlobStore,
-  JournalStore,
-  Projections,
-  RunListFilter,
-  RunSummary,
-} from "./stores.ts";
-
-export { ProviderRegistry } from "./provider.ts";
+export type { TestHooks } from "./hooks.ts";
+export type { WireSchema } from "./jsonschema.ts";
+export { structuralCheck, toWireSchema, unwrapWireValue, wrapWireValue } from "./jsonschema.ts";
+export { mapWithConcurrency, Semaphore } from "./limiter.ts";
+export type { CheckState, HumanState, RunState, StepState, TreeNode, TreePhase } from "./projections.ts";
+export { reduceState, renderReport, renderTree } from "./projections.ts";
 export type {
   AgentProvider,
   AgentRequest,
@@ -60,25 +64,17 @@ export type {
   RunControl,
   ToolPolicy,
 } from "./provider.ts";
-
-export { Budget } from "./budget.ts";
-export type { BudgetLimits } from "./budget.ts";
-
-export { Semaphore, mapWithConcurrency } from "./limiter.ts";
-
-export { structuralCheck, toWireSchema, unwrapWireValue, wrapWireValue } from "./jsonschema.ts";
-export type { WireSchema } from "./jsonschema.ts";
-
-export { ReplayIndex, OrderedDelivery } from "./replay.ts";
+export { ProviderRegistry } from "./provider.ts";
 export type { CompletedEntry, HumanEntry, ReuseMode, ScheduledEntry, SignalEntry } from "./replay.ts";
-
-export { reduceState, renderReport, renderTree } from "./projections.ts";
-export type { CheckState, HumanState, RunState, StepState, TreeNode, TreePhase } from "./projections.ts";
-
+export { OrderedDelivery, ReplayIndex } from "./replay.ts";
 export type { PendingRequest } from "./runtime.ts";
-export type { TestHooks } from "./hooks.ts";
-export { treeHash } from "./ctx.ts";
-
-// Types that appear in @weft/core's own public surface (AgentProvider, events),
-// re-exported so adapter packages need no second workspace dependency.
-export type { Effort, Risk, SchemaIssue, Usage, WriteScope } from "@weft/sdk";
+export type {
+  BlobMeta,
+  BlobRef,
+  BlobStore,
+  JournalStore,
+  Projections,
+  RunListFilter,
+  RunSummary,
+} from "./stores.ts";
+export { MemoryBlobStore, MemoryJournalStore } from "./stores.ts";

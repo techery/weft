@@ -9,11 +9,12 @@
  *   .weft/runs/<id>/report.md       ← projection
  *   .weft/blobs/<aa>/<hash>         ← content-addressed blobs
  */
-export { FsJournalStore } from "./journal.ts";
-export { FsBlobStore } from "./blobs.ts";
 
-import type { BlobStore, JournalStore } from "@weft/core";
+export { FsBlobStore } from "./blobs.ts";
+export { FsJournalStore } from "./journal.ts";
+
 import { join } from "node:path";
+import type { BlobStore, JournalStore } from "@weft/core";
 import { FsBlobStore } from "./blobs.ts";
 import { FsJournalStore } from "./journal.ts";
 

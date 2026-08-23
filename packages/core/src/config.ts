@@ -103,7 +103,11 @@ export function resolveConfig(input: EngineConfigInput = {}): EngineConfig {
   };
 }
 
-export function priceFor(config: EngineConfig, providerId: string, model: string | undefined): ModelPrice | undefined {
+export function priceFor(
+  config: EngineConfig,
+  providerId: string,
+  model: string | undefined,
+): ModelPrice | undefined {
   if (!model) return undefined;
   return config.providers[providerId]?.prices?.[model] ?? DEFAULT_PRICES[model];
 }

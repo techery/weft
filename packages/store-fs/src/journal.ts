@@ -1,5 +1,4 @@
-import { closeSync, existsSync, fsyncSync, openSync, writeSync } from "node:fs";
-import { promises as fs } from "node:fs";
+import { closeSync, existsSync, promises as fs, fsyncSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import type {
   JournalEvent,
@@ -10,7 +9,7 @@ import type {
   RunStatus,
   RunSummary,
 } from "@weft/core";
-import { reduceState, type RunState } from "@weft/core";
+import { type RunState, reduceState } from "@weft/core";
 
 interface RunCache {
   count: number;
@@ -29,7 +28,9 @@ export class FsJournalStore implements JournalStore {
   constructor(readonly runsDir: string) {}
 
   private runDir(runId: string): string {
-    if (!/^[A-Za-z0-9._-]+$/.test(runId)) throw new Error(`invalid runId: ${runId}`);
+    if (!/^[A-Za-z0-9._-]+$/.test(runId) || runId === "." || runId === "..") {
+      throw new Error(`invalid runId: ${runId}`);
+    }
     return join(this.runsDir, runId);
   }
 
@@ -208,8 +209,10 @@ export class FsJournalStore implements JournalStore {
       await fs.writeFile(tmp, content);
       await fs.rename(tmp, join(dir, file));
     };
-    if (projections.state !== undefined) writes.push(writeAtomic("state.json", JSON.stringify(projections.state, null, 2)));
-    if (projections.tree !== undefined) writes.push(writeAtomic("tree.json", JSON.stringify(projections.tree, null, 2)));
+    if (projections.state !== undefined)
+      writes.push(writeAtomic("state.json", JSON.stringify(projections.state, null, 2)));
+    if (projections.tree !== undefined)
+      writes.push(writeAtomic("tree.json", JSON.stringify(projections.tree, null, 2)));
     if (projections.report !== undefined) writes.push(writeAtomic("report.md", projections.report));
     await Promise.all(writes);
   }
@@ -232,7 +235,11 @@ export class FsJournalStore implements JournalStore {
     } catch {
       // absent
     }
-    if (projections.state === undefined && projections.report === undefined && projections.tree === undefined) {
+    if (
+      projections.state === undefined &&
+      projections.report === undefined &&
+      projections.tree === undefined
+    ) {
       return undefined;
     }
     return projections;

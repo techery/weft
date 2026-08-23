@@ -100,6 +100,10 @@ export interface AgentFn {
   /** Same options; returns the value plus usage, files, patch, attempts, sessionId. */
   detailed<S extends AnySchema>(
     prompt: string,
+    opts: AgentOptions<S> & { onError: "null" },
+  ): Promise<DetailedAgentResult<InferOut<S>> | null>;
+  detailed<S extends AnySchema>(
+    prompt: string,
     opts: AgentOptions<S>,
   ): Promise<DetailedAgentResult<InferOut<S>>>;
 }
@@ -214,7 +218,11 @@ export interface ExecResult {
 export interface ExecFn {
   (file: string, args?: string[], opts?: ExecOptions & { schema?: undefined }): Promise<ExecResult>;
   /** With a schema, JSON stdout is parsed and validated into the typed value. */
-  <S extends AnySchema>(file: string, args: string[], opts: ExecOptions & { schema: S }): Promise<InferOut<S>>;
+  <S extends AnySchema>(
+    file: string,
+    args: string[],
+    opts: ExecOptions & { schema: S },
+  ): Promise<InferOut<S>>;
 }
 
 export interface BashFn {

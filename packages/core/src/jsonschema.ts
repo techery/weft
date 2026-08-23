@@ -29,7 +29,9 @@ export function toWireSchema(schema: AnySchema): WireSchema {
       json = { type: "object", additionalProperties: true };
     }
   } else {
-    lints.push(`non-zod schema (vendor: ${schema["~standard"].vendor}); provider receives a permissive schema`);
+    lints.push(
+      `non-zod schema (vendor: ${schema["~standard"].vendor}); provider receives a permissive schema`,
+    );
     json = { type: "object", additionalProperties: true };
   }
   delete json.$schema;
@@ -43,7 +45,8 @@ export function toWireSchema(schema: AnySchema): WireSchema {
       additionalProperties: false,
     };
   }
-  if (depthOf(json) > 8) lints.push("schema nests deeper than 8 levels; native structured output may reject it");
+  if (depthOf(json) > 8)
+    lints.push("schema nests deeper than 8 levels; native structured output may reject it");
   return { json, wrapped, lints };
 }
 
@@ -117,7 +120,11 @@ export function structuralCheck(schemaJson: unknown, value: unknown, path = ""):
     }
   }
 
-  if ((type === "object" || (type === undefined && s.properties)) && typeof value === "object" && value !== null) {
+  if (
+    (type === "object" || (type === undefined && s.properties)) &&
+    typeof value === "object" &&
+    value !== null
+  ) {
     const props = (s.properties ?? {}) as Record<string, unknown>;
     const required = (s.required ?? []) as string[];
     for (const req of required) {

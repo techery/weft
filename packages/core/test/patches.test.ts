@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterAll, describe, expect, test } from "vitest";
-import { defineWorkflow, z } from "@weft/sdk";
 import type { JournalRecord } from "@weft/core";
+import { defineWorkflow, z } from "@weft/sdk";
+import { afterAll, describe, expect, test } from "vitest";
 import { cleanupRepos, tempRepo, testEngine } from "./helpers.ts";
 
 afterAll(cleanupRepos);
@@ -18,9 +18,13 @@ const FixResult = z.object({ summary: z.string() });
 describe("write steps, patches, integration", () => {
   test("a write step edits in its own worktree; integrate lands the patch on the tree", async () => {
     const t = testEngine();
-    t.builder.on({ key: "fix:auth" }, { summary: "bounded the loop" }, {
-      writes: { "src/auth.ts": "export const fixed = true;\n" },
-    });
+    t.builder.on(
+      { key: "fix:auth" },
+      { summary: "bounded the loop" },
+      {
+        writes: { "src/auth.ts": "export const fixed = true;\n" },
+      },
+    );
     const cwd = await tempRepo({ "src/auth.ts": "export const fixed = false;\n" });
     const def = defineWorkflow(
       { description: "fix", input: z.object({}), output: z.object({ merged: z.array(z.string()) }) },
@@ -52,9 +56,13 @@ describe("write steps, patches, integration", () => {
 
   test("warn mode: out-of-scope edit is flagged but the patch still lands", async () => {
     const t = testEngine();
-    t.builder.on({ key: "fix:api" }, { summary: "did too much" }, {
-      writes: { "src/api.ts": "api\n", "docs/notes.md": "oops\n" },
-    });
+    t.builder.on(
+      { key: "fix:api" },
+      { summary: "did too much" },
+      {
+        writes: { "src/api.ts": "api\n", "docs/notes.md": "oops\n" },
+      },
+    );
     const cwd = await tempRepo({ "src/api.ts": "old\n" });
     const def = defineWorkflow(
       { description: "warn", input: z.object({}), output: z.object({ merged: z.number() }) },
@@ -80,9 +88,13 @@ describe("write steps, patches, integration", () => {
 
   test("strict mode quarantines the patch; integrate refuses it; discard clears it", async () => {
     const t = testEngine();
-    t.builder.on({ key: "fix:db" }, { summary: "overreached" }, {
-      writes: { "src/db.ts": "db\n", "src/auth.ts": "poked\n" },
-    });
+    t.builder.on(
+      { key: "fix:db" },
+      { summary: "overreached" },
+      {
+        writes: { "src/db.ts": "db\n", "src/auth.ts": "poked\n" },
+      },
+    );
     const cwd = await tempRepo({ "src/db.ts": "old\n", "src/auth.ts": "auth\n" });
     const def = defineWorkflow(
       { description: "strict", input: z.object({}), output: z.object({ quarantined: z.number() }) },
@@ -153,10 +165,18 @@ describe("side-effect steps", () => {
     const t = testEngine();
     const cwd = await tempRepo();
     const def = defineWorkflow(
-      { description: "exec", input: z.object({}), output: z.object({ failedTests: z.number(), code: z.number() }) },
+      {
+        description: "exec",
+        input: z.object({}),
+        output: z.object({ failedTests: z.number(), code: z.number() }),
+      },
       async (ctx) => {
         const plain = await ctx.exec("node", ["-e", "console.error('warn'); console.log('out')"]);
-        expect(plain).toMatchObject({ exitCode: 0, stdout: expect.stringContaining("out"), stderr: expect.stringContaining("warn") });
+        expect(plain).toMatchObject({
+          exitCode: 0,
+          stdout: expect.stringContaining("out"),
+          stderr: expect.stringContaining("warn"),
+        });
         const typed = await ctx.exec(
           "node",
           ["-e", `console.log(JSON.stringify({ failed: 2 })); process.exit(1)`],
@@ -208,7 +228,11 @@ describe("side-effect steps", () => {
     const t = testEngine();
     const cwd = await tempRepo({ "src/a.ts": "aaa\n", "src/b.ts": "bbb\n", "README.md": "r\n" });
     const def = defineWorkflow(
-      { description: "fs", input: z.object({}), output: z.object({ n: z.number(), sha: z.string(), missing: z.boolean() }) },
+      {
+        description: "fs",
+        input: z.object({}),
+        output: z.object({ n: z.number(), sha: z.string(), missing: z.boolean() }),
+      },
       async (ctx) => {
         const { paths } = await ctx.fs.glob("src/**/*.ts");
         const { sha256 } = await ctx.fs.read("src/a.ts");
@@ -262,7 +286,12 @@ describe("ctx.git steps", () => {
     const t = testEngine();
     const cwd = await tempRepo({ "file.txt": "one\n" });
     const def = defineWorkflow(
-      { name: "gitty", description: "git", input: z.object({}), output: z.object({ branch: z.string(), sha: z.string() }) },
+      {
+        name: "gitty",
+        description: "git",
+        input: z.object({}),
+        output: z.object({ branch: z.string(), sha: z.string() }),
+      },
       async (ctx) => {
         const status = await ctx.git.status();
         expect(status.clean).toBe(true);
@@ -316,11 +345,19 @@ describe("ctx.git steps", () => {
     // create changes on a branch vs main
     const { execa } = await import("execa");
     await execa("git", ["checkout", "-b", "feature"], { cwd });
-    await execa("bash", ["-c", "echo changed >> src/a.ts && echo new > src/new.ts && git add -A && git commit -m change"], {
-      cwd,
-    });
+    await execa(
+      "bash",
+      ["-c", "echo changed >> src/a.ts && echo new > src/new.ts && git add -A && git commit -m change"],
+      {
+        cwd,
+      },
+    );
     const def = defineWorkflow(
-      { description: "review", input: z.object({ base: z.string().default("main") }), output: z.object({ n: z.number() }) },
+      {
+        description: "review",
+        input: z.object({ base: z.string().default("main") }),
+        output: z.object({ n: z.number() }),
+      },
       async (ctx, { base }) => {
         const { files } = await ctx.git.changedSince(base);
         const paths = files.filter((f) => f.status !== "D").map((f) => f.path);
@@ -329,7 +366,9 @@ describe("ctx.git steps", () => {
           await ctx.parallel(
             paths.map((f) =>
               ctx.agent(`Review ${f}`, {
-                schema: z.object({ findings: z.array(z.object({ file: z.string(), line: z.number(), claim: z.string() })) }),
+                schema: z.object({
+                  findings: z.array(z.object({ file: z.string(), line: z.number(), claim: z.string() })),
+                }),
                 key: `review:${f}`,
               }),
             ),

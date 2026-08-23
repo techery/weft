@@ -59,5 +59,7 @@ function resolveSdkEntry(): string {
       // try the next hop
     }
   }
-  throw new Error(`cannot resolve @weft/sdk from ${import.meta.url} (tried directly and via ${VIA.join(", ")})`);
+  throw new Error(
+    `cannot resolve @weft/sdk from ${import.meta.url} (tried directly and via ${VIA.join(", ")})`,
+  );
 }

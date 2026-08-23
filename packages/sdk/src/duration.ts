@@ -20,7 +20,8 @@ export function parseDuration(d: Duration): number {
     return d;
   }
   const m = /^(\d+(?:\.\d+)?)(ms|s|m|h|d)$/.exec(d);
-  if (!m) throw new TypeError(`invalid duration: "${d}" (expected e.g. "10m", "2h", "90s", or ms as a number)`);
+  if (!m)
+    throw new TypeError(`invalid duration: "${d}" (expected e.g. "10m", "2h", "90s", or ms as a number)`);
   return Number(m[1]) * UNIT_MS[m[2]!]!;
 }
 

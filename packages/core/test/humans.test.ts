@@ -1,9 +1,9 @@
-import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { join } from "node:path";
-import { afterAll, describe, expect, test } from "vitest";
-import { defineWorkflow, z } from "@weft/sdk";
 import type { JournalRecord } from "@weft/core";
+import { defineWorkflow, z } from "@weft/sdk";
+import { afterAll, describe, expect, test } from "vitest";
 import { cleanupRepos, tempDir, tempRepo, testEngine } from "./helpers.ts";
 
 afterAll(cleanupRepos);
@@ -95,7 +95,7 @@ describe("human review, confirm tokens, escalation", () => {
     if (outcome.status !== "waiting_for_human") throw new Error("expected suspension");
     await new Promise((r) => setTimeout(r, 120));
     // still pending after the deadline; the escalation was logged
-    expect((await t.engine.pending(handle.runId))).toHaveLength(1);
+    expect(await t.engine.pending(handle.runId)).toHaveLength(1);
     const state = await t.engine.state(handle.runId);
     expect(state.logs.some((l) => l.includes("escalated"))).toBe(true);
     await t.engine.answer(handle.runId, outcome.pending[0]!.id, { approved: true });
@@ -108,7 +108,12 @@ describe("human review, confirm tokens, escalation", () => {
       { description: "deny", input: z.object({}), output: z.object({ fell_back: z.boolean() }) },
       async (ctx) => {
         try {
-          await ctx.human.ask({ question: "pick", schema: z.object({ v: z.string() }), timeout: 30, onTimeout: "deny" });
+          await ctx.human.ask({
+            question: "pick",
+            schema: z.object({ v: z.string() }),
+            timeout: 30,
+            onTimeout: "deny",
+          });
           return { fell_back: false };
         } catch (err) {
           if ((err as { code?: string }).code === "human_timeout") return { fell_back: true };
@@ -129,7 +134,15 @@ describe("integrate conflict resolutions via ask", () => {
     const cwd = await tempRepo({ "shared.txt": "base\n" });
     const FixResult = z.object({ summary: z.string() });
     const def = defineWorkflow(
-      { description: "conflict-ask", input: z.object({}), output: z.object({ merged: z.array(z.string()), skipped: z.array(z.string()), conflicts: z.array(z.string()) }) },
+      {
+        description: "conflict-ask",
+        input: z.object({}),
+        output: z.object({
+          merged: z.array(z.string()),
+          skipped: z.array(z.string()),
+          conflicts: z.array(z.string()),
+        }),
+      },
       async (ctx) => {
         const fixes = ctx.ok(
           await ctx.parallel([
@@ -164,7 +177,9 @@ describe("integrate conflict resolutions via ask", () => {
     expect(out.conflicts).toEqual(["fix:2"]);
     const recs = await records(t.journal, handle.runId);
     const merged = recs.filter((r) => r.ev.type === "patch.merged");
-    expect(merged.some((r) => r.ev.type === "patch.merged" && r.ev.key === "fix:2" && r.ev.conflicted)).toBe(true);
+    expect(merged.some((r) => r.ev.type === "patch.merged" && r.ev.key === "fix:2" && r.ev.conflicted)).toBe(
+      true,
+    );
   });
 });
 
@@ -184,7 +199,11 @@ describe("fetch happy path", () => {
     try {
       const t = testEngine();
       const def = defineWorkflow(
-        { description: "fetch", input: z.object({}), output: z.object({ title: z.string(), missStatus: z.number() }) },
+        {
+          description: "fetch",
+          input: z.object({}),
+          output: z.object({ title: z.string(), missStatus: z.number() }),
+        },
         async (ctx) => {
           const issues = await ctx.fetch(`http://127.0.0.1:${port}/issues`, {
             schema: z.array(z.object({ id: z.number(), title: z.string() })),

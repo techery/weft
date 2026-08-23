@@ -17,44 +17,16 @@
  * });
  * ```
  */
-export { CONFIG_FILE, configPath, loadConfig, WEFT_DIR } from "./config.ts";
-export type { WeftConfig } from "./config.ts";
 
-export { INDEX_FILE, createWeft, resolveWorkflow } from "./weft.ts";
-export type { CreateWeftOptions, ResolvedWorkflow, Weft } from "./weft.ts";
-
-export { parseBudget } from "./budget.ts";
 export type { ParsedBudget } from "./budget.ts";
+export { parseBudget } from "./budget.ts";
+export type { WeftConfig } from "./config.ts";
+export { CONFIG_FILE, configPath, loadConfig, WEFT_DIR } from "./config.ts";
+export type { CreateWeftOptions, ResolvedWorkflow, Weft } from "./weft.ts";
+export { createWeft, INDEX_FILE, resolveWorkflow } from "./weft.ts";
 
 // --- re-exported for hosts, so a host depends on @weft/host and little else -----------
 
-export {
-  bundleWorkflow,
-  checkSource,
-  DEFAULT_ALLOW_BARE,
-  formatDiagnostics,
-  GateError,
-  loadWorkflow,
-} from "@weft/gate";
-export type {
-  BundleOptions,
-  BundleResult,
-  FileWorkflowRegistry,
-  GateDiagnostic,
-  GateRule,
-  LoadedWorkflow,
-  LoadOptions,
-  RegistryLoadResult,
-  WorkflowListEntry,
-} from "@weft/gate";
-
-export { createFsStores } from "@weft/store-fs";
-export type { FsStores } from "@weft/store-fs";
-
-export { mock } from "@weft/provider-mock";
-export type { MockAgentBuilder, MockRequest, MockResponder, MockRuleOptions } from "@weft/provider-mock";
-
-export { Engine, ProviderRegistry, reduceState, renderReport, renderTree } from "@weft/core";
 export type {
   AgentProvider,
   EngineConfig,
@@ -75,7 +47,26 @@ export type {
   TreeNode,
   WorkflowRegistry,
 } from "@weft/core";
-
+export { Engine, ProviderRegistry, reduceState, renderReport, renderTree } from "@weft/core";
+export type {
+  BundleOptions,
+  BundleResult,
+  FileWorkflowRegistry,
+  GateDiagnostic,
+  GateRule,
+  LoadedWorkflow,
+  LoadOptions,
+  RegistryLoadResult,
+  WorkflowListEntry,
+} from "@weft/gate";
+export {
+  bundleWorkflow,
+  checkSource,
+  DEFAULT_ALLOW_BARE,
+  formatDiagnostics,
+  GateError,
+  loadWorkflow,
+} from "@weft/gate";
 /** Types only: `node:sqlite` is loaded the first time a host calls `weft.reindex()`. */
 export type {
   IndexedRun,
@@ -84,6 +75,9 @@ export type {
   RunIndexStats,
   RunSearchQuery,
 } from "@weft/index-sqlite";
-
-export { StepError } from "@weft/sdk";
+export type { MockAgentBuilder, MockRequest, MockResponder, MockRuleOptions } from "@weft/provider-mock";
+export { mock } from "@weft/provider-mock";
 export type { WorkflowDefinition } from "@weft/sdk";
+export { StepError } from "@weft/sdk";
+export type { FsStores } from "@weft/store-fs";
+export { createFsStores } from "@weft/store-fs";

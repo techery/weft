@@ -141,9 +141,9 @@ async function promptForSchema(clack: Clack, schema: unknown, message: string): 
     case "integer": {
       const raw = unwrap(clack, await clack.text({ message, placeholder: "a number" }));
       if (typeof raw !== "string") return raw;
-      const n = Number(raw);
-      if (!Number.isFinite(n)) throw new Error(`"${raw}" is not a number`);
-      return n;
+      // Number("") is 0 — an empty submission must not silently become zero.
+      if (raw.trim() === "" || !Number.isFinite(Number(raw))) throw new Error(`"${raw}" is not a number`);
+      return Number(raw);
     }
     case "object":
       return promptForObject(clack, s);

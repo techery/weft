@@ -77,6 +77,8 @@ export class ReplayIndex {
   static fromRecords(records: JournalRecord[]): ReplayIndex {
     const index = new ReplayIndex();
     const scheduledBySeq = new Map<number, ScheduledEntry & { key?: string }>();
+    const signalNameBySeq = new Map<number, string>();
+    const completedSignalNames: string[] = [];
     for (const rec of records) {
       index.maxJournalIndex = Math.max(index.maxJournalIndex, rec.i);
       const ev = rec.ev;
@@ -97,12 +99,20 @@ export class ReplayIndex {
           const list = index.scheduledByHash.get(ev.hash) ?? [];
           list.push(entry);
           index.scheduledByHash.set(ev.hash, list);
+          if (ev.kind === "signal") {
+            const name = (ev.payload as { name?: string } | undefined)?.name;
+            if (name !== undefined) signalNameBySeq.set(ev.seq, name);
+          }
           break;
         }
         case "step.completed": {
           const sched = scheduledBySeq.get(ev.seq);
           if (!sched) break;
           sched.completed = true;
+          if (sched.kind === "signal") {
+            const name = signalNameBySeq.get(ev.seq);
+            if (name !== undefined) completedSignalNames.push(name);
+          }
           const entry: CompletedEntry = {
             seq: ev.seq,
             hash: sched.hash,
@@ -160,6 +170,9 @@ export class ReplayIndex {
           break;
       }
     }
+    // A completed signal step already consumed its buffered signal.received in the
+    // original run; consume it here too so a later live wait cannot re-take it.
+    for (const name of completedSignalNames) index.takeSignal(name);
     return index;
   }
 
@@ -321,6 +334,9 @@ export class OrderedDelivery {
       }
       if (this.parked.size > 0) this.armWatchdog();
     }, 50);
-    if (typeof this.watchdog.unref === "function") this.watchdog.unref();
+    // Deliberately NOT unref'd: while a delivery is parked this timer may be the
+    // only handle keeping a one-shot resume process alive; unref'ing it lets Node
+    // exit 0 with the run half-replayed. It re-arms only while parked deliveries
+    // exist, so it never outlives the replay.
   }
 }

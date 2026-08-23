@@ -6,13 +6,7 @@
  */
 import { promises as fs } from "node:fs";
 import { dirname, join } from "node:path";
-import type {
-  AgentProvider,
-  AgentRequest,
-  AgentResult,
-  ProviderCapabilities,
-  RunControl,
-} from "@weft/core";
+import type { AgentProvider, AgentRequest, AgentResult, ProviderCapabilities, RunControl } from "@weft/core";
 import type { SchemaIssue, Usage } from "@weft/sdk";
 
 /**
@@ -115,7 +109,12 @@ export class MockProvider implements AgentProvider {
     });
     if (!rule) {
       const known = this.builder.rules
-        .map((r) => JSON.stringify({ ...r.match, prompt: r.match.prompt instanceof RegExp ? String(r.match.prompt) : r.match.prompt }))
+        .map((r) =>
+          JSON.stringify({
+            ...r.match,
+            prompt: r.match.prompt instanceof RegExp ? String(r.match.prompt) : r.match.prompt,
+          }),
+        )
         .join(", ");
       throw new Error(
         `mock provider "${this.id}": no fixture matches ${forRepair ? "repair of " : ""}step ` +
@@ -164,7 +163,10 @@ export class MockProvider implements AgentProvider {
       await fs.mkdir(dirname(target), { recursive: true });
       await fs.writeFile(target, content);
     }
-    const output = typeof rule.respond === "function" ? await (rule.respond as (r: MockRequest) => unknown)(mockReq) : rule.respond;
+    const output =
+      typeof rule.respond === "function"
+        ? await (rule.respond as (r: MockRequest) => unknown)(mockReq)
+        : rule.respond;
     const sessionId = `mock-${this.id}-${++this.sessionCounter}`;
     this.sessions.set(sessionId, req);
     return {

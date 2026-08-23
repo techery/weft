@@ -79,6 +79,8 @@ export type JournalEvent =
       baseRef?: string;
       parentRunId?: string;
       depth: number;
+      /** Hard budget ceiling; journaled so resume keeps enforcing it. */
+      budget?: { tokens?: number; usd?: number };
     }
   | { type: "run.status"; status: RunStatus }
   | { type: "run.completed"; output: unknown }
@@ -118,11 +120,24 @@ export type JournalEvent =
   | { type: "timer.fired"; seq: number; deadline: number }
   // patches
   | { type: "patch.captured"; seq: number; key: string; ref: string; files: string[]; outOfScope?: string[] }
-  | { type: "patch.merged"; key: string; ref: string; baseTree: string; resultTree: string; conflicted?: boolean }
+  | {
+      type: "patch.merged";
+      key: string;
+      ref: string;
+      baseTree: string;
+      resultTree: string;
+      conflicted?: boolean;
+    }
   | { type: "patch.discarded"; key: string; ref: string }
   | { type: "scope.violation"; seq: number; key: string; files: string[]; mode: "warn" | "strict" }
   // ledger & audit
-  | { type: "check"; name: string; status: "pass" | "fail" | "trust-prior" | "skipped"; evidence?: string; required?: boolean }
+  | {
+      type: "check";
+      name: string;
+      status: "pass" | "fail" | "trust-prior" | "skipped";
+      evidence?: string;
+      required?: boolean;
+    }
   | { type: "note"; kind: "decision" | "claim" | "risk"; text: string; evidence?: string }
   | { type: "drop"; seq?: number; key?: string; reason: string }
   | { type: "budget.sampled"; tokens: number; usd: number }

@@ -4,6 +4,7 @@
  * be — CLI, MCP server, and daemon are thin shells over this class (C10).
  */
 import { randomUUID } from "node:crypto";
+import { trace } from "@opentelemetry/api";
 import {
   CancelledError,
   isCancellation,
@@ -12,14 +13,13 @@ import {
   validateSchema,
   type WorkflowDefinition,
 } from "@weft/sdk";
-import { trace } from "@opentelemetry/api";
 import { Budget } from "./budget.ts";
 import { type EngineConfig, type EngineConfigInput, resolveConfig } from "./config.ts";
 import { buildCtx } from "./ctx.ts";
 import type { JournalRecord, RunStatus } from "./events.ts";
 import { structuralCheck } from "./jsonschema.ts";
 import { Semaphore } from "./limiter.ts";
-import { reduceState, renderReport, renderTree, type RunState } from "./projections.ts";
+import { type RunState, reduceState, renderReport, renderTree } from "./projections.ts";
 import type { AgentProvider, ProviderRegistry } from "./provider.ts";
 import { ReplayIndex, type ReuseMode } from "./replay.ts";
 import {
@@ -164,6 +164,7 @@ export class Engine implements EngineHost {
         cwd: opts.cwd,
         depth: 0,
         ...(opts.baseRef !== undefined ? { baseRef: opts.baseRef } : {}),
+        ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
       },
     ]);
     return this.launch(runtime, def, inputCheck.value);
@@ -187,12 +188,15 @@ export class Engine implements EngineHost {
     let def = opts.def;
     if (!def && this.registry) def = await this.registry.get(created.workflow.name);
     if (!def) {
-      throw new Error(`run ${runId}: no definition for "${created.workflow.name}" (pass def or configure a registry)`);
+      throw new Error(
+        `run ${runId}: no definition for "${created.workflow.name}" (pass def or configure a registry)`,
+      );
     }
 
     const replay = ReplayIndex.fromRecords(records);
     const shared: SharedRunResources = {
-      budget: new Budget({}),
+      // The journaled ceiling survives resume; spend restores from journaled usage.
+      budget: new Budget(created.budget ?? {}),
       abort: new AbortController(),
       agentCounter: { count: 0, warned: false },
       reuse: opts.reuse ?? "content",
@@ -228,7 +232,15 @@ export class Engine implements EngineHost {
     };
     this.active.set(runtime.runId, active);
     active.result = this.drive(active, def, input);
-    active.result.catch(() => undefined); // observed via handle/outcome; avoid unhandledRejection
+    // Observed via handle/outcome — avoid unhandledRejection; chain the cleanup off
+    // the caught promise so the .finally() derivative can never reject unobserved.
+    // Entries persist while suspended; at terminal state a later resume() must
+    // replay instead of returning the settled promise, and records[] is freed.
+    void active.result
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.active.get(runtime.runId) === active) this.active.delete(runtime.runId);
+      });
     return {
       runId: runtime.runId,
       result: active.result,
@@ -353,7 +365,7 @@ export class Engine implements EngineHost {
     this.active.get(runtime.runId)?.pending.delete(id);
   }
 
-  async executeChildRun(spec: ChildRunSpec): Promise<unknown> {
+  async executeChildRun(spec: ChildRunSpec): Promise<{ output: unknown; usage: import("@weft/sdk").Usage }> {
     const parent = spec.parent;
     let def: WorkflowDefinition | undefined;
     if (spec.def !== undefined) {
@@ -382,14 +394,17 @@ export class Engine implements EngineHost {
     const childId = spec.childRunId;
     const resuming = await this.journal.exists(childId);
     let input = spec.input;
-    let records: JournalRecord[] = [];
+    const records: JournalRecord[] = [];
     let replay: ReplayIndex | undefined;
     if (resuming) {
       for await (const rec of this.journal.read(childId)) records.push(rec);
       const created = records.find((r) => r.ev.type === "run.created")?.ev;
       if (created?.type === "run.created") input = created.input;
       replay = ReplayIndex.fromRecords(records);
-      shared.budget.restore(0, 0); // child usage already counted in parent restore when parent resumed
+      // The child's own journaled spend charges up the shared chain. The parent's
+      // restore never saw it (a workflow step journals its usage only at
+      // completion, and a completed child is served, not resumed) — no double count.
+      shared.budget.restore(replay.totalUsage.tokens, replay.totalUsage.usd);
     } else {
       const check = await validateSchema(def.meta.input, input ?? {});
       if (!check.ok) {
@@ -428,8 +443,20 @@ export class Engine implements EngineHost {
       ]);
     }
     const handle = this.launch(runtime, def, input, records);
+    const childActive = this.active.get(childId);
     try {
-      return await handle.result;
+      const output = await handle.result;
+      // The child's total journaled spend rides on the parent's workflow step so a
+      // later parent resume restores it without reading the child journal.
+      const usage = { input: 0, output: 0, usd: 0 };
+      for (const rec of childActive?.records ?? []) {
+        if (rec.ev.type === "step.completed" && rec.ev.usage) {
+          usage.input += rec.ev.usage.input ?? 0;
+          usage.output += rec.ev.usage.output ?? 0;
+          usage.usd += rec.ev.usage.usd ?? 0;
+        }
+      }
+      return { output, usage };
     } catch (err) {
       throw StepError.from(err, { kind: "workflow", key: spec.key ?? spec.name, runId: parent.runId });
     } finally {
@@ -458,7 +485,8 @@ export class Engine implements EngineHost {
         );
       }
       if (wait.realSchema) {
-        const check = await validateSchema(wait.realSchema, answer);
+        const { unwrapWireValue } = await import("./jsonschema.ts");
+        const check = await validateSchema(wait.realSchema, unwrapWireValue(answer, wait.wrapped));
         if (!check.ok) {
           throw new StepError(
             "invalid_answer",
@@ -468,7 +496,13 @@ export class Engine implements EngineHost {
         }
       }
       await active.runtime.append([
-        { type: "human.answered", id: requestId, answer, answeredBy: "human", ...(opts.channel ? { channel: opts.channel } : {}) },
+        {
+          type: "human.answered",
+          id: requestId,
+          answer,
+          answeredBy: "human",
+          ...(opts.channel ? { channel: opts.channel } : {}),
+        },
       ]);
       active.runtime.resolveAnswer(requestId, answer, "human");
       return;
@@ -478,7 +512,8 @@ export class Engine implements EngineHost {
     for await (const rec of this.journal.read(runId)) records.push(rec);
     if (records.length === 0) throw new Error(`run ${runId} not found`);
     const request = records.find((r) => r.ev.type === "human.requested" && r.ev.id === requestId)?.ev;
-    if (!request || request.type !== "human.requested") throw new Error(`run ${runId}: no request ${requestId}`);
+    if (!request || request.type !== "human.requested")
+      throw new Error(`run ${runId}: no request ${requestId}`);
     const answered = records.some((r) => r.ev.type === "human.answered" && r.ev.id === requestId);
     if (answered) throw new Error(`run ${runId}: request ${requestId} is already answered`);
     const issues = structuralCheck(request.schema, answer);
@@ -490,7 +525,13 @@ export class Engine implements EngineHost {
       );
     }
     await this.journal.append(runId, [
-      { type: "human.answered", id: requestId, answer, answeredBy: "human", ...(opts.channel ? { channel: opts.channel } : {}) },
+      {
+        type: "human.answered",
+        id: requestId,
+        answer,
+        answeredBy: "human",
+        ...(opts.channel ? { channel: opts.channel } : {}),
+      },
     ]);
   }
 
@@ -509,16 +550,17 @@ export class Engine implements EngineHost {
     const active = this.active.get(runId);
     if (active) {
       active.runtime.shared.abort.abort(new CancelledError());
-      // Wake pending human waits so the run winds down instead of hanging.
-      for (const id of [...active.pending.keys()]) {
-        const wait = active.runtime.pendingWait(id);
-        if (wait) active.runtime.resolveAnswer(id, { $timeout: "deny" }, "timeout");
-      }
+      // Reject (never answer) pending human waits: the run must end cancelled,
+      // not proceed as if someone had denied the request.
+      active.runtime.cancelHumanWaits();
       await active.result.catch(() => undefined);
       return;
     }
     if (!(await this.journal.exists(runId))) throw new Error(`run ${runId} not found`);
-    await this.journal.append(runId, [{ type: "run.cancelled" }, { type: "run.status", status: "cancelled" }]);
+    await this.journal.append(runId, [
+      { type: "run.cancelled" },
+      { type: "run.status", status: "cancelled" },
+    ]);
   }
 
   // -- inspection -----------------------------------------------------------

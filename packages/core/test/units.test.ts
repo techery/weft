@@ -1,5 +1,3 @@
-import { describe, expect, test } from "vitest";
-import { StepError } from "@weft/sdk";
 import {
   Budget,
   canonicalJson,
@@ -10,6 +8,8 @@ import {
   Semaphore,
   structuralCheck,
 } from "@weft/core";
+import { StepError } from "@weft/sdk";
+import { describe, expect, test } from "vitest";
 
 describe("canonical json & hashing", () => {
   test("key order does not matter; undefined fields are dropped", () => {
@@ -139,7 +139,9 @@ describe("structuralCheck", () => {
   };
 
   test("accepts valid values", () => {
-    expect(structuralCheck(schema, { module: "auth", count: 2, tags: ["a"], nested: { ok: true } })).toEqual([]);
+    expect(structuralCheck(schema, { module: "auth", count: 2, tags: ["a"], nested: { ok: true } })).toEqual(
+      [],
+    );
   });
 
   test("reports missing required, wrong types, bad enum with paths", () => {
@@ -213,6 +215,10 @@ describe("StepError ergonomics", () => {
     const e = new StepError("conflict", "patch fix:api conflicts on src/x.ts", {
       step: { key: "fix:api", kind: "sideeffect", runId: "7f3a" },
     });
-    expect(StepError.deserialize(e.serialize()).step).toEqual({ key: "fix:api", kind: "sideeffect", runId: "7f3a" });
+    expect(StepError.deserialize(e.serialize()).step).toEqual({
+      key: "fix:api",
+      kind: "sideeffect",
+      runId: "7f3a",
+    });
   });
 });

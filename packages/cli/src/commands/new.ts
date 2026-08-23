@@ -82,18 +82,20 @@ export default defineWorkflow(
     const findings = reviews.flatMap((review) => review.findings);
 
     ctx.phase("Verify");
-    const verdicts = ctx.ok(
-      await ctx.parallel(
-        findings.map(
-          (finding, i) => () =>
-            ctx.agent(\`Try to refute this finding: \${finding.claim} (\${finding.file}:\${finding.line})\`, {
-              key: \`refute:\${i}\`,
-              schema: z.object({ survives: z.boolean(), why: z.string() }),
-            }),
-        ),
-      ),
+    // The pipeline keeps each finding paired with its verdict, so a failed
+    // refuter branch drops its own lane instead of misaligning the rest.
+    const confirmed = ctx.ok(
+      await ctx.pipeline(findings)
+        .step((finding, _item, i) =>
+          ctx.agent(\`Try to refute this finding: \${finding.claim} (\${finding.file}:\${finding.line})\`, {
+            key: \`refute:\${i}\`,
+            schema: z.object({ survives: z.boolean(), why: z.string() }),
+          }),
+        )
+        .filter((verdict) => verdict.survives)
+        .map((_verdict, finding) => finding)
+        .run(),
     );
-    const confirmed = findings.filter((_, i) => verdicts[i]?.survives === true);
 
     ctx.phase("Report");
     await ctx.note({

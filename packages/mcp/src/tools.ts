@@ -14,8 +14,8 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
   loadWorkflow,
   parseBudget,
-  resolveWorkflow,
   type RunListFilter,
+  resolveWorkflow,
   type Weft,
   type WorkflowDefinition,
 } from "@weft/host";
@@ -60,7 +60,10 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
           .string()
           .optional()
           .describe("Registry name (`review`) or path to a .ts file (`./flows/review.ts`)."),
-        source: z.string().optional().describe("Inline TypeScript exporting `default defineWorkflow({…}, run)`."),
+        source: z
+          .string()
+          .optional()
+          .describe("Inline TypeScript exporting `default defineWorkflow({…}, run)`."),
         input: z
           .record(z.string(), z.unknown())
           .optional()
@@ -95,7 +98,9 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
         timeout: z
           .string()
           .optional()
-          .describe(`How long to hold the poll open: "10m", "90s", "250ms", or ms. Default "${DEFAULT_TIMEOUT}".`),
+          .describe(
+            `How long to hold the poll open: "10m", "90s", "250ms", or ms. Default "${DEFAULT_TIMEOUT}".`,
+          ),
       },
       annotations: { readOnlyHint: true },
     },
@@ -169,7 +174,12 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
       inputSchema: {
         status: RUN_STATUS.optional().describe("Keep only runs in this status."),
         workflow: z.string().optional().describe("Keep only runs of this workflow name."),
-        limit: z.number().int().positive().optional().describe(`Maximum runs to return (default ${LIST_LIMIT}).`),
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(`Maximum runs to return (default ${LIST_LIMIT}).`),
       },
       annotations: { readOnlyHint: true },
     },
@@ -282,6 +292,9 @@ async function reply(produce: () => Promise<unknown>): Promise<CallToolResult> {
     const value = await produce();
     return { content: [{ type: "text", text: JSON.stringify(value ?? null, null, 2) }] };
   } catch (err) {
-    return { content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }], isError: true };
+    return {
+      content: [{ type: "text", text: err instanceof Error ? err.message : String(err) }],
+      isError: true,
+    };
   }
 }

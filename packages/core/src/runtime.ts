@@ -17,14 +17,23 @@ import {
   validateSchema,
 } from "@weft/sdk";
 import picomatch from "picomatch";
-import { Budget } from "./budget.ts";
+import type { Budget } from "./budget.ts";
 import { canonicalJson, hashStep, sha256Hex } from "./canonical.ts";
 import type { ApprovalMode, EngineConfig } from "./config.ts";
-import type { BlobRefJson, HumanKind, HumanRequestEvent, JournalEvent, JournalRecord, RunStatus, StepKind } from "./events.ts";
+import type {
+  BlobRefJson,
+  HumanKind,
+  HumanRequestEvent,
+  JournalEvent,
+  JournalRecord,
+  RunStatus,
+  StepKind,
+} from "./events.ts";
+import { unwrapWireValue, wrapWireValue } from "./jsonschema.ts";
+import type { Semaphore } from "./limiter.ts";
 import type { ProviderRegistry } from "./provider.ts";
 import { type CompletedEntry, OrderedDelivery, type ReplayIndex, type ReuseMode } from "./replay.ts";
 import type { BlobStore, JournalStore } from "./stores.ts";
-import type { Semaphore } from "./limiter.ts";
 
 // ---------------------------------------------------------------------------
 // Host seam (implemented by Engine)
@@ -64,7 +73,7 @@ export interface EngineHost {
   clock(): number;
   registerPending(runtime: RunRuntime, request: PendingRequest): void;
   resolvePending(runtime: RunRuntime, id: string): void;
-  executeChildRun(spec: ChildRunSpec): Promise<unknown>;
+  executeChildRun(spec: ChildRunSpec): Promise<{ output: unknown; usage: Usage }>;
   onRecords(runtime: RunRuntime, records: JournalRecord[]): void;
 }
 
@@ -94,6 +103,8 @@ export interface StepIO {
   attempt: number;
   signal: AbortSignal;
   scheduledAt: number;
+  /** The ORIGINAL schedule time when resuming an incomplete step (sleep deadlines anchor here). */
+  priorScheduledAt?: number;
   childRunId?: string;
   appendAttempt(detail?: string): Promise<void>;
   /** Mark the step as a durable wait (sleep/signal): it stops counting as live work. */
@@ -137,6 +148,8 @@ interface HumanSpec {
   detail?: string;
   schemaJson: unknown;
   realSchema?: AnySchema;
+  /** True when schemaJson wraps a primitive as { value } — answers unwrap before validation. */
+  wrapped?: boolean;
   risk?: Risk;
   timeoutMs?: number;
   onTimeout?: "deny" | "escalate" | "default";
@@ -155,6 +168,7 @@ export interface HumanOutcome {
 interface PendingWait {
   request: HumanRequestEvent;
   realSchema?: AnySchema;
+  wrapped: boolean;
   resolve: (outcome: HumanOutcome) => void;
   reject: (err: unknown) => void;
   timer?: NodeJS.Timeout;
@@ -389,7 +403,11 @@ export class RunRuntime {
         match.entry.consumed = true;
         this.consumedEntries++;
         await this.append([
-          { type: "replay.diverged", seq, reason: `journaled effect for ${spec.key ?? hash.slice(0, 12)} no longer holds` },
+          {
+            type: "replay.diverged",
+            seq,
+            reason: `journaled effect for ${spec.key ?? hash.slice(0, 12)} no longer holds`,
+          },
         ]);
         match = undefined;
       }
@@ -420,25 +438,22 @@ export class RunRuntime {
       this.delivery.breakOrder();
     }
     if (this.insideHistory) {
-      await this.append([{ type: "replay.diverged", seq, reason: `no journal match for ${spec.key ?? spec.kind}` }]);
+      await this.append([
+        { type: "replay.diverged", seq, reason: `no journal match for ${spec.key ?? spec.kind}` },
+      ]);
     }
 
     let childRunId: string | undefined;
+    let priorScheduledAt: number | undefined;
     if (spec.reuseIncomplete) {
       const prior = this.replay?.matchIncompleteScheduled(hash, spec.kind);
       if (prior) {
         prior.consumed = true;
         childRunId = prior.childRunId;
+        priorScheduledAt = prior.at;
       }
       childRunId ??= spec.newChildRunId?.();
     }
-
-    // Per-step abort: a step timeout aborts the step's own signal so providers
-    // tear down their sessions instead of running on after the engine gave up.
-    const stepAbort = new AbortController();
-    const onRunAbort = () => stepAbort.abort();
-    if (this.signal.aborted) stepAbort.abort();
-    else this.signal.addEventListener("abort", onRunAbort, { once: true });
 
     this.inflightLive++;
     let waiting = false;
@@ -481,12 +496,19 @@ export class RunRuntime {
       let attempt = 0;
       for (;;) {
         attempt++;
+        // Per-attempt abort: a step timeout aborts THIS attempt's signal so the
+        // provider tears down its session; a retry gets a fresh controller.
+        const stepAbort = new AbortController();
+        const onRunAbort = () => stepAbort.abort();
+        if (this.signal.aborted) stepAbort.abort();
+        else this.signal.addEventListener("abort", onRunAbort, { once: true });
         try {
           const io: StepIO = {
             seq,
             attempt,
             signal: stepAbort.signal,
             scheduledAt,
+            ...(priorScheduledAt !== undefined ? { priorScheduledAt } : {}),
             ...(childRunId !== undefined ? { childRunId } : {}),
             appendAttempt: async (detail?: string) => {
               await this.append([
@@ -518,7 +540,9 @@ export class RunRuntime {
         } catch (err) {
           unmarkWaiting();
           const stepError =
-            this.signal.aborted && !isCancellation(err) ? new CancelledError("run cancelled", ref) : StepError.from(err, ref);
+            this.signal.aborted && !isCancellation(err)
+              ? new CancelledError("run cancelled", ref)
+              : StepError.from(err, ref);
           const retryable =
             !isCancellation(stepError) &&
             stepError.code !== "budget_exceeded" &&
@@ -526,7 +550,9 @@ export class RunRuntime {
             stepError.code !== "human_denied" &&
             attempt < maxAttempts;
           if (!retryable) {
-            await this.append([{ type: "step.failed", seq, error: stepError.serialize(), attempts: attempt }]);
+            await this.append([
+              { type: "step.failed", seq, error: stepError.serialize(), attempts: attempt },
+            ]);
             throw stepError;
           }
           const backoff = (spec.retry?.backoffMs ?? 1_000) * attempt;
@@ -534,10 +560,11 @@ export class RunRuntime {
             { type: "step.attempt", seq, attempt: attempt + 1, detail: `retry after ${stepError.code}` },
           ]);
           await sleep(backoff, this.signal);
+        } finally {
+          this.signal.removeEventListener("abort", onRunAbort);
         }
       }
     } finally {
-      this.signal.removeEventListener("abort", onRunAbort);
       if (waiting) this.waitingSteps--;
       else this.inflightLive--;
       this.checkIdle();
@@ -551,6 +578,9 @@ export class RunRuntime {
     stepAbort?: AbortController,
   ): Promise<T> {
     if (!timeoutMs) return promise;
+    // When the timer wins the race, the losing execute() promise rejects later
+    // (aborted provider); observe it so Node never sees an unhandled rejection.
+    promise.catch(() => undefined);
     let timer: NodeJS.Timeout | undefined;
     try {
       return await Promise.race([
@@ -590,10 +620,12 @@ export class RunRuntime {
       if (entry.answer) {
         this.hitCount++;
         await this.delivery.deliver(entry.answer.order);
-        return this.settleAnswer(entry.request, spec.realSchema, {
-          answer: structuredClone(entry.answer.answer),
-          answeredBy: entry.answer.answeredBy,
-        });
+        return this.settleAnswer(
+          entry.request,
+          spec.realSchema,
+          { answer: structuredClone(entry.answer.answer), answeredBy: entry.answer.answeredBy },
+          spec.wrapped ?? false,
+        );
       }
       // Unanswered request re-surfaces with the same id — never duplicated.
       if (this.dry) {
@@ -604,12 +636,15 @@ export class RunRuntime {
           runId: this.runId,
         });
       }
-      return this.awaitAnswer(entry.request, spec.realSchema);
+      return this.awaitAnswer(entry.request, spec.realSchema, spec.wrapped ?? false);
     }
 
     if (this.dry) {
       this.dryDiverged.push({ kind: "human", key: spec.question.slice(0, 60), runId: this.runId });
-      throw new CancelledError(`dry-run: human step would be newly requested`, { kind: "human", runId: this.runId });
+      throw new CancelledError(`dry-run: human step would be newly requested`, {
+        kind: "human",
+        runId: this.runId,
+      });
     }
     if (!this.liveDispatched) {
       this.liveDispatched = true;
@@ -642,10 +677,14 @@ export class RunRuntime {
     }
 
     await this.append([request]);
-    return this.awaitAnswer(request, spec.realSchema);
+    return this.awaitAnswer(request, spec.realSchema, spec.wrapped ?? false);
   }
 
-  private async awaitAnswer(request: HumanRequestEvent, realSchema?: AnySchema): Promise<HumanOutcome> {
+  private async awaitAnswer(
+    request: HumanRequestEvent,
+    realSchema: AnySchema | undefined,
+    wrapped: boolean,
+  ): Promise<HumanOutcome> {
     this.setStatus("waiting_for_human");
     this.host.registerPending(this, {
       runId: this.runId,
@@ -674,6 +713,7 @@ export class RunRuntime {
           request,
           resolve,
           reject,
+          wrapped,
           ...(realSchema !== undefined ? { realSchema } : {}),
         };
         this.pendingWaits.set(request.id, wait);
@@ -688,7 +728,7 @@ export class RunRuntime {
         }
         queueMicrotask(() => this.checkIdle());
       });
-      return await this.settleAnswer(request, realSchema, outcome);
+      return await this.settleAnswer(request, realSchema, outcome, wrapped);
     } finally {
       if (inStep) {
         this.inflightLive++;
@@ -701,6 +741,7 @@ export class RunRuntime {
     request: HumanRequestEvent,
     realSchema: AnySchema | undefined,
     outcome: HumanOutcome,
+    wrapped: boolean,
   ): Promise<HumanOutcome> {
     if (
       typeof outcome.answer === "object" &&
@@ -715,7 +756,7 @@ export class RunRuntime {
       return { answer: { approved: false, note: "timed out" }, answeredBy: "timeout" };
     }
     if (realSchema) {
-      const check = await validateSchema(realSchema, outcome.answer);
+      const check = await validateSchema(realSchema, unwrapWireValue(outcome.answer, wrapped));
       if (!check.ok) {
         throw new StepError(
           "invalid_answer",
@@ -740,10 +781,16 @@ export class RunRuntime {
     return true;
   }
 
-  pendingWait(id: string): { request: HumanRequestEvent; realSchema?: AnySchema } | undefined {
+  pendingWait(
+    id: string,
+  ): { request: HumanRequestEvent; realSchema?: AnySchema; wrapped: boolean } | undefined {
     const wait = this.pendingWaits.get(id);
     if (!wait) return undefined;
-    return { request: wait.request, ...(wait.realSchema !== undefined ? { realSchema: wait.realSchema } : {}) };
+    return {
+      request: wait.request,
+      wrapped: wait.wrapped,
+      ...(wait.realSchema !== undefined ? { realSchema: wait.realSchema } : {}),
+    };
   }
 
   private async applyHumanTimeout(id: string): Promise<void> {
@@ -755,7 +802,12 @@ export class RunRuntime {
       this.log(`request ${id} passed its deadline; escalated (still waiting)`);
       return;
     }
-    const answer = policy === "default" ? (request.timeoutDefault ?? null) : TIMEOUT_DENY_MARKER;
+    // The user-supplied default is unwrapped; wrap it so the journaled answer has
+    // the same shape a human answer would (settleAnswer unwraps uniformly).
+    const answer =
+      policy === "default"
+        ? wrapWireValue(request.timeoutDefault ?? null, wait.wrapped)
+        : TIMEOUT_DENY_MARKER;
     await this.append([{ type: "human.answered", id, answer, answeredBy: "timeout" }]);
     this.resolveAnswer(id, answer, "timeout");
   }
@@ -765,7 +817,8 @@ export class RunRuntime {
   resolveApproval(action: string, risk: Risk): { mode: ApprovalMode; confirm: boolean } {
     const policy = this.host.config.approvalPolicy;
     for (const [pattern, mode] of Object.entries(policy.actions ?? {})) {
-      if (picomatch.isMatch(action, pattern)) return { mode, confirm: risk === "irreversible" && mode === "ask" };
+      if (picomatch.isMatch(action, pattern))
+        return { mode, confirm: risk === "irreversible" && mode === "ask" };
     }
     const tier = policy.tiers?.[risk];
     if (tier) return { mode: tier, confirm: risk === "irreversible" && tier === "ask" };
@@ -815,16 +868,40 @@ export class RunRuntime {
 
   // -- signals --------------------------------------------------------------
 
-  private signalWaiters = new Map<string, Array<(payload: unknown) => void>>();
+  private signalWaiters = new Map<string, Array<{ fire: (payload: unknown) => void; dispose: () => void }>>();
 
   takeOrAwaitSignal(name: string, io: StepIO): Promise<unknown> {
     const journaled = this.replay?.takeSignal(name);
     if (journaled) return Promise.resolve(structuredClone(journaled.payload));
     io.markWaiting();
     this.setStatus("waiting_for_signal");
-    return new Promise<unknown>((resolve) => {
+    return new Promise<unknown>((resolve, reject) => {
+      const waiter = {
+        fire: (payload: unknown) => {
+          io.signal.removeEventListener("abort", onAbort);
+          resolve(payload);
+        },
+        dispose: () => io.signal.removeEventListener("abort", onAbort),
+      };
+      const onAbort = () => {
+        const list = this.signalWaiters.get(name);
+        const idx = list?.indexOf(waiter) ?? -1;
+        if (list && idx >= 0) list.splice(idx, 1);
+        reject(
+          new CancelledError(`run cancelled while waiting for signal "${name}"`, {
+            kind: "signal",
+            key: name,
+            runId: this.runId,
+          }),
+        );
+      };
+      if (io.signal.aborted) {
+        reject(new CancelledError(`run cancelled while waiting for signal "${name}"`));
+        return;
+      }
+      io.signal.addEventListener("abort", onAbort, { once: true });
       const list = this.signalWaiters.get(name) ?? [];
-      list.push(resolve);
+      list.push(waiter);
       this.signalWaiters.set(name, list);
       queueMicrotask(() => this.checkIdle());
     });
@@ -837,8 +914,24 @@ export class RunRuntime {
     if (!next) return false;
     if (list && list.length === 0) this.signalWaiters.delete(name);
     if (this.signalWaiters.size === 0 && this.status === "waiting_for_signal") this.setStatus("executing");
-    next(payload);
+    next.fire(payload);
     return true;
+  }
+
+  /** Cancellation: reject every pending human wait so the run winds down as cancelled. */
+  cancelHumanWaits(): void {
+    for (const [id, wait] of [...this.pendingWaits]) {
+      this.pendingWaits.delete(id);
+      if (wait.timer) clearTimeout(wait.timer);
+      this.host.resolvePending(this, id);
+      wait.reject(
+        new CancelledError(`run cancelled while waiting on ${id}`, {
+          kind: "human",
+          key: id,
+          runId: this.runId,
+        }),
+      );
+    }
   }
 
   hasSignalWaiter(name: string): boolean {

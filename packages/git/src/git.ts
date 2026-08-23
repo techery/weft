@@ -68,7 +68,7 @@ export class GitCli implements Git {
   // -- reads -----------------------------------------------------------------
 
   async status(): Promise<GitStatusResult> {
-    const { stdout } = await this.plumb(["status", "--porcelain=v2", "--branch"]);
+    const { stdout } = await this.plumb(["status", "--porcelain=v2", "--branch", "--untracked-files=all"]);
     const staged: string[] = [];
     const unstaged: string[] = [];
     const untracked: string[] = [];
@@ -347,10 +347,15 @@ function fileStatus(code: string): GitFileStatus {
   return letter === "C" ? "A" : "M";
 }
 
-/** `from [to] [-- paths]`; an absent `to` diffs against the working tree. */
+/**
+ * `from [to] [-- paths]`. With an explicit `from`, `to` defaults to HEAD (the
+ * documented contract, matching log); a no-range diff() compares HEAD to the
+ * working tree.
+ */
 function diffArgs(range: GitRange): string[] {
   const args = [range.from ?? "HEAD"];
   if (range.to !== undefined) args.push(range.to);
+  else if (range.from !== undefined) args.push("HEAD");
   if (range.paths && range.paths.length > 0) args.push("--", ...range.paths);
   return args;
 }

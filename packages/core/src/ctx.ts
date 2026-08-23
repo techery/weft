@@ -6,6 +6,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as nodeFs } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import { createGit, GIT_WRITE_RISK, type Git, type GitWriteOp } from "@weft/git";
+import { addWorktree, applyPatchToTree, capturePatch, checkScope, removeWorktree } from "@weft/isolation";
 import {
   type AgentFn,
   type AgentOptions,
@@ -22,15 +24,15 @@ import {
   type GitRange,
   type GitWriteOpts,
   type InferOut,
-  isCancellation,
   type IntegrateOptions,
   type IntegrationLedger,
+  isCancellation,
   type NoteInput,
-  parseDuration,
   type ParallelOptions,
   type ParallelTask,
   type PatchRef,
   type Pipeline,
+  parseDuration,
   type Risk,
   type SecretHandle,
   type Settled,
@@ -40,8 +42,6 @@ import {
   validateSchema,
   type WorkflowDefinitionLike,
 } from "@weft/sdk";
-import { GIT_WRITE_RISK, type Git, type GitWriteOp, createGit } from "@weft/git";
-import { addWorktree, applyPatchToTree, capturePatch, checkScope, removeWorktree } from "@weft/isolation";
 import { execa } from "execa";
 import picomatch from "picomatch";
 import { glob as tinyGlob } from "tinyglobby";
@@ -51,7 +51,7 @@ import type { BlobRefJson } from "./events.ts";
 import { toWireSchema, unwrapWireValue } from "./jsonschema.ts";
 import { mapWithConcurrency } from "./limiter.ts";
 import type { AgentRequest, AgentResult } from "./provider.ts";
-import { sleep as sleepMs, type RunRuntime, type StepIO } from "./runtime.ts";
+import { type RunRuntime, type StepIO, sleep as sleepMs } from "./runtime.ts";
 
 const RISK_ORDER: Risk[] = ["low", "medium", "high", "irreversible"];
 
@@ -76,28 +76,40 @@ function isSecretHandle(v: unknown): v is SecretHandle {
   return typeof v === "object" && v !== null && typeof (v as SecretHandle).__weftSecret === "string";
 }
 
-/** Resolve secret handles engine-side; the journal only ever sees `<redacted:NAME>`. */
-function resolveSecretMap(
+/** Journal-safe view of an env/header map: secret handles become `<redacted:NAME>`. Never touches env. */
+function journalSecretMap(map: Record<string, string | SecretHandle> | undefined): Record<string, string> {
+  const journalSafe: Record<string, string> = {};
+  for (const [k, v] of Object.entries(map ?? {})) {
+    journalSafe[k] = isSecretHandle(v) ? `<redacted:${v.__weftSecret}>` : v;
+  }
+  return journalSafe;
+}
+
+/**
+ * Resolve secret handles engine-side at CALL time — invoked only inside a live
+ * execute(), never before the journal lookup, so a journal-served step resumes
+ * fine in an environment where the secret is no longer set.
+ */
+function resolveSecretValues(
   map: Record<string, string | SecretHandle> | undefined,
   ref: { key?: string; kind?: string },
-): { resolved: Record<string, string>; journalSafe: Record<string, string> } {
+): Record<string, string> {
   const resolved: Record<string, string> = {};
-  const journalSafe: Record<string, string> = {};
   for (const [k, v] of Object.entries(map ?? {})) {
     if (isSecretHandle(v)) {
       const name = v.__weftSecret;
       const value = process.env[name];
       if (value === undefined) {
-        throw new StepError("invalid_input", `secret "${name}" is not set in the engine environment`, { step: ref });
+        throw new StepError("invalid_input", `secret "${name}" is not set in the engine environment`, {
+          step: ref,
+        });
       }
       resolved[k] = value;
-      journalSafe[k] = `<redacted:${name}>`;
     } else {
       resolved[k] = v;
-      journalSafe[k] = v;
     }
   }
-  return { resolved, journalSafe };
+  return resolved;
 }
 
 // ---------------------------------------------------------------------------
@@ -141,8 +153,13 @@ export function buildCtx(rt: RunRuntime): Ctx {
     }
     const wire = toWireSchema(opts.schema);
     const providerId = opts.provider ?? rt.workflowDefaults.provider ?? config.defaults.provider;
+    // step opts → workflow defaults → engine config; a model default applies only
+    // when the step actually routes to the provider that default was written for.
+    const wfProvider = rt.workflowDefaults.provider ?? config.defaults.provider;
     const model =
-      opts.model ?? (providerId === config.defaults.provider ? (rt.workflowDefaults.model ?? config.defaults.model) : undefined);
+      opts.model ??
+      (providerId === wfProvider ? rt.workflowDefaults.model : undefined) ??
+      (providerId === config.defaults.provider ? config.defaults.model : undefined);
     const effort = opts.effort ?? rt.workflowDefaults.effort ?? config.defaults.effort;
     const maxTurns = opts.maxTurns ?? config.limits.maxTurns;
     const timeoutMs = toMs(opts.timeout, config.limits.stepTimeoutMs);
@@ -151,7 +168,11 @@ export function buildCtx(rt: RunRuntime): Ctx {
     const ordinal = rt.nextAgentOrdinal();
     const label = opts.label ?? opts.key ?? `${rt.currentPhase ?? "run"}/agent#${ordinal}`;
     const scope = opts.write
-      ? { paths: opts.write.paths, ...(opts.write.also ? { also: opts.write.also } : {}), mode: opts.write.mode ?? ("warn" as const) }
+      ? {
+          paths: opts.write.paths,
+          ...(opts.write.also ? { also: opts.write.also } : {}),
+          mode: opts.write.mode ?? ("warn" as const),
+        }
       : undefined;
 
     const payload = {
@@ -167,13 +188,20 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
     const stepRef = { kind: "agent", key: opts.key, label, runId: rt.runId };
 
-    const reviveDetailed = async (journaled: unknown, entry?: { usage?: Usage; sessionId?: string; attempts?: number }) => {
+    const reviveDetailed = async (
+      journaled: unknown,
+      entry?: { usage?: Usage; sessionId?: string; attempts?: number },
+    ) => {
       const out = journaled as { value: unknown; files: string[]; patch: PatchRef | null };
       const check = await validateSchema(opts.schema, out.value);
       if (!check.ok) {
-        throw new StepError("invalid_output", `journaled output no longer satisfies the schema for ${label}`, {
-          step: stepRef,
-        });
+        throw new StepError(
+          "invalid_output",
+          `journaled output no longer satisfies the schema for ${label}`,
+          {
+            step: stepRef,
+          },
+        );
       }
       const detailed: DetailedAgentResult<InferOut<S>> = {
         value: check.value,
@@ -196,7 +224,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
         ...(opts.retry
           ? { retry: { attempts: opts.retry.attempts, backoffMs: toMs(opts.retry.backoff, 1_000) } }
           : {}),
-        timeoutMs: timeoutMs + 10_000,
+        // Engine-side guard: a short grace lets a well-behaved provider fail with
+        // its own richer error first; a provider that ignores timeoutMs is aborted.
+        timeoutMs: timeoutMs + 1_000,
         route: { provider: providerId, ...(model ? { model } : {}), ...(effort ? { effort } : {}) },
         ...(scope ? { scope } : {}),
         revive: (journaled, entry) => reviveDetailed(journaled, entry),
@@ -227,7 +257,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
           try {
             let finalPrompt = prompt;
             if (scope) {
-              const also = scope.also?.length ? `\nAlso allowed (incidental files): ${scope.also.join(", ")}` : "";
+              const also = scope.also?.length
+                ? `\nAlso allowed (incidental files): ${scope.also.join(", ")}`
+                : "";
               finalPrompt +=
                 `\n\n## Write scope\nYou may modify only files matching: ${scope.paths.join(", ")}.${also}` +
                 `\nYou are not alone in the codebase: other agents work in parallel scopes — confine every edit to yours.`;
@@ -248,7 +280,15 @@ export function buildCtx(rt: RunRuntime): Ctx {
               timeoutMs,
               onMaxTurns: opts.onMaxTurns ?? "finalize",
               tools: { allowEdits: scope !== undefined || mode.writeInPlace === true },
-              ...(scope ? { writeScope: { paths: scope.paths, mode: scope.mode, ...(scope.also ? { also: scope.also } : {}) } } : {}),
+              ...(scope
+                ? {
+                    writeScope: {
+                      paths: scope.paths,
+                      mode: scope.mode,
+                      ...(scope.also ? { also: scope.also } : {}),
+                    },
+                  }
+                : {}),
               hitl: {
                 onPermission: async (permReq) => {
                   const risk = permReq.risk;
@@ -258,7 +298,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
                       risk,
                       detail: JSON.stringify(permReq.input).slice(0, 500),
                     });
-                    return gate.approved ? { behavior: "allow" } : { behavior: "deny", message: gate.note ?? "denied" };
+                    return gate.approved
+                      ? { behavior: "allow" }
+                      : { behavior: "deny", message: gate.note ?? "denied" };
                   }
                   return { behavior: "allow" };
                 },
@@ -274,7 +316,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
             };
 
             const result = await rt.host.globalLimiter.with(
-              () => rt.host.providerLimiter(providerId).with(() => runProviderWithRepair(provider, req, io), io.signal),
+              () =>
+                rt.host
+                  .providerLimiter(providerId)
+                  .with(() => runProviderWithRepair(provider, req, io), io.signal),
               io.signal,
             );
 
@@ -286,7 +331,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
               }
             }
             rt.budget.charge(usage);
-            void rt.append([{ type: "budget.sampled", tokens: rt.budget.spentTokens(), usd: rt.budget.spentUsd() }]);
+            void rt.append([
+              { type: "budget.sampled", tokens: rt.budget.spentTokens(), usd: rt.budget.spentUsd() },
+            ]);
 
             let transcriptRef: BlobRefJson | undefined;
             if (result.result.transcript) {
@@ -321,7 +368,15 @@ export function buildCtx(rt: RunRuntime): Ctx {
                     ...(outOfScope.length > 0 ? { outOfScope } : {}),
                   },
                   ...(outOfScope.length > 0
-                    ? [{ type: "scope.violation", seq: io.seq, key: patchKey, files: outOfScope, mode: scope.mode } as const]
+                    ? [
+                        {
+                          type: "scope.violation",
+                          seq: io.seq,
+                          key: patchKey,
+                          files: outOfScope,
+                          mode: scope.mode,
+                        } as const,
+                      ]
                     : []),
                 ]);
               }
@@ -424,9 +479,15 @@ export function buildCtx(rt: RunRuntime): Ctx {
     }
   }
 
-  async function parallel<T>(tasks: ReadonlyArray<ParallelTask<T>>, opts?: ParallelOptions): Promise<Settled<T>[]> {
+  async function parallel<T>(
+    tasks: ReadonlyArray<ParallelTask<T>>,
+    opts?: ParallelOptions,
+  ): Promise<Settled<T>[]> {
     if (tasks.length > config.limits.fanoutMax) {
-      throw new StepError("invalid_input", `parallel: ${tasks.length} items exceeds the cap of ${config.limits.fanoutMax}`);
+      throw new StepError(
+        "invalid_input",
+        `parallel: ${tasks.length} items exceeds the cap of ${config.limits.fanoutMax}`,
+      );
     }
     let settled: Settled<T>[];
     if (opts?.concurrency && tasks.every((t) => typeof t === "function")) {
@@ -441,9 +502,15 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
   function pipeline<I>(items: ReadonlyArray<I>): Pipeline<I, I> {
     if (items.length > config.limits.fanoutMax) {
-      throw new StepError("invalid_input", `pipeline: ${items.length} items exceeds the cap of ${config.limits.fanoutMax}`);
+      throw new StepError(
+        "invalid_input",
+        `pipeline: ${items.length} items exceeds the cap of ${config.limits.fanoutMax}`,
+      );
     }
-    type Stage = { type: "step" | "filter" | "map"; fn: (prev: unknown, item: unknown, i: number) => unknown };
+    type Stage = {
+      type: "step" | "filter" | "map";
+      fn: (prev: unknown, item: unknown, i: number) => unknown;
+    };
     const stages: Stage[] = [];
     const makeBuilder = (): Pipeline<I, unknown> => ({
       step(fn) {
@@ -459,24 +526,30 @@ export function buildCtx(rt: RunRuntime): Ctx {
         return makeBuilder() as never;
       },
       async run(opts?: { concurrency?: number }) {
-        const lanes = await mapWithConcurrency(items, opts?.concurrency ?? (items.length || 1), async (item, i) => {
-          let prev: unknown = item;
-          try {
-            for (const stage of stages) {
-              if (stage.type === "filter") {
-                if (!(await stage.fn(prev, item, i))) return { filtered: true } as const;
-              } else {
-                prev = await stage.fn(prev, item, i);
+        const lanes = await mapWithConcurrency(
+          items,
+          opts?.concurrency ?? (items.length || 1),
+          async (item, i) => {
+            let prev: unknown = item;
+            try {
+              for (const stage of stages) {
+                if (stage.type === "filter") {
+                  if (!(await stage.fn(prev, item, i))) return { filtered: true } as const;
+                } else {
+                  prev = await stage.fn(prev, item, i);
+                }
               }
+              return { ok: true, value: prev } as const;
+            } catch (err) {
+              return { ok: false, error: StepError.from(err) } as const;
             }
-            return { ok: true, value: prev } as const;
-          } catch (err) {
-            return { ok: false, error: StepError.from(err) } as const;
-          }
-        });
+          },
+        );
         const cancelled = lanes.find((l) => "ok" in l && !l.ok && isCancellation(l.error));
         if (cancelled && "error" in cancelled) throw cancelled.error;
-        return lanes.filter((l): l is Exclude<typeof l, { filtered: true }> => !("filtered" in l)) as Settled<unknown>[];
+        return lanes.filter(
+          (l): l is Exclude<typeof l, { filtered: true }> => !("filtered" in l),
+        ) as Settled<unknown>[];
       },
     });
     return makeBuilder() as Pipeline<I, I>;
@@ -500,9 +573,13 @@ export function buildCtx(rt: RunRuntime): Ctx {
   ): Promise<unknown> {
     const name = typeof defOrName === "string" ? defOrName : (defOrName.meta.name ?? "inline");
     if (rt.depth + 1 > config.limits.maxDepth) {
-      throw new StepError("depth_exceeded", `sub-workflow depth limit (${config.limits.maxDepth}) exceeded at "${name}"`, {
-        step: { kind: "workflow", key: opts.key ?? name, runId: rt.runId },
-      });
+      throw new StepError(
+        "depth_exceeded",
+        `sub-workflow depth limit (${config.limits.maxDepth}) exceeded at "${name}"`,
+        {
+          step: { kind: "workflow", key: opts.key ?? name, runId: rt.runId },
+        },
+      );
     }
     return rt.runStep<unknown>({
       kind: "workflow",
@@ -514,7 +591,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
       revive: (journaled) => (journaled as { output: unknown }).output,
       execute: async (io) => {
         const childRunId = io.childRunId ?? randomUUID().slice(0, 8);
-        const output = await rt.host.executeChildRun({
+        const { output, usage } = await rt.host.executeChildRun({
           parent: rt,
           name,
           ...(typeof defOrName === "string" ? {} : { def: defOrName }),
@@ -523,7 +600,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
           ...(opts.key !== undefined ? { key: opts.key } : {}),
           ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
         });
-        return { value: output, journalOutput: { childRunId, output } };
+        return { value: output, journalOutput: { childRunId, output }, usage };
       },
     });
   }
@@ -540,7 +617,11 @@ export function buildCtx(rt: RunRuntime): Ctx {
           const bytes = await nodeFs.readFile(resolveInCwd(path));
           const content = bytes.toString("utf8");
           return {
-            value: { content, sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.byteLength },
+            value: {
+              content,
+              sha256: createHash("sha256").update(bytes).digest("hex"),
+              size: bytes.byteLength,
+            },
           };
         },
       }),
@@ -566,7 +647,13 @@ export function buildCtx(rt: RunRuntime): Ctx {
           try {
             const s = await nodeFs.stat(resolveInCwd(path));
             return {
-              value: { exists: true, size: s.size, mtimeMs: s.mtimeMs, isFile: s.isFile(), isDirectory: s.isDirectory() },
+              value: {
+                exists: true,
+                size: s.size,
+                mtimeMs: s.mtimeMs,
+                isFile: s.isFile(),
+                isDirectory: s.isDirectory(),
+              },
             };
           } catch {
             return { value: { exists: false } };
@@ -579,15 +666,17 @@ export function buildCtx(rt: RunRuntime): Ctx {
     kind: "exec" | "bash" | "check",
     payload: Record<string, unknown>,
     label: string,
-    spawn: () => ReturnType<typeof execa>,
+    spawn: (env: Record<string, string>) => ReturnType<typeof execa>,
     opts: (ExecOptions & { schema?: AnySchema }) | undefined,
-    checkName?: string,
+    envMap?: Record<string, string | SecretHandle>,
   ): Promise<unknown> {
     const ref = { kind, key: opts?.key, label, runId: rt.runId };
     if (opts?.risk) {
       const gate = await rt.gateStep({ action: `${kind}: ${label}`, risk: opts.risk });
       if (!gate.approved) {
-        throw new StepError("gate_denied", `${kind} "${label}" denied${gate.note ? `: ${gate.note}` : ""}`, { step: ref });
+        throw new StepError("gate_denied", `${kind} "${label}" denied${gate.note ? `: ${gate.note}` : ""}`, {
+          step: ref,
+        });
       }
     }
     const reviveTyped = async (raw: ExecResult): Promise<unknown> => {
@@ -596,9 +685,13 @@ export function buildCtx(rt: RunRuntime): Ctx {
       try {
         parsed = JSON.parse(raw.stdout);
       } catch {
-        throw new StepError("exec_failed", `${label}: stdout is not valid JSON (exit ${raw.exitCode}): ${tail(raw.stderr || raw.stdout, 300)}`, {
-          step: ref,
-        });
+        throw new StepError(
+          "exec_failed",
+          `${label}: stdout is not valid JSON (exit ${raw.exitCode}): ${tail(raw.stderr || raw.stdout, 300)}`,
+          {
+            step: ref,
+          },
+        );
       }
       const check = await validateSchema(opts.schema, parsed);
       if (!check.ok) {
@@ -614,10 +707,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
       kind,
       ...(opts?.key !== undefined ? { key: opts.key } : {}),
       label,
-      payload: checkName ? { name: checkName, ...payload } : payload,
+      payload,
       ...(opts?.schema ? { schemaJson: toWireSchema(opts.schema).json } : {}),
       revive: (journaled) => reviveTyped(journaled as ExecResult),
-      execute: async () => {
+      execute: async (io) => {
         const hooks = rt.host.testHooks;
         if (hooks) {
           const stubbed =
@@ -628,14 +721,21 @@ export function buildCtx(rt: RunRuntime): Ctx {
             return { value: await reviveTyped(stubbed), journalOutput: stubbed };
           }
         }
-        const result = await spawn();
+        // Secrets resolve only on the live path; the global limiter caps every
+        // effectful step, so un-capped ctx.parallel cannot fork-bomb the host.
+        const resolvedEnv = resolveSecretValues(envMap, ref);
+        const result = await rt.host.globalLimiter.with(() => spawn(resolvedEnv), io.signal);
         if (result.timedOut) {
           throw new StepError("timeout", `${label} timed out`, { step: ref });
         }
         if (result.failed && result.exitCode === undefined) {
-          throw new StepError("exec_failed", `${label}: ${tail(String(result.stderr || result.shortMessage || "spawn failed"), 400)}`, {
-            step: ref,
-          });
+          throw new StepError(
+            "exec_failed",
+            `${label}: ${tail(String(result.stderr || result.shortMessage || "spawn failed"), 400)}`,
+            {
+              step: ref,
+            },
+          );
         }
         const raw: ExecResult = {
           exitCode: result.exitCode ?? 0,
@@ -648,35 +748,35 @@ export function buildCtx(rt: RunRuntime): Ctx {
   }
 
   const exec = ((file: string, args: string[] = [], opts?: ExecOptions & { schema?: AnySchema }) => {
-    const { resolved, journalSafe } = resolveSecretMap(opts?.env, { kind: "exec" });
     const timeoutMs = toMs(opts?.timeout, config.limits.execTimeoutMs);
     const cwd = opts?.cwd ? resolveInCwd(opts.cwd) : rt.cwd;
     return execStep(
       "exec",
-      { op: "exec", file, args, cwd: opts?.cwd ?? null, env: journalSafe, timeoutMs },
+      { op: "exec", file, args, cwd: opts?.cwd ?? null, env: journalSecretMap(opts?.env), timeoutMs },
       `${file} ${args.join(" ")}`.trim(),
-      () => execa(file, args, { cwd, env: { ...process.env, ...resolved }, timeout: timeoutMs, reject: false }),
+      (env) => execa(file, args, { cwd, env: { ...process.env, ...env }, timeout: timeoutMs, reject: false }),
       opts,
+      opts?.env,
     );
   }) as Ctx["exec"];
 
   const bash = ((command: string, opts?: ExecOptions & { schema?: AnySchema }) => {
-    const { resolved, journalSafe } = resolveSecretMap(opts?.env, { kind: "bash" });
     const timeoutMs = toMs(opts?.timeout, config.limits.execTimeoutMs);
     const cwd = opts?.cwd ? resolveInCwd(opts.cwd) : rt.cwd;
     return execStep(
       "bash",
-      { op: "bash", command, cwd: opts?.cwd ?? null, env: journalSafe, timeoutMs },
+      { op: "bash", command, cwd: opts?.cwd ?? null, env: journalSecretMap(opts?.env), timeoutMs },
       command,
-      () =>
+      (env) =>
         execa(command, {
           cwd,
-          env: { ...process.env, ...resolved },
+          env: { ...process.env, ...env },
           timeout: timeoutMs,
           reject: false,
           shell: "/bin/bash",
         }),
       opts,
+      opts?.env,
     );
   }) as Ctx["bash"];
 
@@ -688,16 +788,15 @@ export function buildCtx(rt: RunRuntime): Ctx {
     } catch {
       throw new StepError("invalid_input", `ctx.fetch: invalid URL "${url}"`, { step: ref });
     }
-    if (config.fetchAllow && !config.fetchAllow.some((pattern) => picomatch.isMatch(hostname, pattern))) {
-      throw new StepError("fetch_denied", `host "${hostname}" is not in the fetch allow-list`, { step: ref });
-    }
-    const { resolved, journalSafe } = resolveSecretMap(init?.headers, ref);
+    const journalSafe = journalSecretMap(init?.headers);
     const timeoutMs = toMs(init?.timeout, config.limits.fetchTimeoutMs);
     const method = init?.method ?? "GET";
     const reviveTyped = async (raw: { status: number; headers: Record<string, string>; body: string }) => {
       if (!init?.schema) return raw;
       if (raw.status < 200 || raw.status >= 300) {
-        throw new StepError("fetch_failed", `${method} ${url} → ${raw.status} (schema requested)`, { step: ref });
+        throw new StepError("fetch_failed", `${method} ${url} → ${raw.status} (schema requested)`, {
+          step: ref,
+        });
       }
       let parsed: unknown;
       try {
@@ -727,16 +826,31 @@ export function buildCtx(rt: RunRuntime): Ctx {
         if (stubbed !== undefined) {
           return { value: await reviveTyped(stubbed as never), journalOutput: stubbed };
         }
+        // Policy and secrets are live-path concerns: a journal-served fetch never
+        // re-checks the allow-list or touches the environment.
+        if (config.fetchAllow && !config.fetchAllow.some((pattern) => picomatch.isMatch(hostname, pattern))) {
+          throw new StepError("fetch_denied", `host "${hostname}" is not in the fetch allow-list`, {
+            step: ref,
+          });
+        }
+        const resolved = resolveSecretValues(init?.headers, ref);
         let response: Response;
         try {
-          response = await globalThis.fetch(url, {
-            method,
-            headers: resolved,
-            ...(init?.body !== undefined ? { body: init.body } : {}),
-            signal: AbortSignal.any([AbortSignal.timeout(timeoutMs), io.signal]),
-          });
+          response = await rt.host.globalLimiter.with(
+            () =>
+              globalThis.fetch(url, {
+                method,
+                headers: resolved,
+                ...(init?.body !== undefined ? { body: init.body } : {}),
+                signal: AbortSignal.any([AbortSignal.timeout(timeoutMs), io.signal]),
+              }),
+            io.signal,
+          );
         } catch (err) {
-          throw new StepError("fetch_failed", `${method} ${url}: ${(err as Error).message}`, { step: ref, cause: err });
+          throw new StepError("fetch_failed", `${method} ${url}: ${(err as Error).message}`, {
+            step: ref,
+            cause: err,
+          });
         }
         const body = await response.text();
         const headers: Record<string, string> = {};
@@ -751,16 +865,20 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
   const env: Ctx["env"] = {
     get: (name) =>
-      rt.runStep({
-        kind: "env",
-        payload: { op: "env.get", name },
-        label: `env:${name}`,
-        execute: async () => {
-          const value = rt.host.testHooks?.env ? (rt.host.testHooks.env(name) ?? null) : (process.env[name] ?? null);
-          return { value: { value }, journalOutput: { value } };
-        },
-        revive: (j) => j as { value: string | null },
-      }).then((r) => (r as { value: string | null }).value ?? undefined),
+      rt
+        .runStep({
+          kind: "env",
+          payload: { op: "env.get", name },
+          label: `env:${name}`,
+          execute: async () => {
+            const value = rt.host.testHooks?.env
+              ? (rt.host.testHooks.env(name) ?? null)
+              : (process.env[name] ?? null);
+            return { value: { value }, journalOutput: { value } };
+          },
+          revive: (j) => j as { value: string | null },
+        })
+        .then((r) => (r as { value: string | null }).value ?? undefined),
   };
 
   // ---- git ----------------------------------------------------------------
@@ -823,7 +941,8 @@ export function buildCtx(rt: RunRuntime): Ctx {
     fileAt: (ref, path) => gitRead("fileAt", { ref, path }, () => gitHandle.fileAt(ref, path)),
     snapshot: () => gitRead("snapshot", null, () => gitHandle.snapshot()),
 
-    add: (opts) => gitWrite("add", "git.add", { paths: opts.paths }, opts, () => gitHandle.add({ paths: opts.paths })),
+    add: (opts) =>
+      gitWrite("add", "git.add", { paths: opts.paths }, opts, () => gitHandle.add({ paths: opts.paths })),
     commit: (opts) =>
       gitWrite(
         "commit",
@@ -842,8 +961,12 @@ export function buildCtx(rt: RunRuntime): Ctx {
         () => gitHandle.checkout(ref, opts?.discard ? { discard: true } : {}),
       ),
     fetch: (opts) =>
-      gitWrite("fetch", `git.fetch ${opts?.remote ?? "origin"}`, { remote: opts?.remote ?? "origin" }, opts, () =>
-        gitHandle.fetchRemote(opts?.remote ? { remote: opts.remote } : {}),
+      gitWrite(
+        "fetch",
+        `git.fetch ${opts?.remote ?? "origin"}`,
+        { remote: opts?.remote ?? "origin" },
+        opts,
+        () => gitHandle.fetchRemote(opts?.remote ? { remote: opts.remote } : {}),
       ),
     pull: (opts) =>
       gitWrite(
@@ -857,7 +980,12 @@ export function buildCtx(rt: RunRuntime): Ctx {
       gitWrite(
         opts?.force ? "push.force" : "push",
         `git.push ${opts?.remote ?? "origin"}/${opts?.branch ?? "HEAD"}${opts?.force ? " --force" : ""}`,
-        { remote: opts?.remote ?? null, branch: opts?.branch ?? null, setUpstream: opts?.setUpstream ?? false, force: opts?.force ?? false },
+        {
+          remote: opts?.remote ?? null,
+          branch: opts?.branch ?? null,
+          setUpstream: opts?.setUpstream ?? false,
+          force: opts?.force ?? false,
+        },
         opts,
         () => gitHandle.push(opts ?? {}),
       ),
@@ -870,8 +998,12 @@ export function buildCtx(rt: RunRuntime): Ctx {
         () => gitHandle.reset({ to: opts.to, mode: opts.mode ?? "mixed" }),
       ),
     apply: (opts) =>
-      gitWrite("apply", "git.apply", { patch: sha256Of(opts.patch), threeWay: opts.threeWay ?? false }, opts, () =>
-        gitHandle.applyPatch({ patch: opts.patch, threeWay: opts.threeWay ?? false }),
+      gitWrite(
+        "apply",
+        "git.apply",
+        { patch: sha256Of(opts.patch), threeWay: opts.threeWay ?? false },
+        opts,
+        () => gitHandle.applyPatch({ patch: opts.patch, threeWay: opts.threeWay ?? false }),
       ),
     tag: (name, opts) =>
       gitWrite(
@@ -893,8 +1025,12 @@ export function buildCtx(rt: RunRuntime): Ctx {
           async () => (await gitHandle.revParse(name)) !== null,
         ),
       delete: (name, opts) =>
-        gitWrite("branch.delete", `git.branch.delete ${name}`, { name, force: opts?.force ?? false }, opts, () =>
-          gitHandle.branchDelete(name, opts ?? {}),
+        gitWrite(
+          "branch.delete",
+          `git.branch.delete ${name}`,
+          { name, force: opts?.force ?? false },
+          opts,
+          () => gitHandle.branchDelete(name, opts ?? {}),
         ),
     },
     stash: {
@@ -906,7 +1042,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
       drop: (opts) => gitWrite("stash.drop", "git.stash.drop", null, opts, () => gitHandle.stashDrop()),
     },
     clean: (opts) =>
-      gitWrite("clean", "git.clean", { force: opts?.force ?? false }, opts, () => gitHandle.clean(opts ?? {})),
+      gitWrite("clean", "git.clean", { force: opts?.force ?? false }, opts, () =>
+        gitHandle.clean(opts ?? {}),
+      ),
   };
 
   function sha256Of(s: string): string {
@@ -924,6 +1062,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         ...(opts.detail !== undefined ? { detail: opts.detail } : {}),
         schemaJson: wire.json,
         realSchema: opts.schema,
+        wrapped: wire.wrapped,
         ...(opts.timeout !== undefined ? { timeoutMs: parseDuration(opts.timeout) } : {}),
         ...(timeoutSpec(opts.onTimeout) ?? {}),
       });
@@ -953,6 +1092,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         question: opts.question ?? "Review the attached artifact",
         schemaJson: wire.json,
         realSchema: opts.schema,
+        wrapped: wire.wrapped,
         artifactRef: { $blob: blob.hash, size: blob.size, preview: opts.artifact.slice(0, 200) },
         ...(opts.timeout !== undefined ? { timeoutMs: parseDuration(opts.timeout) } : {}),
         ...(timeoutSpec(opts.onTimeout) ?? {}),
@@ -985,7 +1125,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
         payload: { name, trustPrior: opts.trustPrior, required },
         onSettle: settle,
         execute: async () => ({
-          value: { status: "trust-prior", evidence: `run ${opts.trustPrior!.run}: ${opts.trustPrior!.reason}` },
+          value: {
+            status: "trust-prior",
+            evidence: `run ${opts.trustPrior!.run}: ${opts.trustPrior!.reason}`,
+          },
         }),
       });
     }
@@ -997,9 +1140,14 @@ export function buildCtx(rt: RunRuntime): Ctx {
         label: `check:${name}`,
         payload: { name, exec: opts.exec, required },
         onSettle: settle,
-        execute: async () => {
+        execute: async (io) => {
           const stubbed = await rt.host.testHooks?.exec?.(file, args);
-          const result = stubbed ?? (await execa(file, args, { cwd: rt.cwd, timeout: timeoutMs, reject: false }));
+          const result =
+            stubbed ??
+            (await rt.host.globalLimiter.with(
+              () => execa(file, args, { cwd: rt.cwd, timeout: timeoutMs, reject: false }),
+              io.signal,
+            ));
           const pass = result.exitCode === 0 && !("timedOut" in result && result.timedOut);
           return {
             value: {
@@ -1055,23 +1203,40 @@ export function buildCtx(rt: RunRuntime): Ctx {
     rt.setStatus("integrating");
     try {
       for (const result of results) {
-        const patch: PatchRef | undefined = "ref" in result ? (result as PatchRef) : (result as DetailedAgentResult<unknown>).patch;
+        const patch: PatchRef | undefined =
+          "ref" in result ? (result as PatchRef) : (result as DetailedAgentResult<unknown>).patch;
         if (!patch) {
           ledger.skipped.push("(no patch)");
           continue;
         }
         if (patch.quarantined) {
           ledger.quarantined.push(patch.key);
-          rt.log(`patch ${patch.key} is quarantined (out-of-scope files: ${patch.outOfScope?.join(", ")}) — not merged`);
+          rt.log(
+            `patch ${patch.key} is quarantined (out-of-scope files: ${patch.outOfScope?.join(", ")}) — not merged`,
+          );
           continue;
         }
-        const outcome = await rt.runStep<{ applied: boolean; conflicted?: boolean; baseTree: string; resultTree: string }>({
+        const outcome = await rt.runStep<{
+          applied: boolean;
+          conflicted?: boolean;
+          baseTree: string;
+          resultTree: string;
+        }>({
           kind: "sideeffect",
           label: `integrate:${patch.key}`,
           payload: { op: "patch.apply", key: patch.key, ref: patch.ref, onConflict },
           verifyServe: async (journaled) => {
             const j = journaled as { applied: boolean; resultTree: string };
-            return j.applied ? (await treeHash(rt.cwd)) === j.resultTree : true;
+            if (!j.applied) return true;
+            if ((await treeHash(rt.cwd)) === j.resultTree) return true;
+            // Later patches moved the tree past this patch's resultTree; the merge
+            // still holds if the patch content is present (it reverse-applies).
+            const patchText = await rt.host.blobs.getText(patch.ref);
+            const reverse = await gitHandle.raw(["apply", "--reverse", "--check"], {
+              allowFailure: true,
+              input: patchText,
+            });
+            return reverse.exitCode === 0;
           },
           onSettle: (value) => {
             const state = rt.patches.get(patch.key);
@@ -1085,7 +1250,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
             const applied = await applyPatchToTree({ repoRoot: rt.cwd, patch: patchText });
             if (applied.ok) {
               const resultTree = await treeHash(rt.cwd);
-              await rt.append([{ type: "patch.merged", key: patch.key, ref: patch.ref, baseTree, resultTree }]);
+              await rt.append([
+                { type: "patch.merged", key: patch.key, ref: patch.ref, baseTree, resultTree },
+              ]);
               return { value: { applied: true, baseTree, resultTree } };
             }
             const conflictList = applied.conflicts.join(", ") || "(unknown files)";
@@ -1100,13 +1267,26 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 `A patch (${patch.key}) was applied with 3-way merge and left conflict markers in: ${conflictList}.\n` +
                   `Resolve every conflict marker in those files, keeping both intents where possible. ` +
                   `Do not touch any other file.`,
-                { schema: z.object({ resolved: z.boolean(), notes: z.string() }), key: `merge:${patch.key}`, write: { paths: applied.conflicts, mode: "warn" } },
+                {
+                  schema: z.object({ resolved: z.boolean(), notes: z.string() }),
+                  key: `merge:${patch.key}`,
+                  write: { paths: applied.conflicts, mode: "warn" },
+                },
                 { detailed: false, writeInPlace: true },
               );
               const r = resolved as { resolved: boolean; notes: string };
               if (r.resolved) {
                 const resultTree = await treeHash(rt.cwd);
-                await rt.append([{ type: "patch.merged", key: patch.key, ref: patch.ref, baseTree, resultTree, conflicted: true }]);
+                await rt.append([
+                  {
+                    type: "patch.merged",
+                    key: patch.key,
+                    ref: patch.ref,
+                    baseTree,
+                    resultTree,
+                    conflicted: true,
+                  },
+                ]);
                 return { value: { applied: true, conflicted: true, baseTree, resultTree } };
               }
               await restorePatchFiles(snapRef, [...patch.files, ...applied.conflicts]);
@@ -1126,7 +1306,16 @@ export function buildCtx(rt: RunRuntime): Ctx {
             const res = (answer.answer as z.infer<typeof ResolutionSchema>).resolution;
             if (res === "keep-conflicts") {
               const resultTree = await treeHash(rt.cwd);
-              await rt.append([{ type: "patch.merged", key: patch.key, ref: patch.ref, baseTree, resultTree, conflicted: true }]);
+              await rt.append([
+                {
+                  type: "patch.merged",
+                  key: patch.key,
+                  ref: patch.ref,
+                  baseTree,
+                  resultTree,
+                  conflicted: true,
+                },
+              ]);
               return { value: { applied: true, conflicted: true, baseTree, resultTree } };
             }
             await restorePatchFiles(snapRef, [...patch.files, ...applied.conflicts]);
@@ -1176,7 +1365,14 @@ export function buildCtx(rt: RunRuntime): Ctx {
       label: `note:${n.kind}`,
       payload: { op: "note", ...n },
       execute: async () => {
-        await rt.append([{ type: "note", kind: n.kind, text: n.text, ...(n.evidence !== undefined ? { evidence: n.evidence } : {}) }]);
+        await rt.append([
+          {
+            type: "note",
+            kind: n.kind,
+            text: n.text,
+            ...(n.evidence !== undefined ? { evidence: n.evidence } : {}),
+          },
+        ]);
         return { value: n };
       },
     });
@@ -1224,7 +1420,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
       payload: { op: "sleep", ms },
       reuseIncomplete: true,
       execute: async (io) => {
-        const deadline = io.scheduledAt + ms;
+        // Anchor to the ORIGINAL schedule time: a resumed sleep waits only the
+        // remainder, never its full duration again.
+        const deadline = (io.priorScheduledAt ?? io.scheduledAt) + ms;
         const remaining = deadline - rt.host.clock();
         if (remaining > 0) {
           io.markWaiting();

@@ -1,6 +1,6 @@
-import { afterAll, describe, expect, test } from "vitest";
-import { defineWorkflow, z } from "@weft/sdk";
 import type { JournalRecord } from "@weft/core";
+import { defineWorkflow, z } from "@weft/sdk";
+import { afterAll, describe, expect, test } from "vitest";
 import { cleanupRepos, reopen, tempDir, testEngine } from "./helpers.ts";
 
 afterAll(cleanupRepos);
@@ -81,15 +81,12 @@ describe("replay & edit-tolerant resume", () => {
 
   test("rewording one prompt re-runs that step only; the rest serve from the journal", async () => {
     const mkDef = (promptB: string) =>
-      defineWorkflow(
-        { name: "two", description: "two", input: z.object({}), output: Out },
-        async (ctx) => {
-          const a = await ctx.agent("stable prompt A", { schema: z.object({ tag: z.string() }), key: "a" });
-          const b = await ctx.agent(promptB, { schema: z.object({ tag: z.string() }), key: "b" });
-          await ctx.human.approve({ action: "done?" });
-          return { values: [a.tag, b.tag] };
-        },
-      );
+      defineWorkflow({ name: "two", description: "two", input: z.object({}), output: Out }, async (ctx) => {
+        const a = await ctx.agent("stable prompt A", { schema: z.object({ tag: z.string() }), key: "a" });
+        const b = await ctx.agent(promptB, { schema: z.object({ tag: z.string() }), key: "b" });
+        await ctx.human.approve({ action: "done?" });
+        return { values: [a.tag, b.tag] };
+      });
     const t1 = testEngine();
     t1.builder.on({ key: "*" }, (req) => ({ tag: `v1:${req.key}` }));
     const cwd = await tempDir();
@@ -138,7 +135,11 @@ describe("replay & edit-tolerant resume", () => {
     const def = defineWorkflow(
       { name: "flaky", description: "flaky", input: z.object({}), output: z.object({ ok: z.boolean() }) },
       async (ctx) => {
-        const r = await ctx.agent("do it", { schema: z.object({ ok: z.boolean() }), key: "flaky", repair: 0 });
+        const r = await ctx.agent("do it", {
+          schema: z.object({ ok: z.boolean() }),
+          key: "flaky",
+          repair: 0,
+        });
         return { ok: r.ok };
       },
     );
@@ -162,12 +163,10 @@ describe("replay & edit-tolerant resume", () => {
         const order: string[] = [];
         const settled = await ctx.parallel(
           ["fast", "slow", "mid"].map((k) =>
-            ctx
-              .agent(`work ${k}`, { schema: z.object({ tag: z.string() }), key: `w:${k}` })
-              .then((r) => {
-                order.push(k);
-                return r;
-              }),
+            ctx.agent(`work ${k}`, { schema: z.object({ tag: z.string() }), key: `w:${k}` }).then((r) => {
+              order.push(k);
+              return r;
+            }),
           ),
         );
         await ctx.human.approve({ action: "done?" });
@@ -225,14 +224,11 @@ describe("replay & edit-tolerant resume", () => {
 
   test("replay --dry reports hits, salvage, and the diverged step without touching providers", async () => {
     const mkDef = (promptB: string) =>
-      defineWorkflow(
-        { name: "dry", description: "dry", input: z.object({}), output: Out },
-        async (ctx) => {
-          const a = await ctx.agent("A", { schema: z.object({ tag: z.string() }), key: "a" });
-          const b = await ctx.agent(promptB, { schema: z.object({ tag: z.string() }), key: "b" });
-          return { values: [a.tag, b.tag] };
-        },
-      );
+      defineWorkflow({ name: "dry", description: "dry", input: z.object({}), output: Out }, async (ctx) => {
+        const a = await ctx.agent("A", { schema: z.object({ tag: z.string() }), key: "a" });
+        const b = await ctx.agent(promptB, { schema: z.object({ tag: z.string() }), key: "b" });
+        return { values: [a.tag, b.tag] };
+      });
     const t1 = testEngine();
     t1.builder.on({ key: "*" }, (req) => ({ tag: req.key! }));
     const cwd = await tempDir();

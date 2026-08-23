@@ -1,6 +1,6 @@
-import { afterAll, describe, expect, test } from "vitest";
-import { defineWorkflow, StepError, z } from "@weft/sdk";
 import type { JournalRecord } from "@weft/core";
+import { defineWorkflow, StepError, z } from "@weft/sdk";
+import { afterAll, describe, expect, test } from "vitest";
 import { cleanupRepos, reopen, tempDir, testEngine } from "./helpers.ts";
 
 afterAll(cleanupRepos);
@@ -16,7 +16,11 @@ async function records(journal: { read(runId: string): AsyncIterable<JournalReco
 describe("engine end to end", () => {
   test("runs a sequential workflow with typed agent steps and journals everything", async () => {
     const t = testEngine();
-    t.builder.on({ key: "plan" }, { steps: ["a", "b"], risk: "low" }, { usage: { input: 1000, output: 200 } });
+    t.builder.on(
+      { key: "plan" },
+      { steps: ["a", "b"], risk: "low" },
+      { usage: { input: 1000, output: 200 } },
+    );
     const def = defineWorkflow(
       {
         name: "planner",
@@ -62,7 +66,10 @@ describe("engine end to end", () => {
       async (ctx) => {
         const settled = await ctx.parallel(
           ["a.ts", "b.ts"].map((f) =>
-            ctx.agent(`Review ${f}`, { schema: z.object({ findings: z.array(Finding) }), key: `review:${f}` }),
+            ctx.agent(`Review ${f}`, {
+              schema: z.object({ findings: z.array(Finding) }),
+              key: `review:${f}`,
+            }),
           ),
         );
         expect(settled).toHaveLength(2);
@@ -86,9 +93,13 @@ describe("engine end to end", () => {
     const def = defineWorkflow(
       { description: "verify", input: z.object({}), output: z.object({ kept: z.array(z.number()) }) },
       async (ctx) => {
-        const out = await ctx.pipeline([1, 2, 3])
+        const out = await ctx
+          .pipeline([1, 2, 3])
           .step((n) =>
-            ctx.agent(`verify ${n}`, { schema: z.object({ real: z.boolean(), reason: z.string() }), key: `verify:${n}` }),
+            ctx.agent(`verify ${n}`, {
+              schema: z.object({ real: z.boolean(), reason: z.string() }),
+              key: `verify:${n}`,
+            }),
           )
           .filter((verdict) => verdict.real)
           .map((_verdict, n) => n * 10)
@@ -183,7 +194,11 @@ describe("engine end to end", () => {
   test("gate with low risk auto-approves and records answered_by: policy", async () => {
     const t = testEngine();
     const def = defineWorkflow(
-      { description: "gate", input: z.object({}), output: z.object({ approved: z.boolean(), by: z.string() }) },
+      {
+        description: "gate",
+        input: z.object({}),
+        output: z.object({ approved: z.boolean(), by: z.string() }),
+      },
       async (ctx) => {
         const go = await ctx.gate({ action: "create scratch branch", risk: "low" });
         return { approved: go.approved, by: go.answeredBy };
@@ -228,7 +243,9 @@ describe("engine end to end", () => {
     expect(outcome.pending[0]).toMatchObject({ kind: "ask", question: "Which module first?" });
 
     // Structural validation rejects a bad answer before it reaches the journal.
-    await expect(t.engine.answer(handle.runId, outcome.pending[0]!.id, { module: "billing" })).rejects.toMatchObject({
+    await expect(
+      t.engine.answer(handle.runId, outcome.pending[0]!.id, { module: "billing" }),
+    ).rejects.toMatchObject({
       code: "invalid_answer",
     });
     await t.engine.answer(handle.runId, outcome.pending[0]!.id, { module: "auth" });
@@ -291,7 +308,10 @@ describe("engine end to end", () => {
         output: z.object({ fixed: z.boolean() }),
       },
       async (ctx, { target }) => {
-        const r = await ctx.agent(`fix ${target}`, { schema: z.object({ ok: z.boolean() }), key: `fix:${target}` });
+        const r = await ctx.agent(`fix ${target}`, {
+          schema: z.object({ ok: z.boolean() }),
+          key: `fix:${target}`,
+        });
         return { fixed: r.ok };
       },
     );
@@ -300,7 +320,11 @@ describe("engine end to end", () => {
     });
     t.builder.on({ key: "fix:*" }, { ok: true }, { usage: { input: 10, output: 5 } });
     const def = defineWorkflow(
-      { description: "parent", input: z.object({}), output: z.object({ fixed: z.boolean(), byName: z.boolean() }) },
+      {
+        description: "parent",
+        input: z.object({}),
+        output: z.object({ fixed: z.boolean(), byName: z.boolean() }),
+      },
       async (ctx) => {
         const direct = await ctx.workflow(child, { target: "auth" }, { budget: { fraction: 0.5 } });
         const named = (await ctx.workflow("fix-pass", { target: "api" })) as { fixed: boolean };
@@ -330,7 +354,12 @@ describe("engine end to end", () => {
       const inner = deep[i - 1];
       deep.push(
         defineWorkflow(
-          { name: `d${i}`, description: "deep", input: z.object({}), output: z.object({ depth: z.number() }) },
+          {
+            name: `d${i}`,
+            description: "deep",
+            input: z.object({}),
+            output: z.object({ depth: z.number() }),
+          },
           async (ctx) => {
             if (!inner) return { depth: 0 };
             const r = (await ctx.workflow(inner as never, {})) as { depth: number };
@@ -447,7 +476,11 @@ describe("engine end to end", () => {
   test("now/random/uuid are journaled steps", async () => {
     const t = testEngine();
     const def = defineWorkflow(
-      { description: "rand", input: z.object({}), output: z.object({ n: z.number(), r: z.number(), u: z.string() }) },
+      {
+        description: "rand",
+        input: z.object({}),
+        output: z.object({ n: z.number(), r: z.number(), u: z.string() }),
+      },
       async (ctx) => ({ n: await ctx.now(), r: await ctx.random(), u: await ctx.uuid() }),
     );
     const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
@@ -465,7 +498,12 @@ describe("engine end to end", () => {
       { description: "route", input: z.object({}), output: z.object({}) },
       async (ctx) => {
         await ctx.agent("first", { schema: z.object({ ok: z.boolean() }), key: "a" });
-        await ctx.agent("second", { schema: z.object({ ok: z.boolean() }), key: "b", provider: "codex", model: "gpt-5.2-codex" });
+        await ctx.agent("second", {
+          schema: z.object({ ok: z.boolean() }),
+          key: "b",
+          provider: "codex",
+          model: "gpt-5.2-codex",
+        });
         return {};
       },
     );

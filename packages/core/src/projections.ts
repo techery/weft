@@ -102,6 +102,9 @@ export function reduceState(records: JournalRecord[]): RunState {
     replay: { salvaged: 0, diverged: 0 },
     children: [],
   };
+  // seq restarts at 0 on resume, so one seq can be scheduled twice across passes;
+  // keep every occurrence in the list while completed/failed apply to the latest.
+  const allSteps: StepState[] = [];
   const stepsBySeq = new Map<number, StepState>();
   const humansById = new Map<string, HumanState>();
   let currentPhase: string | undefined;
@@ -153,6 +156,7 @@ export function reduceState(records: JournalRecord[]): RunState {
           ...(ev.route !== undefined ? { route: ev.route } : {}),
           ...(ev.childRunId !== undefined ? { childRunId: ev.childRunId } : {}),
         };
+        allSteps.push(step);
         stepsBySeq.set(ev.seq, step);
         const phaseName = ev.phase ?? currentPhase;
         if (phaseName) {
@@ -161,7 +165,7 @@ export function reduceState(records: JournalRecord[]): RunState {
             phase = { name: phaseName, steps: [] };
             state.phases.push(phase);
           }
-          phase.steps.push(ev.seq);
+          if (!phase.steps.includes(ev.seq)) phase.steps.push(ev.seq);
         }
         if (ev.childRunId) state.children.push({ seq: ev.seq, childRunId: ev.childRunId });
         break;
@@ -177,7 +181,8 @@ export function reduceState(records: JournalRecord[]): RunState {
         if (ev.patchRef !== undefined) step.patchRef = ev.patchRef;
         if (step.kind === "check") {
           const out = ev.output as { status?: CheckState["status"]; evidence?: string } | null;
-          const payloadName = payloadNameOf(records, ev.seq) ?? step.label?.replace(/^check:/, "") ?? String(ev.seq);
+          const payloadName =
+            payloadNameOf(records, ev.seq) ?? step.label?.replace(/^check:/, "") ?? String(ev.seq);
           if (out?.status) {
             state.checks.push({
               name: payloadName,
@@ -226,7 +231,11 @@ export function reduceState(records: JournalRecord[]): RunState {
         break;
       }
       case "note":
-        state.notes.push({ kind: ev.kind, text: ev.text, ...(ev.evidence !== undefined ? { evidence: ev.evidence } : {}) });
+        state.notes.push({
+          kind: ev.kind,
+          text: ev.text,
+          ...(ev.evidence !== undefined ? { evidence: ev.evidence } : {}),
+        });
         break;
       case "log":
         state.logs.push(ev.message);
@@ -247,7 +256,11 @@ export function reduceState(records: JournalRecord[]): RunState {
         });
         break;
       case "patch.merged":
-        state.patches.merged.push({ key: ev.key, ref: ev.ref, ...(ev.conflicted ? { conflicted: true } : {}) });
+        state.patches.merged.push({
+          key: ev.key,
+          ref: ev.ref,
+          ...(ev.conflicted ? { conflicted: true } : {}),
+        });
         break;
       case "patch.discarded":
         state.patches.discarded.push({ key: ev.key, ref: ev.ref });
@@ -268,7 +281,7 @@ export function reduceState(records: JournalRecord[]): RunState {
         break;
     }
   }
-  state.steps = [...stepsBySeq.values()].sort((a, b) => a.seq - b.seq);
+  state.steps = [...allSteps].sort((a, b) => a.seq - b.seq);
   return state;
 }
 
@@ -311,6 +324,7 @@ export interface TreePhase {
 }
 
 export function renderTree(state: RunState): TreePhase[] {
+  // Duplicate seqs (a resumed run's second pass) display their LATEST occurrence.
   const nodesBySeq = new Map<number, TreeNode>();
   for (const step of state.steps) {
     nodesBySeq.set(step.seq, {
@@ -323,9 +337,10 @@ export function renderTree(state: RunState): TreePhase[] {
     });
   }
   const roots: number[] = [];
-  for (const step of state.steps) {
-    if (step.parentSeq !== undefined && nodesBySeq.has(step.parentSeq)) {
-      nodesBySeq.get(step.parentSeq)!.children.push(nodesBySeq.get(step.seq)!);
+  for (const node of nodesBySeq.values()) {
+    const step = state.steps.findLast((s) => s.seq === node.seq)!;
+    if (step.parentSeq !== undefined && nodesBySeq.has(step.parentSeq) && step.parentSeq !== step.seq) {
+      nodesBySeq.get(step.parentSeq)!.children.push(node);
     } else {
       roots.push(step.seq);
     }
@@ -368,13 +383,18 @@ export function renderReport(state: RunState): string {
     lines.push("## Changes");
     for (const p of state.patches.merged) {
       const captured = state.patches.captured.find((c) => c.ref === p.ref);
-      lines.push(`- **${p.key}** merged${p.conflicted ? " (with conflicts kept)" : ""}: ${captured?.files.join(", ") ?? p.ref}`);
+      lines.push(
+        `- **${p.key}** merged${p.conflicted ? " (with conflicts kept)" : ""}: ${captured?.files.join(", ") ?? p.ref}`,
+      );
     }
     for (const p of state.patches.discarded) lines.push(`- ~~${p.key}~~ discarded`);
     const pending = state.patches.captured.filter(
-      (c) => !state.patches.merged.some((m) => m.ref === c.ref) && !state.patches.discarded.some((d) => d.ref === c.ref),
+      (c) =>
+        !state.patches.merged.some((m) => m.ref === c.ref) &&
+        !state.patches.discarded.some((d) => d.ref === c.ref),
     );
-    for (const p of pending) lines.push(`- ⚠ **${p.key}** captured but not integrated (${p.files.join(", ")})`);
+    for (const p of pending)
+      lines.push(`- ⚠ **${p.key}** captured but not integrated (${p.files.join(", ")})`);
     lines.push("");
   }
 
@@ -397,7 +417,8 @@ export function renderReport(state: RunState): string {
   const failedSteps = state.steps.filter((s) => s.status === "failed");
   if (failedSteps.length + state.drops.length > 0) {
     lines.push("## Failures & drops");
-    for (const s of failedSteps) lines.push(`- step ${s.key ?? s.label ?? s.seq}: ${s.error?.code} — ${s.error?.message}`);
+    for (const s of failedSteps)
+      lines.push(`- step ${s.key ?? s.label ?? s.seq}: ${s.error?.code} — ${s.error?.message}`);
     for (const d of state.drops) lines.push(`- dropped ${d.key ?? d.seq ?? "?"}: ${d.reason}`);
     lines.push("");
   }
@@ -408,7 +429,8 @@ export function renderReport(state: RunState): string {
     risks.push(`scope violation (${v.mode}): ${v.key} touched ${v.files.join(", ")}`);
   }
   for (const h of pendingHumans) risks.push(`waiting on ${h.id} (${h.kind}): ${h.question}`);
-  if (state.replay.diverged > 0) risks.push(`${state.replay.diverged} step(s) diverged from the journal on the last resume`);
+  if (state.replay.diverged > 0)
+    risks.push(`${state.replay.diverged} step(s) diverged from the journal on the last resume`);
   if (risks.length > 0) {
     lines.push("## Remaining risk");
     for (const r of risks) lines.push(`- ${r}`);

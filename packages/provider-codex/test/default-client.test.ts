@@ -76,7 +76,12 @@ describe("the default SDK client", () => {
     const provider = createCodexProvider();
 
     const first = await provider.run(request(), control());
-    await provider.repair(first.sessionId, request(), [{ path: "ok", message: "expected boolean" }], control());
+    await provider.repair(
+      first.sessionId,
+      request(),
+      [{ path: "ok", message: "expected boolean" }],
+      control(),
+    );
 
     expect(sdk.state.constructed).toBe(1);
     expect(sdk.state.resumed).toEqual(["thread-default"]);

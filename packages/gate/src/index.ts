@@ -8,16 +8,11 @@
  * const registry = createWorkflowRegistry({ dir: ".weft/workflows" }); // Engine's registry
  * ```
  */
-export { checkSource, DEFAULT_ALLOW_BARE, formatDiagnostics, GateError } from "./rules.ts";
-export type { GateDiagnostic, GateRule } from "./rules.ts";
 
-export { bundleWorkflow } from "./bundle.ts";
 export type { BundleOptions, BundleResult } from "./bundle.ts";
-
-export { loadWorkflow } from "./load.ts";
+export { bundleWorkflow } from "./bundle.ts";
 export type { LoadedWorkflow, LoadOptions } from "./load.ts";
-
-export { createWorkflowRegistry } from "./registry.ts";
+export { loadWorkflow } from "./load.ts";
 export type {
   FileWorkflowRegistry,
   RegistryLoadResult,
@@ -25,3 +20,6 @@ export type {
   WorkflowListEntry,
   WorkflowRegistry,
 } from "./registry.ts";
+export { createWorkflowRegistry } from "./registry.ts";
+export type { GateDiagnostic, GateRule } from "./rules.ts";
+export { checkSource, DEFAULT_ALLOW_BARE, formatDiagnostics, GateError } from "./rules.ts";
