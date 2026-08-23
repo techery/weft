@@ -1,4 +1,4 @@
-import type { JournalRecord } from "@weft/core";
+import { type JournalRecord, ReplayIndex } from "@weft/core";
 import { defineWorkflow, z } from "@weft/sdk";
 import { afterAll, describe, expect, test } from "vitest";
 import { cleanupRepos, reopen, tempDir, tempRepo, testEngine } from "./helpers.ts";
@@ -478,6 +478,11 @@ describe("codex review findings, round 2 (PR #1)", () => {
     await t2.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
     // the owning engine's journal tailer delivers it to the suspended wait
     expect(await h1.result).toEqual({ ok: true });
+    // ...and folds the externally appended record into the active projection, so the
+    // terminal snapshot shows the request answered, never still pending.
+    const snap = await t1.journal.readSnapshot(h1.runId);
+    const humans = (snap?.state as { humans?: Array<{ status: string }> } | undefined)?.humans;
+    expect(humans?.[0]?.status).toBe("answered");
   });
 
   test("a cancel appended by another engine aborts the run this engine is holding", async () => {
@@ -698,5 +703,58 @@ describe("codex review findings, round 4 (PR #1)", () => {
     // The terminal run released its claim: a later engine replays freely.
     const h2 = await t2.engine.resume(h1.runId, { def });
     expect(await h2.result).toEqual({ ok: true });
+  });
+
+  test("replay's restored spend includes failed attempts", async () => {
+    const t1 = testEngine();
+    t1.builder.on({ key: "wonky" }, { never: true }, { usage: { input: 300, output: 100 } });
+    const def = defineWorkflow(
+      { name: "lossy", description: "l", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        try {
+          await ctx.agent("wonky", { schema: z.object({ ok: z.boolean() }), key: "wonky" });
+        } catch (err) {
+          if ((err as { code?: string }).code !== "schema_repair_exhausted") throw err;
+        }
+        return {};
+      },
+    );
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    expect(await h1.result).toEqual({});
+    const recs = await records(t1.journal, h1.runId);
+    // 3 repair turns × 400 tokens, every one failed: the completion event never
+    // carries them, so the failure record must — or a resume under-restores.
+    expect(ReplayIndex.fromRecords(recs).totalUsage.tokens).toBe(1200);
+  });
+
+  test("parallel agent calls cannot collectively blow through the budget", async () => {
+    const t = testEngine();
+    t.builder.on({ key: "*" }, { ok: true }, { usage: { input: 500, output: 100 } });
+    const def = defineWorkflow(
+      {
+        name: "swarm",
+        description: "s",
+        input: z.object({}),
+        output: z.object({ done: z.number(), refused: z.number(), spent: z.number() }),
+      },
+      async (ctx) => {
+        const results = await Promise.allSettled(
+          ["a", "b", "c", "d"].map((k) => ctx.agent(k, { schema: z.object({ ok: z.boolean() }), key: k })),
+        );
+        const done = results.filter((r) => r.status === "fulfilled").length;
+        const refused = results.filter(
+          (r) => r.status === "rejected" && (r.reason as { code?: string }).code === "budget_exceeded",
+        ).length;
+        return { done, refused, spent: ctx.budget.spent.tokens };
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir(), budget: { tokens: 1000 } });
+    const out = (await h.result) as { done: number; refused: number; spent: number };
+    // 4 × 600 against 1000: without a shared reservation every call dispatches and the
+    // run spends 2400. With one, calls probe one at a time until a cost is observed —
+    // the ceiling holds even though each refused sibling costs a budget_exceeded.
+    expect(out.spent).toBeLessThanOrEqual(1000);
+    expect(out.done).toBeGreaterThanOrEqual(1);
+    expect(out.done + out.refused).toBe(4);
   });
 });

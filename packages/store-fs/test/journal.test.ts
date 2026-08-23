@@ -312,6 +312,7 @@ describe("acquireRun", () => {
     const stolen = await successor.acquireRun("run-a");
     expect(stolen).toBeTruthy();
 
+    await short?.refresh(); // the dead owner's refresh must not resurrect its claim
     await short?.release(); // no longer theirs: must not remove the new claim
     expect(await dead.acquireRun("run-a")).toBeUndefined();
     await stolen?.release();

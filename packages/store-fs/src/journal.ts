@@ -287,8 +287,10 @@ export class FsJournalStore implements JournalStore {
   /**
    * Cross-process ownership: an owner.json claim with a TTL. A live claim refuses a
    * second owner (a daemon must not wake a run a CLI is executing); a claim whose
-   * owner died expires on its own and can be stolen. Best-effort — a simultaneous
-   * steal race is possible but the loser detects it by re-reading its own claim.
+   * owner died expires on its own and can be stolen. Every write of the claim is an
+   * atomic rename, so a reader can never observe a truncated claim and mistake a live
+   * owner for a stale one; refreshes and steals verify their own token AFTER writing,
+   * so of two simultaneous writers exactly one keeps believing it owns the run.
    */
   async acquireRun(runId: string, opts: { ttlMs?: number } = {}): Promise<RunLease | undefined> {
     const ttl = opts.ttlMs ?? 15_000;
@@ -303,21 +305,31 @@ export class FsJournalStore implements JournalStore {
         return false;
       }
     };
+    const writeClaim = async (): Promise<void> => {
+      const tmp = `${path}.${token.slice(0, 8)}.tmp`;
+      await fs.writeFile(tmp, claim());
+      await fs.rename(tmp, path);
+    };
     try {
+      // Exclusive create settles the common fresh-run case atomically.
       await fs.writeFile(path, claim(), { flag: "wx" });
     } catch {
       try {
         const prev = JSON.parse(await fs.readFile(path, "utf8")) as { expiresAt?: number };
         if (typeof prev.expiresAt === "number" && prev.expiresAt > Date.now()) return undefined;
       } catch {
-        // an unreadable claim counts as stale
+        // claims are written atomically, so unreadable means corrupt — treat as stale
       }
-      await fs.writeFile(path, claim());
+      await writeClaim();
       if (!(await mine())) return undefined; // lost a simultaneous steal to another process
     }
     return {
       refresh: async () => {
-        if (await mine()) await fs.writeFile(path, claim());
+        if (!(await mine())) return; // the claim was stolen or released — never clobber it
+        // If a thief renames between the check and this rename, whoever landed LAST
+        // holds the file — the other side's next mine() is false and it stops renewing,
+        // so exactly one owner survives the race.
+        await writeClaim();
       },
       release: async () => {
         if (await mine()) await fs.rm(path, { force: true });

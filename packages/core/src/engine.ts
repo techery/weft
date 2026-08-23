@@ -81,6 +81,8 @@ interface ActiveRun {
   runtime: RunRuntime;
   def: WorkflowDefinition;
   records: JournalRecord[];
+  /** Indices already in records[] — dedupes the tailer against in-process appends. */
+  seen: Set<number>;
   result: Promise<unknown>;
   pending: Map<string, PendingRequest>;
   sinceSnapshot: number;
@@ -247,6 +249,7 @@ export class Engine implements EngineHost {
       runtime,
       def,
       records: [...priorRecords],
+      seen: new Set(priorRecords.map((r) => r.i)),
       pending: new Map(),
       sinceSnapshot: 0,
       result: undefined as never,
@@ -371,6 +374,7 @@ export class Engine implements EngineHost {
     const active = this.active.get(runtime.runId);
     if (!active) return;
     active.records.push(...records);
+    for (const rec of records) active.seen.add(rec.i);
     active.sinceSnapshot += records.length;
     const important = records.some(
       (r) =>
@@ -395,6 +399,13 @@ export class Engine implements EngineHost {
   private async tailExternalEvents(active: ActiveRun, fromIndex: number, signal: AbortSignal): Promise<void> {
     try {
       for await (const rec of this.journal.watch(active.runtime.runId, { fromIndex, signal })) {
+        // Externally appended records belong in the active projection too, or the
+        // terminal snapshot describes an answered request as still pending.
+        if (!active.seen.has(rec.i)) {
+          active.seen.add(rec.i);
+          active.records.push(rec);
+          active.sinceSnapshot++;
+        }
         const ev = rec.ev;
         if (ev.type === "human.answered") {
           active.runtime.deliverAnswer(ev.id, structuredClone(ev.answer), ev.answeredBy);
@@ -410,7 +421,8 @@ export class Engine implements EngineHost {
   }
 
   private async snapshot(active: ActiveRun): Promise<void> {
-    const state = reduceState(active.records);
+    // Tailed external records can land out of order relative to in-process appends.
+    const state = reduceState([...active.records].sort((a, b) => a.i - b.i));
     await this.journal.snapshot(active.runtime.runId, {
       state,
       tree: renderTree(state),
@@ -512,14 +524,20 @@ export class Engine implements EngineHost {
     try {
       const output = await handle.result;
       // The child's total journaled spend rides on the parent's workflow step so a
-      // later parent resume restores it without reading the child journal.
+      // later parent resume restores it without reading the child journal. Failed
+      // attempts count too — their spend lives on retry/failure records.
       const usage = { input: 0, output: 0, usd: 0 };
+      const fold = (u: import("@weft/sdk").Usage | undefined) => {
+        if (!u) return;
+        usage.input += u.input ?? 0;
+        usage.output += u.output ?? 0;
+        usage.usd += u.usd ?? 0;
+      };
       for (const rec of childActive?.records ?? []) {
-        if (rec.ev.type === "step.completed" && rec.ev.usage) {
-          usage.input += rec.ev.usage.input ?? 0;
-          usage.output += rec.ev.usage.output ?? 0;
-          usage.usd += rec.ev.usage.usd ?? 0;
-        }
+        if (rec.ev.type === "step.completed") fold(rec.ev.usage);
+        else if (rec.ev.type === "step.attempt") fold(rec.ev.usage);
+        else if (rec.ev.type === "step.failed")
+          fold((rec.ev.error.detail as { usage?: import("@weft/sdk").Usage } | undefined)?.usage);
       }
       return { output, usage };
     } catch (err) {
@@ -662,7 +680,7 @@ export class Engine implements EngineHost {
 
   async state(runId: string): Promise<RunState> {
     const active = this.active.get(runId);
-    if (active) return reduceState(active.records);
+    if (active) return reduceState([...active.records].sort((a, b) => a.i - b.i));
     const records: JournalRecord[] = [];
     for await (const rec of this.journal.read(runId)) records.push(rec);
     if (records.length === 0) throw new Error(`run ${runId} not found`);

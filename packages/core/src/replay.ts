@@ -143,6 +143,25 @@ export class ReplayIndex {
           index.entryCount++;
           break;
         }
+        case "step.attempt": {
+          // A retry record carries the FAILED previous attempt's spend — the
+          // completion event never will, so restore it from here.
+          if (ev.usage) {
+            index.totalUsage.tokens += (ev.usage.input ?? 0) + (ev.usage.output ?? 0);
+            index.totalUsage.usd += ev.usage.usd ?? 0;
+          }
+          break;
+        }
+        case "step.failed": {
+          // A terminal failure's turns were charged live; the serialized error is
+          // where that spend survives (attached by the repair loop).
+          const usage = (ev.error.detail as { usage?: Usage } | undefined)?.usage;
+          if (usage) {
+            index.totalUsage.tokens += (usage.input ?? 0) + (usage.output ?? 0);
+            index.totalUsage.usd += usage.usd ?? 0;
+          }
+          break;
+        }
         case "human.requested": {
           const entry: HumanEntry = { id: ev.id, hash: ev.hash, seq: ev.seq, request: ev, consumed: false };
           const list = index.humansByHash.get(ev.hash) ?? [];

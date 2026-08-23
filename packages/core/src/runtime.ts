@@ -563,8 +563,17 @@ export class RunRuntime {
             throw stepError;
           }
           const backoff = (spec.retry?.backoffMs ?? 1_000) * attempt;
+          // The failed attempt's spend was charged live (the error carries it); the
+          // retry record is where it survives for a later resume's budget restore.
+          const carried = (stepError.detail as { usage?: Usage } | undefined)?.usage;
           await this.append([
-            { type: "step.attempt", seq, attempt: attempt + 1, detail: `retry after ${stepError.code}` },
+            {
+              type: "step.attempt",
+              seq,
+              attempt: attempt + 1,
+              detail: `retry after ${stepError.code}`,
+              ...(carried !== undefined ? { usage: carried } : {}),
+            },
           ]);
           await sleep(backoff, this.signal);
         } finally {

@@ -112,7 +112,9 @@ export type JournalEvent =
       payload?: unknown;
       childRunId?: string;
     }
-  | { type: "step.attempt"; seq: number; attempt: number; detail?: string }
+  // `usage` on a retry attempt is what the FAILED previous attempt spent — journaled
+  // here so a resume restores spend the completion event will never carry.
+  | { type: "step.attempt"; seq: number; attempt: number; detail?: string; usage?: Usage }
   | {
       type: "step.completed";
       seq: number;

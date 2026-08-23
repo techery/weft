@@ -16,11 +16,19 @@ export class Budget {
   private tokens = 0;
   private usd = 0;
   private readonly parent: Budget | undefined;
+  // In-flight provider calls and observed per-call cost, tracked at the ROOT so the
+  // whole pool (children included) shares one view of concurrent exposure.
+  private inflightCalls = 0;
+  private chargedCalls = 0;
 
   constructor(limits: BudgetLimits = {}, parent?: Budget) {
     this.limitTokens = limits.tokens;
     this.limitUsd = limits.usd;
     this.parent = parent;
+  }
+
+  private root(): Budget {
+    return this.parent ? this.parent.root() : this;
   }
 
   /** Sub-allocate: fraction of remaining, or absolute caps, always parent-linked. */
@@ -40,7 +48,8 @@ export class Budget {
   charge(usage: Usage): void {
     this.tokens += (usage.input ?? 0) + (usage.output ?? 0);
     this.usd += usage.usd ?? 0;
-    this.parent?.charge(usage);
+    if (this.parent) this.parent.charge(usage);
+    else this.chargedCalls++; // one cost sample per charged call, counted once at the root
   }
 
   /** Restore journaled spend on resume without re-charging parents twice. */
@@ -88,6 +97,50 @@ export class Budget {
       `budget exhausted before step ${stepRef.key ?? stepRef.kind ?? "?"} (${axis}; remaining tokens=${t}, usd=${u})`,
       stepRef,
     );
+  }
+
+  /**
+   * Reserve one in-flight provider call. `checkBeforeStep` alone lets N parallel calls
+   * all pass against a nearly-dry pool (nothing has charged yet), overspending by
+   * N × call-cost; this gate holds the ceiling across concurrency. Nobody declares a
+   * call's cost up front, so the observed average per charged call stands in for it —
+   * and with no history yet, calls probe ONE at a time. Returns a release fn for the
+   * dispatch site's finally.
+   */
+  reserveCall(stepRef: { key?: string; kind?: string }): () => void {
+    this.checkBeforeStep(stepRef);
+    const root = this.root();
+    const rt = this.remainingTokens();
+    const ru = this.remainingUsd();
+    if (rt !== null || ru !== null) {
+      const samples = root.chargedCalls;
+      const refuse = (why: string): never => {
+        throw new BudgetExceededError(
+          `budget cannot cover step ${stepRef.key ?? stepRef.kind ?? "?"} ${why} ` +
+            `(${root.inflightCalls} in flight; remaining tokens=${rt}, usd=${ru})`,
+          stepRef,
+        );
+      };
+      if (samples === 0) {
+        // No cost observed yet: calls probe ONE at a time so a parallel fan-out
+        // cannot multiply an unknown cost past the ceiling.
+        if (root.inflightCalls > 0) refuse("while an unpriced call is in flight");
+      } else {
+        // The observed average stands in for the declared cost nobody provides:
+        // this call plus everything in flight must fit in what is left.
+        const fits = (remaining: number | null, spent: number): boolean =>
+          remaining === null || remaining >= (root.inflightCalls + 1) * (spent / samples);
+        if (!fits(rt, root.tokens) || !fits(ru, root.usd)) refuse("at the observed per-call cost");
+      }
+    }
+    root.inflightCalls++;
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        root.inflightCalls--;
+      }
+    };
   }
 
   view(): BudgetView {

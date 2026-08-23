@@ -286,24 +286,26 @@ export function buildCtx(rt: RunRuntime): Ctx {
           }
         },
         execute: async (io) => {
-          rt.budget.checkBeforeStep(stepRef);
           rt.bumpAgentCount(stepRef);
 
           let workCwd = rt.cwd;
           let worktree: { path: string; base: string } | undefined;
-          if (useWorktree) {
-            const dir = join(tmpdir(), "weft-worktrees", rt.runId, `${io.seq}`);
-            // Seed from the CURRENT integration state, not HEAD: patches merged by
-            // an earlier ctx.integrate() are uncommitted in the tree, and a later
-            // write agent must build on them.
-            worktree = await addWorktree({
-              repoRoot: rt.cwd,
-              dir,
-              baseRef: await integrationBaseCommit(rt.cwd),
-            });
-            workCwd = worktree.path;
-          }
+          // Reserved, not just checked: parallel dispatches against one pool must not
+          // all sail past a nearly-dry ceiling before the first charge lands.
+          const releaseCall = rt.budget.reserveCall(stepRef);
           try {
+            if (useWorktree) {
+              const dir = join(tmpdir(), "weft-worktrees", rt.runId, `${io.seq}`);
+              // Seed from the CURRENT integration state, not HEAD: patches merged by
+              // an earlier ctx.integrate() are uncommitted in the tree, and a later
+              // write agent must build on them.
+              worktree = await addWorktree({
+                repoRoot: rt.cwd,
+                dir,
+                baseRef: await integrationBaseCommit(rt.cwd),
+              });
+              workCwd = worktree.path;
+            }
             let finalPrompt = prompt;
             if (scope) {
               const also = scope.also?.length
@@ -391,9 +393,15 @@ export function buildCtx(rt: RunRuntime): Ctx {
               );
             } catch (err) {
               // Turns preceding a failure still cost money: charge the accumulated
-              // usage the repair loop attached before rethrowing.
-              const carried = (err as { detail?: { usage?: Usage } }).detail?.usage;
-              if (carried && (carried.input > 0 || carried.output > 0)) chargeUsage(carried);
+              // usage the repair loop attached before rethrowing — and write the
+              // priced value back onto the error, so the step.attempt / step.failed
+              // record carries exactly what was charged for the resume-time restore.
+              const failed = err as { detail?: { usage?: Usage } };
+              const carried = failed.detail?.usage;
+              if (carried && (carried.input > 0 || carried.output > 0)) {
+                const priced = chargeUsage(carried);
+                failed.detail = { ...failed.detail, usage: priced };
+              }
               throw err;
             }
 
@@ -467,6 +475,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
               attempts: result.attempts,
             };
           } finally {
+            releaseCall();
             if (worktree) await removeWorktree({ repoRoot: rt.cwd, path: worktree.path });
           }
         },
