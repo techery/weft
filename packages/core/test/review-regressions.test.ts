@@ -757,4 +757,21 @@ describe("codex review findings, round 4 (PR #1)", () => {
     expect(out.done).toBeGreaterThanOrEqual(1);
     expect(out.done + out.refused).toBe(4);
   });
+
+  test("cancelling an already-terminal run never overwrites its outcome", async () => {
+    const def = defineWorkflow(
+      { name: "fin", description: "f", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async () => ({ ok: true }),
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    expect(await h1.result).toEqual({ ok: true });
+
+    // A stale UI cancel arriving after completion must not flip the projection.
+    const t2 = reopen(t1);
+    await expect(t2.engine.cancel(h1.runId)).rejects.toThrow(/already complete/);
+    const state = await t2.engine.state(h1.runId);
+    expect(state.status).toBe("complete");
+    expect(state.output).toEqual({ ok: true });
+  });
 });

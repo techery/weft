@@ -121,6 +121,10 @@ export async function treeHash(cwd: string): Promise<string> {
   const indexFile = join(tmpdir(), `weft-index-${randomUUID()}`);
   const env = { ...process.env, GIT_INDEX_FILE: indexFile };
   try {
+    // Seed from HEAD first (same reason as integrationBaseCommit below): on an empty
+    // index a tracked file that .gitignore also matches would drop out of the hash,
+    // and integrate's idempotency check would go blind to changes in it.
+    await execa("git", ["read-tree", "HEAD"], { cwd, env });
     await execa("git", ["add", "-A", "."], { cwd, env });
     const { stdout } = await execa("git", ["write-tree"], { cwd, env });
     return stdout.trim();
@@ -296,6 +300,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
           try {
             if (useWorktree) {
               const dir = join(tmpdir(), "weft-worktrees", rt.runId, `${io.seq}`);
+              // A process killed mid-step leaves this seq's directory registered as a
+              // worktree; without clearing it, every resume of the step would fail at
+              // `git worktree add`. removeWorktree prunes and tolerates absence.
+              await removeWorktree({ repoRoot: rt.cwd, path: dir });
               // Seed from the CURRENT integration state, not HEAD: patches merged by
               // an earlier ctx.integrate() are uncommitted in the tree, and a later
               // write agent must build on them.

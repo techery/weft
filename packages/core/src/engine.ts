@@ -646,6 +646,17 @@ export class Engine implements EngineHost {
       return;
     }
     if (!(await this.journal.exists(runId))) throw new Error(`run ${runId} not found`);
+    // Fold the journal first: a stale cancel must never overwrite a recorded outcome
+    // (a "cancelled" projection over a run.completed output misreports the run).
+    let status: "open" | "complete" | "failed" | "cancelled" = "open";
+    for await (const rec of this.journal.read(runId)) {
+      if (rec.ev.type === "run.completed") status = "complete";
+      else if (rec.ev.type === "run.failed") status = "failed";
+      else if (rec.ev.type === "run.cancelled") status = "cancelled";
+      else if (rec.ev.type === "run.status" && rec.ev.status !== "cancelled") status = "open";
+    }
+    if (status === "cancelled") return; // idempotent
+    if (status !== "open") throw new Error(`run ${runId} is already ${status}`);
     await this.journal.append(runId, [
       { type: "run.cancelled" },
       { type: "run.status", status: "cancelled" },

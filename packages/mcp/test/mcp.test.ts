@@ -306,6 +306,27 @@ describe("the weft MCP server", () => {
     expect(done.output).toEqual({ approved: true, note: "from elsewhere" });
   });
 
+  it("wakes an ownerless suspended run after weft_answer, without weft_resume", async () => {
+    const cwd = await tempRepo();
+    await mkdir(path.join(cwd, ".weft", "workflows"), { recursive: true });
+    await writeFile(path.join(cwd, ".weft", "workflows", "gated.ts"), GATED, "utf8");
+
+    const starter = await session(cwd);
+    const { runId } = await json<{ runId: string }>(starter, "weft_run", { workflow: "gated" });
+    const suspended = await json<WaitReply>(starter, "weft_wait", { runId, timeout: "10s" });
+    const requestId = suspended.awaiting?.id;
+    expect(requestId).toBeDefined();
+    await starter.weft.engine.shutdown(); // the owning process dies
+
+    // Nobody holds the run: the answer itself must wake it — "wait again" would
+    // otherwise poll a journal with no pending request and no runtime forever.
+    const other = await session(cwd);
+    await json(other, "weft_answer", { runId, requestId, answer: { approved: true, note: "go" } });
+    const done = await json<WaitReply>(other, "weft_wait", { runId, timeout: "10s" });
+    expect(done.status).toBe("complete");
+    expect(done.output).toEqual({ approved: true, note: "go" });
+  });
+
   it("hands back the SDK source a session needs to write an inline workflow", async () => {
     const s = await session();
     const { types } = await json<{ types: string }>(s, "weft_types");

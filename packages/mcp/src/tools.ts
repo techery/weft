@@ -125,6 +125,27 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
     async (args) =>
       reply(async () => {
         await weft.engine.answer(args.runId, args.requestId, args.answer, { channel: "mcp" });
+        // A run whose owner exited has no runtime to deliver the answer into: wake it
+        // so the journal serves it and weft_wait sees progress without an explicit
+        // weft_resume. Fire-and-forget and lease-protected — when a live process
+        // still owns the run, the claim is refused and its tailer delivers instead.
+        if (!weft.engine.isActive(args.runId)) {
+          const tracked = runs.get(args.runId);
+          void weft.engine
+            .resume(args.runId, { ...(tracked?.def !== undefined ? { def: tracked.def } : {}) })
+            .then((handle) => {
+              runs.track({
+                handle,
+                ...(tracked?.ref !== undefined
+                  ? { ref: tracked.ref }
+                  : tracked?.def !== undefined
+                    ? { def: tracked.def }
+                    : {}),
+              });
+              return handle.outcome();
+            })
+            .catch(() => undefined);
+        }
         return { ok: true };
       }),
   );

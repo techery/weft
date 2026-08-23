@@ -1,6 +1,8 @@
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { integrationBaseCommit, type JournalRecord } from "@weft/core";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { integrationBaseCommit, type JournalRecord, treeHash } from "@weft/core";
 import { defineWorkflow, z } from "@weft/sdk";
 import { execa } from "execa";
 import { afterAll, describe, expect, test } from "vitest";
@@ -53,6 +55,37 @@ describe("write steps, patches, integration", () => {
     // write-scope prompt lines reached the agent
     expect(t.builder.calls[0]!.prompt).toContain("Write scope");
     expect(t.builder.calls[0]!.prompt).toContain("src/**");
+  });
+
+  test("a stale worktree left by a killed process does not wedge the step", async () => {
+    const t = testEngine();
+    t.builder.on({ key: "fix" }, { summary: "done" }, { writes: { "src/a.ts": "fixed\n" } });
+    const cwd = await tempRepo({ "src/a.ts": "orig\n" });
+    // A previous process died between addWorktree() and its cleanup: the write
+    // step's seq-1 directory is still registered as a worktree of this repo.
+    const runId = "stalewt1";
+    const stale = join(tmpdir(), "weft-worktrees", runId, "1");
+    await mkdir(dirname(stale), { recursive: true });
+    await execa("git", ["worktree", "add", "--detach", stale], { cwd });
+
+    const def = defineWorkflow(
+      { description: "w", input: z.object({}), output: z.object({ merged: z.array(z.string()) }) },
+      async (ctx) => {
+        const fix = await ctx.agent.detailed("fix it", {
+          schema: FixResult,
+          key: "fix",
+          write: { paths: ["src/**"], mode: "warn" },
+        });
+        const ledger = await ctx.integrate([fix]);
+        return { merged: ledger.merged };
+      },
+    );
+    const handle = await t.engine.start(def, { input: {}, cwd, runId });
+    expect(await handle.result).toEqual({ merged: ["fix"] });
+    // The step really did claim (and afterwards clean) the stale path — if the seq
+    // ever moves, this catches the fixture no longer covering the collision.
+    expect(existsSync(stale)).toBe(false);
+    expect(await readFile(join(cwd, "src/a.ts"), "utf8")).toBe("fixed\n");
   });
 
   test("warn mode: out-of-scope edit is flagged but the patch still lands", async () => {
@@ -175,6 +208,12 @@ describe("integrationBaseCommit", () => {
     // The fresh untracked .gitignore itself is captured too.
     const ignore = await execa("git", ["show", `${sha}:.gitignore`], { cwd });
     expect(ignore.stdout).toContain("config/local.env");
+
+    // treeHash shares the seeding: a change to that file must change the hash,
+    // or integrate's idempotency check goes blind to it.
+    const before = await treeHash(cwd);
+    await writeFile(join(cwd, "config/local.env"), "tracked=3\n");
+    expect(await treeHash(cwd)).not.toBe(before);
   });
 });
 
