@@ -100,9 +100,19 @@ export function createApp(weft: Weft): Hono {
     } catch (err) {
       return fail(c, err);
     }
+    // An automatic EventSource reconnect carries its cursor as Last-Event-ID (the
+    // last `id:` it saw), not as ?from= — resume one past it so a transient
+    // disconnect never replays the whole journal into the UI.
     const from = Number.parseInt(c.req.query("from") ?? "", 10);
+    const lastSeen = Number.parseInt(c.req.header("last-event-id") ?? "", 10);
+    const fromIndex =
+      Number.isFinite(from) && from >= 0
+        ? from
+        : Number.isFinite(lastSeen) && lastSeen >= 0
+          ? lastSeen + 1
+          : undefined;
     return streamJournal(weft, runId, {
-      ...(Number.isFinite(from) && from >= 0 ? { fromIndex: from } : {}),
+      ...(fromIndex !== undefined ? { fromIndex } : {}),
       signal: c.req.raw.signal,
     });
   });

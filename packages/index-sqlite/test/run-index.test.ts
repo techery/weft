@@ -24,7 +24,8 @@ afterEach(async () => {
       // already closed by the test
     }
   }
-  for (const dir of temps.splice(0)) await rm(dir, { recursive: true, force: true });
+  for (const dir of temps.splice(0))
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 async function tempDir(): Promise<string> {

@@ -280,8 +280,28 @@ describe("the tool gate", () => {
       });
     }
 
+    // Deny-by-default: mutations no write-pattern blocklist would ever catch.
+    for (const command of [
+      "git checkout -- src/a.ts",
+      "npm install",
+      "chmod +x tool.sh",
+      `python -c 'open("f","w").write("x")'`,
+      "ls $(echo anything)",
+      "find src -name '*.tmp' -delete",
+      "xargs rm",
+    ]) {
+      expect(await ask(options, "Bash", { command }), command).toEqual({
+        behavior: "deny",
+        message: READ_ONLY_MESSAGE,
+      });
+    }
+
     expect(await ask(options, "Read", { file_path: `${CWD}/src/a.ts` })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Bash", { command: "rg -n 'todo' src 2>&1" })).toEqual({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: "git log --oneline | head -5 && git diff" })).toEqual({
+      behavior: "allow",
+    });
+    expect(await ask(options, "Bash", { command: "find src -name '*.ts'" })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Grep", { pattern: "todo" })).toEqual({ behavior: "allow" });
   });
 

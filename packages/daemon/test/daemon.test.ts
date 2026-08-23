@@ -47,7 +47,9 @@ const roots: string[] = [];
 afterAll(async () => {
   for (const weft of opened) await weft.close().catch(() => undefined);
   opened.length = 0;
-  await Promise.all(roots.map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    roots.map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })),
+  );
   roots.length = 0;
 });
 
@@ -321,6 +323,36 @@ describe("the event stream", () => {
     for (let reads = 0; reads < 50 && !done; reads++) done = (await reader.read()).done;
     expect(done).toBe(true);
     await reader.cancel();
+  });
+
+  it("honours Last-Event-ID from an automatic EventSource reconnect", async () => {
+    const h = await open(await repo());
+    const runId = await seed(h);
+
+    // A browser reconnect sends the last `id:` it saw as a header, not ?from=.
+    const client = new AbortController();
+    const res = await h.app.request(`/api/runs/${runId}/events`, {
+      headers: { "Last-Event-ID": "1" },
+      signal: client.signal,
+    });
+    expect(res.status).toBe(200);
+
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error("the event stream has no body");
+    const decoder = new TextDecoder();
+    let buffered = "";
+    while (!buffered.includes("\n\n")) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffered += decoder.decode(chunk.value, { stream: true });
+    }
+    const first = buffered.split("\n").find((text) => text.startsWith("data: "));
+    expect(first, buffered).toBeTruthy();
+    // Resumes one PAST the acknowledged id — nothing replayed, nothing skipped.
+    expect((JSON.parse((first ?? "").slice("data: ".length)) as JournalRecord).i).toBe(2);
+
+    client.abort();
+    await reader.cancel().catch(() => undefined);
   });
 
   it("resumes from ?from= instead of replaying the whole journal", async () => {

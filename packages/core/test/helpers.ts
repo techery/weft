@@ -66,7 +66,7 @@ const cleanups: Array<() => Promise<void>> = [];
 /** Temp git repo with an initial commit; cleaned up via cleanupRepos(). */
 export async function tempRepo(files: Record<string, string> = { "README.md": "hello\n" }): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "weft-core-"));
-  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+  cleanups.push(() => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   const git = (...args: string[]) => execa("git", args, { cwd: dir });
   await git("init", "-b", "main");
   await git("config", "user.email", "weft@test");
@@ -82,7 +82,7 @@ export async function tempRepo(files: Record<string, string> = { "README.md": "h
 
 export async function tempDir(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "weft-dir-"));
-  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+  cleanups.push(() => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }));
   return dir;
 }
 

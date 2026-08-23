@@ -14,7 +14,7 @@ const temps: string[] = [];
 
 afterEach(async () => {
   for (const dir of temps.splice(0)) {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 

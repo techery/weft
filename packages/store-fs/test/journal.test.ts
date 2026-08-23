@@ -118,6 +118,30 @@ describe("watch", () => {
     expect(seen.map((r) => r.i)).toEqual([2]);
   });
 
+  test("observing external appends does not skew the next local append's index", async () => {
+    const dir = await tempDir();
+    const local = new FsJournalStore(dir);
+    const external = new FsJournalStore(dir);
+    await local.append("run-a", [runCreated("run-a", "audit")]);
+
+    const seen: JournalRecord[] = [];
+    const controller = new AbortController();
+    const pump = (async () => {
+      for await (const rec of local.watch("run-a", { signal: controller.signal })) seen.push(rec);
+    })();
+    await waitFor(() => seen.length === 1);
+    await external.append("run-a", [logged("external")]);
+    await waitFor(() => seen.length === 2, 2_000);
+
+    // The watcher saw record 1; reconcile must count it exactly once, so the next
+    // local append continues at 2 — never 3 (a gap a watch cursor would fall into).
+    const appended = await local.append("run-a", [logged("local")]);
+    expect(appended.map((r) => r.i)).toEqual([2]);
+
+    controller.abort();
+    await pump;
+  });
+
   test("picks up out-of-process appends by polling the file", async () => {
     const dir = await tempDir();
     const watcher = new FsJournalStore(dir);

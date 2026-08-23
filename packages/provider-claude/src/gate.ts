@@ -12,8 +12,8 @@ import {
   baseToolName,
   EDIT_TOOLS,
   editTargetPath,
+  isReadOnlyCommand,
   isRiskyCommand,
-  isWriteCommand,
   STRUCTURED_OUTPUT_TOOL,
 } from "./tools.ts";
 
@@ -70,7 +70,9 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
 
     if (base === "Bash") {
       const command = typeof input.command === "string" ? input.command : "";
-      if (!allowEdits && isWriteCommand(command)) return deny(READ_ONLY_MESSAGE);
+      // Read-only steps run in the integration cwd, not a worktree, so the shell is
+      // deny-by-default there: only commands known not to write may run.
+      if (!allowEdits && !isReadOnlyCommand(command)) return deny(READ_ONLY_MESSAGE);
       if (isRiskyCommand(command)) {
         const decision = await req.hitl.onPermission({ tool: toolName, input, risk: "high" });
         if (decision.behavior === "deny") return deny(decision.message ?? "denied by the approval policy");

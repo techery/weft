@@ -33,7 +33,9 @@ async function write(dir: string, file: string, source: string): Promise<string>
 }
 
 afterAll(async () => {
-  await Promise.all(roots.map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    roots.map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })),
+  );
 });
 
 /** Expected position of `needle`, so tests never hand-count lines and columns. */

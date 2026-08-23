@@ -19,7 +19,9 @@ export async function write(dir: string, file: string, content: string): Promise
 }
 
 export async function cleanupRoots(): Promise<void> {
-  await Promise.all(roots.map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    roots.map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })),
+  );
   roots.length = 0;
 }
 

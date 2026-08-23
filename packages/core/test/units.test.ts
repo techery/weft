@@ -2,9 +2,11 @@ import {
   Budget,
   canonicalJson,
   hashStep,
+  type JournalRecord,
   MemoryJournalStore,
   OrderedDelivery,
   ReplayIndex,
+  reduceState,
   Semaphore,
   structuralCheck,
   toWireSchema,
@@ -189,6 +191,49 @@ describe("structuralCheck", () => {
     };
     expect(structuralCheck(wired, { value: "ab" })).toHaveLength(1);
     expect(structuralCheck(wired, { value: "abc" })).toEqual([]);
+  });
+});
+
+describe("reduceState check metadata", () => {
+  test("a re-scheduled seq binds each completion to its own occurrence", () => {
+    // Seqs restart on resume, so an edited workflow can put a DIFFERENT check at a
+    // seq an earlier pass used; each completion must read its own schedule's payload.
+    const recs: JournalRecord[] = [
+      {
+        i: 0,
+        at: 1,
+        ev: { type: "run.created", runId: "r", workflow: { name: "w" }, input: {}, cwd: "/", depth: 0 },
+      },
+      {
+        i: 1,
+        at: 2,
+        ev: {
+          type: "step.scheduled",
+          seq: 1,
+          hash: "h1",
+          kind: "check",
+          payload: { name: "lint", required: true },
+        },
+      },
+      { i: 2, at: 3, ev: { type: "step.completed", seq: 1, output: { status: "fail" } } },
+      {
+        i: 3,
+        at: 4,
+        ev: {
+          type: "step.scheduled",
+          seq: 1,
+          hash: "h2",
+          kind: "check",
+          payload: { name: "types", required: false },
+        },
+      },
+      { i: 4, at: 5, ev: { type: "step.completed", seq: 1, output: { status: "pass" } } },
+    ];
+    const state = reduceState(recs);
+    expect(state.checks).toEqual([
+      { name: "lint", status: "fail", required: true },
+      { name: "types", status: "pass", required: false },
+    ]);
   });
 });
 

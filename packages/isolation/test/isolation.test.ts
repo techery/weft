@@ -22,7 +22,7 @@ const temps: string[] = [];
 
 afterEach(async () => {
   for (const dir of temps.splice(0)) {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 });
 
@@ -108,7 +108,7 @@ describe("removeWorktree", () => {
     const repo = await initRepo();
     await seed(repo, { "a.txt": "one\n" }, "init");
     const handle = await addWorktree({ repoRoot: repo.cwd, dir: await worktreePath() });
-    await rm(handle.path, { recursive: true, force: true });
+    await rm(handle.path, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 
     await expect(removeWorktree({ repoRoot: repo.cwd, path: handle.path })).resolves.toBeUndefined();
     expect((await repo.raw(["worktree", "list"])).stdout).not.toContain(handle.path);

@@ -13,7 +13,8 @@ export async function tempDir(prefix = "weft-store-fs-"): Promise<string> {
 }
 
 export async function removeTemps(): Promise<void> {
-  for (const dir of temps.splice(0)) await rm(dir, { recursive: true, force: true });
+  for (const dir of temps.splice(0))
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 }
 
 export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));

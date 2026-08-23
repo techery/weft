@@ -107,6 +107,10 @@ export function reduceState(records: JournalRecord[]): RunState {
   const allSteps: StepState[] = [];
   const stepsBySeq = new Map<number, StepState>();
   const humansById = new Map<string, HumanState>();
+  // Check metadata keyed by seq, overwritten at every (re)schedule: a completion
+  // processed in journal order then reads the schedule it actually belongs to,
+  // never an earlier pass's check that happened to reuse the same seq.
+  const checkMetaBySeq = new Map<number, { name?: string; required: boolean }>();
   let currentPhase: string | undefined;
 
   for (const rec of records) {
@@ -158,6 +162,13 @@ export function reduceState(records: JournalRecord[]): RunState {
         };
         allSteps.push(step);
         stepsBySeq.set(ev.seq, step);
+        if (ev.kind === "check") {
+          const payload = ev.payload as { name?: string; required?: boolean } | undefined;
+          checkMetaBySeq.set(ev.seq, {
+            ...(payload?.name !== undefined ? { name: payload.name } : {}),
+            required: payload?.required === true,
+          });
+        }
         const phaseName = ev.phase ?? currentPhase;
         if (phaseName) {
           let phase = state.phases.find((p) => p.name === phaseName);
@@ -181,13 +192,13 @@ export function reduceState(records: JournalRecord[]): RunState {
         if (ev.patchRef !== undefined) step.patchRef = ev.patchRef;
         if (step.kind === "check") {
           const out = ev.output as { status?: CheckState["status"]; evidence?: string } | null;
-          const payloadName =
-            payloadNameOf(records, ev.seq) ?? step.label?.replace(/^check:/, "") ?? String(ev.seq);
+          const meta = checkMetaBySeq.get(ev.seq);
+          const payloadName = meta?.name ?? step.label?.replace(/^check:/, "") ?? String(ev.seq);
           if (out?.status) {
             state.checks.push({
               name: payloadName,
               status: out.status,
-              required: payloadRequiredOf(records, ev.seq),
+              required: meta?.required === true,
               ...(out.evidence !== undefined ? { evidence: out.evidence } : {}),
             });
           }
@@ -292,26 +303,6 @@ export function reduceState(records: JournalRecord[]): RunState {
   }
   state.steps = [...allSteps].sort((a, b) => a.seq - b.seq);
   return state;
-}
-
-function payloadNameOf(records: JournalRecord[], seq: number): string | undefined {
-  for (const rec of records) {
-    if (rec.ev.type === "step.scheduled" && rec.ev.seq === seq) {
-      const payload = rec.ev.payload as { name?: string } | undefined;
-      return payload?.name;
-    }
-  }
-  return undefined;
-}
-
-function payloadRequiredOf(records: JournalRecord[], seq: number): boolean {
-  for (const rec of records) {
-    if (rec.ev.type === "step.scheduled" && rec.ev.seq === seq) {
-      const payload = rec.ev.payload as { required?: boolean } | undefined;
-      return payload?.required === true;
-    }
-  }
-  return false;
 }
 
 // ---------------------------------------------------------------------------

@@ -76,7 +76,9 @@ afterAll(async () => {
     await session.server.close();
     await session.weft.close();
   }
-  await Promise.all(roots.map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    roots.map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })),
+  );
 });
 
 /** A throwaway repo, a mock-wired server over it, and a connected client. */

@@ -143,10 +143,12 @@ export class FsJournalStore implements JournalStore {
     poll.unref?.();
     try {
       while (!opts.signal?.aborted) {
-        // Out-of-process writers: pick up lines beyond our cache.
+        // Out-of-process writers: pick up lines beyond our cache. The append cache is
+        // deliberately NOT touched here — advancing count without byteOffset would make
+        // the next append's reconcile() re-count these very lines and skip indices;
+        // reconcile() folds external growth into both fields together.
         for await (const rec of this.read(runId, cursor)) {
           cursor = rec.i + 1;
-          if (rec.i >= cached.count) cached.count = rec.i + 1;
           yield rec;
         }
         while (queue.length > 0) {

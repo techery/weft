@@ -43,7 +43,11 @@ export async function tempCwd(): Promise<string> {
 
 export async function cleanupCwds(): Promise<void> {
   await Promise.all(
-    tempDirs.splice(0).map((d) => rm(d, { recursive: true, force: true }).catch(() => undefined)),
+    tempDirs
+      .splice(0)
+      .map((d) =>
+        rm(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch(() => undefined),
+      ),
   );
 }
 

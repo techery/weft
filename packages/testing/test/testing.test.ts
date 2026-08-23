@@ -17,7 +17,11 @@ async function tempDir(prefix: string): Promise<string> {
 
 afterAll(async () => {
   await Promise.all(
-    tempDirs.splice(0).map((d) => rm(d, { recursive: true, force: true }).catch(() => undefined)),
+    tempDirs
+      .splice(0)
+      .map((d) =>
+        rm(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }).catch(() => undefined),
+      ),
   );
 });
 
@@ -389,7 +393,7 @@ journalStoreConformance("FsJournalStore", async () => {
   const dir = await mkdtemp(join(tmpdir(), "weft-fs-journal-"));
   return {
     store: new FsJournalStore(join(dir, "runs")),
-    cleanup: () => rm(dir, { recursive: true, force: true }),
+    cleanup: () => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
   };
 });
 
@@ -399,6 +403,6 @@ blobStoreConformance("FsBlobStore", async () => {
   const dir = await mkdtemp(join(tmpdir(), "weft-fs-blobs-"));
   return {
     store: new FsBlobStore(join(dir, "blobs")),
-    cleanup: () => rm(dir, { recursive: true, force: true }),
+    cleanup: () => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
   };
 });
