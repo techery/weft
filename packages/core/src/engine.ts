@@ -84,6 +84,8 @@ interface ActiveRun {
   result: Promise<unknown>;
   pending: Map<string, PendingRequest>;
   sinceSnapshot: number;
+  /** Stops the external-event tailer when the run reaches a terminal state. */
+  tail?: AbortController;
 }
 
 export class Engine implements EngineHost {
@@ -231,6 +233,11 @@ export class Engine implements EngineHost {
       result: undefined as never,
     };
     this.active.set(runtime.runId, active);
+    // The owning engine consumes events other processes append to this run's journal
+    // (answers, signals, cancellation) — without this, a CLI answering or cancelling
+    // a daemon-owned run would append events nobody ever delivers.
+    active.tail = new AbortController();
+    void this.tailExternalEvents(active, priorRecords.length, active.tail.signal);
     active.result = this.drive(active, def, input);
     // Observed via handle/outcome — avoid unhandledRejection; chain the cleanup off
     // the caught promise so the .finally() derivative can never reject unobserved.
@@ -239,6 +246,7 @@ export class Engine implements EngineHost {
     void active.result
       .catch(() => undefined)
       .finally(() => {
+        active.tail?.abort();
         if (this.active.get(runtime.runId) === active) this.active.delete(runtime.runId);
       });
     return {
@@ -345,6 +353,30 @@ export class Engine implements EngineHost {
     if (important || active.sinceSnapshot >= 25) {
       active.sinceSnapshot = 0;
       void this.snapshot(active).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Consume run-directed events appended after launch, whichever process wrote
+   * them. Deliveries are idempotent (an answer this process already resolved is a
+   * no-op), and signal delivery happens ONLY here so a payload is never delivered
+   * twice. This coordinates delivery to the owner, not concurrent execution: two
+   * processes must still not RUN the same run at once.
+   */
+  private async tailExternalEvents(active: ActiveRun, fromIndex: number, signal: AbortSignal): Promise<void> {
+    try {
+      for await (const rec of this.journal.watch(active.runtime.runId, { fromIndex, signal })) {
+        const ev = rec.ev;
+        if (ev.type === "human.answered") {
+          active.runtime.resolveAnswer(ev.id, structuredClone(ev.answer), ev.answeredBy);
+        } else if (ev.type === "signal.received") {
+          active.runtime.deliverSignal(ev.name, structuredClone(ev.payload));
+        } else if (ev.type === "run.cancelled") {
+          active.runtime.externalCancel();
+        }
+      }
+    } catch {
+      // the tailer dies silently when the watch is aborted or the store goes away
     }
   }
 
@@ -535,10 +567,11 @@ export class Engine implements EngineHost {
   }
 
   async signal(runId: string, name: string, payload: unknown): Promise<void> {
+    // Append only: the OWNING engine's journal tailer is the single delivery point
+    // (buffering when no waiter is registered yet), whichever process appended.
     const active = this.active.get(runId);
     if (active) {
       await active.runtime.append([{ type: "signal.received", name, payload }]);
-      active.runtime.deliverSignal(name, payload);
       return;
     }
     if (!(await this.journal.exists(runId))) throw new Error(`run ${runId} not found`);

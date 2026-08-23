@@ -431,3 +431,71 @@ describe("codex review findings (PR #1)", () => {
     expect(await handle.result).toEqual({ sha: "abc123" });
   });
 });
+
+describe("codex review findings, round 2 (PR #1)", () => {
+  test("schema-repair turns all count against the budget, success and failure alike", async () => {
+    const t = testEngine();
+    let flakyCalls = 0;
+    t.builder.on({ key: "flaky" }, () => (++flakyCalls === 1 ? { wrong: true } : { ok: true }), {
+      usage: { input: 100, output: 50 },
+    });
+    t.builder.on({ key: "hopeless" }, { never: "valid" }, { usage: { input: 100, output: 50 } });
+    const def = defineWorkflow(
+      { name: "spendy", description: "s", input: z.object({}), output: z.object({ spent: z.number() }) },
+      async (ctx) => {
+        await ctx.agent("flaky", { schema: z.object({ ok: z.boolean() }), key: "flaky" }); // 1 turn + 1 repair
+        try {
+          await ctx.agent("hopeless", { schema: z.object({ ok: z.boolean() }), key: "hopeless" }); // 3 turns, all invalid
+        } catch (err) {
+          if ((err as { code?: string }).code !== "schema_repair_exhausted") throw err;
+        }
+        return { spent: ctx.budget.spent.tokens };
+      },
+    );
+    const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    // 2 turns for flaky + 3 turns for hopeless (initial + 2 repairs), 150 tokens each
+    expect(await handle.result).toEqual({ spent: 750 });
+    const recs = await records(t.journal, handle.runId);
+    const completed = recs.find((r) => r.ev.type === "step.completed" && r.ev.seq === 1)?.ev;
+    if (completed?.type !== "step.completed") throw new Error("missing completion");
+    expect(completed.usage).toMatchObject({ input: 200, output: 100 }); // both turns journaled
+  });
+
+  test("an answer appended by another engine reaches the run this engine is holding", async () => {
+    const def = defineWorkflow(
+      { name: "held", description: "h", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const go = await ctx.human.approve({ action: "proceed?" });
+        return { ok: go.approved };
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+    // a SECOND engine (another process) answers — no resume call anywhere
+    const t2 = reopen(t1);
+    await t2.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    // the owning engine's journal tailer delivers it to the suspended wait
+    expect(await h1.result).toEqual({ ok: true });
+  });
+
+  test("a cancel appended by another engine aborts the run this engine is holding", async () => {
+    const def = defineWorkflow(
+      { name: "heldcancel", description: "h", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.gate({ action: "git.push origin/main", risk: "high" });
+        return {};
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    await h1.outcome();
+    const t2 = reopen(t1);
+    await t2.engine.cancel(h1.runId); // inactive in t2: appends run.cancelled only
+    await expect(h1.result).rejects.toMatchObject({ code: "cancelled" });
+    const state = await t1.engine.state(h1.runId);
+    expect(state.status).toBe("cancelled");
+    expect(state.output).toBeUndefined(); // never records complete
+  });
+});

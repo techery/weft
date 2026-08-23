@@ -361,25 +361,40 @@ export function buildCtx(rt: RunRuntime): Ctx {
               },
             };
 
-            const result = await rt.host.globalLimiter.with(
-              () =>
-                rt.host
-                  .providerLimiter(providerId)
-                  .with(() => runProviderWithRepair(provider, req, io), io.signal),
-              io.signal,
-            );
-
-            const usage: Usage = { ...result.result.usage };
-            if (usage.usd === undefined) {
-              const price = priceFor(config, providerId, model);
-              if (price) {
-                usage.usd = (usage.input / 1e6) * price.inputPer1M + (usage.output / 1e6) * price.outputPer1M;
+            const chargeUsage = (u: Usage): Usage => {
+              const usage: Usage = { ...u };
+              if (usage.usd === undefined) {
+                const price = priceFor(config, providerId, model);
+                if (price) {
+                  usage.usd =
+                    (usage.input / 1e6) * price.inputPer1M + (usage.output / 1e6) * price.outputPer1M;
+                }
               }
+              rt.budget.charge(usage);
+              void rt.append([
+                { type: "budget.sampled", tokens: rt.budget.spentTokens(), usd: rt.budget.spentUsd() },
+              ]);
+              return usage;
+            };
+
+            let result: Awaited<ReturnType<typeof runProviderWithRepair>>;
+            try {
+              result = await rt.host.globalLimiter.with(
+                () =>
+                  rt.host
+                    .providerLimiter(providerId)
+                    .with(() => runProviderWithRepair(provider, req, io), io.signal),
+                io.signal,
+              );
+            } catch (err) {
+              // Turns preceding a failure still cost money: charge the accumulated
+              // usage the repair loop attached before rethrowing.
+              const carried = (err as { detail?: { usage?: Usage } }).detail?.usage;
+              if (carried && (carried.input > 0 || carried.output > 0)) chargeUsage(carried);
+              throw err;
             }
-            rt.budget.charge(usage);
-            void rt.append([
-              { type: "budget.sampled", tokens: rt.budget.spentTokens(), usd: rt.budget.spentUsd() },
-            ]);
+
+            const usage = chargeUsage(result.usage);
 
             let transcriptRef: BlobRefJson | undefined;
             if (result.result.transcript) {
@@ -458,7 +473,18 @@ export function buildCtx(rt: RunRuntime): Ctx {
       provider: ReturnType<typeof rt.host.providers.get>,
       req: AgentRequest,
       io: StepIO,
-    ): Promise<{ result: AgentResult; raw: unknown; validated: unknown; attempts: number }> {
+    ): Promise<{ result: AgentResult; raw: unknown; validated: unknown; attempts: number; usage: Usage }> {
+      // Every provider turn costs real tokens — the initial call AND each repair —
+      // so usage accumulates across turns, and turns preceding a failure are
+      // charged too (the exhausted/error throws carry the spend for the caller).
+      const used: Usage = { input: 0, output: 0 };
+      const addUsage = (u: Usage | undefined) => {
+        if (!u) return;
+        used.input += u.input ?? 0;
+        used.output += u.output ?? 0;
+        if (u.cacheRead !== undefined) used.cacheRead = (used.cacheRead ?? 0) + u.cacheRead;
+        if (u.usd !== undefined) used.usd = (used.usd ?? 0) + u.usd;
+      };
       let attempts = 1;
       let result: AgentResult;
       try {
@@ -470,17 +496,18 @@ export function buildCtx(rt: RunRuntime): Ctx {
           cause: err,
         });
       }
+      addUsage(result.usage);
       for (;;) {
         const value = unwrapWireValue(result.output, wire.wrapped);
         const check = await validateSchema(opts.schema, value);
-        if (check.ok) return { result, raw: value, validated: check.value, attempts };
+        if (check.ok) return { result, raw: value, validated: check.value, attempts, usage: used };
         if (attempts > repairMax) {
           throw new StepError(
             "schema_repair_exhausted",
             `${label} — schema repair exhausted (${repairMax} attempts): ${check.issues
               .map((i) => `${i.path}: ${i.message}`)
               .join("; ")}`,
-            { step: stepRef, attempts },
+            { step: stepRef, attempts, detail: { usage: used } },
           );
         }
         attempts++;
@@ -492,8 +519,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
           throw new StepError("provider_error", `${providerId} repair: ${(err as Error).message}`, {
             step: stepRef,
             cause: err,
+            detail: { usage: used },
           });
         }
+        addUsage(result.usage);
       }
     }
 

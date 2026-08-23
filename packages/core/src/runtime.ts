@@ -935,6 +935,12 @@ export class RunRuntime {
     return true;
   }
 
+  /** A run.cancelled appended by ANOTHER process (CLI cancelling a daemon-owned run). */
+  externalCancel(): void {
+    if (!this.signal.aborted) this.shared.abort.abort(new CancelledError());
+    this.cancelHumanWaits();
+  }
+
   /** Cancellation: reject every pending human wait so the run winds down as cancelled. */
   cancelHumanWaits(): void {
     for (const [id, wait] of [...this.pendingWaits]) {
