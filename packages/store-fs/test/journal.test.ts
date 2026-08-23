@@ -92,6 +92,21 @@ describe("append", () => {
     expect(appended.map((r) => r.i)).toEqual([1]);
   });
 
+  test("a failed append leaves the cache consistent: the next append lands at the real index", async () => {
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    await store.append("run-a", [runCreated("run-a", "audit")]);
+    // A bigint makes JSON.stringify throw AFTER indices would have been assigned:
+    // the cached count must not advance for a record that never became durable.
+    await expect(store.append("run-a", [{ type: "log", message: "x", n: 10n } as never])).rejects.toThrow();
+
+    const appended = await store.append("run-a", [logged("after the failure")]);
+    expect(appended.map((r) => r.i)).toEqual([1]);
+    // Conditional appends against the REAL on-disk count still match.
+    expect(await store.appendIf("run-a", 2, [logged("cas")])).toHaveLength(1);
+    expect((await drain(store, "run-a")).map((r) => r.i)).toEqual([0, 1, 2]);
+  });
+
   test("an ACTIVE holder renews its lock, so a slow append can never be stolen mid-write", async () => {
     const dir = await tempDir();
     const store = new FsJournalStore(dir);

@@ -300,6 +300,7 @@ describe("the tool gate", () => {
       "sort --output=clobbered input.txt",
       "uniq input.txt clobbered", // the second positional IS uniq's output file
       "uniq - clobbered", // stdin in, still a written output
+      "git diff --output=clobbered", // a "read" git subcommand writing a file
     ]) {
       expect(await ask(options, "Bash", { command }), command).toEqual({
         behavior: "deny",
@@ -381,6 +382,11 @@ describe("the tool gate", () => {
       behavior: "deny",
       message: "release needs a human",
     });
+    // An alias defined on the command line expands inside git, out of this
+    // screen's sight — any such invocation goes to approval conservatively.
+    expect(await ask(options, "Bash", { command: "git -c alias.ship=push ship origin main" })).toEqual({
+      behavior: "allow",
+    });
     // Quoting must not smuggle a push past the broker: the shell resolves
     // `git p'u'sh` to `git push` before git ever sees it.
     expect(await ask(options, "Bash", { command: "git p'u'sh origin main" })).toEqual({
@@ -396,7 +402,7 @@ describe("the tool gate", () => {
     expect(await ask(options, "Bash", { command: "pnpm test" })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Bash", { command: "git commit -m x" })).toEqual({ behavior: "allow" });
 
-    expect(seen).toHaveLength(6);
+    expect(seen).toHaveLength(7);
     expect(seen.every((r) => r.risk === "high")).toBe(true);
     expect(seen[0]?.tool).toBe("Bash");
   });

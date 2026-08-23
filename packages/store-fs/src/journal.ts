@@ -100,9 +100,13 @@ export class FsJournalStore implements JournalStore {
       } catch {
         // no journal yet
       }
+      // Indices are TENTATIVE until the payload is durably on disk: a stringify or
+      // I/O failure that had already advanced the cache would poison every later
+      // append (indices past the real count; appendIf never matching again).
       const at = Date.now();
-      const records = events.map((ev) => {
-        const rec: JournalRecord = { i: cached.count++, at, ev };
+      const base = cached.count;
+      const records = events.map((ev, offset) => {
+        const rec: JournalRecord = { i: base + offset, at, ev };
         return rec;
       });
       const payload = records.map((r) => JSON.stringify(r)).join("\n") + "\n";
@@ -113,6 +117,7 @@ export class FsJournalStore implements JournalStore {
       } finally {
         closeSync(fd);
       }
+      cached.count = base + records.length;
       cached.byteOffset += Buffer.byteLength(payload);
       for (const w of cached.watchers) w(records);
       return records;

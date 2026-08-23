@@ -11,6 +11,7 @@ import {
   MemoryJournalStore,
   ProviderRegistry,
   ReplayIndex,
+  reduceState,
 } from "@weft/core";
 import { mock } from "@weft/provider-mock";
 import { defineWorkflow, z } from "@weft/sdk";
@@ -1711,5 +1712,32 @@ describe("codex review findings, round 13 (PR #1)", () => {
     if (violation?.type !== "scope.violation") throw new Error("missing scope.violation");
     expect(violation.files).toEqual(["stray.log"]);
     expect(violation.mode).toBe("strict");
+  });
+});
+
+describe("codex review findings, round 14 (PR #1)", () => {
+  test("a resumed run's nonterminal status clears the previous pass's outcome", () => {
+    const recs: JournalRecord[] = [
+      {
+        i: 0,
+        at: 1,
+        ev: { type: "run.created", runId: "r", workflow: { name: "w" }, input: {}, cwd: "/", depth: 0 },
+      },
+      {
+        i: 1,
+        at: 2,
+        ev: {
+          type: "run.failed",
+          error: { name: "StepError", code: "internal", message: "boom", step: {} },
+        },
+      },
+      // A new execution resumed past the failure and is running again: the state
+      // (and the daemon's report) must not keep showing the old failure.
+      { i: 2, at: 3, ev: { type: "run.status", status: "executing" } },
+    ];
+    const state = reduceState(recs);
+    expect(state.status).toBe("executing");
+    expect(state.error).toBeUndefined();
+    expect(state.output).toBeUndefined();
   });
 });

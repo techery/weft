@@ -130,6 +130,12 @@ export function reduceState(records: JournalRecord[]): RunState {
         break;
       case "run.status":
         state.status = ev.status;
+        // A resumed run going nonterminal again must not keep showing the
+        // previous pass's outcome while it executes or waits.
+        if (ev.status !== "cancelled" && ev.status !== "complete" && ev.status !== "failed") {
+          delete state.output;
+          delete state.error;
+        }
         break;
       // Terminal events clear their opposite: a resumed run that now completes must
       // not keep reporting the failure an earlier pass recorded (and vice versa).

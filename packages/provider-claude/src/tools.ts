@@ -137,6 +137,9 @@ export function isReadOnlyCommand(command: string): boolean {
     if (name === "git") {
       const sub = words[i + 1];
       if (sub === undefined || !READ_GIT_SUBCOMMANDS.has(sub)) return false;
+      // The diff family's --output=<file> sends the result to a FILE: a "read"
+      // subcommand alone is not proof of read-only behavior.
+      if (/\s--output\b/.test(seg)) return false;
       continue;
     }
     // find reads — unless told to delete or execute.
@@ -209,7 +212,16 @@ export function isRiskyCommand(command: string): boolean {
     const head = words[i];
     if (head === undefined) continue;
     if ((head.split("/").pop() ?? head) !== "git") continue;
-    if (gitSubcommandOf(words.slice(i)) === "push") return true;
+    const gitWords = words.slice(i);
+    // `git -c alias.ship=push ship …` runs whatever the alias expands to — the
+    // expansion happens inside git, out of this screen's sight. Any alias
+    // DEFINED on the command line routes to approval conservatively.
+    for (let j = 1; j < gitWords.length; j++) {
+      const w = gitWords[j] as string;
+      if (w.startsWith("-calias.")) return true;
+      if (w === "-c" && (gitWords[j + 1] ?? "").startsWith("alias.")) return true;
+    }
+    if (gitSubcommandOf(gitWords) === "push") return true;
   }
   return false;
 }
