@@ -92,7 +92,9 @@ export async function applyPatchToTree(opts: { repoRoot: string; patch: string }
     if (threeWay.exitCode === 0) return { ok: true };
 
     // Conflict markers come with unmerged entries — in the throwaway index.
-    const unmerged = await git.raw(["diff", "--name-only", "--diff-filter=U", "-z"], { env });
+    const unmerged = await git.raw(["diff", "--no-ext-diff", "--name-only", "--diff-filter=U", "-z"], {
+      env,
+    });
     const conflicted = splitNul(unmerged.stdout);
     if (conflicted.length > 0) return { ok: false, conflicts: conflicted };
     const reported = filesFromStderr(`${threeWay.stderr}\n${check.stderr}`);
