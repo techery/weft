@@ -1,0 +1,247 @@
+{
+  "duplicateAlreadyExists": [
+    {
+      "title": "stdlib: escalate() \u2014 the `ctx.budget` accessor it says must be added already exists",
+      "evidence": "The idea's `fitsArchitecture` says: \"One small core addition: a read-only `ctx.budget` view (`{ remainingTokens, remainingUsd, spent }`) in `sdk/src/types.ts` and `core/src/ctx.ts` \u2014 which does not exist today.\" It does. `BudgetView { spent: {tokens,usd}; remaining: {tokens|null, usd|null} }` is declared in packages/sdk/src/types.ts and is a member of `Ctx` (`budget: BudgetView`), wired at packages/core/src/ctx.ts:2399-2401 (`get budget() { return rt.budget.view(); }`). Cut the core-addition claim; the remaining pattern is a 15-line for-loop over ctx.agent with a predicate and does not need to be a maintained stdlib API."
+    },
+    {
+      "title": "stdlib: bestOfPatch() \u2014 same false premise about ctx.budget",
+      "evidence": "Its risks section says the pattern \"should refuse to fan out when remaining headroom cannot cover N candidates \u2026 using the same `ctx.budget` view `escalate` needs.\" That view is shipped (packages/sdk/src/types.ts `BudgetView`; packages/core/src/ctx.ts:2399). The genuinely new part of this idea is `ctx.verify` \u2014 keep that, cut the budget framing."
+    },
+    {
+      "title": "`weft fork <run> --from <step>` (HITL category) \u2014 duplicated verbatim by \"weft fork: turn the journal from a recovery log into an exploration surface\" (DX category)",
+      "evidence": "Two separate entries in the brainstormed set propose the identical command (`weft fork <run> --from <step> [--set \u2026]`), the identical mechanism (copy records up to the cut into a new run id, optionally rewrite the chosen step's output, then resume normally), and the identical prior art (DBOS forkWorkflow, LangGraph update_state, Burr's (app_id, partition_key, sequence_id)). One of the two must be cut; merge the DX entry's `--bulk` and side-effect-refusal detail into the HITL entry."
+    },
+    {
+      "title": "`isolation: \"sandbox\"` (isolation category) \u2014 duplicated by \"Declared step capabilities backed by a real OS sandbox and a network allow-list\"",
+      "evidence": "Both propose: a pluggable backend seam, bubblewrap-on-Linux / Seatbelt-on-macOS as backend one, writes allow-only scoped to the worktree, network deny-all behind a host proxy with a per-step domain allowlist, a journaled `sandbox.denied` event, and Anthropic's sandbox-runtime as prior art. They differ only in which package holds the seam (a new `packages/sandbox` vs `packages/isolation`) and the option name (`sandbox:` vs `isolation:\"sandbox\"`). Cut one; `packages/isolation` is the right home since worktree.ts and scope.ts already live there."
+    },
+    {
+      "title": "Session handoff (`continueFrom`) \u2014 sessionId is already surfaced to workflow authors",
+      "evidence": "The idea claims \"nothing in the authoring surface can use it. The only consumer is the internal repair loop.\" Half wrong: `DetailedAgentResult.sessionId?: string` is a public field in packages/sdk/src/types.ts returned by `ctx.agent.detailed`, and it is journaled on `step.completed` (packages/core/src/events.ts). Both adapters already resume by session id (`provider.repair(result.sessionId, \u2026)` at packages/core/src/ctx.ts:869). What is missing is only the inbound half \u2014 `AgentRequest.resume` \u2014 so this is a small delta, not the L-shaped feature the write-up implies. Keep it, but re-scope to S."
+    },
+    {
+      "title": "Retry policies as declared objects \u2014 `backoff` is already a Duration and `meta.defaults` already exists",
+      "evidence": "The idea states \"`retry` is `{ attempts, backoffMs? }`\". The public shape is `RetryOptions { attempts: number; backoff?: Duration }` (packages/sdk/src/types.ts); `backoffMs` is the internal StepSpec field (packages/core/src/runtime.ts:157) mapped at packages/core/src/ctx.ts:354 via `toMs(opts.retry.backoff, 1_000)`. It also proposes inventing \"a workflow-level default in `meta.defaults.retry`\" \u2014 `meta.defaults` already exists (packages/sdk/src/define.ts:13-14) as the routing-default slot, so that is an extension of a shipped field, not a new concept."
+    },
+    {
+      "title": "Checkpoint records + blob GC \u2014 the blob-GC half is duplicated by \"Repo-root discovery, blob GC, and weft doctor --fix\"",
+      "evidence": "Both propose `weft prune` doing mark-and-sweep over journals to collect `$outputBlob` / patch / transcript / artifact refs and delete the unreferenced remainder, plus run compaction by age. Only one should ship the verb. The checkpoint-event half (a `checkpoint` event embedding a serialized ReplayIndex digest so `fromRecords` folds from the last checkpoint) is genuinely separate and should be split out \u2014 as should the fact that neither idea notices `BlobStore` has no `list()` or `delete()` at all (packages/core/src/stores.ts:88-93), which is the actual first task."
+    }
+  ],
+  "weakIdeas": [
+    {
+      "title": "Record-and-replay the nondeterministic globals instead of banning them",
+      "why": "The proposed API is impossible as written. `createSandbox()` takes no arguments and is called inside `instantiateBundle` at *load* time (packages/gate/src/load.ts:73), long before any run exists \u2014 and the registry caches the instantiated `def` per (file, bundleHash) in a Map (packages/gate/src/registry.ts:70-92), so a single sandbox context and its `Date`/`Math` stand-ins are SHARED BY EVERY CONCURRENT RUN of that workflow in the process. Installing a per-run seeded PRNG or logical clock as a sandbox global means the daemon running two `review` runs interleaves their draws and their clocks. The sketch's `createSandbox(rt: DeterministicHost)` cannot be built. It is fixable via AsyncLocalStorage (packages/core/src/runtime.ts:277 already uses one for parentSeq) but the idea never mentions the problem, and \"M\" effort is understated. Two further holes: pinning `Date.now()` to \"the `at` of the most recent journaled record\" makes elapsed-time measurement inside a step return 0, which is worse than a thrown error because it fails silently; and `performance.now()` is not in the eleven rules and not replaced in the sandbox, so authors route around the whole thing."
+    },
+    {
+      "title": "Multi-worker execution: the journal as a work queue",
+      "why": "XL, and it breaks the two guarantees weft actually sells. (1) Budget: `reserveCall` admission is per-process state on one `Budget` object (packages/core/src/budget.ts:147-214); N workers each admit against their own view, so the hard USD ceiling \u2014 weft's most defensible feature \u2014 becomes N\u00d7 overshootable, and the idea's own mitigation (\"a journaled reservation event\") puts a locked+fsync'd append on the hot path of every model call. (2) Patch capture: a worker must diff against `integrationBaseCommit`, which is a DANGLING commit reachable only via `refs/weft/snapshots/*` in the owner's repo (packages/core/src/ctx.ts:190-244) \u2014 another machine cannot fetch it without a push, which the idea does not address. (3) There is no substrate to build an offer queue on: both `JournalStore.watch(runId, \u2026)` (packages/core/src/stores.ts) and `Engine.watch(runId, \u2026)` (packages/core/src/engine.ts:1778) are per-run; nothing enumerates work across runs. This is a different product, not a feature."
+    },
+    {
+      "title": "`ctx.await({ any: [...] })` \u2014 composable durable wait conditions",
+      "why": "The primitive is right and the hard half is unaddressed. `takeOrAwaitSignal` (packages/core/src/runtime.ts:1310-1373) drains journaled `signal.received` entries, then in-process buffered deliveries, then parks \u2014 a signal arm that loses a race has already CONSUMED a buffered delivery, and the idea says nothing about un-consuming it, so the payload is silently lost and a resume cannot re-take it (the `signal.rejected` machinery exists precisely because this class of bug wedges runs permanently). It also proposes `all` and then admits `all` combined with a timer is \"genuinely ambiguous\". Ship `any` only, and specify signal re-buffering before writing any code."
+    },
+    {
+      "title": "Incremental event index and `weft query`",
+      "why": "The typed query half is fine; the load-bearing sub-proposal is not. It says \"replace best-effort `budget.sampled` with an awaited `usage.charged { seq, usage }` on the charge path \u2014 one append per model call.\" Every fs append takes a cross-process lock, double-reconciles on-disk growth, `writeSync`es to completion and `fsync`s (packages/store-fs/src/journal.ts:104-310). Awaiting one per provider call serializes all 16 lanes of a fan-out behind a single lock at exactly the moment they complete. The idea notes journal growth and misses the lock contention, which is the real cost. Also `--sql` against a table whose shape you control is a support liability the moment anyone scripts it. Keep the incremental `IndexSink` and `--json` query; drop the awaited charge event."
+    },
+    {
+      "title": "Park and wake: suspend a waiting run to zero",
+      "why": "Two problems. (1) It requires releasing the lease at park, reversing a deliberate decision (packages/core/src/engine.ts:1623-1631, 1696-1701) taken because a zombie step may still be writing after a bounded drain \u2014 the idea's entire safety argument is the sentence \"the safety argument has to actually hold\", which is not an argument. (2) It proposes parking as the DEFAULT for CLI runs without `--watch`. That silently converts `weft run` into a command that returns without finishing and leaves completion dependent on a `weft wake` cron the user never installed. A run that blocks visibly is a better default than a run that exits and never resumes. Worth building; not worth defaulting."
+    },
+    {
+      "title": "Prompt-prefix cache-aware fan-out scheduling",
+      "why": "The release signal is wrong, so the feature would degrade to a flat 5s penalty on every fan-out. The sketch calls `prefixScheduler.release(group)` from `chargeUsage`, but the Claude adapter only extracts usage from `result` messages (packages/provider-claude/src/index.ts usageOf/absorb) \u2014 i.e. at the END of the leader's turn, not at its first token. Siblings would therefore always hit the `prefixStaggerMs` cap rather than releasing early, converting a cost optimisation into a latency tax on short steps. Doing this correctly requires a first-token signal, which is exactly the `RunControl.emit` proposed by the live-progress idea \u2014 so this depends on that idea and does not say so."
+    },
+    {
+      "title": "ctx.memory \u2014 a durable, journal-honest knowledge store across runs",
+      "why": "L effort for a feature that weakens the property weft exists to provide, and it has an unspecified core semantic: the idea journals the READ as a step (correct) but never says what a `remember` WRITE does on replay \u2014 re-write, skip, or write-once? If it re-writes, replaying an old journal mutates present state; if it skips, the memory store and the journal disagree about history. It also opens a prompt-injection channel by construction (an agent in run A writes text that becomes prompt input in run B) at a point where weft has no redaction at any boundary \u2014 so it strictly depends on the redaction idea shipping first, which is not stated. Defer."
+    },
+    {
+      "title": "Self-improving workflows: journal-mined hint bank with human-reviewed prompt patches",
+      "why": "The hint-bank half puts model-generated text from a mutable external store INTO the step identity hash (\"the rendered hints go INTO the identity payload\"). That makes a step's content hash depend on machine-local mutable state, so the same workflow on two machines produces different identities and no journal is portable or comparable \u2014 which is the exact property content-addressing exists to provide. It also requires ctx.memory (deferred above) and incremental indexing, neither of which exists. The `weft optimize` half \u2014 fold journals, cluster recurring repair/check failures by (stepKey, issuePath), emit a reviewable diff, never auto-apply \u2014 is genuinely good, needs nothing new, and should be split out and shipped alone."
+    },
+    {
+      "title": "Speculative fan-out with preemption (`ctx.speculate`)",
+      "why": "The sketch does not compile against the shipped API: it passes `ctx.check(name, { exec: [...], cwd: r.worktree })`, and `CheckOptions` has no `cwd` \u2014 `ctx.check`'s exec runs unconditionally at `rt.cwd` (packages/core/src/ctx.ts:1833). Verifying a candidate patch in its own tree is the whole point of the pattern and is not expressible today; that gap is what the `ctx.verify` proposal (in bestOfPatch) exists to fill, so `ctx.speculate` is blocked behind it. Preemption is also weaker than advertised: `withTimeout` already documents that an aborted attempt can keep running and mutating files (packages/core/src/runtime.ts:800-833), so \"abort the losing lanes\" means \"stop waiting for them\" while they keep spending against a ceiling already committed."
+    },
+    {
+      "title": "Workflow packages: `weft add`, npm distribution, and a lockfile",
+      "why": "The lockfile's central claim is false. It records a `bundleHash` per workflow \"which is the same hash `run.created` stamps as `defHash`\" and treats it as pinning the workflow's code \u2014 but `bundleWorkflow` passes `external: [...allowBare]` to esbuild (packages/gate/src/bundle.ts:91), so allow-listed bare imports (zod, and anything a package adds to its own allowBare) are NOT in the emitted code and NOT in the hash. A zod major bump silently changes every schema's wire form with an unchanged lockfile and an unchanged defHash. Either hash the resolved versions of externals alongside the code, or stop calling it a lock."
+    },
+    {
+      "title": "CI-native weft: GitHub Action, PR-comment reports, gates as review requests",
+      "why": "It diagnoses its own fatal flaw and then proceeds anyway: \"a run whose journal is only in a 90-day artifact is not durable in any meaningful sense\". Artifact-based state handoff between jobs is not durability, it is a tarball with an expiry. The `--read-only` integrate refusal also needs a policy layer a workflow cannot override, which weft has no concept of (config is one file, all fields optional, consumed once at assembly \u2014 packages/host/src/config.ts). Right direction, wrong sequencing: a shared JournalStore (S3/Postgres) and a policy section are prerequisites, and neither is proposed."
+    },
+    {
+      "title": "ctx.spawn \u2014 non-blocking, durable sub-workflow handles",
+      "why": "Admits in its own risks that it is \"not worth much\" without the park/wake scheduler, which is itself weak (above). Beyond that, `detached: true` breaks two shipped invariants without proposing a replacement: the budget roll-up assumes a parent's spend covers its subtree (packages/core/src/engine.ts:1264-1301 rolls child delta onto the parent step), and `unintegrated_patches` fails a run whose patches were never integrated or discarded (packages/core/src/engine.ts:824-831) \u2014 a detached child that captures a patch has no defined owner for either rule."
+    }
+  ],
+  "missingProjects": [
+    "Effect / Effect-TS (@effect/workflow, Effect Cluster, Effect Schema) \u2014 15.5k stars, verified via GitHub API 2026-08-24, repo topics literally include workflows, schema, clustering, concurrency, opentelemetry. This is the single largest omission in the whole landscape: it is the TypeScript ecosystem's durable-workflow + typed-schema + structured-concurrency + typed-error stack, and it competes with weft on the authoring axis (Effect programs are code, not a DSL), with Zod on the schema axis (Effect Schema is a Standard Schema implementation), and with the retry-policy idea specifically (Effect `Schedule` combinators are exactly the exponential/jitter/predicate policy object being proposed). Any comparison that covers Resonate at 656 stars and omits Effect is not surveying the field.",
+    "promptfoo \u2014 24.5k stars, verified 2026-08-24, TypeScript, MIT. CLI-first, declarative-config evals with first-class CI/CD integration and an assertions library. Structurally far closer to what `weft eval` / `weft conformance` should look like than Braintrust or Langfuse, because it is a CLI over config files in your repo rather than a SaaS with an SDK. Its assertion vocabulary (contains, javascript, llm-rubric, is-json with a schema) is directly reusable.",
+    "Plandex \u2014 15.6k stars, verified 2026-08-24, Go, open source. The closest existing analogue to weft's patch-then-integrate model in a shipped coding agent: changes accumulate in a plan sandbox separate from the project files, and you review and apply them explicitly. The coding-harness cluster asserts that no competitor has a patch object and a deferred integrate gate; Plandex is the counter-example and needs to be addressed head-on.",
+    "Nx (29.3k stars, verified 2026-08-24) and Turborepo / Bazel \u2014 content-addressed task caching keyed on declared inputs, with remote cache and affected-project detection from a file-change set. This is the real prior art for the `reads:` scopes and cross-run cache ideas, and it is TypeScript-native. Both ideas cite Bazel in one clause and then design the cache key from scratch; Nx's inputs/namedInputs model and its cache-invalidation failure modes are the lesson.",
+    "Dagster \u2014 16.1k stars, verified 2026-08-24. Software-defined assets with code_version + data_version staleness computation: the system tells you which assets are stale because their code or their upstream data changed. That is precisely the question the `reads:` world-hash idea is trying to answer, solved and productionised, including the failure mode the idea flags (over-broad inputs make everything permanently stale).",
+    "Jujutsu (jj) \u2014 31.2k stars, verified 2026-08-24, Git-compatible VCS. Its operation log is an append-only journal of every repository operation with `jj op log` / `jj op restore` / `jj op undo`. It is the closest thing in existence to weft's journal applied to a repo rather than a run, and its operation-log UX is exactly the fork/undo/explain vocabulary weft is missing. weft's hand-rolled snapshot pinning under refs/weft/snapshots is a partial reimplementation of what jj gives natively.",
+    "Novu \u2014 39.7k stars, verified 2026-08-24, TypeScript, self-hostable, describes itself as \"open-source communication infrastructure for agents and products\". Multi-channel (email, SMS, push, in-app, chat) with workflows, digests and preferences. The notifier-seam idea proposes hand-writing Slack/webhook/desktop channels; Novu is the layer that already exists, and a `Notifier` implementation over it is smaller than three bespoke adapters.",
+    "Continue.dev \u2014 35.6k stars, verified 2026-08-24, Apache-2.0, TypeScript, describes itself as \"open-source coding agent\" with CLI and CI positioning. Larger than most projects in the coding-harness cluster and entirely absent from it.",
+    "Deno \u2014 its permission model (`--allow-write=<path>`, `--allow-net=<host>`, `--allow-read`) is a shipped, TypeScript-native, cross-platform capability sandbox with exactly the allow-list granularity both sandbox ideas propose to obtain from bubblewrap/Seatbelt. It deserves evaluation as a backend (run the agent-adjacent process under Deno permissions) and as prior art for the option shape, especially since it works on Windows where bwrap does not.",
+    "Standard Schema (standardschema.dev / the @standard-schema spec) \u2014 weft's own schema boundary is built on it (`AnySchema`, `InferIn`/`InferOut` in packages/sdk/src/schema.ts) and it is never named as a project. It is the reason Valibot and ArkType work in weft today and the reason the `{value:{}}` degradation for non-Zod vendors exists; the comparison discusses that degradation without naming the spec that causes it.",
+    "mcp-agent (lastmile-ai) \u2014 implements Anthropic's \"Building Effective Agents\" patterns over MCP with optional Temporal-backed durable execution. It is the direct competitor to the combination weft is selling (MCP-native + durable + patterns) and appears nowhere.",
+    "OpenLLMetry / Traceloop and Laminar (lmnr) \u2014 OSS OpenTelemetry instrumentation for LLM apps. Mentioned once in passing inside the Helicone entry; both are the obvious consumers of the per-step-spans idea and belong in the observability cluster on their own merits."
+  ],
+  "missingDimensions": [
+    "Context and prompt management \u2014 compaction, truncation, and context-window accounting. Verified absent: `grep -rn \"compact|condense|truncat|contextWindow|summariz\"` across packages/core/src and packages/provider-*/src returns only scope-manifest truncation, nothing about prompts. weft meters tokens AFTER a call and has no idea how large a prompt is before dispatch, so one oversized `ctx.human.review` artifact or an unbounded `git diff` in a prompt can blow a USD ceiling in a single call that `reserveCall`'s average-cost heuristic cannot anticipate. Every harness in the landscape has an answer (Claude Code compaction, OpenHands condenser \u2014 which the landscape even cites as an auxiliary spend source), and no dimension asks about it.",
+    "Trigger surface \u2014 how a run STARTS. weft has exactly one: a human typing `weft run`, plus `weft_run` over MCP. No cron, no webhook, no file-watch, no git-event start, and the daemon has no `POST /api/runs` (verified: the route table in packages/daemon/src/app.ts:82-213 has no create route). goose has a built-in scheduler, Windmill has schedules and webhooks, Inngest is event-driven by construction, Temporal has Schedules, Dagster has sensors. A durable engine whose runs can only be started by hand is a fundamentally different product, and no dimension surfaces that.",
+    "Journal/state format versioning and migration. Verified absent: no `schemaVersion`, `journalVersion`, or `formatVersion` anywhere in packages/core/src/events.ts or packages/store-fs/src/journal.ts. The journal is the sole source of truth and carries no format identifier, so there is no forward/backward compatibility contract and no migration story. This is a dimension on which weft scores worse than every competitor with a server (all of which version their persistence), and it silently blocks about a dozen of the brainstormed ideas.",
+    "Repo concurrency \u2014 what happens when two runs share a working tree. `integrationBaseCommit` and `ctx.integrate()` both mutate the real tree at `rt.cwd`, and the ownership lease is per-RUN, not per-repo. Two weft runs in one checkout can interleave integrates and corrupt each other. Restate's single-writer-per-key Virtual Objects is named in the landscape as an idea to steal and no dimension asks whether any project actually serializes writers on the shared resource.",
+    "Auth, authz, and multi-tenancy. Covered only as a per-project footnote (Temporal namespaces, Windmill Enterprise). weft's daemon has a loopback + Host/Origin check and nothing else (packages/daemon/src/app.ts:70-80): no authentication, no authorization, no TLS, and once the proposed patch/transcript blob routes land it is serving repository source code over an unauthenticated port. This deserves its own row.",
+    "Artifact management for non-patch outputs \u2014 build logs, coverage reports, screenshots, generated docs. weft has a content-addressed blob store used internally for transcripts and patches, but no first-class artifact concept, no retention, no listing, and no way for a workflow to declare \"this is an output of the run\". Google ADK's versioned ArtifactService is the reference; the landscape mentions it once inside the ADK entry and never asks the question of anyone else.",
+    "Degradation semantics at a limit \u2014 what a system does when it hits the ceiling, not just whether it has one. weft throws `BudgetExceededError`, which the retry predicate marks non-retryable (packages/core/src/runtime.ts:726-731), so exhaustion fails the run after spending the entire budget. Trigger.dev pauses and queues; Windmill's disapproval branches; Golem's idempotence mode. The comparison's budget dimension scores presence/absence of a ceiling and never asks what the ceiling does to you.",
+    "Workflow discoverability and parameterisation \u2014 how a caller finds out what a workflow accepts. `meta.input` is a REQUIRED Standard Schema on every workflow (packages/sdk/src/define.ts:41-44) and weft renders it nowhere: no `weft describe`, no schema in `weft run <name> --help`, no launch form in the daemon or MCP. Windmill generates input UIs from typed signatures, goose declares typed promptable parameters, Trigger.dev has `schemaTask`. This is a dimension where weft has the data and ships none of the surface.",
+    "Time-to-first-value / blank-page cost. Every ranking in the comparison is about mechanism; none is about what a new user does in the first ten minutes. Claude Code's model-authored workflows, goose's Recipe Cookbook, Claude Code Action's solution templates, and Windmill's app store are all answers to a dimension weft scores worst on (`weft new` emits one generic two-phase template) and that nobody measured."
+  ],
+  "missingIdeas": [
+    {
+      "title": "Journal format version + tolerant reader (prerequisite for a dozen other ideas)",
+      "proposal": "Add `v: 1` to `run.created` in packages/core/src/events.ts and a matching constant in core. Readers refuse an unknown MAJOR with an actionable error naming the weft version that wrote it; reducers and `ReplayIndex.fromRecords` skip unknown event `type`s instead of assuming exhaustiveness (packages/core/src/projections.ts already has a `default:` branch at :319 \u2014 packages/core/src/replay.ts must be audited for the same). `weft doctor` reports the version distribution across `.weft/runs`. Ship a documented rule: new event types are additive-minor and must be ignorable; changing an existing event's shape is a major.",
+      "why": "Verified absent \u2014 no `schemaVersion`/`journalVersion`/`formatVersion` anywhere in events.ts or store-fs/journal.ts. The journal is the ONLY source of truth for a product whose entire pitch is that you can resume a run from it hours or days later, and it has no format identifier. Every brainstormed idea that adds an event type (checkpoint, cache.hit, sandbox.denied, wait.resolved, run.parked, run.forked, memory.written, speculation.decided, usage.charged, step.offered) makes journals written by the new version unreadable-or-worse by the old one, with no error message that says so. This is ~50 lines, it is a hard prerequisite for roughly a third of the brainstormed set, and nobody proposed it."
+    },
+    {
+      "title": "`weft describe <workflow>` plus schema-rendered `--help`, `--json` descriptor, and launch forms",
+      "proposal": "One projection from `def.meta`: name, description, routing defaults, and the input schema rendered three ways \u2014 human (`weft run review --help` lists `--base <string>  base ref to diff against` derived from the Zod shape), machine (`weft describe review --json` emits the JSON Schema), and interactive (the daemon and MCP `weft_run` render a form from the same JSON Schema, exactly as `weft answer` already does for human requests at packages/cli/src/commands/answer.ts:134-181).",
+      "why": "`meta.input` is a REQUIRED schema on every workflow (packages/sdk/src/define.ts:41-44) and packages/cli/src/commands/run.ts:176 already reaches into `def.meta.input.shape` for the unknown-flag probe \u2014 the data and half the plumbing are shipped. Today a typo in a dynamic flag is refused but never suggested, and the only way to learn what a workflow accepts is to read its source. This is the cheapest adoption win available (roughly a day) and no brainstormed idea proposes it; the CLI idea lists signal/search/cat/version as the missing verbs and omits the one that makes every other verb usable."
+    },
+    {
+      "title": "`onExhausted: \"suspend\"` \u2014 turn budget exhaustion into a durable human gate",
+      "proposal": "Add a run-level (and optionally step-level) policy to the budget config. On `checkBeforeStep` failing, instead of throwing the non-retryable `BudgetExceededError` that fails the run, journal a human request (\"this run has spent $5.00 of $5.00; raise the ceiling, or stop\") with a schema of `{ action: \"raise\" | \"stop\"; addUsd?: number; addTokens?: number }`, park exactly like any other human step, and on a `raise` answer journal a `budget.raised` event that `Budget` folds on resume.",
+      "why": "Today hitting the ceiling is the most brutal failure mode in the product: `budget_exceeded` is explicitly excluded from the retry predicate (packages/core/src/runtime.ts:726-731), so a 40-step run that exhausts its budget at step 38 fails outright \u2014 after spending the entire budget, with worktrees full of uncaptured work. Weft already has every piece needed to do better (durable human steps, journaled budget restore, appendIf-guarded answers); this is a ~30-line change plus one event. Trigger.dev's pause-and-queue-at-cap is cited approvingly in the landscape as \"the graceful-degradation half weft lacks\" and no brainstormed idea proposes it."
+    },
+    {
+      "title": "Repo-level integration mutex",
+      "proposal": "A `.weft/repo.lock` acquired with the same CAS + TTL + steal protocol as `owner.lock` (packages/store-fs/src/journal.ts:184-262), held for the duration of `ctx.integrate()` and `integrationBaseCommit()`, keyed on the resolved repo root. A run that cannot acquire it within a bound marks itself waiting (reusing `markWaiting`, so it reports as suspended rather than hung) and retries.",
+      "why": "Ownership leases are per-RUN. `integrationBaseCommit` (packages/core/src/ctx.ts:190-244) and the integrate step (packages/core/src/ctx.ts:2042-2235) both stage and mutate the REAL working tree at `rt.cwd`. Two weft runs in one checkout \u2014 trivially reachable via `weft ui` plus a `weft run` in another terminal, and the explicit goal of every parallel-agent idea in the set \u2014 can interleave `git add -A` and patch application and destroy each other's work. This is a correctness hole, not a feature gap, and no idea in the set notices it despite several proposing more concurrency."
+    },
+    {
+      "title": "`weft why <run> <step>` \u2014 explain the replay decision",
+      "proposal": "A projection over events that already exist: for each step, report which of the three matching tiers fired (same-seq hash hit, salvage from `replay.salvaged { seq, fromSeq }`, `--reuse key`), or why it re-ran (`replay.diverged { seq, reason }` already carries the reason string, including \"ambiguous keyless identity\"), plus whether `positionsTrusted` was true and which stamp disagreed (bodyHash vs defHash from `run.created.workflow`).",
+      "why": "Edit-tolerant replay is weft's single most unusual claim, and there is no way to ask it a question. `replay.salvaged` and `replay.diverged` are journaled (packages/core/src/events.ts) and `positionsTrusted` is computed (packages/core/src/engine.ts:94-128) and surfaced nowhere. `weft replay --dry` gives aggregate counts for a hypothetical resume; nothing explains an actual one. The cost is a fold over events already in the journal, and it converts the salvage machinery from magic into something a user can trust or debug."
+    },
+    {
+      "title": "`weft export` / `weft import` \u2014 make a run a portable artifact",
+      "proposal": "`weft export <run> [--out run.tgz] [--redact]` writes the journal, every blob it references (walk `$outputBlob`, `patchRef`, `transcriptRef`, artifact refs), and the persisted `script.ts`/`workflow.json` provenance into one tarball; `weft import run.tgz` reconstitutes it under a fresh or preserved run id. Pair with the redaction pass so an exported run is safe to attach to a bug report.",
+      "why": "Weft's central asset is a self-contained, content-addressed record of a run, and there is no verb that treats it as one. This is the prerequisite the CI-native idea assumes exists (its artifact handoff between jobs is exactly export/import), it is how a user files a reproducible bug, it is how a run moves from a CI runner to a laptop for debugging, and it is the concrete version of the \"portable serialized run\" the landscape admires in OpenAI's `RunState.toString()`. Nobody proposed it; several ideas depend on it."
+    },
+    {
+      "title": "One glob dialect across the product",
+      "proposal": "Extract a single `matchGlob` (picomatch with `{ dot: true }`, the NFC normalisation and newline stand-in already in packages/isolation/src/scope.ts:17-32) into one module and use it for write scopes, testing fixtures, provider-mock rules, the approval-policy action patterns in packages/core/src/config.ts, and `fetchAllow`. Document the dialect once. Where the existing `*`-crosses-`/` behaviour is genuinely wanted (step keys like `review:src/a.ts`), express it as `**` and say so in the migration note.",
+      "why": "There are currently at least three glob semantics shipping together: packages/provider-mock/src/index.ts:22-28 defines a regex `globMatch` where `*` crosses `/`; packages/testing/src/fixtures.ts:48-55 defines a DIFFERENT function with the same name using picomatch where `*` stops at `/`; packages/isolation/src/scope.ts uses picomatch with extra normalisation and a deliberate two-matcher include/exclude split because picomatch's array semantics fail open. The same pattern string means different things depending on which table you wrote it in, and both mock tables are used by the same test file. This is a small, unglamorous fix that removes an entire class of \"my fixture didn't match and I can't see why\" support burden \u2014 and provider-mock is the one package with no test directory at all."
+    },
+    {
+      "title": "Prompt-size accounting and a declared truncation policy per step",
+      "proposal": "Before dispatch, estimate the assembled prompt's token count (a cheap heuristic is fine; providers report real counts afterwards to calibrate) and journal it on `step.scheduled` as `promptTokens`. Add `context?: { max?: number; onOverflow?: \"fail\" | \"truncate\" | \"blob\" }` to AgentOptions: `truncate` applies a declared strategy to the largest interpolated artifact, `blob` offloads it and passes a reference the agent can read via a tool, `fail` refuses before spending. Surface the estimate in `weft explain` and the projected cost in `weft replay --dry`.",
+      "why": "Verified absent \u2014 no prompt-size, context-window, or truncation logic anywhere in core or the adapters. This is the missing half of weft's budget story: `reserveCall` admits based on the OBSERVED AVERAGE cost per charged call (packages/core/src/budget.ts:147-169), so a single step that interpolates a 400KB diff into its prompt sails past admission and blows the ceiling in one call the heuristic had no way to anticipate. Weft is the project in this landscape with the strongest claim to enforce spend and the weakest visibility into what it is about to spend it on."
+    }
+  ],
+  "factualCorrections": [
+    {
+      "claim": "Brainstormed ideas \"stdlib: escalate()\" and \"stdlib: bestOfPatch()\" both state that a read-only budget view on Ctx \"does not exist today\" and must be added.",
+      "correction": "It exists and is public. `BudgetView { spent: { tokens, usd }; remaining: { tokens: number | null; usd: number | null } }` is declared in packages/sdk/src/types.ts and `budget: BudgetView` is a member of the `Ctx` interface; it is implemented at packages/core/src/ctx.ts:2399-2401 as `get budget() { return rt.budget.view(); }`. Both ideas' \"one small core addition\" is already shipped."
+    },
+    {
+      "claim": "Idea \"Retry policies as declared objects\": \"`retry` is `{ attempts, backoffMs? }` and the delay scales linearly (runtime.ts:726-751).\"",
+      "correction": "The PUBLIC shape is `RetryOptions { attempts: number; backoff?: Duration }` (packages/sdk/src/types.ts). `backoffMs` is the internal StepSpec field (packages/core/src/runtime.ts:157), produced by `toMs(opts.retry.backoff, 1_000)` at packages/core/src/ctx.ts:354. Authors already write `retry: { attempts: 3, backoff: \"2s\" }`; the missing pieces are the strategy, the jitter, the error predicate, and the workflow-level default \u2014 not the Duration."
+    },
+    {
+      "claim": "Same idea: \"a run that crashes mid-backoff re-arms the FULL delay on resume, because the backoff sleep is not a `reuseIncomplete` step.\"",
+      "correction": "The opposite happens. The backoff is an in-process `await sleep(backoff, this.signal)` (packages/core/src/runtime.ts:749) with no journaled timer at all. Agent steps do not set `reuseIncomplete`, so a crash mid-backoff leaves an incomplete `step.scheduled` plus a `step.attempt` and the resumed run re-executes the step IMMEDIATELY with zero delay \u2014 it does not re-arm anything. The real defect is that a crash-loop bypasses backoff entirely, which is a worse bug than the one described and argues harder for making the backoff a durable step."
+    },
+    {
+      "claim": "Idea \"Speculative fan-out with preemption\" sketches `ctx.check(\\`tests:${r.lane}\\`, { exec: [\"pnpm\", \"test\"], cwd: r.worktree })`.",
+      "correction": "`CheckOptions` has no `cwd` field (packages/sdk/src/types.ts: `{ exec?, fn?, trustPrior?, required?, timeout? }`), and the exec branch runs unconditionally at `rt.cwd` (packages/core/src/ctx.ts:1833). The sketch does not typecheck, and the capability it depends on \u2014 running a check inside a candidate's worktree \u2014 does not exist in any form."
+    },
+    {
+      "claim": "Idea \"Session handoff\": \"`DetailedAgentResult.sessionId` \u2026 nothing in the authoring surface can use it. The only consumer is the internal repair loop.\"",
+      "correction": "`sessionId?: string` is a public field on `DetailedAgentResult` in packages/sdk/src/types.ts, returned by `ctx.agent.detailed`, and journaled on `step.completed` (packages/core/src/events.ts). A workflow can already read it; what is missing is only the inbound direction (`AgentRequest.resume`) and the digest fallback. The idea is right that the capability is unusable and wrong that the value is hidden \u2014 which changes its size from L to roughly S."
+    },
+    {
+      "claim": "The internal inventory's feature list for the engine (`@techery/weft-core` + sdk) enumerates the Ctx surface.",
+      "correction": "It omits `ctx.fs` entirely. `FsApi { read(path) -> { content, sha256, size }; glob(patterns, { cwd }) -> { paths }; stat(path) -> { exists, size, mtimeMs, isFile, isDirectory } }` is declared in packages/sdk/src/types.ts and is a member of `Ctx`. Three brainstormed ideas reason about what a workflow can and cannot read from disk without knowing this API exists \u2014 notably the `reads:` scope idea, whose world-hash would need to cover `ctx.fs.read` results too, and the AGENTS.md idea, which proposes a new `ctx.context.repo()` when `ctx.fs.read` plus a nearest-wins walk may be sufficient."
+    },
+    {
+      "claim": "Idea \"Notifier seam\": \"a journal-tailing dispatcher \u2026 subscribes to `engine.watch(runId)` (already public, engine.ts:1778) for every active run and to `store.list()` for runs it did not start.\"",
+      "correction": "Both watch APIs are per-run: `Engine.watch(runId, opts)` (packages/core/src/engine.ts:1778) and `JournalStore.watch(runId, opts)` (packages/core/src/stores.ts). There is no watch-all-runs stream in either interface, and no `onAppend`/observer registration on the Engine (`onRecords` at engine.ts:882 takes a RunRuntime and is called internally). So the \"dispatcher\" is necessarily a `list()` poll loop opening one watcher per discovered run, with all the missed-run and duplicate-watcher problems that implies. The idea should either say so or propose the missing store method \u2014 the same gap blocks the multi-worker and inbox ideas."
+    },
+    {
+      "claim": "Comparison, authoring dimension: the bundle \"hash is SHA-256 of the emitted code, which is the version a run pins and covers every bundled module\"; idea \"Workflow packages\" builds a lockfile on that hash.",
+      "correction": "True but load-bearingly incomplete: `bundleWorkflow` passes `external: [...allowBare]` to esbuild (packages/gate/src/bundle.ts:91), so allow-listed bare imports \u2014 `zod` by default \u2014 are NOT in the emitted code and therefore NOT in the hash. A zod major bump changes every schema's JSON-Schema wire form, and every step's identity hash includes that schema, while `defHash` and the registry cache key stay identical. The hash covers every BUNDLED module and says nothing about the externals; a lockfile built on it pins half the code."
+    },
+    {
+      "claim": "Landscape, Daytona entry: \"Open-source license file present on the repo (AGPL-3.0 historically; verify current \u2014 not directly confirmed in this pass)\" alongside \"71.9k stars\".",
+      "correction": "Star count verified correct (71,890 via the GitHub API, 2026-08-24), as is the stale push date (2026-07-24). But the API returns NO `license` object for daytonaio/daytona at all, meaning GitHub cannot detect a standard license in the repo. Combined with the \"core development moved to a private codebase\" notice, the entry should read \"license not detected by GitHub; treat as unverified and do not depend on it\" rather than implying AGPL."
+    },
+    {
+      "claim": "Comparison, deployment dimension: \"no `--version` flag on the program\" is listed among missing capabilities.",
+      "correction": "Correct as a fact, misleading as a cost estimate. `packages/cli/bin/weft.js` already reads its own `package.json` manifest at startup to decide between the published-`dist` and checkout-`src` shapes, so the version string is already in hand \u2014 `--version` is a two-line change against existing code, not a new capability, and should not be weighed alongside genuinely missing verbs like `signal` or `search`."
+    },
+    {
+      "claim": "Several brainstormed ideas describe the `node:vm` sandbox as something that can be parameterised per run (e.g. `createSandbox(rt)`), and the comparison describes it as \"a node:vm context with replaced globals\" without noting its lifetime.",
+      "correction": "The sandbox context is created once inside `instantiateBundle` (packages/gate/src/load.ts:73) at LOAD time, and the resulting `def` \u2014 whose `run` closure captures those globals lexically \u2014 is cached per (file, bundleHash) in the registry's Map (packages/gate/src/registry.ts:70-92). One sandbox and one set of `Date`/`Math` stand-ins is therefore shared by every concurrent run of that workflow in the process, including every run served by one daemon. Any design that wants per-run state in a sandbox global must route through AsyncLocalStorage (which packages/core/src/runtime.ts:277 already uses for step context) or instantiate per run."
+    }
+  ],
+  "topTen": [
+    {
+      "rank": 1,
+      "title": "Notifier seam: make a durable gate reach a person (Slack / webhook / desktop, ideally over Novu)",
+      "justification": "Verified by grep that no notification code of any kind exists in packages/*/src, which makes the README's headline promise \u2014 \"the answer can arrive hours later\" \u2014 true in mechanism and hollow in practice; it is a leaf package over already-public `Engine.watch`/`pending`/`answer` with zero core changes, and `human.answered.channel` was clearly built for it and is currently written only by the daemon."
+    },
+    {
+      "rank": 2,
+      "title": "Journal format version + tolerant reader",
+      "justification": "~50 lines that nobody proposed, and a hard prerequisite for roughly a third of the brainstormed set: every idea adding an event type silently breaks cross-version journal reads today because events.ts and store-fs/journal.ts contain no version field at all."
+    },
+    {
+      "rank": 3,
+      "title": "Machine-readable CLI: `--json` on every verb, documented exit codes, and the four missing commands",
+      "justification": "A tool whose entire pitch is unattended multi-hour runs currently emits only ANSI-painted prose (verified: no `--json` anywhere in packages/cli/src), so scripting weft into CI means parsing terminal output \u2014 and it is pure CLI work over Engine methods that all already exist, including the `signal` route the daemon has and the CLI does not."
+    },
+    {
+      "rank": 4,
+      "title": "AgentProvider conformance suite",
+      "justification": "S effort that converts a README falsehood (\"behind a shared conformance suite\" \u2014 only journalStore/blobStore suites exist) into a red build, and forces the honest fix for the asymmetry where `write: { mode: \"strict\" }` means live canUseTool gating on Claude and nothing at all on Codex behind one advertised interface."
+    },
+    {
+      "rank": 5,
+      "title": "Per-step OpenTelemetry spans with GenAI + OpenInference attributes",
+      "justification": "Mechanical fold from a journal that already records kind, key, phase, route, effort, per-attempt usage, cacheRead and USD \u2014 versus the single `tracer.startSpan` at engine.ts:789 that is the entire current implementation \u2014 and it buys a full trace UI in Phoenix/Langfuse/Opik for near-zero build cost."
+    },
+    {
+      "rank": 6,
+      "title": "Schema-aligned coercion pass before spending a repair turn",
+      "justification": "S effort reusing the keyword walker already in jsonschema.ts, inserted at the one place in ctx.ts:851-853 where a failed `validateSchema` goes straight to a paid `provider.repair` turn; it removes fences, prose wrappers and near-miss scalars for zero model calls, and the authoritative Zod schema still has final say so it cannot widen the contract."
+    },
+    {
+      "rank": 7,
+      "title": "`weft fork <run> --from <step>` (the two duplicate proposals, merged)",
+      "justification": "Weft built content-addressed identity, three-tier salvage and a version stamp and then exposed three verbs over the journal; fork is mostly a record copy plus the existing resume path, and every checkpoint-based competitor with strictly less information than weft already ships it (DBOS forkWorkflow, LangGraph checkpoint_id, Burr's sequence_id triple)."
+    },
+    {
+      "rank": 8,
+      "title": "Cross-run gate inbox (`weft inbox`, `GET /api/pending`, `weft_pending`)",
+      "justification": "S effort answering the only question a human ever has \u2014 \"what is waiting on me?\" \u2014 which is currently unanswerable because every pending surface is keyed by runId, and it is the natural payload source for the notifier at rank 1 rather than a competing feature."
+    },
+    {
+      "rank": 9,
+      "title": "`reads:` scopes and a world-hash in step identity",
+      "justification": "The one item on weft's own honest-deviations list that changes what the product IS: without the tree in the identity hash, a resume serves an answer computed against a repo that has since changed, and every cross-run cache or distribution idea is unsound until it lands \u2014 with Nx/Bazel/Dagster as real prior art the brainstorm cites in one clause and then ignores."
+    },
+    {
+      "rank": 10,
+      "title": "OS sandbox for write steps plus default-deny egress (the two duplicate sandbox proposals, merged), starting with the egress half",
+      "justification": "`fetchAllow` is optional and undefined by default, so a default install lets model-generated code reach any host and skips the hardened redirect path entirely \u2014 flipping that default is a one-line change with outsized safety value, and it is the honest down-payment on the larger fix for \"worktree isolation is convention, not enforcement\" before committing to bubblewrap/Seatbelt/Deno-permissions backends."
+    }
+  ]
+}

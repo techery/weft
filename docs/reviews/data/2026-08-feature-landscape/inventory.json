@@ -1,0 +1,1147 @@
+[
+  {
+    "area": "Weft engine internals (@techery/weft-core + sdk, store-fs, index-sqlite): journaling, replay/salvage, budget, concurrency, HITL, projections, schema boundary, isolation/patches, sub-workflows, storage",
+    "features": [
+      {
+        "name": "Append-only journal as the only source of truth",
+        "description": "A run is a sequence of {i, at, ev} records; every other artifact (state.json, tree.json, report.md, the sqlite index) is a fold over it. The event union covers run lifecycle (run.created/status/completed/failed/cancelled), steps (step.scheduled/attempt/completed/failed), humans (human.requested/answered/rejected), signals (signal.received/rejected), timers, patches (captured/merged/discarded), scope.violation, checks, notes, drops, budget.sampled, phase, log, and replay.salvaged/diverged.",
+        "evidence": "packages/core/src/events.ts:82-170; packages/core/src/events.ts:173-177; packages/core/src/projections.ts:1-4",
+        "maturity": "solid"
+      },
+      {
+        "name": "Canonical-JSON step identity hashing",
+        "description": "Step identity is sha256 over canonicalJson({kind, payload, schema, key}) with recursively sorted object keys, undefined-valued properties dropped, and Dates ISO-stringified. Including the explicit key in the hash keeps two same-content steps with different keys from serving each other's journal entries.",
+        "evidence": "packages/core/src/canonical.ts:8-24; packages/core/src/canonical.ts:35-37; packages/core/src/runtime.ts:475",
+        "maturity": "solid"
+      },
+      {
+        "name": "ReplayIndex: journal folded into serve-able entries",
+        "description": "fromRecords builds bySeq/byHash/byKey completion maps, human entries by hash and id, incomplete scheduled entries by hash, buffered signals by name, plus totalUsage {tokens,usd,samples} accumulated from step.completed, step.attempt (failed prior attempt's spend) and step.failed error.detail.usage, and mergedBaseTrees from patch.merged. human.answered records only the FIRST standing answer; human.rejected clears the slot so a replacement can fill it; signal.rejected consumes the delivery the failed step took.",
+        "evidence": "packages/core/src/replay.ts:90-238; packages/core/src/replay.ts:153-183; packages/core/src/replay.ts:196-225",
+        "maturity": "solid"
+      },
+      {
+        "name": "Three-tier replay matching (fast path / salvage / --reuse key)",
+        "description": "matchStep first tries the same seq with the same hash+kind, then any unconsumed same-hash+kind entry (salvage, journaling replay.salvaged), then \u2014 only under reuse mode \"key\" \u2014 an unconsumed entry with the same key. Anything unmatched re-runs live and journals replay.diverged while still inside history.",
+        "evidence": "packages/core/src/replay.ts:248-301; packages/core/src/runtime.ts:504-575; packages/core/src/runtime.ts:589-593",
+        "maturity": "solid"
+      },
+      {
+        "name": "Keyless-ambiguity guard tied to a workflow version stamp",
+        "description": "run.created stores bodyHash = sha256(name + def.run.toString()) and optionally the host's bundle defHash. On resume versionUnchanged() requires both available stamps to agree; when they don't, positionsTrusted=false and a keyless step whose content matches more than one journaled entry re-runs (journaling replay.diverged with an \"ambiguous keyless identity\" reason) rather than taking the entry sitting at its seq.",
+        "evidence": "packages/core/src/engine.ts:94-128; packages/core/src/engine.ts:429-435; packages/core/src/replay.ts:275-291; packages/core/src/runtime.ts:512-528",
+        "maturity": "solid"
+      },
+      {
+        "name": "OrderedDelivery: journaled completion ordering with a machine-independent stall watchdog",
+        "description": "While replay is pure (no live dispatch yet), cached completions are parked and released in journaled completion order so seq numbers and continuations reproduce. A stall is detected by counting drained event-loop TURNS (3) with busy()==0 rather than wall-clock, then skipping forward; the first live dispatch calls breakOrder() and flushes everything.",
+        "evidence": "packages/core/src/replay.ts:318-460; packages/core/src/replay.ts:430-460; packages/core/src/runtime.ts:292-295",
+        "maturity": "solid"
+      },
+      {
+        "name": "verifyServe: refusing journaled effects whose result no longer holds",
+        "description": "A StepSpec may supply verifyServe(journaled); a false verdict consumes the entry, journals replay.diverged, and re-executes with io.reExecuting=true (so recovery paths may treat an existing branch/tag as their own prior work rather than a collision). Used by git.commit (ancestor-of-HEAD check), git.checkout (HEAD still on the ref, branch-vs-detached aware), git.tag (tag peels to the journaled sha), branch.create (+checkout still current), ctx.integrate (tree hash / reverse-apply / mergedBaseTrees / forward-apply), function checks, and sub-workflow steps.",
+        "evidence": "packages/core/src/runtime.ts:529-544; packages/core/src/runtime.ts:604-619; packages/core/src/ctx.ts:1531-1541; packages/core/src/ctx.ts:1550-1574; packages/core/src/ctx.ts:2073-2098",
+        "maturity": "solid"
+      },
+      {
+        "name": "Generic step runner with retry, per-attempt abort, and deadline anchoring",
+        "description": "runStep journals step.scheduled (hash, kind, key, label, phase, parentSeq via AsyncLocalStorage, route, scope, payload, childRunId), then loops attempts with a fresh AbortController each time; failures journal step.failed unless retryable (never for cancelled/budget_exceeded/gate_denied/human_denied), retries journal step.attempt carrying the failed attempt's usage and back off linearly. reuseIncomplete re-adopts a prior incomplete schedule so a resumed timed wait gets only the REMAINDER of its deadline.",
+        "evidence": "packages/core/src/runtime.ts:596-761; packages/core/src/runtime.ts:657-664; packages/core/src/runtime.ts:726-751",
+        "maturity": "solid"
+      },
+      {
+        "name": "Step timeout with bounded drain and late-usage harvest",
+        "description": "withTimeout arms a referenced timer chunked below Node's 2^31-1ms ceiling, aborts the attempt on expiry, then races the losing promise against a 5s drain so a provider settling inside that window can hand back its accumulated Usage; the timeout StepError carries that usage so a later resume restores the charge.",
+        "evidence": "packages/core/src/runtime.ts:763-834; packages/core/src/runtime.ts:815-833",
+        "maturity": "solid"
+      },
+      {
+        "name": "Budget accounting: token+USD ledger with parent-linked child pools",
+        "description": "Budget.charge sums non-negative input+output tokens and usd and propagates up the parent chain (root counts chargedCalls); remainingTokens/remainingUsd take the min of own and ancestor headroom; checkBeforeStep throws BudgetExceededError once either axis hits zero. Child budgets are created by fraction of remaining or absolute caps and always parent-linked.",
+        "evidence": "packages/core/src/budget.ts:62-72; packages/core/src/budget.ts:115-145; packages/core/src/budget.ts:49-60",
+        "maturity": "solid"
+      },
+      {
+        "name": "Concurrency-aware budget admission (reserveCall)",
+        "description": "Before dispatching a provider call, reserveCall parks rather than refuses: admits() requires (inflight+1) * (spent/samples) to fit in the remaining headroom, serializes calls one at a time while no cost sample exists, and wakes every parked caller whenever a charge lands or a call releases. It only throws when waiting cannot help (pool exhausted, or nothing in flight and this call still doesn't fit).",
+        "evidence": "packages/core/src/budget.ts:147-214; packages/core/src/budget.ts:216-230; packages/core/src/ctx.ts:386-404",
+        "maturity": "solid"
+      },
+      {
+        "name": "Budget restore across resumes and descendant journals",
+        "description": "Resume restores max(sum of journaled usage, last budget.sampled) \u2014 the sample is a lower bound covering a crash between charge and terminal record \u2014 plus a recursive walk of parentage-verified descendant journals for child spend the parent's own roll-ups don't represent (clamped at zero per child), with a matching samples count so the per-call average stays honest. Re-entering a child restores the delta up the chain and restoreLocal()s the full amount into the fresh child ledger.",
+        "evidence": "packages/core/src/engine.ts:437-461; packages/core/src/engine.ts:494-557; packages/core/src/engine.ts:1169-1189; packages/core/src/budget.ts:89-105",
+        "maturity": "solid"
+      },
+      {
+        "name": "Pricing table and USD-only ceiling guard",
+        "description": "When a provider reports tokens but no usd, the engine prices the call from config.providers[id].prices[model] or the built-in DEFAULT_PRICES (claude-opus-5/sonnet-5/haiku-4-5) and journals a budget.sampled after each charge. A run with a USD-only ceiling whose provider neither reports usd nor has configured pricing is refused before dispatch instead of silently running unbounded.",
+        "evidence": "packages/core/src/config.ts:74-78; packages/core/src/config.ts:113-120; packages/core/src/ctx.ts:538-554; packages/core/src/ctx.ts:468-482",
+        "maturity": "solid"
+      },
+      {
+        "name": "FIFO counting semaphore + per-provider limiters",
+        "description": "Semaphore is a FIFO counting semaphore with abort-aware acquire; `with()` releases on settlement OR on abort (deliberately allowing a bounded overshoot rather than a permanent deadlock from a zombie step). The global limiter defaults to min(16, cpus-2) and wraps the entire agent lane (worktree creation included), exec/bash/fetch/check spawns; a per-provider Semaphore stacks on top for model calls.",
+        "evidence": "packages/core/src/limiter.ts:3-77; packages/core/src/config.ts:66-68; packages/core/src/engine.ts:249-256; packages/core/src/ctx.ts:375-382; packages/core/src/ctx.ts:556-562",
+        "maturity": "solid"
+      },
+      {
+        "name": "HITL broker: human steps are journaled steps whose provider is a person",
+        "description": "runHuman hashes {kind, question, detail, schema, risk, artifact, timeout settings}, matches a journaled request by hash, serves a standing answer (in journaled order) or re-surfaces the same request id and waits. Live requests journal human.requested with id h<N> (counter seeded from the journal's max), schema, risk, deadline, onTimeout policy and confirmToken.",
+        "evidence": "packages/core/src/runtime.ts:838-957; packages/core/src/runtime.ts:866-882; packages/core/src/runtime.ts:929-956",
+        "maturity": "solid"
+      },
+      {
+        "name": "Answer validation with a reject-and-reopen loop",
+        "description": "An answer is checked against the step's authoritative Standard Schema (after unwrapping the {value} wire carrier); a failure from a human-submitted answer journals human.rejected, reopens the request, and waits for a replacement instead of failing the run. Out-of-process answers are structurally checked against the journaled JSON Schema before appending.",
+        "evidence": "packages/core/src/runtime.ts:959-994; packages/core/src/runtime.ts:1042-1094; packages/core/src/engine.ts:1406-1424; packages/core/src/engine.ts:1510-1517",
+        "maturity": "solid"
+      },
+      {
+        "name": "Answer delivery is serialized and CAS-guarded across processes",
+        "description": "Engine.answer chains per runId::requestId, refuses journal-unsafe payloads, and appends via journal.appendIf under a re-fold loop: a standing answer, a terminal run event, or a lost CAS refuses the caller. A parent-addressed answer is routed to the live or durable descendant that actually holds the pending request (request ids are run-local).",
+        "evidence": "packages/core/src/engine.ts:1343-1379; packages/core/src/engine.ts:1442-1467; packages/core/src/engine.ts:993-1046; packages/core/src/engine.ts:1476-1533",
+        "maturity": "solid"
+      },
+      {
+        "name": "Human deadlines with deny/escalate/default policies",
+        "description": "A request with a timeout arms a referenced, chunked timer; at the deadline the policy applies \u2014 escalate logs and keeps waiting, default wraps and journals the pre-validated fallback, deny journals a {$timeout:\"deny\"} sentinel that becomes human_timeout for ask/review and {approved:false} for gates/approvals. The timeout append uses the same appendIf CAS as Engine.answer and abandons on a terminal event or a standing real answer. onTimeout.default is validated and JSON-checked at request time, not at the deadline.",
+        "evidence": "packages/core/src/runtime.ts:1193-1252; packages/core/src/runtime.ts:1066-1081; packages/core/src/runtime.ts:840-865; packages/core/src/runtime.ts:1183-1191",
+        "maturity": "solid"
+      },
+      {
+        "name": "Risk-tiered approval gates with typed confirmation",
+        "description": "resolveApproval matches glob patterns over the gate action string first (picomatch, first match wins), then per-risk tiers, defaulting low\u2192auto and everything else\u2192ask; irreversible+ask additionally demands a confirm token `confirm:<sha256(action)[0:8]>` echoed in the answer, and a mismatch is treated as denied. Auto-approved gates append request+answer(answeredBy:\"policy\") in one batch and never wait.",
+        "evidence": "packages/core/src/runtime.ts:1256-1306; packages/core/src/runtime.ts:948-953; packages/core/src/config.ts:10-15",
+        "maturity": "solid"
+      },
+      {
+        "name": "In-agent permission hook and asks routed into the broker",
+        "description": "Provider adapters get a ProviderHitl seam: onPermission escalates high/irreversible tool requests through the gate (deny by default when the attempt has been aborted), and onAsk opens a human \"ask\" step. Both are fenced against zombie attempts so an abandoned attempt cannot open gates or journal requests.",
+        "evidence": "packages/core/src/provider.ts:23-27; packages/core/src/ctx.ts:504-535",
+        "maturity": "solid"
+      },
+      {
+        "name": "Signal waits: buffered, ordered, and rejection-consuming",
+        "description": "ctx.signal is a journaled step with reuseIncomplete (so a resumed timed wait keeps its original deadline). takeOrAwaitSignal drains journaled signal.received entries first, then in-process buffered deliveries, then parks as a durable wait. A payload that fails the schema journals signal.rejected so a resume cannot re-take the same bad payload ahead of a corrected one. Delivery happens only via the owning engine's journal tailer, so a payload is never delivered twice.",
+        "evidence": "packages/core/src/ctx.ts:2280-2317; packages/core/src/runtime.ts:1310-1373; packages/core/src/engine.ts:908-951",
+        "maturity": "solid"
+      },
+      {
+        "name": "Suspension model and tree-aggregated outcome()",
+        "description": "Steps toggle between live work and durable waits (markWaiting/unmarkWaiting); a run is suspended when inflightLive==0 and pending waits exist. suspensionOf recursively folds live children so a parent whose only work is a child waiting on a person reports waiting_for_human and surfaces the child's pending requests; a waitBridge flips the parent's workflow step per level.",
+        "evidence": "packages/core/src/runtime.ts:418-446; packages/core/src/runtime.ts:621-637; packages/core/src/engine.ts:768-785; packages/core/src/engine.ts:1246-1259",
+        "maturity": "solid"
+      },
+      {
+        "name": "Projections: state / tree / report as pure folds",
+        "description": "reduceState replays every event into RunState (steps with duplicate seqs across resume passes all retained, checks keyed by the schedule they belong to, terminal events clearing their opposite, first-standing-answer semantics matching replay). renderTree nests by parentSeq into phases with a \"(no phase)\" bucket; renderReport emits status/cost, outcome JSON, changes (including captured-but-not-integrated warnings), a checks table, ledger notes, failures & drops, remaining risk, and the exact `weft answer` command for the first pending request.",
+        "evidence": "packages/core/src/projections.ts:89-325; packages/core/src/projections.ts:345-375; packages/core/src/projections.ts:381-468",
+        "maturity": "solid"
+      },
+      {
+        "name": "Snapshot publication ordered by covered record count",
+        "description": "RunState carries `records` (how many journal records the reduction covered); the engine serializes snapshots per run on a promise chain and re-reduces index-sorted records each pass, and both the memory and fs stores refuse to publish a reduction covering fewer records than the standing one (the fs store does the compare under a cross-process snapshot.lock and writes each file tmp+rename).",
+        "evidence": "packages/core/src/projections.ts:81-86; packages/core/src/engine.ts:953-968; packages/store-fs/src/journal.ts:522-559; packages/core/src/stores.ts:234-242",
+        "maturity": "solid"
+      },
+      {
+        "name": "Schema boundary: Zod\u2192JSON Schema with primitive wrapping and lints",
+        "description": "toWireSchema converts Zod via z.toJSONSchema({io:\"input\", reused:\"inline\"}), strips $schema, and wraps any non-object root as {value} (required, additionalProperties:false) because providers demand an object root; wrap/unwrap happens symmetrically on the way back. Depth >8 and non-zod vendors produce lints; non-zod schemas fall back to a permissive {value:{}} carrier.",
+        "evidence": "packages/core/src/jsonschema.ts:21-73; packages/core/src/jsonschema.ts:59-61",
+        "maturity": "solid"
+      },
+      {
+        "name": "Schema repair loop against the same provider session",
+        "description": "runProviderWithRepair validates the unwrapped output against the real schema; on failure it appends a step.attempt (\"schema repair n/max\") and calls provider.repair(sessionId, req, issues) up to limits.repair (default 2) before throwing schema_repair_exhausted. Usage accumulates per turn with per-turn non-negative normalization, and every failure path carries the accumulated spend on the error so the journal record restores it later.",
+        "evidence": "packages/core/src/ctx.ts:813-882; packages/core/src/config.ts:103; packages/core/src/ctx.ts:563-578",
+        "maturity": "solid"
+      },
+      {
+        "name": "Structural JSON-Schema validator for hosts without the real schema",
+        "description": "structuralCheck covers type (incl. unions and integer), enum, anyOf, required/properties, additionalProperties:false, array items, and the constraint keywords zod emits (const, minLength/maxLength/pattern, minimum/maximum/exclusive*, multipleOf with a scale-aware tolerance, minItems/maxItems), with order-independent deepEqual for enum/const.",
+        "evidence": "packages/core/src/jsonschema.ts:86-213; packages/core/src/jsonschema.ts:225-243",
+        "maturity": "partial"
+      },
+      {
+        "name": "JSON-safety gate on everything that crosses the journal",
+        "description": "jsonUnsafeAt walks a value and names the first path JSONL cannot hold \u2014 undefined (including present-but-undefined properties), bigint, function, symbol, non-finite numbers, Map/Set/Date/class instances (realm-tolerant prototype test), and cycles via an ancestor stack that still allows diamond sharing. It gates workflow input, workflow output (before and after schema transforms), child input, answers, signal payloads, and onTimeout defaults.",
+        "evidence": "packages/core/src/jsonschema.ts:252-299; packages/core/src/engine.ts:273-280; packages/core/src/engine.ts:799-823; packages/core/src/engine.ts:1352-1359; packages/core/src/engine.ts:1541-1548",
+        "maturity": "solid"
+      },
+      {
+        "name": "Secret handles: redacted in the journal, resolved only on the live path",
+        "description": "ctx.secret(name) returns {__weftSecret:name}; exec/bash env maps and fetch headers are journaled as `<redacted:NAME>` while resolveSecretValues reads process.env inside execute() only \u2014 so a journal-served step replays in an environment where the secret is gone, and a missing secret is an invalid_input StepError.",
+        "evidence": "packages/core/src/ctx.ts:109-158; packages/core/src/ctx.ts:1242; packages/core/src/ctx.ts:1286; packages/core/src/ctx.ts:1207; packages/core/src/ctx.ts:1335",
+        "maturity": "solid"
+      },
+      {
+        "name": "fetch: allow-list, manual redirect chain, and credential stripping",
+        "description": "ctx.fetch checks config.fetchAllow (picomatch on hostname) on the live path only. When an allow-list exists or any header is secret-backed or credential-SHAPED (CREDENTIAL_HEADER regex), redirects are followed by hand: every hop is re-validated, only the five real redirect statuses are followed, max 5 hops, 303/POST-301/302 rewrite to GET dropping body and content-type/length, and crossing origins strips credential and secret-backed headers. Deadlines use a chunked AbortSignal that stays armed through the body read.",
+        "evidence": "packages/core/src/ctx.ts:1328-1418; packages/core/src/ctx.ts:121-122; packages/core/src/ctx.ts:87-103",
+        "maturity": "solid"
+      },
+      {
+        "name": "Write isolation: per-attempt worktrees seeded from the integration state",
+        "description": "A step with `write` or isolation:\"worktree\" gets a worktree at tmpdir/weft-worktrees/<runId>/<seq>.<attempt>, pre-pruned (so a resume after a kill doesn't fail on a registered worktree) and seeded from integrationBaseCommit \u2014 a dangling, ref-pinned commit of the current tracked+untracked state, so later write agents build on earlier ctx.integrate() results rather than HEAD.",
+        "evidence": "packages/core/src/ctx.ts:406-423; packages/core/src/ctx.ts:190-244; packages/core/src/ctx.ts:803-809",
+        "maturity": "solid"
+      },
+      {
+        "name": "Patch capture, scope checking, and quarantine",
+        "description": "capturePatch stages everything (force-adding in-scope but gitignored outputs), refuses accidental gitlinks, and diffs --cached --binary --no-renames --no-ext-diff --no-textconv with NUL-delimited paths. The engine unions captured files with provider-reported escaped paths (absolute or ../), runs checkScope, journals patch.captured plus scope.violation, and marks the patch quarantined when mode is strict.",
+        "evidence": "packages/core/src/ctx.ts:613-681; packages/isolation/src/patch.ts:42-83; packages/isolation/src/patch.ts:198-243",
+        "maturity": "solid"
+      },
+      {
+        "name": "In-place write-scope enforcement with ignored-tree manifests",
+        "description": "An in-place writer (used by the merge-resolution agent) is bounded by tree snapshots before/after plus a listing diff of untracked-ignored entries and a content-hash stat manifest of pre-existing ignored paths (cap 10,000). Out-of-scope edits journal scope.violation and, in strict mode, are rolled back file-by-file from the snapshot (worktree-only restore, or rm for paths absent from the snapshot).",
+        "evidence": "packages/core/src/ctx.ts:435-454; packages/core/src/ctx.ts:682-770; packages/core/src/ctx.ts:1962-2040; packages/core/src/ctx.ts:1924-1954",
+        "maturity": "solid"
+      },
+      {
+        "name": "ctx.integrate: nested journaled snapshot/apply with conflict policies",
+        "description": "Integration runs per patch as an outer step whose snapshot and apply are themselves journaled sub-steps (so a resume mid-ask reuses the PRE-conflict snapshot instead of capturing markers). Clean applies journal patch.merged with baseTree/resultTree; conflicts follow onConflict \u2014 \"fail\" restores and throws, \"agent\" runs a strict in-place resolver and verifies no conflict markers remain before accepting its self-report, \"ask\" (default) asks a person for skip/keep-conflicts/abort. A run that ends with un-integrated, un-discarded patches fails with unintegrated_patches.",
+        "evidence": "packages/core/src/ctx.ts:2042-2235; packages/core/src/ctx.ts:2104-2146; packages/core/src/ctx.ts:2154-2193; packages/core/src/engine.ts:824-831",
+        "maturity": "solid"
+      },
+      {
+        "name": "Sub-workflows: own run, own journal, shared abort/agent-cap, scoped budget",
+        "description": "ctx.workflow enforces maxDepth (default 3), never serves its completion (verifyServe:false) so the child's own journal is the replay authority, and reuses the journaled childRunId (from step.scheduled or the completed output) on re-execution. executeChildRun validates the child input schema on every execution, detects an 8-hex id collision with an unrelated journal and reallocates (up to 16 tries), launches the child with its own lease, and rolls the child's spend up onto the parent step as a delta beyond what earlier failed passes already carried.",
+        "evidence": "packages/core/src/ctx.ts:1023-1080; packages/core/src/engine.ts:1056-1339; packages/core/src/engine.ts:1088-1105; packages/core/src/engine.ts:1264-1301",
+        "maturity": "solid"
+      },
+      {
+        "name": "Cross-process ownership: leases, fencing, and conditional terminals",
+        "description": "acquireRun claims a run before execution (fs store: owner.json + TTL 15s under an owner.lock CAS); the engine renews every 5s and fences the runtime after a lost claim or 3 consecutive refresh failures. Fencing refuses all further appends, disarms deadline timers, rejects pending waits, and aborts step work WITHOUT journaling a terminal event. appendTerminal lands run.completed/failed/cancelled through appendIf so a cancellation committed in the tailer's blind spot converts the outcome instead of being overridden.",
+        "evidence": "packages/core/src/engine.ts:622-647; packages/core/src/engine.ts:728-739; packages/core/src/runtime.ts:1116-1136; packages/core/src/engine.ts:681-726; packages/store-fs/src/journal.ts:604-670",
+        "maturity": "solid"
+      },
+      {
+        "name": "External-event tailer with retry-then-fence",
+        "description": "The owning engine watches its own journal from launch and converts externally appended human.answered / signal.received / run.cancelled into in-process deliveries (structuredClone'd, idempotent against already-delivered ids). A watch that fails five times fences the run exactly like a lost lease, with exponential unref'd backoff in between.",
+        "evidence": "packages/core/src/engine.ts:908-951; packages/core/src/runtime.ts:1138-1162",
+        "maturity": "solid"
+      },
+      {
+        "name": "Bounded cancel and non-terminal shutdown/detach",
+        "description": "cancel() aborts, rejects human waits across the live descendant tree, and drains up to 5s; past the bound it journals run.cancelled BEFORE fencing, retires the active entry, and deliberately keeps the lease (a zombie may still be writing). shutdown() fences and drains every active run without journaling a terminal, releasing the claim only for runs that actually unwound \u2014 so runs stay resumable and a still-live one TTL-expires instead.",
+        "evidence": "packages/core/src/engine.ts:1572-1662; packages/core/src/engine.ts:1676-1703; packages/core/src/engine.ts:64-77",
+        "maturity": "solid"
+      },
+      {
+        "name": "replay --dry: cost-free divergence report",
+        "description": "replayDry re-executes the workflow against the journal with a runtime in dry mode: appends are synthesized in memory, matched steps are served, and the first would-run step throws a CancelledError recorded as a divergence. It reports hits, salvaged, diverged step refs, still-pending request ids, and whether the body completed.",
+        "evidence": "packages/core/src/engine.ts:1792-1859; packages/core/src/runtime.ts:317-321; packages/core/src/runtime.ts:581-584",
+        "maturity": "partial"
+      },
+      {
+        "name": "Durable failure suppression for optional agent steps",
+        "description": "With onError:\"null\" a StepError is recorded as a drop and a sentinel step.completed {$suppressed:true} is journaled for that seq, so a resume replays the same declared null instead of re-running the paid optional step; if the sentinel cannot be journaled the original error propagates rather than silently un-suppressing later.",
+        "evidence": "packages/core/src/ctx.ts:884-913; packages/core/src/ctx.ts:305-323",
+        "maturity": "solid"
+      },
+      {
+        "name": "Blob offload and repairable-vs-fatal read failures",
+        "description": "Step outputs over limits.blobThresholdBytes (64KB, measured in real bytes) are replaced by {$outputBlob, size, preview}; transcripts, patches and review artifacts go to blobs directly. loadOutput returns undefined ONLY for BlobMissingError/BlobCorruptError/unparseable JSON \u2014 treated as a cache miss that re-runs the step \u2014 while any other store failure (EACCES/EIO/timeouts) propagates so a step is never re-paid to recover data that was never lost. FsBlobStore writes tmp+rename and verifies the sha256 of every read against the ref.",
+        "evidence": "packages/core/src/runtime.ts:372-416; packages/core/src/stores.ts:282-316; packages/store-fs/src/blobs.ts:20-62",
+        "maturity": "solid"
+      },
+      {
+        "name": "FsJournalStore: locked, fsynced JSONL appends with torn-tail recovery",
+        "description": "Each append takes a cross-process lock (exclusive-create + 2.5s mtime renewal, 10s staleness with an identity-safe rename-aside steal, 30s acquisition deadline), reconciles on-disk growth into count/byteOffset twice (so a stolen lock's committed records are never truncated), re-tests the appendIf CAS, truncates only a genuinely torn trailing line, then loops writeSync to completion and fsyncs. Indices stay tentative until the bytes are durable.",
+        "evidence": "packages/store-fs/src/journal.ts:104-178; packages/store-fs/src/journal.ts:184-310; packages/store-fs/src/journal.ts:318-348",
+        "maturity": "solid"
+      },
+      {
+        "name": "Absence-vs-fault discipline throughout the fs store",
+        "description": "Only ENOENT/ENOTDIR count as \"no journal\": read(), exists(), loadCache(), list() and the owner-claim reader all propagate EACCES/EIO instead of reporting a durable run as missing. list() skips only damaged (SyntaxError) or vanished runs so one corrupt journal cannot empty `weft ls` \u2014 or, through RunIndex.rebuild, delete healthy rows.",
+        "evidence": "packages/store-fs/src/journal.ts:22-38; packages/store-fs/src/journal.ts:350-371; packages/store-fs/src/journal.ts:427-465; packages/store-fs/src/journal.ts:589-602",
+        "maturity": "solid"
+      },
+      {
+        "name": "Freshness-checked run summaries and projection rebuild",
+        "description": "summarize() prefers state.json but only while strictly newer than journal.jsonl (an equal mtime distrusts the projection), otherwise folds the journal; rebuildProjections() regenerates state.json, tree.json AND report.md from the journal for `weft doctor`-style repair.",
+        "evidence": "packages/store-fs/src/journal.ts:467-520; packages/store-fs/src/journal.ts:672-691",
+        "maturity": "solid"
+      },
+      {
+        "name": "SQLite run index: derived, self-healing, own-spend accounting",
+        "description": "RunIndex keeps one row per run folded from its journal (status, timestamps, agentSteps, display tokens/usd, own tokens/usd, a lowercased search_text of workflow name, step keys/labels and human questions). PRAGMA user_version drift drops and recreates the table; a corrupt file (SQLITE_CORRUPT/NOTADB or a matching message) is deleted along with -wal/-shm and reopened, while SQLITE_BUSY/EACCES/EIO propagate. stats() sums own_tokens/own_usd so child spend is counted exactly once (workflow-kind roll-ups excluded, with seq\u2192kind tracked chronologically because seqs restart on resume).",
+        "evidence": "packages/index-sqlite/src/run-index.ts:86-142; packages/index-sqlite/src/run-index.ts:216-235; packages/index-sqlite/src/run-index.ts:298-328; packages/index-sqlite/src/run-index.ts:368-382",
+        "maturity": "solid"
+      },
+      {
+        "name": "Error taxonomy: StepError with code, step ref, attempts, detail",
+        "description": "Every step either returns a schema-validated value or throws a StepError carrying a StepErrorCode, a StepRef (seq/key/kind/label/runId), optional attempts and a detail bag (used to carry Usage across failures). BudgetExceededError and CancelledError are subclasses; serialize/deserialize round-trip through the journal, and isCancellation() is the single predicate fan-out uses to never swallow an abort.",
+        "evidence": "packages/sdk/src/errors.ts:7-113; packages/core/src/runtime.ts:716-736; packages/core/src/ctx.ts:952-954",
+        "maturity": "partial"
+      },
+      {
+        "name": "Fan-out primitives: parallel, pipeline, ok()",
+        "description": "ctx.parallel returns Settled[] in input order, caps items at limits.fanoutMax (4096) after settling already-running promise tasks, and rethrows any cancellation. ctx.pipeline builds immutable per-branch stage lists (step/filter/map) and runs lanes through mapWithConcurrency, dropping filtered lanes; ctx.ok narrows Settled[] to values and journals a `drop` for each failure.",
+        "evidence": "packages/core/src/ctx.ts:932-1019; packages/core/src/limiter.ts:80-98; packages/core/src/runtime.ts:358-368",
+        "maturity": "solid"
+      },
+      {
+        "name": "Checks and the required-check gate",
+        "description": "ctx.check supports exec checks (exit code, evidence tail-truncated to 2000 chars), fn checks (chunked timeout that yields a FAILED check rather than an aborted step, and never served from the journal), trustPrior records, and skipped records; a failing required check is collected and fails the run at the end with check_failed.",
+        "evidence": "packages/core/src/ctx.ts:1797-1907; packages/core/src/engine.ts:832-838; packages/core/src/projections.ts:210-222",
+        "maturity": "solid"
+      },
+      {
+        "name": "Journaled replacements for nondeterministic globals",
+        "description": "ctx.now/random/uuid are journaled sideeffect steps so a replay reproduces the original values, and ctx.sleep is a durable timer step (reuseIncomplete, deadline anchored to the ORIGINAL schedule time, chunked past Node's timer ceiling, journaling timer.fired).",
+        "evidence": "packages/core/src/ctx.ts:2341-2369; packages/core/src/ctx.ts:2319-2339; packages/core/src/runtime.ts:1402-1426",
+        "maturity": "solid"
+      },
+      {
+        "name": "Agent-step caps and routing resolution",
+        "description": "Agent dispatches are counted across the whole run tree (restored on resume from journaled agent step.scheduled records plus descendant journals): passing agentGuideline (15) logs once, passing agentHard (1000) throws. Routing resolves step opts \u2192 workflow defaults \u2192 engine config, and a default model applies only when the step actually routes to the provider that default was written for.",
+        "evidence": "packages/core/src/runtime.ts:448-463; packages/core/src/engine.ts:406-417; packages/core/src/engine.ts:559-591; packages/core/src/ctx.ts:269-277",
+        "maturity": "solid"
+      },
+      {
+        "name": "Test hooks seam",
+        "description": "TestHooks lets @techery/weft-testing stub git ops, exec/bash, fetch, and env reads; a hook returning a value short-circuits the live path and the result is journaled exactly as a real side effect would be.",
+        "evidence": "packages/core/src/hooks.ts:1-14; packages/core/src/ctx.ts:1195-1204; packages/core/src/ctx.ts:1464-1471; packages/core/src/ctx.ts:1322-1325",
+        "maturity": "solid"
+      }
+    ],
+    "limitations": [
+      {
+        "what": "IntegrateOptions.order?: \"sequential\" is declared in the public API but never read \u2014 integration is unconditionally sequential (a for-of over results).",
+        "evidence": "packages/sdk/src/types.ts:398-401; packages/core/src/ctx.ts:2050-2230 (no reference to opts.order)"
+      },
+      {
+        "what": "Two declared StepErrorCodes are never produced anywhere in packages/*/src: `max_turns` and `git_failed`. A GitError from the git layer becomes code \"internal\" via StepError.from. `human_denied` appears only in the retry predicate and is never thrown.",
+        "evidence": "packages/sdk/src/errors.ts:9,20,15; packages/core/src/runtime.ts:730; packages/git/src/index.ts:33-43; packages/sdk/src/errors.ts:88-92"
+      },
+      {
+        "what": "structuralCheck (the only validator hosts have for out-of-process answers) ignores allOf/oneOf/not/$ref/format/uniqueItems/patternProperties, tuple-form items, and non-false additionalProperties \u2014 so an answer can pass the wire check and still be rejected by the owning runtime, which is why the reject-and-reopen loop exists.",
+        "evidence": "packages/core/src/jsonschema.ts:86-206; packages/core/src/jsonschema.ts:165-171"
+      },
+      {
+        "what": "Any non-Zod Standard Schema degrades to a permissive {value:{}} wire schema, so the provider receives no shape guidance at all and the repair loop can only fire after the fact against the real schema.",
+        "evidence": "packages/core/src/jsonschema.ts:31-39; packages/core/src/jsonschema.ts:59-61"
+      },
+      {
+        "what": "Human steps have no `key` and no ambiguity guard: their identity hash is hashStep(\"human\", payload) with no key or schema argument, and matchHuman returns the first unconsumed same-hash entry. Two identical questions in one workflow are distinguished only by occurrence order, with no positionsTrusted-style protection when the script changed.",
+        "evidence": "packages/core/src/runtime.ts:866-885; packages/core/src/replay.ts:303-305; contrast packages/core/src/replay.ts:275-291"
+      },
+      {
+        "what": "replayDry does not compute positionsTrusted, ignores opts.defHash, and resets the budget and agent counter to empty \u2014 so its report can differ from what an actual resume of an edited script would do (which is exactly the case the tool is for).",
+        "evidence": "packages/core/src/engine.ts:1792-1827 (no positionsTrusted / defHash / restore, `budget: new Budget({})`, `agentCounter: { count: 0 }`)"
+      },
+      {
+        "what": "ctx.parallel's `concurrency` option is silently ignored unless EVERY task is a thunk; promise-form tasks fall through to Promise.all with no lane cap.",
+        "evidence": "packages/core/src/ctx.ts:947-951"
+      },
+      {
+        "what": "pipeline.run() defaults to concurrency = items.length, i.e. no pipeline-level cap; only the global limiter inside effectful steps bounds actual work.",
+        "evidence": "packages/core/src/ctx.ts:982-1001 (`opts?.concurrency ?? (items.length || 1)`)"
+      },
+      {
+        "what": "Semaphore.with releases its permit on abort as well as settlement, so the configured concurrency cap can be exceeded by the number of timed-out-but-still-running steps (an accepted trade documented in the code).",
+        "evidence": "packages/core/src/limiter.ts:34-65"
+      },
+      {
+        "what": "Budget admission is a heuristic, not a guarantee: it uses the observed average cost per charged call and undercounts in-flight calls for zombie attempts, so the hard ceiling can be overshot by an in-flight call's actual cost \u2014 enforcement is after the fact in charge()/checkBeforeStep.",
+        "evidence": "packages/core/src/budget.ts:147-169; packages/core/src/ctx.ts:390-404"
+      },
+      {
+        "what": "Resume-time spend restoration relies on the last durable budget.sampled as a lower bound; a crash after a provider charge but before both the terminal record and any sample loses that spend, and the sampled append is best-effort (`void rt.append`, `.catch(() => undefined)`).",
+        "evidence": "packages/core/src/engine.ts:437-461; packages/core/src/ctx.ts:548-552; packages/core/src/engine.ts:1295-1300"
+      },
+      {
+        "what": "Secret redaction covers only env maps and fetch header names/values passed as SecretHandles. Step OUTPUTS are journaled verbatim \u2014 exec/bash stdout+stderr, fetch response bodies and headers, agent prompts, and ctx.env.get's actual value all land in the journal unredacted.",
+        "evidence": "packages/core/src/ctx.ts:1227-1232; packages/core/src/ctx.ts:1435-1436; packages/core/src/ctx.ts:1451-1456; packages/core/src/ctx.ts:292-301"
+      },
+      {
+        "what": "Run ids are 8 hex characters of a UUID. start() only refuses an id whose journal already exists; collision detection and regeneration exist solely for CHILD runs (16 attempts, parentage-verified).",
+        "evidence": "packages/core/src/engine.ts:262-265; packages/core/src/engine.ts:1088-1105"
+      },
+      {
+        "what": "MemoryJournalStore claims never expire (\"in one process a claim never goes stale\"), so an in-process owner that dies without releasing blocks resume forever; MemoryBlobStore performs no hash verification on read, unlike FsBlobStore.",
+        "evidence": "packages/core/src/stores.ts:114-125; packages/core/src/stores.ts:253-276"
+      },
+      {
+        "what": "Strict completion ordering on replay ends at the first live dispatch, and a stall is resolved by skipping forward after 3 quiet drained turns \u2014 determinism of the remainder is explicitly best-effort.",
+        "evidence": "packages/core/src/replay.ts:10-13; packages/core/src/replay.ts:370-378; packages/core/src/replay.ts:430-450"
+      },
+      {
+        "what": "Step timeouts cannot stop a runaway execution: withTimeout aborts, drains 5s, then fails the step while the zombie may keep running and mutating files; ctx.check's fn timeout is likewise best-effort (JS cannot force-kill the callback).",
+        "evidence": "packages/core/src/runtime.ts:800-833; packages/core/src/ctx.ts:1886-1892"
+      },
+      {
+        "what": "Most git write ops have no idempotency verifier, so a resume serves them from the journal without re-checking the world: add, fetch, pull, push, reset, apply, branch.delete, stash.push/pop/drop, clean, and checkout --discard (explicitly excluded).",
+        "evidence": "packages/core/src/ctx.ts:1522-1523; packages/core/src/ctx.ts:1576-1620; packages/core/src/ctx.ts:1710-1730; packages/core/src/ctx.ts:1555-1556"
+      },
+      {
+        "what": "verifyServe is disabled entirely whenever testHooks are configured, so fixture-driven runs never exercise the effect-still-holds re-check.",
+        "evidence": "packages/core/src/ctx.ts:1501"
+      },
+      {
+        "what": "In-place scope verification of ignored content is capped at 10,000 files: a strict scope refuses to run (or fails mid-step) past the cap, and in warn mode edits beyond it are simply not seen.",
+        "evidence": "packages/core/src/ctx.ts:1981-1994; packages/core/src/ctx.ts:443-452; packages/core/src/ctx.ts:698-706"
+      },
+      {
+        "what": "A strict in-place step that modifies pre-existing gitignored files cannot roll them back (no snapshot holds ignored content) \u2014 it throws scope_violation and leaves the edit on disk.",
+        "evidence": "packages/core/src/ctx.ts:709-730"
+      },
+      {
+        "what": "Sub-workflow steps and function checks are never served from the journal (verifyServe: async () => false), so every resume re-enters the child run / re-runs the check function; the child's own journal is what avoids re-paying for its steps.",
+        "evidence": "packages/core/src/ctx.ts:1053-1059; packages/core/src/ctx.ts:1861-1865"
+      },
+      {
+        "what": "The sqlite index is never updated incrementally by the engine \u2014 nothing in core calls indexRun; the only host path is a full RunIndex.rebuild(), so rows are stale between rebuilds. search() is an unranked LIKE substring scan (no FTS) with a default limit of 50.",
+        "evidence": "packages/host/src/weft.ts:122-141; packages/index-sqlite/src/run-index.ts:184-213; packages/index-sqlite/src/run-index.ts:166-182"
+      },
+      {
+        "what": "ctx.fetch allows every host unless fetchAllow is explicitly configured (the field is optional and undefined by default), and the manual per-hop validation path is skipped entirely when no allow-list and no credential-shaped header is present.",
+        "evidence": "packages/core/src/config.ts:52-55; packages/core/src/ctx.ts:1328-1330; packages/core/src/ctx.ts:1351-1354"
+      },
+      {
+        "what": "JournalStore.appendIf and acquireRun are optional; a store without them makes Engine fall back to unconditional appends and no ownership guard, explicitly accepting the answer/cancel/terminal races (\"single-process hosts don't race themselves\").",
+        "evidence": "packages/core/src/stores.ts:53-57; packages/core/src/stores.ts:68-75; packages/core/src/engine.ts:684-687; packages/core/src/engine.ts:1527-1531; packages/core/src/engine.ts:1655-1659"
+      },
+      {
+        "what": "The fs append lock is best-effort: a holder frozen past the 10s stale threshold (SIGSTOP, VM pause) can have its lock stolen, and acquisition gives up after 30s with an error. Correctness then rests on the double reconcile + mutex.held() re-checks rather than on true mutual exclusion.",
+        "evidence": "packages/store-fs/src/journal.ts:184-262; packages/store-fs/src/journal.ts:120-146; packages/store-fs/src/journal.ts:263-299"
+      },
+      {
+        "what": "There is no blob garbage collection or deletion: BlobStore exposes only put/get/getText/has, so transcripts, patches and artifacts accumulate indefinitely under .weft/blobs.",
+        "evidence": "packages/core/src/stores.ts:88-93; packages/store-fs/src/blobs.ts:12-76"
+      },
+      {
+        "what": "The engine's own version stamp is sha256(name + def.run.toString()), so an edit inside an imported helper the workflow delegates to is invisible unless the host also supplies a bundle defHash; child runs never have a bundle stamp at all and inherit the root's verdict.",
+        "evidence": "packages/core/src/engine.ts:79-96; packages/core/src/engine.ts:108-128; packages/core/src/engine.ts:1143-1159"
+      },
+      {
+        "what": "A duplicate explicit step key is only logged, not rejected \u2014 two steps sharing a key still both run and both become byKey candidates for `--reuse key`.",
+        "evidence": "packages/core/src/runtime.ts:477-482; packages/core/src/replay.ts:293-299"
+      },
+      {
+        "what": "Cosmetic events (phase, log, drop) are suppressed during replay until the first live dispatch, so a resumed run's projections can lack logs/drops the first pass recorded only if that pass never journaled them; and setStatus/log/phase appends are fire-and-forget (`void this.append`), unobserved on failure.",
+        "evidence": "packages/core/src/runtime.ts:306-368"
+      },
+      {
+        "what": "After a bounded cancel or shutdown drain, the ownership lease is deliberately NOT released; the run stays claimed until its TTL expires, so another process cannot take it over promptly.",
+        "evidence": "packages/core/src/engine.ts:1623-1631; packages/core/src/engine.ts:1696-1701"
+      }
+    ]
+  },
+  {
+    "area": "Developer-facing surface of weft: CLI (all 14 commands + flags), MCP server tools, daemon HTTP API + web UI, determinism gate (rules/bundler/sandbox/registry), host assembly + config format, testing harness, scaffolding, doctor, packaging/release, CI",
+    "features": [
+      {
+        "name": "`weft` program shell and global flags",
+        "description": "Commander program built by `buildProgram(io)` with every line routed through an injectable `CliIo` writer, so the whole CLI is drivable from a test with no terminal. Two global options: `--cwd <dir>` (repo root, defaults to `process.cwd()`) and `--mock` (wires the fixture provider instead of Claude/Codex). Errors from any command are caught at the top and turned into one red line plus `process.exitCode = 1` \u2014 never `process.exit`, so journal writes flush.",
+        "evidence": "packages/cli/src/main.ts:43-76 (program + global options), main.ts:32-37 (consoleIo), main.ts:87-96 (run/error handling), packages/cli/src/io.ts:12-20 (CliIo), packages/cli/src/context.ts:22-31 (globalOptions/openWeft)",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft run <ref>` \u2014 start a run",
+        "description": "Accepts a registry name, a path to a `.ts` file, or `-` (workflow source on stdin, gated and hashed inline). Flags: `--args <json>`, `--budget <spec>`, `--reuse <content|key>`, `--watch`; `allowUnknownOption()` lets a workflow's input fields become `--flag value` pairs that merge over `--args`. Before launching it reserves a run id by exclusive `mkdir` and persists provenance (`script.ts` for inline, `workflow.json` for path refs), cleaning up if `start()` throws before any journal record exists.",
+        "evidence": "packages/cli/src/commands/run.ts:34-86 (command + flags), run.ts:47 (args/flag merge), run.ts:60-78 (reserve id, persist provenance, cleanup), run.ts:102-112 (stdin ref), packages/host/src/weft.ts:161-203 (reserveRunId/persistInlineScript/persistWorkflowRef)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Typo-proof dynamic input flags",
+        "description": "`parseDynamicFlags` turns `--base main`, `--base=main`, `--no-cache`, `--watchOnly` into a null-prototype object, kebab\u2192camel cases names, rejects a repeated flag, and coerces only values that survive `String(Number(raw)) === raw` (so `1e5`, `1.20`, `007`, `0x10` stay strings). `rejectUnknownInput` then validates the merged input and, for every key absent from the output, probes the schema twice (key removed, key replaced with a sentinel) \u2014 a key that changes nothing under both is reported as unknown, which keeps `.passthrough()`/`.catchall()` and renaming `.transform()` schemas working.",
+        "evidence": "packages/cli/src/flags.ts:12-53 (parseDynamicFlags), flags.ts:67-72 (coerce), packages/cli/src/commands/run.ts:144-184 (rejectUnknownInput), run.ts:192 (PROBE), packages/cli/test/unknown-input.test.ts:15-78",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft resume <run>` \u2014 replay and continue",
+        "description": "Re-resolves the definition from a persisted path ref or inline script (`persistedDefOf`), falling back to the registry lookup by the journaled name, and passes the bundle hash alongside the definition via `resumeOptions` so the engine's version check sees edits inside modules the body delegates to. Flags: `--reuse <content|key>`, `--watch`.",
+        "evidence": "packages/cli/src/commands/resume.ts:19-45, packages/host/src/weft.ts:215-262 (persistedDefOf/resumeOptions)",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft ls` \u2014 run listing",
+        "description": "Lists runs newest-first straight off the JournalStore (never the derived sqlite index), with `--status`, `--workflow`, and `--limit` (default 20, validated as a positive integer). Rows with an empty workflow name \u2014 a known projection gap on first-run snapshots \u2014 are repaired by re-deriving state from the journal for that row only.",
+        "evidence": "packages/cli/src/commands/ls.ts:19-56 (command + filters), ls.ts:65-69 (workflowNameOf repair)",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft status <run>` \u2014 one run at a glance",
+        "description": "Prints header (workflow, run id, painted status), a cost line (`N steps \u00b7 N agents \u00b7 tok \u00b7 $ \u00b7 elapsed`), script hash and cwd, the phase/step tree from `renderTree`, any run error, the output JSON, and each pending human request with the exact `weft answer \u2026` command that unblocks it.",
+        "evidence": "packages/cli/src/commands/status.ts:12-41, packages/cli/src/format.ts:68-83 (costLine), format.ts:102-118 (treeLines), format.ts:143-157 (pendingLines/answerLine)",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft answer <run> [req] [json]` \u2014 durable HITL answers",
+        "description": "Answers a pending request on a run no process is holding; a lone JSON argument is detected and shifted into place. With no id it uses the single pending request, or lists them and exits non-zero; an id that matches several runs (ids are run-local) is refused with the owning run ids. The answer is submitted to the request's owning run (possibly a child), then projections are re-derived from the journal so `ls` shows the post-answer status.",
+        "evidence": "packages/cli/src/commands/answer.ts:20-64, answer.ts:76-107 (pickRequest), packages/cli/src/runio.ts:15-23 (refreshProjections)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Interactive answer prompting from the journaled JSON Schema",
+        "description": "With no JSON argument, `@clack/prompts` renders the request's journaled JSON Schema: `enum` \u2192 select, `boolean` \u2192 confirm, `string` \u2192 text, `number`/`integer` \u2192 validated numeric text, `object` \u2192 a walk over its properties (optional fields skipped when left blank). Anything deeper falls back to showing the schema and taking raw JSON, with a generated sample value as the placeholder.",
+        "evidence": "packages/cli/src/commands/answer.ts:116-132 (promptForAnswer), answer.ts:134-181 (promptForSchema/promptForObject), answer.ts:184-192 (askJson), packages/cli/src/format.ts:159-190 (sampleJson)",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft cancel <run>`",
+        "description": "Calls `engine.cancel(runId)`, refreshes the run's projections from the journal, and prints the resume command \u2014 the journal is untouched apart from the cancellation event, so the run stays resumable.",
+        "evidence": "packages/cli/src/commands/cancel.ts:11-25",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft replay --dry <run>` \u2014 cost preview before a resume",
+        "description": "Runs `engine.replayDry` (no provider calls, no journal appends) and prints hits / salvaged / diverged / still-pending counts, one line per diverged step (by key or seq, with its kind), one line per outstanding request, and whether the run would replay to completion. `--dry` is mandatory: without it the command errors and points at `weft resume`. `--reuse content|key` is accepted.",
+        "evidence": "packages/cli/src/commands/replay.ts:16-50, replay.ts:23 (mandatory --dry)",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft report <run>`",
+        "description": "Prints the run's generated markdown report (outcome, changes, checks, ledger, failures, remaining risk) by calling `engine.report(runId)`, which re-derives the projection from the journal on every call.",
+        "evidence": "packages/cli/src/commands/report.ts:9-21",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft explain <run> <key|label|seq>` \u2014 one step in full",
+        "description": "Locates a step by key, label, or sequence number and prints status mark, kind/seq, phase, route (`provider/model`, effort), attempt count, duration, usage (in/out/cached tokens and USD), the journaled payload \u2014 with an agent's `prompt` rendered raw and remaining options as JSON \u2014 plus the error or the output (blob-backed outputs are fetched from the blob store), the patch ref, and the child run id when present.",
+        "evidence": "packages/cli/src/commands/explain.ts:13-81, packages/cli/src/runio.ts:33-38 (resolveOutput), runio.ts:47-53 (payloadOf), runio.ts:69-74 (findStep)",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft diff <a> <b>` \u2014 compare two runs by step key",
+        "description": "Matches only keyed, successful steps across two runs and reports keys present in one side only, plus a one-level field-by-field diff for keys in both (absence and explicit null are treated as different values). Ends with an `N of M step(s) differ` summary.",
+        "evidence": "packages/cli/src/commands/diff.ts:13-47, diff.ts:53-73 (shallowDiff), packages/cli/src/runio.ts:58-66 (keyedOutputs)",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft check [name]` \u2014 gate ahead of a run",
+        "description": "Bundles and instantiates every `*.ts` in the workflow directory exactly as a run would (so a banned global inside `./schemas.ts` fails here), printing `\u2713`/`\u2717`/`- (module, not a workflow)` per file and then `file:line:col  rule  message` with a `fix:` line per finding; any finding sets exit code 1. A directory read error other than ENOENT is fatal rather than silently 'nothing to check'.",
+        "evidence": "packages/cli/src/commands/check.ts:29-68, check.ts:72-84 (gate/helper classification), check.ts:86-91 (renderDiagnostic), check.ts:101-128 (file selection, ENOENT handling)",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft check` type-check pass",
+        "description": "After a clean gate, resolves the locally installed `typescript/bin/tsc` and runs `--noEmit --strict --target es2023 --module nodenext --allowImportingTsExtensions --skipLibCheck` over the workflow files. It is advisory only \u2014 output is printed as a note and never fails the command \u2014 and it degrades to a one-line skip message when TypeScript or `@techery/weft-sdk` is not installed.",
+        "evidence": "packages/cli/src/commands/check.ts:148-178, check.ts:180-188 (resolveTsc)",
+        "maturity": "partial"
+      },
+      {
+        "name": "`weft new <name>` \u2014 scaffolding",
+        "description": "Validates the name against `/^[a-z][a-z0-9-]*$/i`, creates the workflow directory, and writes `<name>.ts` \u2014 a two-phase find/verify workflow using `ctx.phase`, keyed `ctx.parallel` fan-out, a `ctx.pipeline` refutation stage, and `ctx.note` \u2014 plus `schemas.ts` with a `Finding` schema if absent. Never overwrites: an existing workflow file is an error, an existing `schemas.ts` is kept. The template passes `weft check` as written.",
+        "evidence": "packages/cli/src/commands/new.ts:17-48, new.ts:51-108 (workflowTemplate), new.ts:111-119 (SCHEMAS_TEMPLATE)",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft doctor` \u2014 preflight checks",
+        "description": "Nine-plus checks in the order they bite, printed as a table with \u2713/!/\u2717 and a final `ready` or `N problems to fix` (exit 1 on any fail): node \u2265 22.12; `git --version` on PATH; `.weft/` present; workflow dir present; `.weft/config.json` present or defaults; cwd is a git repo; `ANTHROPIC_API_KEY` (warn, notes that a `claude login` counts); `OPENAI_API_KEY` or `$CODEX_HOME/auth.json` (warn); one line per registry workflow (gated by loading it). Credentials are reported by presence only, never read or echoed.",
+        "evidence": "packages/cli/src/commands/doctor.ts:32-93, doctor.ts:101-119 (node/git), doctor.ts:121-146 (layout), doctor.ts:152-182 (credentials), doctor.ts:216-232 (workflowCheck)",
+        "maturity": "solid"
+      },
+      {
+        "name": "doctor's unlisted-file audit",
+        "description": "The registry silently skips files that fail to load, so doctor separately reads the workflow directory and, for every `.ts` not in the listing, loads it: a file whose only diagnostics are `no-workflow-export` is reported as a helper module, anything else is a `fail` naming the violation count and the `weft check <name>` command. A non-ENOENT directory read error is itself a failure, so 'ready' can never print over an unreadable directory.",
+        "evidence": "packages/cli/src/commands/doctor.ts:51-74, doctor.ts:190-214 (unlistedFileCheck), packages/cli/test/cli.test.ts:432-478",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft ui [--port n]`",
+        "description": "Validates the port (1..65535, default 4781), opens the repo's engine, and hands that same `Weft` to `@techery/weft-daemon`'s `startDaemon` \u2014 loaded through a computed specifier so the daemon stays swappable \u2014 then prints the URL and the runs directory. Missing daemon or a daemon without `startDaemon()` produces an explicit error saying every other command still works.",
+        "evidence": "packages/cli/src/commands/ui.ts:28-61, ui.ts:13 (DEFAULT_PORT 4781), packages/daemon/src/server.ts:48-95 (startDaemon, weft passthrough)",
+        "maturity": "solid"
+      },
+      {
+        "name": "`--watch` live tree renderer",
+        "description": "Re-renders a whole frame (header, cost line, phase/step tree with per-node token counts) every 500 ms via `io.live` (log-update in a terminal) until the run settles or suspends, then freezes the last frame. The frame is recomputed from the projection each time, never accumulated, and the run label is passed in because a live run's projection can lack identity fields until the first resume.",
+        "evidence": "packages/cli/src/outcome.ts:26-30 (liveFrame), outcome.ts:36-55 (watchRun), outcome.ts:13 (FRAME_MS), packages/cli/src/format.ts:102-118 (treeLines)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Terminal outcome reporting",
+        "description": "`reportOutcome` prints the output JSON plus `complete` for a finished run; a resumable notice and exit 1 for `cancelled`; error code/message, the failing step key and the `weft explain`/`weft resume` follow-ups (exit 1) for a failure; and for a suspension, the pending request blocks with the ready-to-paste `weft answer <owning-run> <id> '<sample-json>'` line followed by `then: weft resume <run>`.",
+        "evidence": "packages/cli/src/outcome.ts:69-97, packages/cli/src/format.ts:143-157 (pendingLines/answerLine)",
+        "maturity": "solid"
+      },
+      {
+        "name": "`bin/weft.js` dual-shape entry point",
+        "description": "Reads its own manifest to decide which shape the package is in: a published install's `exports` point at `./dist/`, so compiled ESM is loaded under plain node; a checkout's point at `src/*.ts`, so `tsx/esm/api` is registered and the sources load. It also swallows EPIPE on stdout/stderr so `weft report <run> | head` is not a crash.",
+        "evidence": "packages/cli/bin/weft.js:16-32, packages/cli/package.json (exports \u2192 ./src/index.ts, publishConfig \u2192 ./dist/)",
+        "maturity": "solid"
+      },
+      {
+        "name": "MCP server: seven session tools",
+        "description": "`weft_run` (exactly one of `workflow` name/path or inline `source`; `input` any JSON; `budget`; `reuse`) returns a runId immediately. `weft_wait` long-polls. `weft_answer` submits a validated answer. `weft_resume` re-resolves and continues. `weft_list` (status/workflow/limit, default 20) and `weft_report` are marked `readOnlyHint`. `weft_types` returns the SDK authoring source. Every reply is one JSON text block; every failure comes back as `isError` carrying the engine's own message.",
+        "evidence": "packages/mcp/src/tools.ts:56-311 (all seven registrations), tools.ts:404-414 (reply/isError), tools.ts:40-50 (RUN_STATUS mirror), packages/mcp/test/mcp.test.ts:197-213",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft_wait` long-poll semantics",
+        "description": "Returns `{status:\"complete\",output}` / `{status:\"failed\",error}` / `{status:\"cancelled\"}` / `{awaiting:{runId,id,kind,question,schema,detail,risk}}` / `{status:\"running\"}` on timeout (default `10m`, parsed from `10m|90s|250ms|<ms>`). A run this process started resolves off its `RunHandle` with no polling; anything else polls the journal every 500 ms, recursing into live descendants so a child's pending approval surfaces on the parent's id. The deadline is armed in \u22642^31-1 ms chunks so a `30d` wait does not overflow the timer.",
+        "evidence": "packages/mcp/src/runs.ts:44-49 (WaitResult), runs.ts:107-142 (waitForChange/liveWait/pollWait), runs.ts:150-171 (pendingAcross), runs.ts:215-242 (MAX_TIMER_MS race), runs.ts:252-260 (parseTimeout)",
+        "maturity": "solid"
+      },
+      {
+        "name": "MCP auto-wake after an answer",
+        "description": "After `weft_answer` lands, if no process holds the run the server walks `parentRunId` to the root of the recorded tree and fires a lease-protected `resume` so the waiting step actually receives the answer without an explicit `weft_resume`. A refused claim (a live owner exists) is a designed no-op; any other failure is stored per-run and surfaced by the next `weft_wait` as an error rather than reporting `running` forever.",
+        "evidence": "packages/mcp/src/tools.ts:152-211 (answer + wake), packages/mcp/src/runs.ts:67-86 (wake-failure retention), tools.ts:121-132 (takeWakeFailure on wait), packages/mcp/test/mcp.test.ts:473-528",
+        "maturity": "solid"
+      },
+      {
+        "name": "MCP server instructions and stdio bin",
+        "description": "`createWeftMcpServer({cwd, providers})` builds the engine through the same `createWeft` every host uses and registers the tools under a server named `weft` v0.1.0, with instructions that spell out the run\u2192wait\u2192answer\u2192wait loop, that `awaiting.runId` names the request's owning (possibly child) run, and that replies are JSON to be read field-wise. `bin/weft-mcp.js` speaks JSON-RPC over stdio and writes startup failures to stderr only.",
+        "evidence": "packages/mcp/src/server.ts:36-64 (INSTRUCTIONS + createWeftMcpServer + main), packages/mcp/src/bin.ts:1-11, packages/mcp/package.json (bin weft-mcp)",
+        "maturity": "solid"
+      },
+      {
+        "name": "`weft_types` authoring surface",
+        "description": "Reads `types.ts`, `define.ts`, and `schema.ts` off the *installed* `@techery/weft-sdk` (resolved directly or hopping through `@techery/weft-host`/`@techery/weft-core`), concatenates them with per-file banners, and caches once per process \u2014 so what a session reads to write inline source is exactly what the gate will compile.",
+        "evidence": "packages/mcp/src/typings.ts:15-16 (FILES/VIA), typings.ts:23-26 (cached sdkTypings), typings.ts:39-65 (resolution hops)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Daemon HTTP API",
+        "description": "Hono app over one engine: `GET /` (the page), `GET /api/runs` (status/workflow/limit query filters), `GET /api/runs/:id`, `.../report` (text/markdown), `.../tree`, `.../pending`, `.../events` (SSE), and `POST .../answer`, `.../signal`, `.../cancel`, `.../resume`. Every read folds the run's journal rather than trusting the engine's in-memory projection; a run nobody has journaled is the only 404, everything else is a 400 carrying the engine's message.",
+        "evidence": "packages/daemon/src/app.ts:60-215 (all routes), app.ts:230-235 (stateOf folds the journal), app.ts:479-488 (listFilter), app.ts:509-512 (404/400 rule)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Daemon SSE journal stream",
+        "description": "`GET /api/runs/:id/events` streams one `data:` line per journal record with `id:` = journal index, resuming from `?from=` or one past an `Last-Event-ID` reconnect cursor, with a 15 s heartbeat comment for proxies. Descendant journals are fanned into the same stream as unnumbered `event: child` records (seeded from the projection on reconnect and from `step.scheduled.childRunId` live), and the stream is never closed from the server side because a resume can append to a terminal run.",
+        "evidence": "packages/daemon/src/app.ts:128-150 (route + cursor logic), app.ts:372-468 (streamJournal, heartbeat, child fan-in), app.ts:29 (HEARTBEAT_MS), packages/daemon/test/daemon.test.ts:342-434",
+        "maturity": "solid"
+      },
+      {
+        "name": "Daemon wake-suspended-runs job",
+        "description": "An answer or signal for a run this process is not holding triggers a fire-and-forget resume: the code walks to the root of the recorded run tree (so answering a child does not leave the parent's step un-re-executed), re-resolves the definition via `persistedDefOf`, and resumes. Projections are refreshed from the journal before the wake so the run list never shows the pre-answer status, and the POST response reports `{ok:true, woke:boolean}`.",
+        "evidence": "packages/daemon/src/app.ts:152-187 (answer/signal + woke flag), app.ts:331-360 (wakeIfSuspended root walk), app.ts:303-316 (refreshProjections), packages/daemon/test/daemon.test.ts:526-554",
+        "maturity": "solid"
+      },
+      {
+        "name": "Daemon loopback + DNS-rebinding guard",
+        "description": "The daemon binds 127.0.0.1 only, and a middleware ahead of every route (reads and side-effecting POSTs alike) rejects any request whose `Host` or `Origin` header does not resolve to a loopback hostname, returning 403 \u2014 which is what stops a DNS-rebinding page or a blind cross-site POST from driving answers/cancels/resumes.",
+        "evidence": "packages/daemon/src/app.ts:70-80 (guard), app.ts:43-53 (isLoopbackName), packages/daemon/src/server.ts:21 (HOSTNAME), packages/daemon/test/daemon.test.ts:455-479",
+        "maturity": "solid"
+      },
+      {
+        "name": "Web UI (single self-contained page)",
+        "description": "One hand-written HTML/CSS/vanilla-JS file with no build step and no external asset: a run sidebar (polled every 2 s, `#runId` deep links), and a detail pane with header + status/cost/steps/error facts, Resume and Cancel buttons, the phase/step tree with token counts, the report rendered as preformatted markdown, a live journal tail (last 200 records over EventSource) and forms for pending requests. Answer forms are generated from the request's JSON Schema (enum\u2192select, boolean\u2192checkbox, string/number\u2192input, anything else\u2192JSON textarea with the schema in a `<details>`), rebuilt only when the set of open requests changes so a half-typed answer is not wiped, and posted to the request's *owning* run.",
+        "evidence": "packages/daemon/src/ui.ts:12 (INDEX_HTML), ui.ts:198-211 (layout), ui.ts:396-418 (loadDetail: state+tree+pending+report), ui.ts:421-461 (head + Resume/Cancel actions), ui.ts:510-571 (pending cards, owning-run post), ui.ts:578-660 (schema\u2192controls), ui.ts:329-360 (EventSource + debounce), ui.ts:216-218 (POLL_MS/TAIL_MAX)",
+        "maturity": "partial"
+      },
+      {
+        "name": "Determinism gate: AST rule set",
+        "description": "Eleven rules parsed with the TypeScript compiler API, each with a `ctx`-naming fix-it: `no-date-now`, `no-argless-date`, `no-math-random`, `no-timers` (setTimeout/setInterval/setImmediate), `no-global-fetch`, `no-process-env`, `no-require`, `no-gc-globals` (WeakRef/FinalizationRegistry), `no-locale` (toLocaleString/DateString/TimeString/LowerCase/UpperCase, localeCompare), `no-intl`, `no-bare-import` (node builtins included; type-only imports exempt; dynamic `import()` must be a literal relative specifier). Member access is matched in both `a.b` and `a[\"b\"]` form; there is deliberately no scope analysis, so a local named `fetch` is still a finding.",
+        "evidence": "packages/gate/src/rules.ts:57-72 (FIX_ITS = the whole rule set), rules.ts:119-215 (checkSource visitor), rules.ts:218-230 (staticMemberAccess), rules.ts:237-251 (isDeclarationName), packages/gate/test/gate.test.ts:147-334",
+        "maturity": "solid"
+      },
+      {
+        "name": "Gate diagnostics and allow-list",
+        "description": "Diagnostics carry rule, message, repo-relative file, 1-based line/column and fix-it; `GateError.fromDiagnostics` renders them as a headline plus indented `file:line:col rule message` / `fix:` pairs. `DEFAULT_ALLOW_BARE` is `[\"@techery/weft-sdk\",\"zod\"]`; a config allow-list *extends* rather than replaces it and `@techery/weft-sdk` is always allowed; matching is by exact package or subpath (`zod` permits `zod/v4`).",
+        "evidence": "packages/gate/src/rules.ts:17-25 (GateDiagnostic), rules.ts:28-31 (DEFAULT/REQUIRED_ALLOW_BARE), rules.ts:82-106 (GateError/formatDiagnostics), rules.ts:109-112 (resolveAllowBare), rules.ts:261-263 (isAllowedBare), packages/host/src/weft.ts:76-80 (mergedAllowBare)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Bundler: esbuild + in-build gating + content hash",
+        "description": "`bundleWorkflow` builds entry-or-stdin to a single CJS script (`platform:node`, `target:node22`, inline source map, allow-listed bare imports left external) with an `onLoad` plugin that gates *every* module esbuild pulls in, so a violation in `./schemas.ts` fails the build. Findings are sorted by file/line/column/rule and thrown as a `GateError` in preference to esbuild's own message; the returned `hash` is SHA-256 of the emitted code, which is the version a run pins and covers every bundled module.",
+        "evidence": "packages/gate/src/bundle.ts:43-113 (build + gate plugin + hash), bundle.ts:54-64 (onLoad gating), bundle.ts:66-69 (inline source gating), bundle.ts:115-133 (esbuild failures as diagnostics), bundle.ts:142-147 (repo-relative paths)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Sandboxed loader (`node:vm` determinism fence)",
+        "description": "The bundle runs as a CJS module inside a `vm` context whose globals are replaced: `Math` proxied so `.random` throws, a proxied `Date` that refuses argless construction, plain call, `Date.now`, and the constructor reachable via instances/prototype while keeping `new Date(value)`/`parse`/`UTC`; throwing `fetch`/`setTimeout`/`setInterval`/`setImmediate`; a throwing `process.env` proxy; `WeakRef`/`FinalizationRegistry` throwers; an `Intl` proxy that throws on property read. ECMAScript intrinsics are deliberately *not* injected so a `Promise.constructor(\"\u2026\")` escape evaluates against the sandboxed globals. `require` is a shim over host modules pre-imported from the allow-list plus any allow-listed subpath literally required in the emitted code, so a workflow's `z.object` is real host Zod.",
+        "evidence": "packages/gate/src/load.ts:67-101 (instantiateBundle + export check), load.ts:118-143 (createSandbox), load.ts:163-193 (sandboxDate), load.ts:145-153/195-208/226-247 (Math, process.env, Intl, GC), load.ts:254-306 (require shim + requestedModuleIds), packages/gate/test/gate.test.ts:558-640",
+        "maturity": "solid"
+      },
+      {
+        "name": "File workflow registry",
+        "description": "A directory of `*.ts` (default `.weft/workflows`) callable by name \u2014 the basename unless `meta.name` overrides it. Loading is cached by the *bundle's* content hash, so editing `./schemas.ts` invalidates every workflow that imports it. `list()` tolerates helper modules and broken neighbours by skipping what fails to load; `load()`/`get()`/`hashOf()` share one fold; ENOENT/ENOTDIR mean an empty registry while EACCES/EIO surface as a `GateError` rather than a silently empty listing.",
+        "evidence": "packages/gate/src/registry.ts:65-162 (createWorkflowRegistry), registry.ts:70-92 (hash-keyed cache), registry.ts:94-113 (candidates + error discrimination), registry.ts:115-133 (find, direct-file fast path), registry.ts:172-191 (isNotAWorkflow/tolerantLoad)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Config file format and discovery",
+        "description": "`<cwd>/.weft/config.json`, all fields optional, absent file \u2192 `{}`. Validated by a Zod schema that is *loose at the top level* (unknown keys carried through for forward compatibility) and *strict inside every section*, so `limits.stepTimoutMs` is an error naming the file and field rather than a silently ignored setting. Sections: `defaults` (provider/model/effort), `providers` (concurrency + per-model `inputPer1M`/`outputPer1M` prices), `approvalPolicy` (`tiers` per risk, `actions` globs), `fetchAllow`, `limits` (concurrency, maxTurns, stepTimeoutMs, execTimeoutMs, fetchTimeoutMs, repair, agentGuideline, agentHard, fanoutMax, blobThresholdBytes, maxDepth), and the host-only `workflows` (`dir`, `allowBare`).",
+        "evidence": "packages/host/src/config.ts:16-33 (WEFT_DIR/CONFIG_FILE/configPath/WeftConfig), config.ts:39-99 (schema, strict sections, .loose() top level), config.ts:106-131 (loadConfig error messages), packages/core/src/config.ts:79-110 (defaults: claude/claude-opus-5/high, concurrency min(16,cpus-2), maxTurns 50, repair 2, agentGuideline 15, agentHard 1000, fanoutMax 4096, blob 64KiB, maxDepth 3)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Host assembly (`createWeft`) shared by all three hosts",
+        "description": "One function builds the fs stores under `<cwd>/.weft`, the workflow registry (config `workflows.dir` or `.weft/workflows`, merged allow-list), the provider registry \u2014 real mode lazily imports the Claude and Codex adapters plus mock, mock mode registers the fixture builder under `claude`/`codex`/`mock` ids \u2014 and the `Engine`. It exposes `engine`, `registry`, `config`, `cwd`, `weftDir`, `runsDir`, `mockBuilder`, a lazy `reindex()` over `node:sqlite`, and `close()` which shuts the engine down first so ownership claims do not block a resume elsewhere.",
+        "evidence": "packages/host/src/weft.ts:82-152 (createWeft), weft.ts:94-110 (provider wiring, lazy vendor imports), weft.ts:122-128 (lazy sqlite index), weft.ts:143-150 (close/shutdown ordering), packages/host/src/index.ts:44-100 (re-exported host surface)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Workflow ref resolution and budget parsing",
+        "description": "`resolveWorkflow` prefers registry names (what a run journals and a later resume finds), falls back to a path ref (`/`, platform separator, or `.ts` suffix), names an anonymous definition after the ref that found it, and reports an unknown ref with the list of available names. `parseBudget` is the one parser behind `--budget`/MCP `budget`: `\"500k\"`, `\"$5\"`, `\"500k,$5\"`, `k`/`m`/`b` scales, USD rounded to cents, each axis allowed once, anything else throws.",
+        "evidence": "packages/host/src/weft.ts:306-330 (resolveWorkflow), weft.ts:348-350 (looksLikePath), weft.ts:357-367 (unknownRef message), packages/host/src/budget.ts:11-14 (PART regex), budget.ts:23-46 (parseBudget)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Testing harness: `runWorkflow`",
+        "description": "Starts a workflow on a private in-memory engine (MemoryJournalStore + MemoryBlobStore, the mock builder registered as both `claude` and `codex`), drives it to a terminal state, and returns `{output, journal, state, runId}`. Options: `input`, `provider`, `git`, `exec`, `bash`, `fetch`, `env`, `answers`, `cwd` (a per-call temp dir swept at process exit by default), `budget`, `config`. Human suspensions are answered from `answers`; an unanswered request or a run blocked on `ctx.signal()` throws a message naming what is missing instead of hanging.",
+        "evidence": "packages/testing/src/run.ts:36-57 (options/result), run.ts:84-121 (engine assembly + return), run.ts:128-172 (settle loop, signal/human errors), run.ts:66-82 (scratchCwd), packages/testing/test/testing.test.ts:91-247",
+        "maturity": "solid"
+      },
+      {
+        "name": "Mock provider (`mock()` fixture builder)",
+        "description": "Fluent `mock().on({key|label|prompt}, responder, opts)` \u2014 key/label matched by glob (`*` crosses `/`), prompt by substring or RegExp. The responder receives the real request (prompt, key, label, cwd, schema, model, effort, writeScope, `attempt`, and the `issues` on a repair call) and its output goes through the engine's normal schema validation. Rule options: `usage`, `writes` (files created in the request cwd), `filesTouched` (to model paths capture cannot see), `delayMs` (abort-aware), `times`. An unmatched step throws naming the key, label, and every registered rule; `capabilities()` advertises tool-structured output, permission hook, session resume, and USD reporting; every call is recorded in `builder.calls`.",
+        "evidence": "packages/provider-mock/src/index.ts:74-90 (MockAgentBuilder/mock), index.ts:29-64 (MockRequest/MockRuleOptions), index.ts:100-136 (findRule + failure message), index.ts:138-190 (respond: writes, delay, usage, transcript), index.ts:192-206 (run/repair)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Side-effect fixtures \u2192 engine test hooks",
+        "description": "`buildTestHooks` turns fixture tables into the engine's `TestHooks`: `git` keyed by op name (`changedSince` or `git.changedSince`), `exec` by `\"file arg arg\"` or bare file, `bash` by the verbatim command line, `fetch` by url or `\"METHOD url\"`, `env` by variable name. Each table accepts a function or a record whose keys are matched exactly first and then as picomatch globs; anything a table does not answer falls through to the real side effect, and whatever a hook returns is journaled as if the real effect ran.",
+        "evidence": "packages/testing/src/fixtures.ts:13-46 (fixture types), fixtures.ts:48-69 (glob/lookup precedence), fixtures.ts:72-107 (buildTestHooks), packages/testing/test/testing.test.ts:287-348",
+        "maturity": "solid"
+      },
+      {
+        "name": "Journal assertion view",
+        "description": "`journal.records` (raw), `journal.steps({kind, phase})`, `journal.step(key)` (throws listing the known keys), and `journal.toJSON()` \u2014 a snapshot-stable projection of seq/kind/key/label/phase/status with no timestamps, ids, or outputs. Human requests are steps too, keyed by request id and labelled with the question; `human.rejected` correctly returns a request to `running` and drops its output. Step views carry the journaled prompt, route, usage, and output.",
+        "evidence": "packages/testing/src/journal.ts:11-42 (StepView/JournalView), journal.ts:50-140 (fold, incl. human.requested/answered/rejected), journal.ts:133-140 (step() error listing known keys), journal.ts:141-149 (toJSON)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Store conformance suites",
+        "description": "`@techery/weft-testing/conformance` exports `journalStoreConformance(name, factory)` and `blobStoreConformance(...)` as `describe()` blocks encoding exactly what the engine relies on: monotonic per-run indices continuing across batches, `read(fromIndex)` resumption, `watch()` replaying history then seeing a live append, `list()` filtering by workflow/status with a limit, snapshot round-trip (skipped when `readSnapshot` is absent), `exists()`; and for blobs: put/get/getText/has round trips for strings and bytes, content addressing/idempotence, and a missing ref that is absent and throws `/not found/`. It is the only entry point importing vitest, which is an optional peer dependency so `runWorkflow` stays importable from a published install.",
+        "evidence": "packages/testing/src/conformance.ts:26-135 (journal suite), conformance.ts:137-186 (blob suite), packages/testing/package.json (./conformance export; vitest optional peerDependency), packages/testing/src/index.ts:17-21 (why it is a separate entry)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Repo-bundled example workflows",
+        "description": "`.weft/workflows/review.ts` (git.changedSince \u2192 keyed parallel review \u2192 `ctx.pipeline` refutation by `provider:\"codex\"`) and `audit-and-fix.ts` (parallel find at `effort:\"high\"`, a three-vote `[\"claude\",\"codex\",\"claude\"]` panel with a \u22652 majority, a `ctx.gate({risk:\"medium\"})`, parallel `ctx.agent.detailed` fixes with `isolation:\"worktree\"` and declared `write` scopes, `ctx.integrate({order:\"sequential\", onConflict:\"ask\"})`, and a required `ctx.check(\"tests\", {exec:[\"pnpm\",\"test\"]})`), sharing `schemas.ts`. Both gate clean and are what `weft run review` / `weft check` exercise in CI.",
+        "evidence": ".weft/workflows/review.ts:1-53, .weft/workflows/audit-and-fix.ts:15 (PANEL), audit-and-fix.ts:63-89 (gate, worktree fixes, integrate, check), .weft/workflows/schemas.ts:8-37, .github/workflows/ci.yml:113-117",
+        "maturity": "solid"
+      },
+      {
+        "name": "Runnable example tours",
+        "description": "Seven self-contained `examples/0N-*/main.ts` programs, all offline and deterministic (mock providers, memory stores) except 03 which builds a throwaway git repo: engine-as-a-library, durable HITL + timeout policies, write steps/patches/scope violations, resume + `replayDry` with exact call counts, sub-workflows under a shared token ceiling, stdlib patterns, and the testing harness driven under plain `node:assert`. Each folder has its own README explaining what to look for.",
+        "evidence": "examples/README.md:1-30 (index table), examples/04-resume-and-replay/README.md:10-20 (measured replay numbers), examples/05-sub-workflows-and-budget/README.md:8-18, examples/07-testing-workflows/README.md:10-22, .github/workflows/ci.yml:106-112 (all examples run in CI)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Packaging and release story",
+        "description": "Sixteen packages versioned together. In-repo `exports` point at `src/*.ts` (no build step for tests/examples/bin); `publishConfig` swaps them for `dist/` at pack time, and both `dist/` and `src/` ship so declaration maps and `weft_types` work. `pnpm version:set <v>` rewrites every manifest, `pnpm sync:meta` generates the per-package README/LICENSE, `pnpm verify:packing` packs each tarball and rejects source-pointing exports, unrewritten `workspace:*` ranges, bins missing from `files`, and missing README/LICENSE/dist, and `pnpm verify:install` installs those tarballs into a scratch project and drives `weft --help`/`doctor`/`new`+`check` and a real `weft-mcp` initialize handshake as compiled ESM with no loader.",
+        "evidence": "RELEASING.md:1-60, scripts/set-version.mjs:15-30, scripts/sync-package-meta.mjs:16-38, scripts/verify-packing.mjs:43-66 (the four checks), scripts/verify-install.mjs:66-100 (four install-time checks), packages/cli/package.json (exports vs publishConfig)",
+        "maturity": "solid"
+      },
+      {
+        "name": "CI and release automation",
+        "description": "`ci.yml` runs five jobs on push-to-main and every PR: biome lint, strict `tsc --noEmit`, vitest on node 22 and 24 (with a git identity configured because suites build real repos), a build+`sync:meta --check`+`verify:packing`+`verify:install` package job, and a smoke job that runs all seven examples plus `weft --help`, `weft doctor`, `weft check`. `release.yml` fires on a `v*` tag (or manual dispatch defaulting to dry-run): it fails fast unless the tag matches all 17 manifests, re-runs the full CI gate set, builds, verifies packing and install, publishes with `pnpm -r publish` under npm trusted publishing (OIDC, `id-token: write`, `NPM_CONFIG_PROVENANCE`), then opens a GitHub release with generated notes.",
+        "evidence": ".github/workflows/ci.yml:12-117, .github/workflows/release.yml:6-14 (triggers/dry-run), release.yml:50-71 (tag/version guard), release.yml:74-98 (gates + trusted publish), release.yml:100-114 (github-release job)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Lint/format configuration",
+        "description": "Biome 2.5.10 as the single lint+format tool, honouring `.gitignore`, excluding `**/dist` and `**/.weft/runs`, 2-space indent, 110-column lines, double quotes, always-semicolons, recommended rules with `noExplicitAny`, `noAssignInExpressions`, `noNonNullAssertion`, `noParameterAssign`, `useTemplate`, `noForEach`, and `useLiteralKeys` turned off. Root scripts: `lint`, `lint:fix`, `format`.",
+        "evidence": "biome.json:1-31, package.json:18-20 (lint/lint:fix/format scripts)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Documented self-review",
+        "description": "`docs/reviews/2026-08-dx-and-architecture.md` is a 758-line adversarial review at commit `ad5ecae` with a measured baseline, five headline findings (budget-vs-fan-out, salvage cache hits, wall-clock in the replayer, determinism-fence gaps, unsupported README claims), a per-round log of what the fixes themselves broke, and a recommendation list \u2014 several items of which (LICENSE, publishConfig/build scripts, release job, unknown-flag rejection, GC/locale/Intl fencing) are visibly closed in the current tree.",
+        "evidence": "docs/reviews/2026-08-dx-and-architecture.md:1-12 (scope), :63-110 (what was fixed), :330-449 (findings 1-2), :500-520 (finding 4), :560-585 (Part 5 publish readiness), packages/gate/src/rules.ts:57-72 (GC/locale/Intl rules now present), LICENSE (present)",
+        "maturity": "solid"
+      }
+    ],
+    "limitations": [
+      {
+        "what": "No `--json` (or any machine-readable) output on any CLI command. `ls`, `status`, `report`, `replay --dry`, `explain`, and `diff` emit ANSI-painted human text only, so scripting weft into CI means parsing terminal output.",
+        "evidence": "grep for `--json` across packages/cli/src returns nothing; packages/cli/src/commands/ls.ts:19-24, status.ts:12-15, report.ts:9-13, replay.ts:16-21 (option lists)"
+      },
+      {
+        "what": "No repo-root discovery: `--cwd` defaults to `process.cwd()` and `.weft` is always `<cwd>/.weft`, with no walk toward a parent. Running any command from a subdirectory of the repo silently targets a different, empty `.weft` instead of erroring.",
+        "evidence": "packages/cli/src/context.ts:24 (`resolve(opts.cwd ?? process.cwd())`), packages/host/src/weft.ts:85 (`join(cwd, WEFT_DIR)`), packages/host/src/config.ts:31-33; verified: `cd packages && node ../packages/cli/bin/weft.js doctor` reports `.weft not created yet` and `not a git repo`"
+      },
+      {
+        "what": "`weft run <name> --help` does not render the workflow's input schema \u2014 it lists only `--args/--budget/--reuse/--watch`. There is no `weft describe`/`weft workflows` verb either, so the flags a workflow accepts are discoverable only by reading its source (a typo is now refused, but never suggested).",
+        "evidence": "packages/cli/src/commands/run.ts:36-43 (static option list); verified `node packages/cli/bin/weft.js run review --help` prints only those four; command list in packages/cli/src/main.ts:57-72 has no describe/workflows verb"
+      },
+      {
+        "what": "Missing CLI verbs against capabilities the engine already has: no `signal` command (the daemon exposes `POST /api/runs/:id/signal`, the CLI has none), no `reindex`/`search` (host exposes `weft.reindex()` and `@techery/weft-index-sqlite` implements full-text `search()`, no host surfaces either), no way to view a step transcript or a captured patch blob, no `rm`/`prune` for old runs, and no `--version` flag on the program.",
+        "evidence": "packages/cli/src/main.ts:57-72 (14 commands, none of these); packages/daemon/src/app.ts:174-187 (signal route with no CLI peer); packages/host/src/weft.ts:138-142 (reindex) vs. grep `reindex|RunIndex` in packages/cli|mcp|daemon \u2192 no hits; packages/index-sqlite/src/run-index.ts:22-28 (RunSearchQuery, unreferenced by hosts); packages/cli/src/commands/explain.ts:77 (patchRef printed as a bare string); verified `weft --version` \u2192 `error: unknown option '--version'`"
+      },
+      {
+        "what": "The web UI and the daemon API cannot START a run: there is no `POST /api/runs` and no workflow listing route, so the browser surface can only observe, answer, resume, and cancel runs someone else started from the CLI or MCP.",
+        "evidence": "packages/daemon/src/app.ts:82-213 (the complete route table: GET /, /api/runs, /api/runs/:id, /report, /tree, /pending, /events; POST answer, signal, cancel, resume \u2014 no create route)"
+      },
+      {
+        "what": "The web UI has no step-level detail: no per-step prompt/payload/output view (the CLI's `weft explain`), no run-to-run diff, no patch or transcript viewer, no filtering or search over the run list (`/api/runs` supports status/workflow/limit but the page always fetches it bare), and its journal tail is capped at the last 200 records.",
+        "evidence": "packages/daemon/src/ui.ts:396-418 (detail = state+tree+pending+report only), ui.ts:289-291 (`api('/api/runs')` with no query), ui.ts:218 (TAIL_MAX = 200), ui.ts:362-395 (tail renders raw event JSON, no step drill-down)"
+      },
+      {
+        "what": "The web UI's pending-request form cannot express nested or array answers except as hand-written JSON in a textarea, and it re-renders on a 2 s poll plus SSE debounce rather than a push model for the run list.",
+        "evidence": "packages/daemon/src/ui.ts:608-655 (control(): enum/boolean/string/number, everything else a JSON textarea), ui.ts:578-600 (one flat level of object properties), ui.ts:216 (POLL_MS = 2000), ui.ts:673 (`setInterval(refreshRuns, POLL_MS)`)"
+      },
+      {
+        "what": "The daemon has no authentication or authorization beyond the loopback/Host/Origin guard, and no TLS: anything that can make a loopback-looking request to port 4781 can answer, cancel, and resume every run in the repo. `startDaemon` also has no port fallback \u2014 a busy port throws.",
+        "evidence": "packages/daemon/src/app.ts:70-80 (the only guard), packages/daemon/src/server.ts:21 (127.0.0.1 hardcoded), server.ts:60-73 (listen error rethrown after closing the engine)"
+      },
+      {
+        "what": "The MCP surface is seven tools and omits verbs the CLI has: no cancel, no status/tree, no explain, no diff, no check/gate, no doctor, no new. The stdio bin also takes no arguments or env for `cwd` or provider mode \u2014 it always uses `process.cwd()` and real providers, so it can only be pointed at a repo by the spawn cwd.",
+        "evidence": "packages/mcp/src/tools.ts:59-311 (the seven registrations), packages/mcp/src/server.ts:64-67 (`createWeftMcpServer({ cwd: process.cwd() })`, no providers argument), packages/mcp/src/bin.ts:1-11 (no argv parsing)"
+      },
+      {
+        "what": "`--mock` is only useful for agent-less workflows: there is no way to script fixtures from a shell, so any agent step under `--mock` fails with `no fixture matches step \u2026` by design. Fixtures are reachable only from `@techery/weft-testing`/`mockBuilder` in-process.",
+        "evidence": "packages/cli/src/context.ts:14-19 (documented as such), packages/host/src/weft.ts:95-97 (mock builder registered with no rules), packages/provider-mock/src/index.ts:118-135 (failure message), packages/cli/test/cli.test.ts:309-329"
+      },
+      {
+        "what": "`weft check`'s type-check pass is advisory and cannot fail the command, and it synthesises its own compiler flags rather than using the repo's tsconfig \u2014 so a missing `schema:` (a type error, not a rule violation) never turns `weft check` red. It silently degrades to a skip line when TypeScript or `@techery/weft-sdk` is not resolvable.",
+        "evidence": "packages/cli/src/commands/check.ts:64 (`say(io, ...await typecheck(...))` outside the failure branch), check.ts:148-178 (synthesised flags, advisory output, two skip paths)"
+      },
+      {
+        "what": "The gate has no rule for floating/unawaited promises, `Promise.race`/`Promise.any` over `ctx` steps, or any other wall-clock-resolved concurrency \u2014 a dropped `ctx.agent(...)` mid-body still dispatches, charges budget, and consumes a seq. The eleven implemented rules are the whole set.",
+        "evidence": "packages/gate/src/rules.ts:57-72 (FIX_ITS is the complete rule list), docs/reviews/2026-08-dx-and-architecture.md:505-520 (Promise.race unfenced), :460-470 (floating ctx.agent caught by neither layer)"
+      },
+      {
+        "what": "The AST rules have no scope analysis and match on names alone, so a local variable or method called `fetch`, `localeCompare`, `WeakRef`, etc. is a false positive whose only cure is renaming; conversely any computed form (`globalThis[\"Da\"+\"te\"]`) passes the parse layer entirely and is caught only at runtime by the vm sandbox.",
+        "evidence": "packages/gate/src/rules.ts:8-12 and :152-153 (deliberate, documented), packages/gate/src/load.ts:7-12 (fence, not a boundary), docs/reviews/2026-08-dx-and-architecture.md:264-283 (computed-access evasion demonstrated)"
+      },
+      {
+        "what": "The sandbox is `node:vm` with replaced globals rather than a worker thread or isolate, and it is explicitly a determinism fence, not a security boundary: injected host objects (console, URL, TextEncoder, the Math/Date stand-ins) expose host functions whose `.constructor` is the host `Function`, and digging past the shimmed `Date` prototype with two `getPrototypeOf` calls stays possible.",
+        "evidence": "packages/gate/src/load.ts:103-116 (documented limit), load.ts:155-162 (prototype-chain caveat), README.md 'Status and honest deviations' item 1"
+      },
+      {
+        "what": "Registry `list()` swallows every load failure, so a broken workflow is simply absent from listings; only `weft doctor`'s separate directory scan surfaces it, and `resolveWorkflow`'s 'unknown workflow' message likewise lists only the names that happen to load.",
+        "evidence": "packages/gate/src/registry.ts:182-191 (tolerantLoad swallows), registry.ts:136-143 (list uses it), packages/host/src/weft.ts:357-367 (unknownRef built from list()), packages/cli/src/commands/doctor.ts:51-74 (the compensating scan)"
+      },
+      {
+        "what": "Config is a single file with no layering, no env-var overrides, and no CLI overrides for anything it holds: `--cwd`, `--mock`, `--budget`, `--reuse`, `--port` are the only knobs a shell can turn. Provider/model/effort/limits/approval policy can be changed only by editing `.weft/config.json`.",
+        "evidence": "packages/host/src/config.ts:106-131 (one file, one read), packages/cli/src/main.ts:46-50 + per-command option lists (the full flag surface), packages/host/src/weft.ts:82-92 (config consumed once at assembly)"
+      },
+      {
+        "what": "`weft ui` claims the daemon is optional and loads it through a computed specifier, but `@techery/weft-daemon` is a hard `dependencies` entry of the CLI package \u2014 the fallback error path is unreachable in a normal install.",
+        "evidence": "packages/cli/src/commands/ui.ts:1-4 and :39-49 (computed import + fallback), packages/cli/package.json dependencies includes `@techery/weft-daemon: workspace:*`"
+      },
+      {
+        "what": "`runWorkflow` cannot drive workflows that block on `ctx.signal()` \u2014 it throws naming the awaited signal and tells you to drive the `Engine` directly. There is also no exported corpus/bulk `replay --dry` assertion for CI, so replay regressions are not testable from `@techery/weft-testing`.",
+        "evidence": "packages/testing/src/run.ts:142-152 (signal refusal), packages/testing/src/index.ts:203-222 (full export list: no replay assertion), docs/reviews/2026-08-dx-and-architecture.md:543-548 ('No corpus replay gate')"
+      },
+      {
+        "what": "Conformance suites cover only JournalStore and BlobStore. There is no exported `AgentProvider` conformance suite despite the README's package table claiming the provider adapters sit 'behind a shared conformance suite'; each adapter has its own hand-written tests instead.",
+        "evidence": "packages/testing/src/conformance.ts:26 and :137 (the only two suites); grep 'conformance' across packages/ hits only testing/*; README.md package table row for provider-claude/-codex/-mock"
+      },
+      {
+        "what": "`@techery/weft-provider-mock` is the one package with no test directory, and the mock's glob matcher differs from the testing package's fixture matcher (`*` crosses `/` in the provider, picomatch semantics in fixtures), so the same pattern can mean two things depending on which table it is written in.",
+        "evidence": "no packages/provider-mock/test directory exists; packages/provider-mock/src/index.ts:18-27 (regex glob, `*` crosses `/`) vs. packages/testing/src/fixtures.ts:4-6 and :48-55 (picomatch, `*` stops at `/`)"
+      },
+      {
+        "what": "Known engine-level soundness gaps documented but not closed in the surface: replay identity hashes only kind/payload/schema/key \u2014 the working tree a step reads is not in it, and declared `reads:` scopes do not exist; OpenTelemetry emits one span per run, not per step; the Claude adapter uses only the terminating `structured_output` tool (native JSON mode unwired); TypeScript is pinned to 5.9 because the gate needs the in-process compiler API.",
+        "evidence": "README.md 'Status and honest deviations' items 2, 4, 5, 6; packages/gate/package.json (typescript ~5.9.3); docs/reviews/2026-08-dx-and-architecture.md:437-449 (reads:/tree-hash recommendation)"
+      },
+      {
+        "what": "Nothing is published yet: the README's install block is prefixed with a 'Not on npm yet' note, and the release flow requires a manual first publish per package before npm trusted publishing can be configured.",
+        "evidence": "README.md install section note ('Not on npm yet \u2014 \u2026 Delete this note when v0.1.0 ships'), RELEASING.md 'One-time npm setup' step 2 ('Bootstrap the first publish by hand')"
+      }
+    ]
+  },
+  {
+    "area": "Providers (Claude/Codex/mock), typed git, worktree isolation & integration, and the stdlib pattern library in the weft monorepo (/home/user/weft)",
+    "features": [
+      {
+        "name": "AgentProvider contract",
+        "description": "The frozen provider interface: `id`, `capabilities()`, `run(req, ctl)`, `repair(sessionId, req, errors, ctl)`. AgentRequest carries prompt, cwd, an already object-wrapped JSON Schema, label/key, model, effort, maxTurns, timeoutMs, onMaxTurns, a ToolPolicy (`allowEdits` + `deny[]`), an optional writeScope (paths/mode/also), and a `hitl` pair of engine callbacks. AgentResult returns raw `output` (never trusted \u2014 the engine validates), `usage`, optional `sessionId`, `transcript`, `filesTouched`. ProviderCapabilities declares `structured: \"native\"|\"tool\"`, `permissionHook`, `sessionResume`, `reportsUsd`.",
+        "evidence": "packages/core/src/provider.ts:8-13 (ToolPolicy), :15-21 (PermissionRequest/Decision), :24-27 (ProviderHitl), :29-47 (AgentRequest), :49-58 (AgentResult), :60-62 (RunControl), :64-70 (ProviderCapabilities), :72-83 (AgentProvider)",
+        "maturity": "solid"
+      },
+      {
+        "name": "ProviderRegistry",
+        "description": "A Map keyed by provider id with register/get/has/ids. `get` on an unknown id throws naming the registered set. The host registers exactly three ids in live mode (claude, codex, mock) and, in mock mode, binds one shared MockAgentBuilder to all three ids so routing defaults still resolve.",
+        "evidence": "packages/core/src/provider.ts:85-108; packages/host/src/weft.ts:36 (MOCK_IDS), :94-109",
+        "maturity": "solid"
+      },
+      {
+        "name": "Store conformance suites (the only conformance suite in the repo)",
+        "description": "`journalStoreConformance` asserts monotonic per-run indices continuing across batches, run independence, `read(fromIndex)` resumption, `watch` replaying history then seeing a live append, `list` filtering by workflow/status/limit, optional `readSnapshot` round-trip that never replaces the journal, and `exists`. `blobStoreConformance` asserts put/get/getText/has round-trips for strings and bytes, content addressing (same bytes \u2192 same 64-hex ref, idempotent re-put), and that a missing ref reports absent and throws /not found/. It is exported from a separate subpath (`@techery/weft-testing/conformance`) so vitest is not a runtime dep of `runWorkflow`.",
+        "evidence": "packages/testing/src/conformance.ts:26-135 (journal), :137-185 (blob); packages/testing/src/index.ts:17-21",
+        "maturity": "solid"
+      },
+      {
+        "name": "Claude adapter \u2014 structured output as a terminating sdk-mcp tool",
+        "description": "An sdk-mcp server named `weft` serves one tool `structured_output` (model sees `mcp__weft__structured_output`) whose description embeds the step's JSON Schema. Its `result` parameter is deliberately declared `z.record(z.string(), z.unknown())` \u2014 an untyped parameter makes models stringify their answer \u2014 while staying permissive about contents because validation is the engine's job. Every prompt gets an appended `## Output` section restating the schema and that prose is not an answer. The handler boxes the value (`{value}`) so a legitimate null/undefined still counts as captured; a string `result` is defensively JSON.parsed, otherwise passed through untouched.",
+        "evidence": "packages/provider-claude/src/index.ts:87-95 (withOutputSection), :109-117 (capturedValue), :119-124 (toolDescription), :177-198 (tool registration), :65-80 (Turn); packages/provider-claude/src/tools.ts:8,11",
+        "maturity": "solid"
+      },
+      {
+        "name": "Claude adapter \u2014 finalize turn, repair, and paid-failure accounting",
+        "description": "If the stream ends with nothing captured and `onMaxTurns === \"finalize\"`, one extra `query()` resumes the same session with FINALIZE_PROMPT; still nothing captured throws `agent finished without calling structured_output`. `repair()` re-prompts the same session with a bulleted `path: message` issue list plus the schema; a missing sessionId falls back to a full `run()`. The no-output Error is `Object.assign`-ed with the turn's `usage` so the engine folds already-burned spend into the failure record.",
+        "evidence": "packages/provider-claude/src/index.ts:57,59 (prompts), :145-154 (run/finalize), :156-167 (repair), :126-133 (repairPrompt), :291-298 (noOutput)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Claude adapter \u2014 session/resume, usage and transcript extraction",
+        "description": "`session_id` is absorbed from any SDK message that carries a non-empty one and stored on the Turn; a repair or finalize turn passes it as `Options.resume`. Usage comes only from `result` messages and accumulates across turns of one step: `usage.input_tokens`, `output_tokens`, `cache_read_input_tokens` (emitted only when >0), and `total_cost_usd` summed with a `usdSeen` flag so a missing cost is absent rather than 0. Transcript lines are `assistant: <text>`, `assistant \u2192 tool: <name>`, `result: <subtype>`; `filesTouched` is populated by the gate's `onEdit` callback (deduped).",
+        "evidence": "packages/provider-claude/src/index.ts:256-282 (absorb), :284-289 (usageOf), :300-308 (toResult), :229-232 (onEdit wiring), :241 (resume)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Claude adapter \u2014 abort and long-deadline handling",
+        "description": "Each `stream()` builds a fresh AbortController, aborts it immediately if `ctl.signal` is already aborted, otherwise mirrors the abort once; the listener is removed in `finally`. The step deadline arms in chunks of at most 2_147_483_647 ms because Node clamps a longer single timer to ~1 ms (a 30-day agent would abort instantly); the timer is cleared in `finally`. `permissionMode` is pinned to `\"default\"` because canUseTool is only consulted there.",
+        "evidence": "packages/provider-claude/src/index.ts:62 (MAX_TIMER_MS), :200-221 (abort mirror + chunked timer), :233-242 (options), :244-251 (finally)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Claude tool gate \u2014 edit-tool and write-scope enforcement",
+        "description": "`createToolGate` returns a `CanUseTool`. The terminating tool is never gated. `tools.deny` matches both the bare and fully-qualified names. EDIT_TOOLS = {Edit, Write, MultiEdit, NotebookEdit} are denied outright on a read-only step. With a scope, the edit's `file_path`/`notebook_path` is resolved to a posix cwd-relative path and tested with `scopeMatcher` \u2014 the SAME predicate the post-hoc `checkScope` uses, deliberately shared so the live gate cannot drift back to picomatch's fail-open array semantics. Strict mode denies: an out-of-scope path, an undeterminable target path, and an in-scope path whose deepest existing ancestor `realpath`s outside the worktree (dangling symlinks followed by hand, depth-capped at 8). Warn mode lets the edit land for post-hoc flagging.",
+        "evidence": "packages/provider-claude/src/gate.ts:119-166; :53-78 (resolvesOutsideWorktree), :113-117 (workspacePath), :130 (shared matcher); packages/provider-claude/src/tools.ts:14 (EDIT_TOOLS), :17-27",
+        "maturity": "solid"
+      },
+      {
+        "name": "Claude tool gate \u2014 Bash screening",
+        "description": "Four layers. (1) Any command matching /\\bgit\\b/ is rewritten with GIT_READ_WRAPPER prepended \u2014 a shell function forcing `--no-ext-diff --no-textconv` on diff/log/show, `--no-textconv` on blame, `-c core.fsmonitor=false` and `GIT_OPTIONAL_LOCKS=0` on every git call \u2014 applied on write steps too. (2) Read-only steps are deny-by-default: `isReadOnlyCommand` tokenizes with a hand-written shell-word resolver that returns null on any expansion/substitution/redirection/unterminated quote, then requires every segment head to be a bare (non-path-qualified) name in a fixed READ_COMMANDS allow-list or a git read subcommand, and refuses PATH/LD_*/GIT_* env prefixes plus per-command escape options (`git --output`, `--ext-diff`, `--textconv`, `--show-signature`, `grep -O`, `find -exec/-delete/-fprint*`, `rg --pre`, `diff -l`, `tree -o`, `file -C`, `date -s`, `sort -o/--compress-program`, `printf -v`, `uniq`/`xxd` second positional). (3) Strict write scope additionally denies absolute/`~`/`$HOME` paths, `..` traversal, any `$`/backtick/process-substitution token, any literal word resolving out of the worktree, and any git subcommand in SHARED_GIT_METADATA_SUBCOMMANDS (config, remote, branch, tag, checkout, switch, stash, notes, fetch, pull, worktree, gc, prune, update-ref, symbolic-ref, reflog, filter-branch, replace, maintenance) \u2014 then brokers EVERY non-provably-read-only command at risk `high`. (4) `isRiskyCommand` routes push/publish/deploy/apply-style commands (including plumbing `send-pack`/`http-push`, `-c alias.*`/`--config-env=alias.*` definitions, `eval`, computed heads, and any git subcommand outside KNOWN_GIT_SUBCOMMANDS) to the HITL broker at risk `high`.",
+        "evidence": "packages/provider-claude/src/gate.ts:168-230; :27,37,45 (path/traversal/computed regexes), :88-100 (commandEscapesWorktree); packages/provider-claude/src/tools.ts:34-43,53-121,133-221 (shellWords), :239-240 (GIT_READ_WRAPPER), :242-346, :353-362 (gitSubcommandOf), :365-378 (RISKY_PATTERNS), :393-436, :446-576",
+        "maturity": "solid"
+      },
+      {
+        "name": "Codex adapter \u2014 native structured output with vendor schema adaptation",
+        "description": "The step's schema is passed as `TurnOptions.outputSchema`; the final message is the JSON value. `toStrictSchema` walks only real JSON-Schema keyword positions (SCHEMA_KEYWORDS / SCHEMA_LIST_KEYWORDS / SCHEMA_MAP_KEYWORDS) so `const`/`default`/`enum`/`examples` literals pass through byte-for-byte, then sets `additionalProperties: false` on every object schema that doesn't already carry a meaningful catchall, and rewrites `required` to list every property (OpenAI strict-mode requirement; Zod omits defaulted keys). `parseOutput` tries a direct JSON.parse, then a ```json fence, then returns the raw string so the engine's schema check fails it and repair gets a turn instead of the work being discarded.",
+        "evidence": "packages/provider-codex/src/index.ts:163-187 (keyword sets), :207-244 (toStrictSchema), :246-250 (isObjectSchema), :264-267 (outputSchema), :290-318 (parseOutput/tryParse), :70-77 (withOutputNote)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Codex adapter \u2014 sandbox as the only live guard",
+        "description": "There is no per-tool hook. `ThreadOptions` pins `workingDirectory: req.cwd`, `sandboxMode: allowEdits ? \"workspace-write\" : \"read-only\"`, `skipGitRepoCheck: true` (the engine already chose the dir), `approvalPolicy: \"never\"` (no TTY exists), plus model and `modelReasoningEffort` (Weft's five effort tiers are a subset of the SDK's names). `capabilities()` reports `permissionHook: false`, and `filesTouched` is deliberately returned as `[]` so the engine's worktree diff is the sole authority on what changed.",
+        "evidence": "packages/provider-codex/src/index.ts:92-94 (sandboxFor), :96-110 (threadOptions), :275-288 (toResult, filesTouched []), :340-344 (capabilities)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Codex adapter \u2014 session/resume, usage, abort",
+        "description": "`run()` calls `startThread()`; `repair()` calls `resumeThread(sessionId, \u2026)` with the same thread options and a repair prompt listing the schema issues, falling back to a fresh `run()` when no thread id was ever reported. `thread.id` is copied to `sessionId` only when it is a non-empty string. Usage maps `input_tokens`/`output_tokens`/`cached_input_tokens` (cacheRead only when >0); `usd` is deliberately never set \u2014 the engine prices from config. Abort is bracketed: an already-aborted signal throws `aborted` before the SDK is touched, and a turn that finished after cancellation is discarded rather than returned. `turnSignal` combines ctl.signal with the step deadline via `AbortSignal.any`, chunking deadlines over the Node timer ceiling with `unref()` and a `done()` released in `finally` so a successful long-timeout turn does not pin its timer.",
+        "evidence": "packages/provider-codex/src/index.ts:67 (ABORTED), :79-86 (repairPrompt), :112-151 (turnSignal), :252-273 (runTurn brackets), :320-332 (toUsage/num), :346-364 (run/repair), :366-370 (lazy client)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Codex transcript rendering",
+        "description": "`renderTranscript` maps ThreadItems to one line each in production order: `assistant:`/`reasoning:` (trimmed, empty dropped), `exec (<status|exit N>): <command>`, `files (<status>): <kind> <path>, \u2026`, `mcp (<status>): <server>.<tool>`, `search: <query>`, `todo: <done>/<total>`, `error: <message>`. Unknown item types are skipped rather than rendered as [object Object]. An absent/empty list renders \"\".",
+        "evidence": "packages/provider-codex/src/transcript.ts:10-18, :20-49, :51-54",
+        "maturity": "solid"
+      },
+      {
+        "name": "Mock provider \u2014 scripted fixtures",
+        "description": "`mock()` builds a MockAgentBuilder holding rules and a shared call log; `.provider(id)` mints a MockProvider sharing them. A rule matches on `key` (glob where `*` crosses `/`, so `review:*` matches `review:src/a.ts`), `label` (same glob), and `prompt` (substring or RegExp), honouring an optional `times` budget; no match throws an error listing every registered rule. Responders may be a function of the MockRequest or a literal. Options can write files into the request cwd, delay (abortable via ctl.signal), override usage (default `{input:100, output:50}`), and set `filesTouched` explicitly (default: the `writes` keys) to model paths patch capture cannot see. Session ids are `mock-<id>-<n>`; `repair()` looks up the original request by session id and computes its attempt number from the call log. Capabilities mirror Claude's (tool/true/true/true).",
+        "evidence": "packages/provider-mock/src/index.ts:22-28 (globMatch), :53-65 (MockRuleOptions), :74-92 (builder/mock), :103-105 (capabilities), :107-136 (findRule), :138-191 (respond), :193-206 (run/repair)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Typed git API surface (ctx.git)",
+        "description": "Reads (journaled, no approval): status, head, branches, mergeBase, changedSince, diff, log, show, blame, fileAt, snapshot. Writes (journaled, gated): add, commit, checkout, fetch, pull, push, reset, apply, tag, branch.create/delete, stash.push/pop/drop, clean. Every write accepts `GitWriteOpts.risk` to RAISE (never lower) its fixed tier. `tag()` returns the peeled COMMIT sha so resume can detect a `tag -f` re-point.",
+        "evidence": "packages/sdk/src/types.ts:327-371 (GitApi), :322-325 (GitWriteOpts); packages/git/src/index.ts:52-103 (Git handle)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Git risk tiers",
+        "description": "A fixed table maps 18 write op names to Risk: low = add, commit, branch.create, checkout, fetch, stash.push, stash.pop, tag; medium = pull, reset, apply, stash.drop, checkout.discard; high = push; irreversible = push.force, reset.hard, branch.delete, clean. `ctx` picks the op name dynamically (`opts.force ? \"push.force\" : \"push\"`, `mode === \"hard\" ? \"reset.hard\" : \"reset\"`, `discard ? \"checkout.discard\" : \"checkout\"`) and combines the table tier with the caller's via `maxRisk`, which only ever raises along [low, medium, high, irreversible].",
+        "evidence": "packages/git/src/index.ts:111-129 (GitWriteOp), :131-154 (GIT_WRITE_RISK); packages/core/src/ctx.ts:64-69 (RISK_ORDER/maxRisk), :1490 (tier combine), :1545-1547, :1584-1592, :1596-1602",
+        "maturity": "solid"
+      },
+      {
+        "name": "Git CLI hardening (execution-safety of typed reads)",
+        "description": "Every invocation runs `git -c core.fsmonitor=false \u2026` (an fsmonitor hook is repository-configured code a journaled read must not execute) in a fixed cwd with GIT_TERMINAL_PROMPT=0, GIT_PAGER=cat, GIT_OPTIONAL_LOCKS=0, LC_ALL=C and GIT_EXTERNAL_DIFF REMOVED (undefined, not empty \u2014 an empty value is a command git tries to run). Every diff-family call adds `--no-ext-diff --no-textconv`; `show` and `blame` too. Parsed commands add `-c core.quotePath=false` and use `-z` (porcelain=v2 status, name-status, name-only, ls-files, log records) so pathnames containing newlines/quotes/backslashes round-trip verbatim. `refArg` rejects empty or `-`-leading values in ref/name argv positions so `show(\"--output=/x\")` cannot turn a read into a write.",
+        "evidence": "packages/git/src/git.ts:40-46 (GIT_ENV), :49 (RAW_PATHS), :59 (NO_EXT_DIFF), :68-77 (refArg), :100-114 (raw), :127-168 (status -z parse), :189-216 (changedSince), :230-258 (log -z), :260-266 (show), :268-295 (blame), :437-443 (unmergedPaths)",
+        "maturity": "solid"
+      },
+      {
+        "name": "git.snapshot() \u2014 gc-safe tree snapshot",
+        "description": "Not `stash create` (which omits untracked files). A throwaway GIT_INDEX_FILE is seeded `read-tree HEAD` (so a tracked-but-gitignored file stays in), then `add -A .`, `write-tree`; if the tree equals HEAD's tree it returns HEAD, otherwise `commit-tree \u2026 -p HEAD` with a fixed weft identity and the result is PINNED at `refs/weft/snapshots/<sha>` so `git gc --prune` cannot collect it across a long suspension. The temp index is removed in `finally`.",
+        "evidence": "packages/git/src/git.ts:302-337",
+        "maturity": "solid"
+      },
+      {
+        "name": "Worktree isolation",
+        "description": "`addWorktree` mkdirs the parent, runs `git worktree add --detach <dir> <baseRef|HEAD>` in the repo root, then reads the sha back from inside the new worktree (baseRef may be a branch/tag). `removeWorktree` tries `git worktree remove --force`, and on failure rm -rf's the directory and runs `git worktree prune`, tolerating an already-removed dir. Engine-side, each write attempt gets `tmpdir()/weft-worktrees/<runId>/<seq>.<attempt>` (per-ATTEMPT so a retry never removes a directory a hung attempt still writes to), is pre-cleaned via removeWorktree (a process killed mid-step leaves the dir registered), and is seeded from `integrationBaseCommit(cwd)` \u2014 the CURRENT integration state including patches an earlier `ctx.integrate` left uncommitted \u2014 not from HEAD. Teardown runs in `finally` and never vetoes a paid, journaled result.",
+        "evidence": "packages/isolation/src/worktree.ts:11-24, :27-35; packages/core/src/ctx.ts:409-422 (per-attempt dir, pre-clean, seed), :805-809 (finally teardown), :189-243 (integrationBaseCommit + refs/weft/snapshots pin)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Patch capture",
+        "description": "`capturePatch` stages everything (`add -A`), then force-adds any gitignored file that the declared scope patterns match (so a declared `dist/**` output is not lost with the worktree), lists `diff --cached --name-only --no-renames --no-ext-diff -z` (no rename detection: `git mv` out of scope would otherwise list only the destination and silently delete the out-of-scope source; -z keeps a newline filename one path), then emits `diff --cached --binary --no-renames --no-ext-diff --no-textconv`. `--binary` is what makes image/archive patches applicable at all. Before the diff, `refuseAccidentalGitlinks` inspects `--raw` for newly-introduced mode-160000 entries (oldMode \u2260 160000 so a removed submodule isn't misread), cross-checks against `.gitmodules`-registered paths, and throws naming the path rather than journaling a patch that applies cleanly and lands zero files.",
+        "evidence": "packages/isolation/src/patch.ts:21-62, :177-222 (refuseAccidentalGitlinks), :225 (GITLINK_MODE)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Write-scope checking",
+        "description": "`scopeMatcher(scope)` is the single predicate: patterns from `paths` + `also` are split into includes and `!`-prefixed excludes and compiled as TWO picomatch matchers (`dot: true`); a file is in scope iff it matches \u22651 include and 0 excludes. This exists because picomatch's array semantics fail open twice \u2014 `[\"src/**\", \"!src/secret.ts\"]` reports secret.ts as a match, and `[\"!secrets/**\"]` alone matches the whole tree. An empty/inclusion-free scope matches nothing. Paths and patterns are NFC-normalized (macOS hands back decomposed names) and newlines/CRs in paths are mapped to a stand-in character because picomatch's wildcards compile to classes that do not cross a newline. `checkScope` just partitions a file list with that predicate, preserving input order.",
+        "evidence": "packages/isolation/src/scope.ts:17-19 (nfc), :28-32 (NEWLINE_STANDIN/matchable), :48-59 (checkScope), :71-88 (scopeMatcher)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Quarantine semantics",
+        "description": "After capture, `files` is the UNION of what the worktree diff saw and any provider-reported path that escaped it (`isAbsolute(path) || path.startsWith(\"../\")`) \u2014 the escaped paths are the only witness for edits capture cannot see, and they can never match a repo-relative glob so they land out of scope by construction. `quarantined = scope.mode === \"strict\" && outOfScope.length > 0`. The PatchRef carries `{ref, key, files, quarantined?, outOfScope?}`; `patch.captured` and a `scope.violation` event are journaled (the violation is journaled even when every edit escaped and there is no patch to attach it to). A quarantined patch is never merged \u2014 `ctx.integrate` records it under `ledger.quarantined` and logs the out-of-scope files.",
+        "evidence": "packages/core/src/ctx.ts:617-668 (capture/union/quarantine/journal), :669-680 (escaped-only violation); packages/sdk/src/types.ts:87-94 (PatchRef); packages/core/src/ctx.ts:2057-2063 (integrate skip)",
+        "maturity": "solid"
+      },
+      {
+        "name": "In-place write-scope enforcement (no worktree)",
+        "description": "For `writeInPlace` steps (used by the `onConflict: \"agent\"` resolver), the engine snapshots the tree with `integrationBaseCommit`, lists gitignored entries (`ls-files --others --ignored --exclude-standard --directory -z`), and builds a sha256 CONTENT manifest of the pre-existing ignored tree (metadata is forgeable), capped at 10 000 files \u2014 a strict scope refuses to run rather than trust a truncated manifest. After the dispatch it re-diffs the two snapshots with `--no-renames -z`, re-lists new ignored entries, and re-walks the manifest. Out-of-scope files are journaled as `scope.violation`, and under strict mode are ROLLED BACK via `restorePatchFiles` and removed from the reported file list. Modified pre-existing IGNORED paths under strict mode throw `scope_violation` \u2014 no snapshot holds ignored content, so there is nothing to restore from.",
+        "evidence": "packages/core/src/ctx.ts:428-452 (pre-snapshot + cap refusal), :686-770 (post-diff, rollback, ignored handling), :1962-1978 (listIgnoredFiles), :1981-2027 (ignoredStatManifest), :2030-2040 (diffIgnoredManifest), :1924-1953 (restorePatchFiles)",
+        "maturity": "solid"
+      },
+      {
+        "name": "applyPatchToTree \u2014 clean apply then 3-way",
+        "description": "An empty/whitespace patch is a no-op success. Otherwise `git apply --check`; on success apply for real. On failure it falls back to `--3way`, but because `--3way` implies `--index` (which would stage the result and any pre-existing user edits into the CALLER's index) the merge runs against a throwaway GIT_INDEX_FILE seeded `read-tree HEAD` then `add -A .` \u2014 only the working tree keeps the result. Conflicts are reported from `diff --diff-filter=U -z` in the throwaway index; failing that, from four `git apply` stderr patterns (patch failed, does not apply/does not exist in index/No such file, already exists in working directory, binary without full index line); failing that, from the patch's own `---`/`+++` headers (handling `/dev/null` deletions and trailing-tab timestamps). The temp index is removed in `finally`.",
+        "evidence": "packages/isolation/src/patch.ts:69-106, :123-138 (filesFromStderr), :141-158 (filesFromPatch), :161-163 (headerPath); packages/isolation/src/index.ts:16 (ApplyOutcome)",
+        "maturity": "solid"
+      },
+      {
+        "name": "ctx.integrate \u2014 merge orchestration and ledger",
+        "description": "Iterates the results sequentially. A result with no patch \u2192 `ledger.skipped.push(\"(no patch)\")`; a quarantined patch \u2192 `ledger.quarantined`. Otherwise one journaled `sideeffect` step per patch wraps TWO nested journaled steps \u2014 a snapshot step (`treeHash` + `integrationBaseCommit(cwd, patch.files)` force-adding the patch's own targets so even an ignored pre-existing collision file is restorable) and an apply step \u2014 so a resume mid-ask reuses the PRE-conflict snapshot and the first pass's outcome rather than snapshotting conflict markers and stacking a second apply. A successful apply appends `patch.merged {key, ref, baseTree, resultTree}` and lands in `ledger.merged`. The ledger is `{merged, conflicts, quarantined, skipped}` and run status is set to \"integrating\" for the duration.",
+        "evidence": "packages/core/src/ctx.ts:2042-2072, :2104-2146, :2227-2234; packages/sdk/src/types.ts:398-408 (IntegrateOptions/IntegrationLedger)",
+        "maturity": "solid"
+      },
+      {
+        "name": "ctx.integrate \u2014 resume idempotency check",
+        "description": "`verifyServe` decides whether a journaled merge may be served on replay. A non-applied journal entry always serves. Otherwise: if the live tree hash equals the journaled `resultTree`, serve. Else fetch the patch blob and try `git apply --reverse --check` \u2014 success means the content is present (later patches moved the tree past it), serve. Else, if a LATER journaled merge started from this patch's `resultTree` (`replay.mergedBaseTrees`), serve \u2014 that later merge may have edited the very lines this patch introduced. Only if a FORWARD `git apply --check` succeeds (proving the tree genuinely lacks the patch) does the step re-execute.",
+        "evidence": "packages/core/src/ctx.ts:2073-2098; packages/core/src/replay.ts:84 (mergedBaseTrees), :227 (population)",
+        "maturity": "solid"
+      },
+      {
+        "name": "ctx.integrate \u2014 the three conflict strategies",
+        "description": "`onConflict` defaults to \"ask\". `\"fail\"`: restore the patch's files from the pre-conflict snapshot, throw StepError(\"conflict\", \u2026) naming the conflicted files. `\"agent\"`: spawn an in-place, STRICT-scoped agent step keyed `merge:<patchKey>` whose scope is exactly `applied.conflicts`, asking it to resolve every marker and touch nothing else; the model's `resolved: true` self-report is NOT trusted \u2014 `conflictMarkersIn` re-reads each file and matches /^<{7}(?: |$)/m, and only a clean result journals `patch.merged {conflicted: true}`; otherwise the patch's files AND the conflicted files are restored and a StepError(\"conflict\") names whether the agent gave up or lied. `\"ask\"`: a journaled human ask with enum {skip, keep-conflicts, abort} \u2014 keep-conflicts journals `patch.merged {conflicted: true}` and lands markers, skip restores and reports `applied: false` (\u2192 ledger.skipped), abort restores and throws. Ledger placement: conflicted merges \u2192 `ledger.conflicts`, unapplied \u2192 `ledger.skipped`.",
+        "evidence": "packages/core/src/ctx.ts:2148-2153 (fail), :2154-2193 (agent), :2194-2224 (ask), :1909-1912 (ResolutionSchema), :1915-1922 (conflictMarkersIn), :2227-2229 (ledger)",
+        "maturity": "solid"
+      },
+      {
+        "name": "ctx.discard",
+        "description": "Collects PatchRefs from the passed results, and in one journaled `sideeffect` step appends a `patch.discarded {key, ref}` event per patch and marks each in-memory patch state `discarded`. A call with no patches is a no-op.",
+        "evidence": "packages/core/src/ctx.ts:2237-2257",
+        "maturity": "solid"
+      },
+      {
+        "name": "restorePatchFiles \u2014 rollback discipline",
+        "description": "Per file: probe `git cat-file -e <snapRef>:<path>` and distinguish genuine absence (exit 1, or \"does not exist in\"/\"exists on disk, but not in\" in stderr) from a repository/object-store error, which throws `exec_failed` rather than being misread as absence (which would delete a tracked file). Present \u2192 `git restore --worktree --source <snapRef> -- <file>` (worktree-only, so a caller's staged index is not destroyed). Absent \u2192 `rm -rf` the path (recursive so a new ignored DIRECTORY entry rolls back whole). Every rollback op must succeed \u2014 a swallowed failure would leave a skipped integration on a half-applied patch.",
+        "evidence": "packages/core/src/ctx.ts:1924-1953",
+        "maturity": "solid"
+      },
+      {
+        "name": "stdlib: adversarialVerify",
+        "description": "For each claim, `refuters` (default DEFAULT_REFUTERS = 3, clamped by `positiveInt`) independent agent steps get a prompt that explicitly instructs `refuted=true` when uncertain. All claim\u00d7refuter promises are created eagerly and handed to `ctx.parallel`, then read from `settled[i * refuters + r]`. A claim dies at `Math.floor(refuters/2) + 1` refute votes \u2014 a STRICT majority, so a 1-of-2 tie never kills. Settled entries are used deliberately instead of `ctx.ok`: a refuter branch that FAILED counts as a refute vote (`refuter R failed (<code>): <message>`), so a claim never survives because nobody could check it. Keys default to `refute:<claimIndex>:<refuterIndex>`, overridable via `keyFor`. An empty claim list short-circuits. Returns `{survived, refuted: [{claim, reasons}]}` plus a summary `ctx.log`. `adversarialVerifyResultSchema(claim)` mints the matching output schema.",
+        "evidence": "packages/stdlib/src/adversarial.ts:13 (DEFAULT_REFUTERS), :16-19 (RefuterVerdictSchema), :33-41 (options), :44-49 (result schema), :51-61 (prompt), :79-104 (fan-out), :83 (threshold), :108-121 (tally), :123-126 (log)",
+        "maturity": "solid"
+      },
+      {
+        "name": "stdlib: judgePanel",
+        "description": "One attempt per angle (keys `attempt:<i>`, optionally `keyPrefix`-namespaced), then ONE JUDGE PER SURVIVING ATTEMPT (keys `judge:<i>`) \u2014 the judge count is derived, not configurable. Zero angles throws StepError(\"invalid_input\"); all attempts failing throws StepError(\"internal\"). Failed attempts are dropped via `ctx.ok`, and the judge schema is pinned to the surviving count with `judgeVerdictSchema(n)`: `scores` array of exactly n numbers in [0,10], `best` an int in [0, n-1], plus a rationale \u2014 so a wrong-length verdict triggers schema repair. Tally: mean score per attempt over finite scores only, plus best-vote counts (out-of-range `best` ignored). Winner = most best-votes, ties broken by higher mean; every judge failing falls back to attempt 0 with an explicit log. Returns `{winner, attempts, scores}`.",
+        "evidence": "packages/stdlib/src/judge.ts:11-15 (JudgeVerdictSchema), :22-29 (judgeVerdictSchema), :38-45 (options), :48-54 (result schema), :56-78 (prompts), :97-99, :103-117, :118-130 (judges), :132-147 (tally), :149-159 (winner), :161-168 (logs)",
+        "maturity": "solid"
+      },
+      {
+        "name": "stdlib: loopUntilDry",
+        "description": "Pure bookkeeping around a caller-supplied `find(round)`: it spawns no steps itself. `dryRounds` (default 2) and `maxRounds` (default 10) both go through `positiveInt`, so NaN would otherwise run zero rounds and Infinity would remove the paid-round ceiling. Each round's items are deduped by `keyOf` against a Set of everything ever seen; `added === 0` increments a dry streak (reset by any new item), and the loop returns when the streak reaches `dryRounds` or the round ceiling is hit. Every round logs `returned N, M new (K unique so far)`, and both exit paths log which one fired.",
+        "evidence": "packages/stdlib/src/loop.ts:11,13 (defaults), :15-24 (options), :39-40 (clamping), :42-71 (loop/dedupe/streak), :73-74 (ceiling exit)",
+        "maturity": "solid"
+      },
+      {
+        "name": "stdlib: completenessCritic",
+        "description": "A single agent step (key defaults to `completeness`, overridable) whose prompt forbids reviewing quality/style/correctness and enumerates the gap classes to hunt: a modality never run, a claim asserted but unverified, a source referenced but unread, a question left unanswered, a scope quietly narrowed. `instructions` is optional \u2014 without it the prompt tells the critic to infer intent from the work. Returns `{missing: [{what, why}]}` and logs the gap count.",
+        "evidence": "packages/stdlib/src/critic.ts:11-20 (GapSchema/CompletenessGapsSchema), :22-29 (options), :31-46 (prompt), :58-70",
+        "maturity": "partial"
+      },
+      {
+        "name": "stdlib: multiModalSweep",
+        "description": "One agent step per lens, keyed `sweep:<mode.name>` (optionally `keyPrefix`-namespaced) and run through `ctx.parallel`. Each lens's prompt names the OTHER lenses so the agent knows breadth buys nothing. An empty mode list short-circuits to []. Failures are dropped via `ctx.ok` (which records the drop) and the dropped mode names are logged. Returns `[{mode, result}]` in mode order for the survivors; `sweepResultSchema(result)` mints the matching output schema.",
+        "evidence": "packages/stdlib/src/sweep.ts:11-19 (SweepMode/Schema), :26-32 (options), :35-37 (result schema), :39-48 (prompt), :68-92",
+        "maturity": "solid"
+      },
+      {
+        "name": "stdlib: finalReport",
+        "description": "Synchronous, agent-free, deterministic markdown assembly: `# <title.trim()>` then, per section, `## <heading.trim()>` and the trimmed body (omitted entirely when empty), joined with blank lines and terminated by a newline. Takes `ctx` only to emit one log line. Byte-for-byte stable so reports diff cleanly between runs and the last step of a workflow spends no tokens on formatting.",
+        "evidence": "packages/stdlib/src/report.ts:9-27 (types/schemas), :36-46",
+        "maturity": "solid"
+      },
+      {
+        "name": "stdlib: shared internals",
+        "description": "`routing(opts)` forwards only the routing keys actually supplied (provider/model/effort) so step and workflow defaults still win; `prefixed(prefix, key)` composes `<prefix>:<key>` so two uses of one pattern in a workflow cannot claim the same keys; `positiveInt(value, fallback)` clamps to a finite positive integer; `asPromptJson` renders values with 2-space JSON for prompts. Nothing is exported from the package root.",
+        "evidence": "packages/stdlib/src/internal.ts:8-12 (Routing), :15-21, :27-29, :32-36, :39-41; packages/stdlib/src/index.ts:12-33 (root exports)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Engine-side repair loop and usage accounting around providers",
+        "description": "`runProviderWithRepair` calls `provider.run`, then loops: unwrap the wire value, validate against the REAL schema, and on failure call `provider.repair(result.sessionId, req, issues, \u2026)` until `repairMax` (config default 2) is exceeded, then throw `schema_repair_exhausted`. Usage accumulates across every turn \u2014 including turns preceding a failure \u2014 with each turn's components clamped positive per-turn so a malformed negative cannot subtract earlier real spend, and a provider error's duck-typed `.usage` is folded into the StepError detail. Cost is filled in from the config price table when the provider reports no USD; a run with a USD-only ceiling, a provider with `reportsUsd: false`, and no configured price is REFUSED before dispatch.",
+        "evidence": "packages/core/src/ctx.ts:812-882 (runProviderWithRepair), :674-696 (chargeUsage/pricing), :469-484 (USD-ceiling refusal); packages/core/src/config.ts:74-78 (DEFAULT_PRICES), :113-120 (priceFor)",
+        "maturity": "solid"
+      },
+      {
+        "name": "Engine-side HITL bridge for provider permission asks",
+        "description": "The `hitl.onPermission` the engine hands each provider gates only `high` and `irreversible` risk through `rt.gateStep` (action `agent tool <tool> (<label>)`, detail = first 500 chars of the JSON input), auto-allowing lower tiers. Both `onPermission` and `onAsk` are fenced against zombie attempts: an aborted step's signal makes onPermission deny with \"attempt aborted\" and onAsk throw CancelledError, so an abandoned attempt cannot open a gate or journal a human request the run will never answer.",
+        "evidence": "packages/core/src/ctx.ts:518-540 (onPermission), :521-533 (onAsk)",
+        "maturity": "solid"
+      }
+    ],
+    "limitations": [
+      {
+        "what": "There is NO AgentProvider conformance suite. `@techery/weft-testing/conformance` ships only `journalStoreConformance` and `blobStoreConformance`; nothing asserts that a new provider implements structured output, repair, session resume, abort, or usage extraction consistently. Each adapter is verified by its own bespoke test file instead (claude.test.ts ~40 cases, codex.test.ts ~24), so the two adapters are tested against different expectations.",
+        "evidence": "packages/testing/src/conformance.ts:26,137 (only two exported suites); packages/testing/src/index.ts:23-42 (no provider export); packages/provider-claude/test/claude.test.ts:195-1031; packages/provider-codex/test/codex.test.ts:109-436"
+      },
+      {
+        "what": "Only three provider ids exist anywhere: claude, codex, mock. No OpenAI-direct, Gemini, Bedrock/Vertex, or local-model adapter. `ProviderId` is typed as `\"claude\" | \"codex\" | (string & {})`, so a third id typechecks but resolves to a registry miss at dispatch.",
+        "evidence": "packages/host/src/weft.ts:36,107-109; packages/sdk/src/types.ts:14; packages/core/src/provider.ts:93-100"
+      },
+      {
+        "what": "`ProviderHitl.onAsk` is dead contract surface. The engine implements and fences it, but no shipped adapter ever calls it \u2014 Claude's gate only calls `onPermission`, and Codex has no hook at all. Only `onPermission` is exercised.",
+        "evidence": "packages/core/src/provider.ts:26 (declaration); packages/core/src/ctx.ts:522-533 (only implementation); grep across packages/*/src shows call sites only at packages/provider-claude/src/gate.ts:219,226 \u2014 both onPermission"
+      },
+      {
+        "what": "The Codex adapter silently ignores several AgentRequest knobs: `maxTurns`, `onMaxTurns`, and `tools.deny` are never read (`threadOptions` passes only workingDirectory, sandboxMode, skipGitRepoCheck, approvalPolicy, model, modelReasoningEffort). It also always returns `filesTouched: []`, so a Codex write step outside a worktree has no adapter-side witness of what it touched.",
+        "evidence": "packages/provider-codex/src/index.ts:96-110 (threadOptions \u2014 no maxTurns/deny), :281 (filesTouched: [])"
+      },
+      {
+        "what": "Write-scope enforcement is asymmetric between providers. Claude enforces scope LIVE via canUseTool (strict denies out-of-scope edits, symlink escapes, shell writes, shared git-metadata mutations); Codex has no per-tool hook, so its only live guard is the coarse `workspace-write` sandbox and the scope is enforced purely post-hoc by the worktree diff. A strict scope therefore means materially different things per provider.",
+        "evidence": "packages/provider-claude/src/gate.ts:139-230; packages/provider-codex/src/index.ts:8-13 (header note), :101-104, :343 (permissionHook: false)"
+      },
+      {
+        "what": "Codex reports tokens only, and the built-in price table contains claude models exclusively (claude-opus-5, claude-sonnet-5, claude-haiku-4-5). A run with a USD-only budget routed to Codex is refused at dispatch unless the host explicitly configures a price for that model.",
+        "evidence": "packages/core/src/config.ts:74-78 (DEFAULT_PRICES); packages/provider-codex/src/index.ts:326-327,341-343; packages/core/src/ctx.ts:469-484"
+      },
+      {
+        "what": "`IntegrateOptions.order?: \"sequential\"` is inert \u2014 the field is never read anywhere in the engine. `integrate` always applies patches in array order in a plain `for` loop; there is no parallel or dependency-ordered integration.",
+        "evidence": "packages/sdk/src/types.ts:398-401 (declaration); packages/core/src/ctx.ts:2042-2050 (only `opts.onConflict` is read; `opts.order` unreferenced), grep for \"order\" in ctx.ts returns only an unrelated comment at :970"
+      },
+      {
+        "what": "The Claude gate's terminal clause allows every tool it does not specifically recognise. Anything that is not the terminating tool, not in `tools.deny`, not in EDIT_TOOLS, and not `Bash` \u2014 WebFetch/WebSearch, Task/subagent spawning, other MCP servers' tools \u2014 is unconditionally allowed even on a read-only step or under a strict write scope.",
+        "evidence": "packages/provider-claude/src/gate.ts:232 (`return allow;`), with the recognized branches at :136,:137,:139,:168"
+      },
+      {
+        "what": "`warn`-mode write scope leaves the shell completely unscreened on a write step. The out-of-tree path, `..` traversal, computed-token, symlink-escape, shared-git-metadata and broker-everything checks are all gated on `scope?.mode === \"strict\"`; in warn mode only `isRiskyCommand` applies. Post-hoc patch capture cannot see anything written outside the worktree, so warn-mode escapes are recorded only if the provider self-reports them.",
+        "evidence": "packages/provider-claude/src/gate.ts:192-224 (all four screens conditioned on strict); packages/core/src/ctx.ts:621-635 (escaped paths come only from `result.filesTouched`)"
+      },
+      {
+        "what": "Escaped-path detection in the engine is posix-only: `isAbsolute(path) || path.startsWith(\"../\")`. A Windows-style `..\\\\` relative escape reported by a provider would not be recognised as escaped and would not be forced out of scope.",
+        "evidence": "packages/core/src/ctx.ts:631-633"
+      },
+      {
+        "what": "Most git write ops have no resume verifier. Only `commit`, `checkout` (non-discard), `tag`, and `branch.create` pass a `verifyServe`; `add`, `fetch`, `pull`, `push`/`push.force`, `reset`/`reset.hard`, `apply`, `stash.push/pop/drop`, `branch.delete`, `clean`, and discard-checkouts are served from the journal on replay with no check that the effect still holds. Additionally, all verifiers are disabled whenever test hooks are installed.",
+        "evidence": "packages/core/src/ctx.ts:1494 (`verifyServe && !rt.host.testHooks`), :1519-1524 (add: no verifier), :1576-1615 (fetch/pull/push/reset/apply: none), :1710-1730 (branch.delete/stash/clean: none), :1548-1551 (discard checkout deliberately unverified)"
+      },
+      {
+        "what": "The GIT_READ_WRAPPER is prepended whenever the raw command text matches /\\\\bgit\\\\b/ \u2014 including when \"git\" appears only inside a quoted string or as an argument (`grep git README`). The prepended shell function definition is then injected into an unrelated command line.",
+        "evidence": "packages/provider-claude/src/gate.ts:176-178; packages/provider-claude/src/tools.ts:239-240"
+      },
+      {
+        "what": "The read-only Bash allow-list (READ_COMMANDS, READ_GIT_SUBCOMMANDS) is a hard-coded set with no configuration hook; a project's own read-only tooling cannot be added without editing the package. The design comment accepts the over-denial explicitly.",
+        "evidence": "packages/provider-claude/src/tools.ts:45-52 (rationale), :53-97, :100-121"
+      },
+      {
+        "what": "`judgePanel` has no way to set the judge count independently \u2014 it spawns exactly one judge per SURVIVING attempt, so panel size shrinks whenever an attempt fails and is 1 for a single angle. Judges also see all attempts in fixed index order with no anonymisation or order shuffling, so position bias is unmitigated.",
+        "evidence": "packages/stdlib/src/judge.ts:118-129 (`attempts.map((_attempt, i) => \u2026)`), :67-78 (attempts rendered in index order); packages/stdlib/src/judge.ts:38-45 (options carry no `judges` field)"
+      },
+      {
+        "what": "`multiModalSweep` keys steps as `sweep:<mode.name>`; two modes sharing a name collide on the same step key, and nothing validates uniqueness. `adversarialVerify` likewise creates every claim\u00d7refuter promise eagerly and passes them to `ctx.parallel` with no `concurrency` option \u2014 a 100-claim \u00d7 3-refuter call issues 300 in-flight lanes bounded only by the global limiter and the `fanoutMax` cap (default 4096).",
+        "evidence": "packages/stdlib/src/sweep.ts:79; packages/stdlib/src/adversarial.ts:88-104 (eager promise array), :104 (`ctx.parallel(tasks)` with no opts); packages/core/src/ctx.ts:938-951 (concurrency honoured only for thunk tasks); packages/core/src/config.ts:104 (fanoutMax 4096)"
+      },
+      {
+        "what": "Three of the six stdlib patterns are thin. `finalReport` is 46 lines of pure string concatenation with no agent and no await. `loopUntilDry` (75 lines) spawns no steps at all \u2014 it is dedupe + streak bookkeeping around a caller-supplied `find`. `completenessCritic` (70 lines) is a single `ctx.agent` call with a fixed prompt and one optional key override. None of the six exposes retry, timeout, isolation, write-scope, or per-step `maxTurns` \u2014 only provider/model/effort routing is forwarded.",
+        "evidence": "packages/stdlib/src/report.ts:36-46; packages/stdlib/src/loop.ts:36-75; packages/stdlib/src/critic.ts:58-70; packages/stdlib/src/internal.ts:8-21 (Routing is the entire forwarded option surface)"
+      },
+      {
+        "what": "`toStrictSchema` unconditionally overwrites `required` with every property key of an object schema (documented as intentional for OpenAI strict mode). A schema that meant some fields optional is shown to the Codex model as all-required; correctness relies on the engine's later validation against the real schema plus repair.",
+        "evidence": "packages/provider-codex/src/index.ts:239-242, with the rationale at :189-206"
+      },
+      {
+        "what": "In-place strict scope cannot be verified above 10 000 pre-existing ignored files \u2014 the step is refused up front with `invalid_input`, and a re-walk that crosses the cap after the step throws `scope_violation`. Edits inside pre-existing ignored paths are also unrecoverable: there is no snapshot holding ignored content, so a strict violation there fails the step rather than rolling back.",
+        "evidence": "packages/core/src/ctx.ts:1981 (IGNORED_MANIFEST_CAP = 10_000), :443-451 (pre-refusal), :698-707 (post-refusal), :718-727 (no restorable snapshot)"
+      },
+      {
+        "what": "`capturePatch` and the mock provider's `filesTouched` are the only witnesses for out-of-worktree edits, and `capturePatch` by construction sees nothing outside the worktree. The Claude gate's `commandEscapesWorktree` is explicitly documented as a lexical screen, not a sandbox: a destination the shell computes at run time (or any behaviour internal to an invoked binary) is invisible to it.",
+        "evidence": "packages/provider-claude/src/gate.ts:80-100 (\"This is a screen, not a sandbox\"), :209-224; packages/isolation/src/patch.ts:21-24; packages/core/src/ctx.ts:621-626"
+      }
+    ]
+  }
+]

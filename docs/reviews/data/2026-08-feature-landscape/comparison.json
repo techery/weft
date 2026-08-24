@@ -1,0 +1,1233 @@
+{
+  "dimensions": [
+    {
+      "dimension": "Durability mechanism",
+      "weft": "Append-only JSONL journal per run is the sole source of truth; state.json, tree.json, report.md and the sqlite index are all pure folds over it (projections.ts). FsJournalStore appends under a cross-process lock with double on-disk reconcile, torn-tail truncation, writeSync-to-completion and fsync; blobs are content-addressed and sha256-verified on read. Resume re-executes the workflow body and serves completed steps from the journal.",
+      "others": [
+        {
+          "project": "Temporal",
+          "rating": "strong",
+          "note": "Event-sourced Event History persisted server-side; replay rebuilds in-memory state. The reference implementation, but requires a server + persistence store."
+        },
+        {
+          "project": "Vercel Workflow DevKit",
+          "rating": "strong",
+          "note": "Same thesis independently: journaled event log of step inputs/outputs, function replayed from top, completed steps return journaled values. Pluggable `World` backend, Postgres self-host."
+        },
+        {
+          "project": "Restate",
+          "rating": "strong",
+          "note": "Server-owned journal (Rust/RocksDB) of ctx.run/sleep/RPC/state; handlers suspend rather than block. BSL 1.1 server."
+        },
+        {
+          "project": "DBOS Transact",
+          "rating": "strong",
+          "note": "Checkpoint rows in your own Postgres, queryable with SQL and transactable with app writes. Library, not server \u2014 closest footprint peer."
+        },
+        {
+          "project": "Inngest",
+          "rating": "strong",
+          "note": "Step memoization keyed on step id + occurrence counter over managed state; function body re-executes from top on every step."
+        },
+        {
+          "project": "Trigger.dev",
+          "rating": "strong",
+          "note": "Different mechanism: CRIU process checkpoint/restore, so no journal of step results exists at all \u2014 but runs genuinely survive arbitrary waits."
+        },
+        {
+          "project": "OpenHands software-agent-sdk",
+          "rating": "strong",
+          "note": "Closest architectural twin: base_state.json plus numbered per-event JSON files (event-00000-abc.json). But it restores state rather than replaying, so no salvage."
+        },
+        {
+          "project": "Mastra",
+          "rating": "partial",
+          "note": "Snapshot-per-run through a storage adapter; a resumed step re-runs from its start. Checkpoint, not event log."
+        },
+        {
+          "project": "LangGraph.js",
+          "rating": "partial",
+          "note": "Checkpointer snapshots channel state at superstep boundaries. Granularity is the node \u2014 any code before an interrupt re-executes."
+        },
+        {
+          "project": "Claude Code dynamic workflows",
+          "rating": "none",
+          "note": "Workflow resume is process-scoped: \"If you exit Claude Code while a workflow is running, the next session starts the workflow fresh.\" Conversation transcripts are durable; workflow runs are not."
+        },
+        {
+          "project": "Cline agent teams",
+          "rating": "partial",
+          "note": "task-board.json / mailbox.json / mission-log.json persist to ~/.cline/data/teams/ and survive restarts \u2014 but that is coordination state, not step results."
+        }
+      ]
+    },
+    {
+      "dimension": "Edit-tolerant replay (changing the workflow mid-run)",
+      "weft": "Identity is sha256(canonicalJson{kind, payload, schema, key}) \u2014 content, not position. matchStep tries three tiers: same seq + same hash, then any unconsumed same-hash entry (salvage, journaling replay.salvaged), then under --reuse key an unconsumed same-key entry. run.created stamps bodyHash = sha256(name + def.run.toString()) plus an optional bundle defHash; when they disagree positionsTrusted=false and a keyless step matching several journaled entries re-runs with an \"ambiguous keyless identity\" divergence rather than guessing. Unmatched steps re-run live inside history.",
+      "others": [
+        {
+          "project": "Inngest",
+          "rating": "strong",
+          "note": "Publishes the compatibility matrix as a contract: body change \u2192 memoized, add \u2192 runs on reach, remove \u2192 orphan ignored, reorder \u2192 warn but still serves by hash, id change \u2192 re-runs. Deliberately no version pinning."
+        },
+        {
+          "project": "Resonate HQ",
+          "rating": "strong",
+          "note": "Durable promises form an unsequenced addressable SET, so insert/remove/reorder yields different id lookups rather than a positional mismatch. The clearest published theory for why this works \u2014 but 57 stars on the TS SDK."
+        },
+        {
+          "project": "DBOS Transact",
+          "rating": "partial",
+          "note": "forkWorkflow(id, startStep, {applicationVersion, replacementChildren}) is explicit and operator-driven, and applicationVersion defaults to a hash of workflow source with recovery fenced to matching versions. But step identity is name/position based, so automatic tolerance is weaker."
+        },
+        {
+          "project": "Temporal",
+          "rating": "partial",
+          "note": "patched()/deprecatePatch markers written into history, plus Worker Deployment Versioning with pinned/auto-upgrade, ramping and rollback. Explicit and auditable, but requires author scaffolding and leaves permanent conditional scar tissue."
+        },
+        {
+          "project": "Golem Cloud",
+          "rating": "partial",
+          "note": "Author-written save-snapshot/load-snapshot migration, applied only when the worker is idle, with automatic revert if load fails. Plus a best-effort automatic-update mode documented as safe only for minor changes."
+        },
+        {
+          "project": "Vercel Workflow DevKit",
+          "rating": "none",
+          "note": "Journaled replay with no content-addressed salvage \u2014 the classic replay-versioning problem, unaddressed."
+        },
+        {
+          "project": "Restate",
+          "rating": "none",
+          "note": "An in-place edit that reorders/adds/removes SDK calls yields error RT0016 on replay; the answer is immutable deployments, and the vendor concedes long-running handlers are \"still a headache\"."
+        },
+        {
+          "project": "LangGraph",
+          "rating": "none",
+          "note": "Checkpoints assume the same graph topology; edit the graph and in-flight threads are unreliable at best."
+        },
+        {
+          "project": "Microsoft Agent Framework",
+          "rating": "none",
+          "note": "Docs are explicit: topology AND executor identity must match, and stale checkpoints \"cannot be repaired\" \u2014 start a new lineage."
+        },
+        {
+          "project": "Google ADK",
+          "rating": "none",
+          "note": "Documented limitation: \"you cannot modify the workflow before resuming it.\""
+        },
+        {
+          "project": "Trigger.dev",
+          "rating": "none",
+          "note": "A run locks to the environment version at start and never changes, including across retries. The only recourse is Replay \u2014 a brand-new run from the beginning, discarding every completed step."
+        },
+        {
+          "project": "Hatchet",
+          "rating": "none",
+          "note": "No versioning, no pinning, no fork verb; deploying mid-run is undefined behaviour you reason about yourself."
+        }
+      ]
+    },
+    {
+      "dimension": "Determinism enforcement",
+      "weft": "Two layers, and the README concedes it is a fence rather than a boundary. (1) Eleven AST rules parsed with the TS compiler API, applied via an esbuild onLoad plugin to EVERY module the bundle pulls in \u2014 no-date-now, no-argless-date, no-math-random, no-timers, no-global-fetch, no-process-env, no-require, no-gc-globals, no-locale, no-intl, no-bare-import \u2014 each with a ctx-naming fix-it, surfaced by `weft check`. (2) A node:vm context with replaced globals that throw, catching the computed form (globalThis[\"Da\"+\"te\"]) the AST layer deliberately cannot see. Notably: banning, not recording \u2014 there is no journaled Date.now, only ctx.now().",
+      "others": [
+        {
+          "project": "Temporal",
+          "rating": "strong",
+          "note": "vm sandbox with a seeded PRNG for Math.random, Date pinned to last task completion, timers routed to durable timers, WeakRef/FinalizationRegistry removed. Violations fail loudly at replay with DeterminismViolationError \u2014 but no authoring-time static gate."
+        },
+        {
+          "project": "Vercel Workflow DevKit",
+          "rating": "strong",
+          "note": "Strictly friendlier design: the sandbox makes Math.random and Date replay-STABLE rather than unavailable, so ordinary code keeps working. weft bans what WDK records."
+        },
+        {
+          "project": "Golem Cloud",
+          "rating": "strong",
+          "note": "The inverse approach and arguably the best: every WASI host-function result \u2014 clocks, randomness, I/O, network \u2014 is recorded in the oplog and replayed, so user code needs no determinism discipline at all."
+        },
+        {
+          "project": "Claude Code dynamic workflows",
+          "rating": "partial",
+          "note": "The orchestration script sandbox forbids import(), filesystem and shell access (only agents touch the world), but there are no determinism rules \u2014 Date.now and Math.random are fine."
+        },
+        {
+          "project": "Restate",
+          "rating": "none",
+          "note": "No sandbox, no static gate; non-determinism surfaces only as a replay mismatch after the fact."
+        },
+        {
+          "project": "DBOS Transact",
+          "rating": "none",
+          "note": "Pure honor system \u2014 docs state workflows \"should invoke the same steps with the same inputs in the same order\" with zero enforcement and no divergence error."
+        },
+        {
+          "project": "Inngest",
+          "rating": "none",
+          "note": "Non-deterministic code outside step.run is a documented footgun with no sandbox and no detection."
+        },
+        {
+          "project": "Trigger.dev",
+          "rating": "none",
+          "note": "None needed, and that is the point: CRIU checkpointing means no replay ever happens, so Date.now/Math.random/open handles are all fine anywhere."
+        },
+        {
+          "project": "LangGraph.js",
+          "rating": "none",
+          "note": "Nothing prevents clocks, randomness or network inside a node; replay fidelity is convention only."
+        },
+        {
+          "project": "Mastra",
+          "rating": "none",
+          "note": "No determinism enforcement of any kind."
+        },
+        {
+          "project": "Hatchet",
+          "rating": "none",
+          "note": "No sandbox, no static gate, no divergence error \u2014 the weakest of the durable engines on this axis."
+        }
+      ]
+    },
+    {
+      "dimension": "Typed step I/O with in-session schema repair",
+      "weft": "`schema` is required on agent, human.*, and workflow I/O. Zod \u2192 JSON Schema via z.toJSONSchema({io:\"input\"}), with any non-object root wrapped as {value} because providers demand an object root, unwrapped symmetrically on return. runProviderWithRepair validates the unwrapped value against the REAL schema and, on failure, journals a step.attempt (\"schema repair n/max\") and calls provider.repair(sessionId, req, issues) in the SAME provider session up to limits.repair (default 2) before throwing schema_repair_exhausted. Usage accumulates per turn with per-turn non-negative normalization and rides the error so a resume restores the spend. Honest limit: a non-Zod Standard Schema degrades to a permissive {value:{}} carrier with no shape guidance at all.",
+      "others": [
+        {
+          "project": "Pydantic AI",
+          "rating": "strong",
+          "note": "output_type + automatic ModelRetry feeding the specific validation error back, bounded by `retries`, plus @agent.output_validator for custom post-validation that can also raise ModelRetry. The closest peer."
+        },
+        {
+          "project": "Instructor",
+          "rating": "strong",
+          "note": "The canonical implementation: the failed assistant message plus the literal validation error text are appended and re-issued up to max_retries. Also has validation_context, letting validators assert runtime facts \u2014 something weft's structural Zod pass cannot express."
+        },
+        {
+          "project": "BAML",
+          "rating": "strong",
+          "note": "Schema-Aligned Parsing coerces malformed output (fences, prose, wrong scalar types, near-miss keys) in one sub-10ms Rust pass with no extra model call. Published BFCL numbers show large first-pass gains. Strictly cheaper than weft's repair round-trip."
+        },
+        {
+          "project": "Mastra",
+          "rating": "strong",
+          "note": "createStep({inputSchema, outputSchema}) validated at every boundary via Standard Schema (Zod/Valibot/ArkType). Closest in spirit to weft, but repair on failure is not a documented first-class loop."
+        },
+        {
+          "project": "Vercel AI SDK",
+          "rating": "strong",
+          "note": "generateObject with Zod, malformed-JSON repair hook and retry; v6 added Output.object/array/choice composable with tool calling in one loop."
+        },
+        {
+          "project": "Microsoft TypeChat",
+          "rating": "strong",
+          "note": "Uses the TypeScript compiler itself as validator and its diagnostics as the repair prompt \u2014 better error text than Zod issue paths, bounded by maxRepairAttempts."
+        },
+        {
+          "project": "goose Recipes",
+          "rating": "partial",
+          "note": "response.json_schema enforces structured output for the whole run, and retry{max_retries, checks} validates with shell commands \u2014 but repair is a whole-run retry, not in-session."
+        },
+        {
+          "project": "Claude Code dynamic workflows",
+          "rating": "partial",
+          "note": "agent(prompt, {schema}) resolves to a parsed object, but there is no documented repair loop \u2014 it resolves to null on failure and you .filter(Boolean)."
+        },
+        {
+          "project": "LangGraph",
+          "rating": "partial",
+          "note": "create_agent's ToolStrategy has an in-loop repair path with configurable handle_errors, but graph-step state itself is only as validated as the state schema."
+        },
+        {
+          "project": "Temporal",
+          "rating": "none",
+          "note": "Payloads pass through a DataConverter; type safety is TypeScript compile-time only, with no runtime enforcement and no repair."
+        },
+        {
+          "project": "Vercel Workflow DevKit",
+          "rating": "none",
+          "note": "The clearest gap versus weft: step inputs/outputs need only be serializable, with no per-step schema and no runtime check. Pass-by-value mutation silently does nothing."
+        },
+        {
+          "project": "Restate / DBOS / Inngest",
+          "rating": "none",
+          "note": "No engine-level validation of step results in any of the three; Inngest validates event payloads only."
+        }
+      ]
+    },
+    {
+      "dimension": "Human-in-the-loop durability",
+      "weft": "A human step is a journaled step whose provider is a person. runHuman hashes {kind, question, detail, schema, risk, artifact, timeout} and matches a journaled request, serving a standing answer in journaled order or re-surfacing the same request id. Engine.answer serializes per runId::requestId and appends via journal.appendIf under a re-fold loop, so a standing answer, a terminal event or a lost CAS refuses the caller \u2014 safe across processes. The answer is validated against the step's authoritative Standard Schema; a failure journals human.rejected and REOPENS the request rather than failing the run. Deadlines arm chunked timers with deny / escalate / {default} policies (defaults pre-validated at request time, not at the deadline). Risk-tier + glob approval policy auto-approves with answeredBy:\"policy\" recorded, and irreversible+ask demands a confirm:<sha256(action)[0:8]> token.",
+      "others": [
+        {
+          "project": "Trigger.dev",
+          "rating": "strong",
+          "note": "wait.createToken \u2192 {id, webhook URL, browser-safe publicAccessToken} with timeout and tags; because it checkpoints rather than replays, code before the wait does not re-execute \u2014 a real advantage over LangGraph."
+        },
+        {
+          "project": "Windmill",
+          "rating": "strong",
+          "note": "Richest configuration anywhere: N-of-M required approvals, schema-backed approval forms whose fields arrive as resume['field'], group restriction, no-self-approval, continue-on-disapproval as a typed branch, recorded approvers array, native Slack/Teams."
+        },
+        {
+          "project": "Microsoft Agent Framework",
+          "rating": "strong",
+          "note": "Pending requests AND responses are part of the checkpoint payload, with an entry checkpoint written when responses are delivered \u2014 so a crash mid-request is genuinely recoverable, not just resumable forward."
+        },
+        {
+          "project": "Mastra",
+          "rating": "strong",
+          "note": "suspend() persists the snapshot with typed suspendSchema AND resumeSchema, so both directions are checked contracts. But the resumed step re-runs from its start."
+        },
+        {
+          "project": "Pydantic AI",
+          "rating": "strong",
+          "note": "Deferred tools terminate the run with DeferredToolRequests; resume is message_history + DeferredToolResults keyed by tool-call id, and the resume payload can carry an exception (ModelRetry/ToolFailed) as well as a value."
+        },
+        {
+          "project": "Restate",
+          "rating": "strong",
+          "note": "ctx.awakeable() mints an id resolvable by any process at any time; a suspended handler holds zero compute."
+        },
+        {
+          "project": "Temporal",
+          "rating": "strong",
+          "note": "Signals/Queries/Updates are history events, with Updates carrying validators. Durable and battle-tested, but no approval semantics, identity, or N-of-M \u2014 you build all of that."
+        },
+        {
+          "project": "LangGraph",
+          "rating": "partial",
+          "note": "interrupt()/Command(resume) is durable, but the WHOLE NODE re-executes on resume and the docs push idempotency onto the author. Multiple interrupts in one node match resume values strictly by index."
+        },
+        {
+          "project": "HumanLayer",
+          "rating": "partial",
+          "note": "Richest routing and escalation in existence, but approval state lives in a vendor backend and the surrounding agent run is not durable \u2014 a crash after approval loses everything downstream."
+        },
+        {
+          "project": "Claude Code dynamic workflows",
+          "rating": "none",
+          "note": "Explicit: \"No mid-run user input. Only agent permission prompts can pause a run.\" AskUserQuestion is stripped from every subagent. Multi-stage sign-off requires splitting into separate workflows."
+        },
+        {
+          "project": "Cline / opencode / Codex CLI",
+          "rating": "partial",
+          "note": "Excellent per-action approval UX (diff preview, permission matrices), but in-process \u2014 kill the process and the pending prompt is gone."
+        },
+        {
+          "project": "gh-aw",
+          "rating": "none",
+          "note": "No blocking gate at all; safety is structural (read-only agent, validated safe outputs applied by a separate job)."
+        }
+      ]
+    },
+    {
+      "dimension": "HITL reach \u2014 how the human actually finds out",
+      "weft": "Nothing. Verified by grep across packages/*/src: no Slack, no email, no webhook, no push, no notification of any kind. A pending request is discoverable only by `weft status` (which prints the exact `weft answer` command), the loopback-only daemon page, or the MCP weft_wait long-poll. The run blocks durably and indefinitely; nobody is told. This is the single largest gap between weft's mechanism and its promise that \"the answer can arrive hours later\".",
+      "others": [
+        {
+          "project": "HumanLayer",
+          "rating": "strong",
+          "note": "Contact-channel objects per call \u2014 Slack (channelOrUserId + contextAboutChannelOrUser) or email (address + contextAboutUser) \u2014 with escalation paths, timeouts, and granular routing to a team vs an individual."
+        },
+        {
+          "project": "Windmill",
+          "rating": "strong",
+          "note": "getResumeUrls() yields signed resume/cancel/approval-page URLs to mail to a reviewer who never touches the engine, plus native interactive Slack and Microsoft Teams approvals."
+        },
+        {
+          "project": "Trigger.dev",
+          "rating": "strong",
+          "note": "The token carries a webhook URL and a browser-safe public token usable from a page with CORS; React Realtime hooks render the approval UI; tags make pending approvals filterable in the dashboard."
+        },
+        {
+          "project": "Linear Agent Sessions",
+          "rating": "strong",
+          "note": "Elicitation renders as an activity inline in the issue thread that motivated the work, answered by replying in that thread \u2014 the lowest-friction design in the landscape."
+        },
+        {
+          "project": "OpenAI Codex Cloud",
+          "rating": "strong",
+          "note": "Tasks are initiated and results delivered through GitHub PRs, GitLab MRs, Linear issues and Slack \u2014 the human never context-switches."
+        },
+        {
+          "project": "GitHub Copilot Agent HQ",
+          "rating": "strong",
+          "note": "Mission control on web, VS Code and mobile, so a gate can be answered from a phone."
+        },
+        {
+          "project": "Claude Code Action",
+          "rating": "partial",
+          "note": "A live-updating comment with checkboxes in the issue/PR thread \u2014 presentation only (no mid-run gate), but it reaches the human where they already are."
+        },
+        {
+          "project": "A2A",
+          "rating": "partial",
+          "note": "Push notifications to a caller-supplied webhook on task state change, so no held connection is required."
+        },
+        {
+          "project": "MCP Tasks",
+          "rating": "partial",
+          "note": "input_required status with an inputRequests map, but actually surfacing it to a person is the client's job."
+        },
+        {
+          "project": "Temporal / Vercel WDK / Mastra / LangGraph",
+          "rating": "none",
+          "note": "All have durable pause primitives and none has a delivery channel \u2014 the same gap as weft, and equally load-bearing in practice."
+        }
+      ]
+    },
+    {
+      "dimension": "Git isolation, patch capture and gated integration",
+      "weft": "A write step gets a per-ATTEMPT worktree at tmpdir/weft-worktrees/<runId>/<seq>.<attempt> (per-attempt so a retry never deletes a directory a hung attempt still writes to), pre-pruned, and seeded from integrationBaseCommit \u2014 a dangling ref-pinned commit of the current tracked+untracked tree \u2014 so later writers build on earlier ctx.integrate() results rather than HEAD. capturePatch stages everything, force-adds in-scope gitignored outputs, refuses accidental gitlinks, and emits diff --cached --binary --no-renames -z. scopeMatcher compiles includes and !-excludes as TWO picomatch matchers (array semantics fail open twice) and is shared verbatim with Claude's live canUseTool gate. Out-of-scope files journal scope.violation and quarantine under strict. ctx.integrate() is the only merge point: an outer journaled step per patch wrapping nested snapshot and apply sub-steps, onConflict fail/agent/ask, and a verifyServe idempotency chain (result tree hash \u2192 reverse-apply --check \u2192 later merge's baseTree \u2192 forward-apply --check). A run ending with un-integrated, un-discarded patches fails with unintegrated_patches.",
+      "others": [
+        {
+          "project": "container-use (Dagger)",
+          "rating": "strong",
+          "note": "Stronger on isolation, weaker on review: branch AND container per agent, so environment (deps, ports, services) is isolated too \u2014 the hole weft's worktrees leave open. But no patch object, no scope checking, no integrate gate; review is `git checkout` afterwards."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "strong",
+          "note": "Stronger enforcement, weaker composition: statically blocks Edit/Write into the main checkout, Bash whose cwd resolves there, git -C / --git-dir / GIT_DIR / GIT_WORK_TREE / preceding cd, and any command shape it cannot prove stays inside (brace expansion, unquoted heredocs). But work lands as commits on a branch, not a patch returned to an orchestrator, and there is no integrate gate."
+        },
+        {
+          "project": "OpenAI Codex CLI",
+          "rating": "strong",
+          "note": "Automatic worktree per subagent PLUS an OS sandbox (Seatbelt/Landlock/WFP), with .git protected even in workspace-write mode. No patch/integrate model."
+        },
+        {
+          "project": "gh-aw",
+          "rating": "strong",
+          "note": "Structurally different and arguably safer: the agent job is read-only and can only emit schema-validated \"safe outputs\" (create-pull-request, push-to-branch, \u2026) applied by a separately permissioned job, with per-type max limits and required-label filters."
+        },
+        {
+          "project": "Cline",
+          "rating": "partial",
+          "note": "Shadow git repository committing a full tree snapshot after every tool use gives file-level undo including untracked files \u2014 but team specialists appear to share one working tree, so concurrent edits collide."
+        },
+        {
+          "project": "claude-squad / Crystal / Conductor / uzi / Vibe Kanban",
+          "rating": "partial",
+          "note": "All do worktree+branch per agent with a human as scheduler. None does scope checking, patch objects, conflict policy, or a gated integrate \u2014 the worktree is now table stakes; the patch model is not."
+        },
+        {
+          "project": "Sculptor",
+          "rating": "partial",
+          "note": "Worktree + experimental container per workspace, plus Pairing Mode syncing isolated work back to the local checkout so a human can run and edit it \u2014 the review affordance weft's patch model lacks."
+        },
+        {
+          "project": "Aider",
+          "rating": "none",
+          "note": "Strongest git INTEGRATION (every edit is an auto-commit, /undo is a revert), weakest git ISOLATION \u2014 it edits your working tree directly."
+        },
+        {
+          "project": "Temporal / Restate / DBOS / Inngest / WDK / Mastra / LangGraph",
+          "rating": "none",
+          "note": "Zero git awareness across the entire durable-execution and TS-agent-framework space. This is where weft has no peer among engines."
+        }
+      ]
+    },
+    {
+      "dimension": "Multi-provider / per-step routing",
+      "weft": "A frozen AgentProvider interface (id, capabilities(), run, repair) with Claude, Codex and mock adapters; routing resolves step opts \u2192 workflow defaults \u2192 engine config, and a configured default model applies only when the step actually routes to the provider that default was written for. Per-step provider/model/effort makes a cross-vendor panel one option on one step. Real asymmetry underneath: Claude enforces write scope LIVE via canUseTool while Codex has no permission hook (sandbox only, filesTouched: [], maxTurns/onMaxTurns/tools.deny ignored); ProviderHitl.onAsk is declared and fenced but never called by any shipped adapter; and there is NO AgentProvider conformance suite despite the README's package table implying one.",
+      "others": [
+        {
+          "project": "opencode",
+          "rating": "strong",
+          "note": "Models.dev-backed provider catalogue, OAuth flows, per-agent model override, ACP support. The strongest genuinely model-agnostic story in the landscape."
+        },
+        {
+          "project": "OpenHands",
+          "rating": "strong",
+          "note": "A superset of weft's idea: LiteLLM for models, and Agent-Client Protocol so whole third-party AGENTS (Claude Code, Codex, Gemini CLI) are pluggable, not just model APIs."
+        },
+        {
+          "project": "Vercel AI SDK",
+          "rating": "strong",
+          "note": "~30+ providers behind one LanguageModelV2, string-addressable via the gateway, with middleware and provider-specific tools exposed uniformly. Model-level, not agent-level."
+        },
+        {
+          "project": "Cline",
+          "rating": "strong",
+          "note": "Anthropic, OpenAI, Gemini, 200+ via OpenRouter, Bedrock, Vertex, Ollama/LM Studio, with per-mode and per-specialist model selection."
+        },
+        {
+          "project": "BAML",
+          "rating": "strong",
+          "note": "Adds something weft lacks: `client` blocks compose into strategy clients with retry_policy, fallback chains and round-robin, declared rather than written at the call site."
+        },
+        {
+          "project": "Pydantic AI",
+          "rating": "strong",
+          "note": "Full provider matrix plus FallbackModel \u2014 an ordered chain that fails over automatically on provider error."
+        },
+        {
+          "project": "gh-aw",
+          "rating": "strong",
+          "note": "Copilot, Claude Code, Codex, Gemini and Pi selected in frontmatter \u2014 but per workflow, not per step."
+        },
+        {
+          "project": "GitHub Copilot Agent HQ",
+          "rating": "strong",
+          "note": "Copilot, Claude and Codex agents under one control plane with one review surface \u2014 per task, at the largest installed base in the category."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "partial",
+          "note": "Per-subagent model routing (sonnet/opus/haiku/claude-opus-5/inherit) and per-invocation overrides \u2014 but strictly inside the Anthropic family. Cannot put Codex behind the same step."
+        },
+        {
+          "project": "OpenAI Codex CLI",
+          "rating": "partial",
+          "note": "Per-subagent model AND reasoning effort with [agents] defaults and parent inheritance \u2014 the effort axis weft treats as opaque \u2014 but OpenAI models only in practice."
+        },
+        {
+          "project": "Roo Code (archived)",
+          "rating": "strong",
+          "note": "Per-mode model + API profile was the cleanest per-step routing UX shipped by anyone; the project archived 2026-05-15."
+        }
+      ]
+    },
+    {
+      "dimension": "Hard budget ceilings (tokens and USD)",
+      "weft": "Budget.charge sums non-negative input+output tokens and usd and propagates up the parent chain; remainingTokens/remainingUsd take min(own, ancestor headroom); checkBeforeStep throws BudgetExceededError once either axis hits zero, and budget_exceeded is explicitly non-retryable. Child budgets are created by fraction-of-remaining or absolute cap and are ALWAYS parent-linked. reserveCall is a concurrency-aware admission test that PARKS rather than refuses: admits() requires (inflight+1) \u00d7 (spent/samples) to fit, serializes calls one at a time while no cost sample exists, and wakes parked callers on every charge or release. Missing USD is priced from config.providers[id].prices[model] or DEFAULT_PRICES, and a USD-only ceiling with a provider that reports no usd and has no configured price is REFUSED before dispatch. Resume restores max(journaled usage sum, last budget.sampled) plus a recursive walk of parentage-verified descendant journals. Honest limits: admission is a heuristic using observed average cost and undercounts zombie in-flight attempts, so the ceiling can overshoot by one call; a crash between a charge and both the terminal record and any sample loses that spend; DEFAULT_PRICES is Claude-only.",
+      "others": [
+        {
+          "project": "Pydantic AI",
+          "rating": "partial",
+          "note": "The only framework peer with real enforcement: UsageLimits(request_limit, input/output/total_tokens_limit) raises UsageLimitExceeded. But token-only, no USD, per-run, and it does NOT automatically propagate into sub-agent runs \u2014 you thread it through yourself."
+        },
+        {
+          "project": "SWE-agent",
+          "rating": "partial",
+          "note": "--agent.model.per_instance_cost_limit genuinely stops an instance, hardened by running thousands of instances. Per-instance and total, but no parent/child inheritance model."
+        },
+        {
+          "project": "Helicone",
+          "rating": "strong",
+          "note": "Enforced at a different layer and the closest thing to weft's rigor: rate limits expressible in requests, TOKENS, or DOLLARS, per user / per team / globally, backed by an open 300+ model pricing database. A gateway, not a workflow engine \u2014 and the project is now in maintenance mode after the Mintlify acquisition."
+        },
+        {
+          "project": "Trigger.dev",
+          "rating": "partial",
+          "note": "Org-level spend cap that PAUSES and queues rather than fails, with alerts at 75/90/100/200/500% \u2014 the graceful-degradation half weft lacks, but coarse and not per-run."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "none",
+          "note": "The docs are explicit: past 25 scheduled agents or 1.5M projected tokens, \"The warning is advisory: it doesn't pause or limit the run.\" Bounds are structural only (16 concurrent, 1,000 agents per run)."
+        },
+        {
+          "project": "CrewAI",
+          "rating": "none",
+          "note": "The cautionary case: max_iter and max_rpm only, with a documented uncapped crew loop reaching $414 in a single run."
+        },
+        {
+          "project": "Temporal / Restate / DBOS / Inngest / Hatchet / Windmill / Vercel WDK",
+          "rating": "none",
+          "note": "No token or USD concept exists at the engine level in any of them. Governance is namespace/queue rate limiting \u2014 throughput, not spend."
+        },
+        {
+          "project": "LangGraph",
+          "rating": "none",
+          "note": "recursionLimit caps supersteps, not spend; enforcing a USD ceiling means writing your own accumulator plus a conditional edge."
+        },
+        {
+          "project": "Mastra / VoltAgent / Google ADK / Microsoft Agent Framework",
+          "rating": "none",
+          "note": "Cost is a derived dashboard metric in all four \u2014 observed, never enforced."
+        },
+        {
+          "project": "Langfuse / Phoenix / Opik / AgentOps",
+          "rating": "none",
+          "note": "Best-in-class cost ACCOUNTING (maintained pricing tables, per-dimension rollups) and zero enforcement. They tell you after you spent it."
+        },
+        {
+          "project": "goose / opencode / Codex CLI",
+          "rating": "none",
+          "note": "max_turns, max steps and reasoning-effort tiers are structural iteration caps, not spend ceilings."
+        }
+      ]
+    },
+    {
+      "dimension": "Concurrency control, fairness and rate limiting",
+      "weft": "A FIFO counting Semaphore with abort-aware acquire; the global limiter defaults to min(16, cpus-2) and wraps the entire agent lane including worktree creation, plus exec/bash/fetch/check spawns, with a per-provider Semaphore stacked on top for model calls. fanoutMax caps items at 4096. Documented trades: Semaphore.with releases on abort as well as settlement, so the cap can be exceeded by timed-out-but-still-running steps (deliberate, to avoid deadlock from a zombie); ctx.parallel's concurrency option is silently ignored unless EVERY task is a thunk; pipeline.run() defaults to concurrency = items.length, i.e. no pipeline-level cap. There is no per-key fairness, no rate limiting, no queues, no priorities.",
+      "others": [
+        {
+          "project": "Hatchet",
+          "rating": "strong",
+          "note": "Best in the landscape: concurrency keys with FAIRNESS strategies (round-robin across tenant keys rather than a plain global cap), rate limits modelled as declarative consumable resources, priorities, sticky assignment."
+        },
+        {
+          "project": "Inngest",
+          "rating": "strong",
+          "note": "Concurrency with DYNAMIC keys ({key: 'event.data.userId', limit: 1}), throttle, rate limit, debounce and priority declared per function \u2014 per-key limit:1 also doubles as an integration lock."
+        },
+        {
+          "project": "Trigger.dev",
+          "rating": "strong",
+          "note": "Named queues with per-queue concurrency limits and priorities, per-task machine sizing, and maxDuration."
+        },
+        {
+          "project": "DBOS Transact",
+          "rating": "strong",
+          "note": "Durable queues with concurrency limits, rate limits, priority and partition keys."
+        },
+        {
+          "project": "Temporal",
+          "rating": "strong",
+          "note": "Task queues and worker fleets with maxConcurrentActivityTaskExecutions, plus per-namespace rate limits preventing noisy-neighbour effects."
+        },
+        {
+          "project": "Windmill",
+          "rating": "partial",
+          "note": "Explicit per-loop parallelism cap, a squash-onto-one-worker locality option, and worker groups/tags routing steps to machine pools."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "partial",
+          "note": "16 concurrent (fewer on low-CPU or in containers), 1,000 agents per run, plus prompt-cache-aware stagger (CLAUDE_CODE_WORKFLOW_PREFIX_STAGGER_MS, default 5000ms) so siblings share the cached prefix \u2014 a cost optimization nobody else does."
+        },
+        {
+          "project": "OpenAI Codex CLI",
+          "rating": "partial",
+          "note": "agents.max_concurrent_threads_per_session bounds subagent fan-out."
+        },
+        {
+          "project": "Mastra / LangGraph.js / VoltAgent / opencode / Cline",
+          "rating": "none",
+          "note": "In-process Promise concurrency with no fairness, no rate limits, no queues."
+        }
+      ]
+    },
+    {
+      "dimension": "Testing without model calls",
+      "weft": "runWorkflow drives a workflow to a terminal state on a private in-memory engine (MemoryJournalStore + MemoryBlobStore, the mock builder registered under both claude and codex) and returns {output, journal, state, runId}. mock().on({key|label|prompt}, responder, opts) matches by glob or substring/RegExp and its responses go through the engine's NORMAL schema validation and journaling \u2014 \"a fixture that would not pass in production fails the test\". buildTestHooks stubs git/exec/bash/fetch/env and hook results are journaled exactly as real side effects would be. journal.toJSON() is a snapshot-stable projection with no timestamps or ids. Store conformance suites exist for JournalStore and BlobStore. Gaps: no AgentProvider conformance suite, no bulk/corpus replay --dry assertion for CI, runWorkflow refuses workflows blocked on ctx.signal, no time-skipping for ctx.sleep, and verifyServe is disabled entirely whenever testHooks are configured \u2014 so fixture-driven runs never exercise the effect-still-holds re-check.",
+      "others": [
+        {
+          "project": "Temporal",
+          "rating": "strong",
+          "note": "Best in class and clearly ahead: TestWorkflowEnvironment.createTimeSkipping() fast-forwards durable timers so a 30-day sleep completes instantly, plus Worker.runReplayHistory() feeding RECORDED PRODUCTION histories through new code and throwing DeterminismViolationError \u2014 a genuine CI gate for replay safety."
+        },
+        {
+          "project": "Google ADK",
+          "rating": "strong",
+          "note": "`adk conformance` records a scenario's LLM requests, responses and tool calls into golden YAML, then defaults to Replay Mode where any deviation FAILS the command \u2014 designed to block a PR. Nearly free for weft to copy given the journal already is this recording."
+        },
+        {
+          "project": "Pydantic AI",
+          "rating": "strong",
+          "note": "TestModel auto-generates schema-VALID responses with no fixture authoring, FunctionModel scripts them, and ALLOW_MODEL_REQUESTS=False is a global kill switch so an under-mocked test fails loudly instead of burning tokens."
+        },
+        {
+          "project": "Inngest",
+          "rating": "strong",
+          "note": "InngestTestEngine with execute() and executeStep(), plus MockedStep injecting PRIOR step state \u2014 testing one step given a synthetic journal prefix, which weft cannot do."
+        },
+        {
+          "project": "Vercel AI SDK",
+          "rating": "strong",
+          "note": "MockLanguageModelV2 and simulateReadableStream shipped as supported public API, not internal test scaffolding."
+        },
+        {
+          "project": "AutoGen (maintenance mode)",
+          "rating": "partial",
+          "note": "ReplayChatCompletionClient returns a scripted list \u2014 the same idea as a provider-shaped stub, which is the cleanest framing."
+        },
+        {
+          "project": "Braintrust",
+          "rating": "strong",
+          "note": "Different axis: evals as versioned *.eval.ts source files run by a CLI, with a GitHub Action commenting score diffs on the PR \u2014 quality regression, which weft has no answer for."
+        },
+        {
+          "project": "Mastra / VoltAgent / LangGraph.js",
+          "rating": "none",
+          "note": "No shipped mock-step harness; you inject a mock model provider yourself. Evals/scorers exist but are model-backed."
+        },
+        {
+          "project": "Restate / DBOS / Hatchet / Vercel WDK / Trigger.dev",
+          "rating": "none",
+          "note": "No deterministic test harness, no time skipping, no replay-divergence detection across all five."
+        },
+        {
+          "project": "Claude Code dynamic workflows",
+          "rating": "none",
+          "note": "No offline or mocked execution mode \u2014 every workflow run spends tokens."
+        }
+      ]
+    },
+    {
+      "dimension": "Observability depth and trace granularity",
+      "weft": "The journal folds into three projections plus a derived index: reduceState, renderTree (nesting by parentSeq into phases with a \"(no phase)\" bucket), and renderReport (status/cost, outcome JSON, changes with captured-but-not-integrated warnings, a checks table, ledger notes, failures and drops, remaining risk, and the exact `weft answer` command for the first pending request). CLI surfaces status / explain / diff / report / replay --dry, with --watch re-rendering a live tree every 500ms. The daemon streams the journal over SSE with descendant fan-in. The hard limit, admitted in the README: ONE OpenTelemetry span per run with the run id as the trace id \u2014 no per-step spans, so step latency has to come from the journal. Also: no --json on any command, a single hand-written HTML page with no step-level detail, no cost dashboards, and a 200-record tail cap.",
+      "others": [
+        {
+          "project": "Langfuse",
+          "rating": "strong",
+          "note": "OTel-native nested spans typed span/generation/event with model, params, token counts and cost; sessions, users, tags and environments as dimensions; cost from a maintained pricing table aggregated up the trace tree; annotation queues; datasets seeded from production traces. MIT with a real self-host path."
+        },
+        {
+          "project": "Arize Phoenix",
+          "rating": "strong",
+          "note": "OpenInference span kinds (LLM/CHAIN/TOOL/AGENT/RETRIEVER/GUARDRAIL/EVALUATOR) give the UI enough type information to render each node purposefully \u2014 exactly the vocabulary weft's journal already has and does not emit. Runs locally on SQLite."
+        },
+        {
+          "project": "Opik",
+          "rating": "strong",
+          "note": "Apache-2.0 end to end with first-party OTel ingest as a peer to its SDKs, agent-graph view, online evaluation rules on sampled production traffic, and G-Eval."
+        },
+        {
+          "project": "Mastra",
+          "rating": "strong",
+          "note": "Native OTel AI tracing with trace-correlated logs, auto-derived cost/token metrics, and human feedback attached to individual spans, exportable to Langfuse/Datadog/Arize."
+        },
+        {
+          "project": "Trigger.dev",
+          "rating": "strong",
+          "note": "Live OTel-powered span tree rendered as it executes, per-step inputs/outputs, run tags and filters, alerts, and one-click replay of a historical run."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "strong",
+          "note": "/workflows TUI with phase tree, per-agent token totals and elapsed time, drill-in to any agent's prompt and tool calls, and \u2014 crucially \u2014 pause run, kill one agent, RESTART one agent in place."
+        },
+        {
+          "project": "Temporal",
+          "rating": "strong",
+          "note": "Web UI showing the full Event History per execution, pending-activity state, and stack traces of blocked workflows; the per-run history is the best forensic artifact in the durability cluster."
+        },
+        {
+          "project": "Restate",
+          "rating": "strong",
+          "note": "Per-invocation journal viewer rendering each entry in order with its recorded value \u2014 the same artifact weft has, rendered as a product surface."
+        },
+        {
+          "project": "Burr",
+          "rating": "strong",
+          "note": "Fully self-hosted OSS tracking server and UI over every state transition, with no SaaS dependency \u2014 the closest validation of weft's daemon UI as a differentiator."
+        },
+        {
+          "project": "Vercel Workflow DevKit",
+          "rating": "partial",
+          "note": "`npx workflow web` gives a local observability UI with runs, steps, retry attempts and inter-step data \u2014 no cloud required, but shallower than the platforms."
+        },
+        {
+          "project": "AgentOps",
+          "rating": "strong",
+          "note": "Session replay with step-by-step execution graphs and normalized cross-provider cost \u2014 the visualization weft's journal is uniquely equipped to produce and does not."
+        }
+      ]
+    },
+    {
+      "dimension": "Authoring model",
+      "weft": "Plain TypeScript with no DSL, no graph builder, no decorators and no compiler directives: `await` is a sequential edge, ctx.parallel fans out and joins, ctx.pipeline runs independent lanes, `if` on a typed field is a conditional edge, `while` is a bounded loop. The cost of that purity is the fence: the file must pass 11 AST rules (including no-bare-import, so only @techery/weft-sdk and zod are importable by default) and runs bundled inside a node:vm sandbox with replaced globals.",
+      "others": [
+        {
+          "project": "Vercel Workflow DevKit",
+          "rating": "strong",
+          "note": "The closest peer and a major-vendor validation of the same thesis: \"use workflow\" / \"use step\" directives over plain TS with real if/for/try/await, and step bodies get the full Node runtime and npm."
+        },
+        {
+          "project": "Trigger.dev",
+          "rating": "strong",
+          "note": "task({id, run}) over ordinary async TS with no directives and no determinism constraint \u2014 the most permissive authoring model, bought with heavier infrastructure."
+        },
+        {
+          "project": "Inngest",
+          "rating": "strong",
+          "note": "Plain TS with explicit step.run(id, fn) calls; the ids are the price of memoization."
+        },
+        {
+          "project": "DBOS Transact",
+          "rating": "strong",
+          "note": "registerWorkflow + runStep over plain functions; the lowest conceptual overhead in the durable cluster."
+        },
+        {
+          "project": "Claude Code dynamic workflows",
+          "rating": "strong",
+          "note": "Plain JS with top-level await and agent()/pipeline() globals \u2014 and uniquely, the MODEL writes the script from a natural-language task, you approve the phase list, then press `s` to freeze it into a reusable command. Removes the blank-page tax weft imposes."
+        },
+        {
+          "project": "Prefect",
+          "rating": "strong",
+          "note": "@flow/@task decorators over plain Python with a runtime-discovered DAG \u2014 a decade of production hardening behind the same 'code is the graph' bet."
+        },
+        {
+          "project": "Temporal",
+          "rating": "partial",
+          "note": "Plain async TS, but the workflow sandbox forbids Node built-ins, fs, network and child processes entirely, so every real action must be an Activity \u2014 heavyweight for coding steps that want to shell out."
+        },
+        {
+          "project": "Mastra",
+          "rating": "partial",
+          "note": "A fluent builder (.then/.parallel/.branch/.dowhile/.commit) over typed step objects. Linear-reading, but control flow still cannot be plain if/for."
+        },
+        {
+          "project": "LangGraph",
+          "rating": "none",
+          "note": "Explicit node/edge graph DSL with reducer-typed state channels; loops, try/catch and early return must be re-expressed as edges and state. The direct antithesis."
+        },
+        {
+          "project": "Hatchet",
+          "rating": "partial",
+          "note": "Plain TS, but DAG edges are DECLARED via `parents: [...]` rather than inferred from await \u2014 more verbose and less refactor-safe."
+        },
+        {
+          "project": "goose / gh-aw / Windmill / Dify",
+          "rating": "none",
+          "note": "YAML, Markdown frontmatter or a visual canvas. No typed values between steps, no real control flow \u2014 the complexity ceiling Flowise named when it shut down: \"the typical rigid workflow low-code approach quickly hit its limits.\""
+        }
+      ]
+    },
+    {
+      "dimension": "Security boundary for agent execution",
+      "weft": "Explicitly none, and the README says so: node:vm with replaced globals is \"a determinism fence, not a security boundary\", with worker_threads or isolated-vm named as the upgrade path behind the same seam. The AGENT's process is not sandboxed at all \u2014 worktrees isolate files by convention, so a step can write outside its worktree and weft learns about it only from provider self-reported filesTouched (posix-only detection: isAbsolute || startsWith(\"../\")). ctx.fetch allows EVERY host unless fetchAllow is explicitly configured, and the field is optional and undefined by default; the hardened manual redirect path is skipped entirely with no allow-list and no credential-shaped header. Claude's tool gate does real live screening (scope-matched edits with symlink-escape realpath, a read-only bash allow-list, strict-mode traversal/computed-token/shared-git-metadata denial, risky-command brokering) \u2014 but only for Claude, mostly only in strict mode, and its terminal clause allows every tool it does not recognize (WebFetch, Task spawning, other MCP servers).",
+      "others": [
+        {
+          "project": "E2B",
+          "rating": "strong",
+          "note": "Firecracker microVMs with their own guest kernel \u2014 hardware virtualization, the correct answer for model-generated code. Apache-2.0 with a real self-host path, though that means operating Nomad + Consul."
+        },
+        {
+          "project": "microsandbox",
+          "rating": "strong",
+          "note": "The best fit for weft's local-first posture: libkrun microVMs as ordinary child processes (KVM / Hypervisor.framework / WHP), <100ms boot, TypeScript SDK, no control plane. Beta."
+        },
+        {
+          "project": "Anthropic sandbox-runtime",
+          "rating": "strong",
+          "note": "Exactly the boundary weft needs and does not have: bubblewrap/Seatbelt/WFP process-tree scoping with reads deny-then-allow, writes ALLOW-ONLY, network deny-all behind a host proxy domain allowlist. No container, no VM, no daemon."
+        },
+        {
+          "project": "OpenAI Codex CLI",
+          "rating": "strong",
+          "note": "sandbox_mode (read-only / workspace-write / danger-full-access) via Seatbelt/Landlock/seccomp, .git and .codex protected even in writable modes, and approval_policy as an ORTHOGONAL axis to capability."
+        },
+        {
+          "project": "gVisor",
+          "rating": "strong",
+          "note": "Userspace application kernel in memory-safe Go; workload syscalls never reach the host kernel. Also the model for honest threat-model docs \u2014 its \"what it isn't\" section is the standard weft's README partially emulates."
+        },
+        {
+          "project": "container-use",
+          "rating": "strong",
+          "note": "Container per agent, so installs, daemons and env mutations are discarded with the step \u2014 the environment hole weft's worktrees leave wide open."
+        },
+        {
+          "project": "gh-aw",
+          "rating": "strong",
+          "note": "Structural rather than sandboxed: the agent job holds no write credentials, plus a companion Agent Workflow Firewall for egress. A compromised prompt produces a rejected output, not a force-push."
+        },
+        {
+          "project": "GitHub Copilot Agent HQ",
+          "rating": "strong",
+          "note": "Network firewall on by default with a configurable allowlist and a hard 59-minute session cap \u2014 safe defaults most self-hosted setups never configure."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "partial",
+          "note": "Static command analysis is thorough but is a screen, not a sandbox: a destination the shell computes at run time is invisible to it."
+        },
+        {
+          "project": "Temporal",
+          "rating": "partial",
+          "note": "The workflow sandbox is a hard cage but exists for determinism; Activities \u2014 where all real work happens \u2014 are unsandboxed."
+        },
+        {
+          "project": "Mastra / LangGraph / Inngest / Vercel WDK / Restate / DBOS",
+          "rating": "none",
+          "note": "No security boundary of any kind; steps run in the host process."
+        }
+      ]
+    },
+    {
+      "dimension": "Cross-process ownership, fencing and crash safety",
+      "weft": "Unusually rigorous for a library with a filesystem store. acquireRun claims a run before execution (fs store: owner.json with a 15s TTL under an owner.lock CAS); the engine renews every 5s and FENCES the runtime on a lost claim or 3 consecutive refresh failures \u2014 refusing all further appends, disarming deadline timers, rejecting pending waits, and aborting step work WITHOUT journaling a terminal event, so nothing lies about the outcome. appendTerminal lands run.completed/failed/cancelled through appendIf so a cancellation committed in the tailer's blind spot converts the outcome instead of being overridden. Appends take a cross-process lock with 2.5s mtime renewal, 10s staleness with identity-safe rename-aside steal, a DOUBLE on-disk reconcile so a stolen lock's committed records are never truncated, torn-tail-only truncation, writeSync-to-completion and fsync. Honest limits: the lock is best-effort (a SIGSTOPped holder can be stolen from; acquisition gives up at 30s), appendIf/acquireRun are OPTIONAL on the store interface with a documented no-guard fallback, and after a bounded cancel or shutdown the lease is deliberately NOT released so the run stays claimed until TTL.",
+      "others": [
+        {
+          "project": "Temporal",
+          "rating": "strong",
+          "note": "The server owns execution ownership, task dispatch and fencing \u2014 it is the thing you are buying, and it is battle-tested at enterprise scale."
+        },
+        {
+          "project": "Restate",
+          "rating": "strong",
+          "note": "Raft-replicated single-binary server; Virtual Objects give a single-writer-per-key guarantee that is effectively a durable distributed mutex \u2014 the primitive weft would need for 'only one run may integrate into this repo'."
+        },
+        {
+          "project": "DBOS Transact",
+          "rating": "strong",
+          "note": "Postgres owns it, with applicationVersion fencing so old-code runs are never silently resumed by new-code workers."
+        },
+        {
+          "project": "Trigger.dev / Inngest / Hatchet",
+          "rating": "strong",
+          "note": "All three have a server or database owning run ownership, heartbeat/reaping and retry semantics."
+        },
+        {
+          "project": "Golem Cloud",
+          "rating": "strong",
+          "note": "The worker executor owns the oplog and worker lifecycle; idle workers suspend to zero and are resurrected by replay."
+        },
+        {
+          "project": "Microsoft Agent Framework",
+          "rating": "partial",
+          "note": "Checkpoint storage is pluggable (InMemory/File/Cosmos) but ownership and fencing are the host's problem."
+        },
+        {
+          "project": "LangGraph.js / Mastra / VoltAgent",
+          "rating": "none",
+          "note": "Checkpointers persist state; nothing fences a second writer, so two processes resuming the same thread is undefined."
+        },
+        {
+          "project": "OpenHands software-agent-sdk",
+          "rating": "partial",
+          "note": "A persistence directory per conversation with documented pause/resume, but no lease or fencing story."
+        },
+        {
+          "project": "Claude Code / opencode / Cline",
+          "rating": "none",
+          "note": "Process-scoped throughout; there is no notion of another process contending for a run."
+        }
+      ]
+    },
+    {
+      "dimension": "Fork, time-travel and operator recovery verbs",
+      "weft": "None. `weft replay --dry` is a genuinely good cost-free divergence report (hits / salvaged / diverged step refs / still-pending request ids / would-it-complete) \u2014 but it does not compute positionsTrusted, ignores opts.defHash, and resets the budget and agent counter to empty, so its report can differ from an actual resume of an edited script, which is exactly the case it exists for. `weft resume` continues and `weft cancel` stops; there is no fork-from-step, no branch-a-run, no rewind-and-edit-a-value, no per-step re-run, no bulk recovery, and no rm/prune. The journal is used only for recovery, never for exploration.",
+      "others": [
+        {
+          "project": "DBOS Transact",
+          "rating": "strong",
+          "note": "The best operator verb in the landscape: forkWorkflow(workflowID, startStep, {newWorkflowID, applicationVersion, queueName, replacementChildren}) \u2014 plus BULK fork from the Conductor UI, turning 'we shipped a bug and 4,000 runs are wedged at step 7' into a UI action."
+        },
+        {
+          "project": "LangGraph",
+          "rating": "strong",
+          "note": "update_state() writes a new checkpoint on the parent and invoking with a checkpoint_id forks an alternate timeline; Studio exposes rewind-to-superstep-N, edit the recorded state, and re-run as a branch."
+        },
+        {
+          "project": "Burr",
+          "rating": "strong",
+          "note": "fork_from_app_id + fork_from_partition_key + fork_from_sequence_id as a first-class API, and the tracker doubles as the persister so you can resume directly from a recorded production trace."
+        },
+        {
+          "project": "CrewAI Flows",
+          "rating": "partial",
+          "note": "restore_from_state_id forks with a fresh state.id preserving the parent lineage, distinct from kickoff(inputs={'id'}) which resumes and extends \u2014 a thoughtful API split weft lacks entirely."
+        },
+        {
+          "project": "Hatchet",
+          "rating": "partial",
+          "note": "Full task history retained by default with per-task replay from the dashboard \u2014 'replay just this one step' as a UI action."
+        },
+        {
+          "project": "Inngest",
+          "rating": "partial",
+          "note": "Bulk Replay of historical runs from the dashboard, plus Dev Server replay-from-step locally."
+        },
+        {
+          "project": "Mastra",
+          "rating": "partial",
+          "note": "restart() for one run and restartAllActiveWorkflowRuns() for every in-flight run after a deploy \u2014 fleet-level recovery weft has no equivalent of."
+        },
+        {
+          "project": "Restate",
+          "rating": "partial",
+          "note": "Explicit operator verbs: `restate invocations pause <id>` then `resume <id> --deployment <new-id>` to migrate a specific stuck run onto fixed code."
+        },
+        {
+          "project": "Trigger.dev",
+          "rating": "partial",
+          "note": "Replay a historical run with its original payload from the dashboard \u2014 but it is a brand-new run from the beginning, discarding all completed work."
+        },
+        {
+          "project": "Temporal",
+          "rating": "partial",
+          "note": "Deployment Versioning with pinned vs auto-upgrade, percentage ramping and instant rollback repositions in-flight runs onto chosen code \u2014 a fleet version policy rather than fork-a-run-from-step-N."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "partial",
+          "note": "Not fork, but per-agent restart-in-place (r) and kill (x) from the /workflows panel \u2014 the surgical retry weft cannot do."
+        }
+      ]
+    },
+    {
+      "dimension": "Deployment footprint and operational cost",
+      "weft": "A library and a CLI. Sixteen packages, ESM-only, Node \u226522.12, no server, no database, no broker, no container, no account. State is <cwd>/.weft \u2014 one journal.jsonl per run, content-addressed blobs, and an optional node:sqlite index. `weft ui` starts a Hono daemon on 127.0.0.1:4781. Cost is model spend plus your own machine. Caveats: no repo-root discovery (running from a subdirectory silently targets a different, empty .weft rather than erroring \u2014 verified); no blob garbage collection at all, so transcripts, patches and artifacts accumulate indefinitely under .weft/blobs; and a run blocked on a human holds a process and a lease rather than suspending to zero.",
+      "others": [
+        {
+          "project": "DBOS Transact",
+          "rating": "strong",
+          "note": "The closest peer: a library plus a Postgres schema. No orchestrator process, no broker, no sandbox \u2014 the easiest thing in the cluster to embed."
+        },
+        {
+          "project": "Burr",
+          "rating": "strong",
+          "note": "Library plus SQLite plus a self-hosted OSS tracking UI launched by a CLI \u2014 no SaaS anywhere."
+        },
+        {
+          "project": "Arize Phoenix",
+          "rating": "strong",
+          "note": "Single local process on SQLite, or in a notebook, scaling to Postgres only when needed \u2014 validating weft's local-first posture and suggesting the journal store should be swappable the same way."
+        },
+        {
+          "project": "Vercel Workflow DevKit",
+          "rating": "partial",
+          "note": "Local `npx workflow web` with a Postgres backend or a custom World \u2014 genuinely self-hostable, but the ergonomics clearly favour Vercel."
+        },
+        {
+          "project": "Restate",
+          "rating": "partial",
+          "note": "One Rust binary with an embedded store, no external database \u2014 excellent footprint, but BSL 1.1 makes the server not open source."
+        },
+        {
+          "project": "Windmill",
+          "rating": "partial",
+          "note": "Postgres-only, no Redis and no broker \u2014 but AGPL-3.0 with scale features (distributed workers, autoscaling, SSO) behind the Enterprise license."
+        },
+        {
+          "project": "Temporal",
+          "rating": "none",
+          "note": "Server plus a persistence store plus Elasticsearch, or pay for Temporal Cloud. The heaviest option in the durability cluster."
+        },
+        {
+          "project": "Trigger.dev",
+          "rating": "none",
+          "note": "CRIU checkpoint/restore needs container infrastructure; self-hosting means Docker/K8s plus object storage plus Postgres plus Redis."
+        },
+        {
+          "project": "Langfuse",
+          "rating": "none",
+          "note": "Postgres + ClickHouse + Redis + S3 + web + worker for the self-hosted stack."
+        },
+        {
+          "project": "Opik",
+          "rating": "none",
+          "note": "ClickHouse + MySQL + Redis + a Java backend, despite being fully Apache-2.0."
+        },
+        {
+          "project": "Claude Code / opencode / Codex CLI / goose",
+          "rating": "strong",
+          "note": "Single npm install or binary, entirely local \u2014 and this is the bar weft is actually competing against for a developer's attention."
+        }
+      ]
+    },
+    {
+      "dimension": "Maturity, ecosystem and adoption",
+      "weft": "Design preview, not published. The README says so plainly (\"Not on npm yet\"). The engineering discipline around it is real: 16 packages versioned together, a release pipeline with version:set / sync:meta --check / verify:packing / verify:install (which installs the tarballs into a scratch project and drives a real weft-mcp initialize handshake as compiled ESM), CI across node 22 and 24 with biome, strict tsc, seven runnable examples and `weft check` in the smoke job, a tag-guarded trusted-publishing release, and a 758-line adversarial self-review at a named commit with several findings visibly closed. Against that: zero external users, zero third-party integrations, no AGENTS.md ingestion, provider-mock has no test directory, two declared StepErrorCodes are never produced, IntegrateOptions.order is declared and never read, and the README's package table claims provider adapters sit \"behind a shared conformance suite\" that does not exist.",
+      "others": [
+        {
+          "project": "opencode",
+          "rating": "strong",
+          "note": "201k stars, MIT, ~8M reported MAU, daily development \u2014 the largest in the coding-harness cluster."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "strong",
+          "note": "142.9k stars with a bundled subagent/skill/plugin/marketplace ecosystem. Closed source with no license on the repo, but distribution is overwhelming."
+        },
+        {
+          "project": "Temporal",
+          "rating": "strong",
+          "note": "22.5k stars on the server, MIT, the largest enterprise adoption in durable execution, with an official @temporalio/ai-sdk package shipped January 2026."
+        },
+        {
+          "project": "Trigger.dev",
+          "rating": "strong",
+          "note": "16.1k stars, Apache-2.0, genuinely self-hostable, daily commits."
+        },
+        {
+          "project": "Mastra",
+          "rating": "strong",
+          "note": "27.4k stars and the most active TS agent framework \u2014 but with an enterprise-only ee/ directory and heavy version churn."
+        },
+        {
+          "project": "goose",
+          "rating": "strong",
+          "note": "53.4k stars and, uniquely, vendor-neutral Linux Foundation (AAIF) governance \u2014 a real procurement advantage for a layer that brokers competing vendors."
+        },
+        {
+          "project": "Vercel Workflow DevKit",
+          "rating": "partial",
+          "note": "The most direct architectural competitor and also young: 2.3k stars, repo created 2025-10, 349 open issues, rapid API churn, docs reorganizing."
+        },
+        {
+          "project": "LangGraph.js",
+          "rating": "partial",
+          "note": "3.2k stars and trailing its Python sibling (40.4k) materially on features and docs; the deployment server is Elastic-licensed, not OSI-open."
+        },
+        {
+          "project": "Inngest AgentKit",
+          "rating": "none",
+          "note": "No push for ~4 months, npm release ~7 months stale, 49 open issues \u2014 the riskiest bet in the TS cluster despite good design."
+        },
+        {
+          "project": "Flowise / Roo Code / Vibe Kanban / Motia / LlamaIndex workflows-ts",
+          "rating": "none",
+          "note": "Category attrition worth naming: 55.4k-star Flowise archived 2026-08, 24.3k-star Roo Code archived 2026-05, 27.9k-star Vibe Kanban sunsetting, Motia wound down into iii, workflows-ts archived. Stars are not survival."
+        },
+        {
+          "project": "OpenHands",
+          "rating": "strong",
+          "note": "85k stars, MIT, fully self-hostable \u2014 but the 2026 pivot to Agent Canvas has spread SDK, legacy app, Agent Server, Automation Server and Canvas across uneven documentation."
+        }
+      ]
+    }
+  ],
+  "closestCompetitors": [
+    {
+      "project": "Vercel Workflow DevKit (WDK) + @ai-sdk/workflow",
+      "overlap": "The same thesis, arrived at independently by a major vendor: durable execution as a language-level concern in plain TypeScript, backed by a journaled event log of step inputs and outputs, with the function replayed from the top and completed steps returning journaled values. Both run workflow bodies in a sandbox with replaced globals; both are Apache-2.0/MIT-shaped libraries rather than servers; both make `await` the edge rather than a graph DSL. WorkflowAgent/DurableAgent turns AI SDK tool calls into retryable resumable steps, which is structurally weft's ctx.agent.",
+      "differentiation": "Four things weft has that WDK does not: (1) schema validation at step boundaries with in-session repair \u2014 WDK step contracts are TypeScript types plus serializability, with no runtime check, and pass-by-value mutation silently does nothing; (2) content-addressed salvage, so WDK hits the classic replay-versioning problem on any mid-flight edit; (3) any git, patch or integrate awareness at all; (4) token/USD ceilings. Three things WDK has that weft does not: steps compiled into separately deployed auto-scaling worker processes (real isolation and elastic parallelism from plain Promise.all), zero-compute suspension so a week-long human gate costs nothing, and a sandbox that makes Math.random/Date replay-STABLE rather than banned \u2014 a strictly friendlier answer than weft's 11 AST prohibitions. WDK is also younger and churnier (349 open issues) but carries Vercel's distribution."
+    },
+    {
+      "project": "Claude Code dynamic workflows",
+      "overlap": "The closest competitor by use case, and it is bundled free with the agent weft depends on. It is code-as-orchestration (plain JS with top-level await), schema-typed agent calls (agent(prompt, {schema}) resolving to a parsed object), fan-out via pipeline(list, fn), git-worktree isolation per subagent, resumable runs, and a live orchestration TUI \u2014 the same feature vocabulary as weft, shipped, at 142.9k stars.",
+      "differentiation": "weft wins on durability and control: Claude Code's workflow resume is process-scoped (\"If you exit Claude Code while a workflow is running, the next session starts the workflow fresh\"), its replay is order-based so stopping mid fan-out re-runs every agent that started after the first unfinished one even if it completed, it has NO human-in-the-loop inside a workflow (AskUserQuestion is stripped from every subagent), no hard cost ceiling (the large-workflow warning is explicitly \"advisory: it doesn't pause or limit the run\"), and it is Anthropic-only, closed source, with no license on the repo. Claude Code wins on everything around the engine: enforced worktree isolation via static bash analysis (blocking git -C, GIT_DIR, cd-escapes, heredocs), a far better observability TUI with per-agent restart-in-place, prompt-cache-aware fan-out staggering, and model-AUTHORED orchestration that removes weft's blank-page tax entirely."
+    },
+    {
+      "project": "Temporal (+ TypeScript SDK)",
+      "overlap": "The durability lineage weft draws on and the most battle-tested implementation of the same core idea: an append-only event record as the authority, deterministic replay to rebuild state, workflow-as-code in plain async TypeScript, and a vm sandbox with replaced globals to keep replay honest. Both treat a durable wait on a human as a first-class event rather than in-process state.",
+      "differentiation": "Temporal is better at durable execution itself and worse at everything weft is actually for. Better: determinism violations fail loudly with DeterminismViolationError instead of being silently salvaged; time-skipping test server plus Worker.runReplayHistory() as a real CI gate; two mature mid-run-edit answers (patched() markers and Deployment Versioning with ramping and rollback); real multi-tenancy via namespaces and Nexus. Worse for coding workflows: no schema validation or repair of step outputs, no token or USD budget of any kind, zero git awareness, a workflow sandbox so strict that every shell-out must become an Activity, history size limits forcing continueAsNew, and an operational footprint of server + persistence store + Elasticsearch versus weft's `.weft` directory."
+    },
+    {
+      "project": "Mastra",
+      "overlap": "The nearest TypeScript agent framework by philosophy on the typing axis: createStep({inputSchema, outputSchema, execute}) validated at every boundary via Standard Schema, workflow-level input/output schemas, and typed suspend/resume with suspendSchema and resumeSchema \u2014 the same instinct as weft's schema-validated humans-as-steps. Both are TS-native libraries with per-step model routing, and both ship a CLI plus a local UI.",
+      "differentiation": "Mastra's durability is snapshot-per-run through a storage adapter, so a resumed step re-runs from its start and there is no content-addressed salvage or edit tolerance. It has no determinism enforcement, no cost ceilings (spend is a derived dashboard metric), and nothing repo-aware \u2014 no worktrees, no patches, no integrate. What Mastra has that weft badly lacks: OTel AI tracing with per-step spans, trace-correlated logs, auto-derived cost/token metrics, resumable output streams (run.resumeStream()), and restartAllActiveWorkflowRuns() for fleet recovery after a deploy. It also has 27.4k stars and daily commits against weft's zero users."
+    },
+    {
+      "project": "OpenHands software-agent-sdk",
+      "overlap": "The closest architectural twin on durability shape and the closest by use case in Python: an append-only per-event store (numbered event-00000-{hash}.json files plus a base_state.json sidecar), justified in its own docs exactly as weft would justify JSONL \u2014 \"Fast event appends: No need to rewrite the entire history.\" Both are engines for coding agents with pluggable providers, a conversation/run identity that survives process death, and an explicit resume path.",
+      "differentiation": "OpenHands restores state rather than replaying, so there is no salvage and no edit tolerance. Its sub-agent delegation is explicitly \"designed for sequential blocking tasks\" \u2014 no real fan-out inside a conversation. It has no git-worktree isolation and no patch-then-integrate model (isolation is container/volume level), no hard USD/token ceiling in the SDK (budgets are a cloud org feature), and no schema-validated step contracts. What it has that weft should study: ConfirmRisky with an out-of-band LLMSecurityAnalyzer classifying each action LOW/MEDIUM/HIGH so only genuinely risky actions interrupt a human; WAITING_FOR_CONFIRMATION as an explicit polled state; Agent-Client Protocol making whole third-party agents pluggable rather than just model APIs; and counting auxiliary LLM spend (condenser, classifier) in the same rollup \u2014 an accounting bug weft's schema-repair calls could easily reproduce."
+    },
+    {
+      "project": "Inngest (+ AgentKit)",
+      "overlap": "The closest philosophical match on edit-tolerant replay: Inngest deliberately does NOT pin versions, memoizes by hashing a step's declared id together with an occurrence counter, and publishes the compatibility matrix as a contract (body change safe, add runs on reach, remove ignored, reorder warns, id change re-runs). Both bet that tolerance beats pinning. Both are TS-native with plain-code authoring and a durable event wait as the human primitive.",
+      "differentiation": "weft's content hash over {kind, payload, schema, key} plus a workflow-body hash guard is a stronger mechanism than id-plus-counter \u2014 Inngest's flip side is that a reordering edit returns memoized values in the wrong logical position with only a warning, which is silent wrongness where Temporal hard-fails. But Inngest is far ahead on flow control (dynamic concurrency keys, throttle, rate limit, debounce, priority \u2014 weft has none of this), on step.ai.infer() offloading the model call to the engine so the run holds no process during inference, and on distribution. AgentKit itself is ~4 months stale with a ~7-month-old npm release; the server is SSPL, not OSI-open."
+    },
+    {
+      "project": "container-use (Dagger)",
+      "overlap": "The purest expression of weft's isolation idea, delivered as an MCP server rather than an engine: every agent gets its own git branch AND its own container, review is `cu diff` / `cu log` / `cu merge`, and discarding a failure is deleting a branch. Same conviction that agent writes must be quarantined before they touch the tree.",
+      "differentiation": "container-use isolates one layer deeper than weft \u2014 the container means installs, daemons, ports and env mutations are discarded with the step, which weft's worktrees do not do at all. But it has no workflow layer whatsoever: no steps, no ordering, no schema, no journal, no resume, no cost tracking, and no blocking gate (review is after the fact). weft's differentiators against it are the patch as a typed value, scope checking with quarantine, ctx.integrate() with conflict policies and resume-idempotency proofs, and the journal. The right reading is that these are complementary: container-use is the environment boundary weft should adopt underneath its worktrees, not a competitor to the integrate gate."
+    },
+    {
+      "project": "goose Recipes",
+      "overlap": "The declarative equivalent of weft's whole proposition, from a Linux Foundation project at 53.4k stars: response.json_schema ENFORCES structured output from a run (arrived at independently \u2014 the same schema-per-step thesis), retry{max_retries, checks} where checks are shell commands is a declarative acceptance test bound to the workflow, sub_recipes compose, per-recipe provider/model settings give routing, and a cron scheduler turns recipes into recurring runs.",
+      "differentiation": "YAML is the ceiling. goose recipes cannot express conditionals, loops over computed data, or typed values passed between sub-recipes \u2014 precisely the wall weft's plain-TypeScript model is designed to break through. goose also has no step-level journal, no crash resume mid-run, no git/worktree isolation, no patch model, and retry is whole-run rather than in-session repair. What it does better: sequential_when_repeated letting a callee declare its own concurrency constraint, least-privilege tool declaration (naming an extensions block EXCLUDES the defaults), typed user-promptable parameters, a built-in scheduler, and vendor-neutral foundation governance."
+    }
+  ],
+  "weftUniqueStrengths": [
+    {
+      "strength": "verifyServe \u2014 refusing to serve a journaled effect whose result no longer holds in the world. A StepSpec may supply verifyServe(journaled); a false verdict consumes the entry, journals replay.diverged, and re-executes with io.reExecuting=true so recovery paths can treat an existing branch or tag as their own prior work rather than a collision. Used by git.commit (ancestor-of-HEAD), git.checkout (HEAD still on the ref, branch-vs-detached aware), git.tag (tag still peels to the journaled sha), branch.create, and ctx.integrate (tree hash \u2192 reverse-apply \u2192 mergedBaseTrees \u2192 forward-apply).",
+      "whoElseHasIt": "Nobody found in the entire landscape. Every other replay engine \u2014 Temporal, WDK, Restate, DBOS, Inngest, LangGraph, MAF, ADK \u2014 assumes a journaled result is still true and serves it unconditionally. This is the single most defensible mechanism in weft, and it exists because weft's steps mutate a git repository rather than a database. Caveat: it covers only commit, non-discard checkout, tag, branch.create, function checks, sub-workflows and integrate \u2014 add, fetch, pull, push, reset, apply, stash.*, branch.delete, clean and discard-checkouts have no verifier \u2014 and it is disabled entirely whenever testHooks are configured."
+    },
+    {
+      "strength": "ctx.integrate() as a journaled merge gate: an outer step per patch wrapping nested snapshot and apply sub-steps (so a resume mid-ask reuses the PRE-conflict snapshot rather than snapshotting conflict markers and stacking a second apply), with onConflict fail / agent / ask, an agent resolver whose `resolved: true` self-report is not trusted (conflictMarkersIn re-reads each file against /^<{7}(?: |$)/m), and a run that ends with un-integrated, un-discarded patches failing with unintegrated_patches.",
+      "whoElseHasIt": "Nobody. gh-aw's read-only-agent-plus-safe-outputs is the nearest philosophical cousin \u2014 deferred, validated application by a differently-privileged actor \u2014 but it has no diff, conflict or tree semantics. Every worktree-based coding tool (Claude Code, container-use, claude-squad, Crystal, Conductor, Codex CLI, Sculptor, Vibe Kanban) produces branches or commits and leaves merging to git and a human. weft is alone in making the merge itself a resumable, journaled, policy-driven step."
+    },
+    {
+      "strength": "Hard token AND USD ceilings that are inherited by sub-workflows and admission-controlled across concurrency. remainingTokens/Usd take min(own, ancestor headroom); reserveCall PARKS rather than refuses, requiring (inflight+1) \u00d7 (spent/samples) to fit and serializing calls one at a time until a cost sample exists; a USD-only ceiling with a provider that neither reports usd nor has configured pricing is refused before dispatch rather than running unbounded; resume restores max(journaled sum, last budget.sampled) plus a parentage-verified walk of descendant journals.",
+      "whoElseHasIt": "Partially: Pydantic AI's UsageLimits enforces token limits per run but has no USD axis and does not propagate to sub-agents; SWE-agent's per_instance_cost_limit genuinely stops an instance but has no inheritance; Helicone enforces dollars and tokens per user/team/global but at a gateway, not inside a workflow, and is now in maintenance mode after acquisition. Nobody combines both axes, inheritance across a run tree, and concurrency admission. Every durable-execution engine (Temporal, Restate, DBOS, Inngest, Hatchet, Windmill, WDK) has literally no token or USD concept, and every observability platform accounts without enforcing. CrewAI's documented $414 runaway is the shape of what this prevents."
+    },
+    {
+      "strength": "Schema-validated human answers through the SAME machinery as model outputs, with reject-and-reopen instead of run failure, and cross-process CAS-guarded delivery. An answer is checked against the step's authoritative Standard Schema; a failure journals human.rejected, reopens the request, and waits for a replacement. Engine.answer chains per runId::requestId and appends via journal.appendIf under a re-fold loop so a standing answer, a terminal event or a lost CAS refuses the caller. Deadlines carry deny/escalate/{default} policies with the default pre-validated at request time, and irreversible+ask demands a confirm:<sha256(action)[0:8]> token.",
+      "whoElseHasIt": "Partially: Mastra has typed suspendSchema/resumeSchema and Windmill has schema-backed approval forms whose fields arrive as resume['field'] \u2014 both validate the human. Neither reopens on rejection; a bad answer is an error. The cross-process CAS on answer delivery (so a CLI, a daemon and an MCP client racing to answer the same request cannot corrupt the journal) appears unique among library-shaped engines. Windmill's approval configuration matrix \u2014 N-of-M, group restriction, no-self-approval, continue-on-disapproval as a typed branch, recorded approvers \u2014 is still materially richer than weft's."
+    },
+    {
+      "strength": "Cross-process ownership, fencing, and torn-tail-safe fsynced JSONL appends implemented in a library with a filesystem store: owner.json under an owner.lock CAS with a 15s TTL and 5s renewal, fencing that refuses all further appends and aborts step work WITHOUT journaling a terminal event, appendTerminal through appendIf so a cancellation in the tailer's blind spot converts the outcome, and an append path with double on-disk reconcile so a stolen lock's committed records are never truncated.",
+      "whoElseHasIt": "Everyone who has this bought a server for it \u2014 Temporal, Restate, DBOS, Inngest, Trigger.dev, Hatchet, Golem. Among libraries, LangGraph.js, Mastra and VoltAgent persist checkpoints but nothing fences a second writer. This is genuinely unusual engineering for something you `npm i`. It is also the least legible strength: nobody chooses a workflow engine for its lock protocol, and the guarantee degrades silently to nothing on a store that omits the optional appendIf/acquireRun."
+    },
+    {
+      "strength": "The combination, and only the combination: journal + schema validation with in-session repair + durable typed humans + worktree patches gated by integrate + inherited USD ceilings + a static determinism gate + one Engine behind CLI, MCP and daemon \u2014 all in one npm-installable library with no server.",
+      "whoElseHasIt": "Every individual piece is common and weft should not claim otherwise. Plain-code authoring: WDK, Trigger.dev, Inngest, DBOS, Restate, Prefect, Pydantic AI. Journaled durability: Temporal, WDK, Restate, DBOS, Inngest, OpenHands. Schema-validated output with repair: Instructor, Pydantic AI, BAML, Mastra, Vercel AI SDK, TypeChat. Worktree isolation: Claude Code, container-use, Codex CLI, claude-squad, Crystal, Conductor, Sculptor, uzi, Vibe Kanban \u2014 this is now table stakes, not a differentiator. Zero-model-call testing: Pydantic AI, Vercel AI SDK, Inngest, AutoGen. One engine behind several surfaces: opencode (OpenAPI + SSE), Cline (extension + CLI + SDK). What no single project assembles is all of them at once, which is a real but fragile position \u2014 it is defensible only until one of the well-funded engines adds the two or three pieces it is missing."
+    }
+  ],
+  "weftGaps": [
+    {
+      "gap": "A durable human gate that nobody is told about. Verified by grep: no Slack, email, webhook, or push notification exists anywhere in packages/*/src. A pending request is discoverable only by running `weft status`, opening the loopback-only daemon page, or holding an MCP weft_wait long-poll. The README's promise that \"the answer can arrive hours later\" is technically true and operationally hollow \u2014 durability solves the waiting problem and does nothing about the noticing problem.",
+      "whoDoesItBetter": "HumanLayer (Slack/email contact-channel objects with per-call context strings, escalation ladders, timeouts), Windmill (getResumeUrls() signed approval links plus native interactive Slack and Teams), Trigger.dev (token carries a webhook URL and a browser-safe public token, with tags making pending approvals filterable), Linear Agent Sessions (elicitation rendered inline in the issue thread that caused the work), OpenAI Codex Cloud (GitHub PR / GitLab MR / Linear / Slack as both trigger and delivery)",
+      "severity": "critical"
+    },
+    {
+      "gap": "No security boundary, and no network egress control by default. The README correctly disclaims node:vm as a determinism fence \u2014 but the agent's own process is entirely unsandboxed, worktree isolation is convention (a step can fs.writeFile anywhere and weft learns about it only from provider-self-reported filesTouched, with posix-only escape detection), and ctx.fetch allows EVERY host unless fetchAllow is explicitly configured, which it is not by default. The hardened per-hop redirect validation is skipped entirely when there is no allow-list and no credential-shaped header.",
+      "whoDoesItBetter": "Anthropic sandbox-runtime (bubblewrap/Seatbelt/WFP process-tree scoping, writes allow-only, network deny-all behind a host proxy domain allowlist \u2014 exactly the shape weft needs and could adopt without containers), OpenAI Codex CLI (Seatbelt/Landlock/seccomp with .git protected even in workspace-write), gh-aw (read-only agent + egress firewall), GitHub Copilot Agent HQ (firewall on by default with allowlist), microsandbox (local libkrun microVMs as child processes, <100ms boot, TS SDK), E2B, gVisor, container-use",
+      "severity": "critical"
+    },
+    {
+      "gap": "Provider asymmetry silently breaks a headline guarantee. `write: { mode: \"strict\" }` means live canUseTool enforcement on Claude (scope-matched edits with symlink-escape realpath, read-only bash allow-list, traversal and shared-git-metadata denial, risky-command brokering) and post-hoc worktree diffing only on Codex, which has no permission hook at all, returns filesTouched: [], and silently ignores maxTurns, onMaxTurns and tools.deny. Meanwhile ProviderHitl.onAsk is declared and fenced but never called by any shipped adapter, and the README's package table claims provider adapters sit \"behind a shared conformance suite\" that does not exist \u2014 the two adapters are tested against different bespoke expectations (~40 cases vs ~24).",
+      "whoDoesItBetter": "OpenAI Codex CLI (uniform OS-level sandbox_mode inherited by every subagent, verified in v0.115.0 to inherit sandbox and network rules from the parent), OpenHands via ACP (one protocol contract per agent rather than per-vendor adapters), and \u2014 on the honesty axis \u2014 anyone who does not claim a conformance suite they have not written",
+      "severity": "critical"
+    },
+    {
+      "gap": "OpenTelemetry covers runs, not steps \u2014 one span per run with the run id as trace id (verified: a single tracer.startSpan in engine.ts:789). weft's journal is the richest per-step record in this entire landscape (inputs, outputs, model, effort, per-attempt usage, repair attempts, scope violations, gate decisions, patch refs) and none of it is legible to any tool a team already runs. Mapping journal events onto nested GenAI spans is close to mechanical and would buy an entire trace UI for near-zero build cost.",
+      "whoDoesItBetter": "Langfuse (OTel-native nested generation spans with cost from a maintained pricing table), Arize Phoenix (OpenInference span kinds \u2014 LLM/CHAIN/TOOL/AGENT/GUARDRAIL/EVALUATOR \u2014 so each node renders purposefully; weft already knows every step's kind), Opik (first-party OTLP ingest as a peer to its SDKs), Mastra, Trigger.dev, AgentOps, and the OTel GenAI semantic conventions themselves, which now define invoke_agent and execute_tool operations plus cache-read/cache-write/reasoning token breakouts weft's USD ceiling arguably needs to price correctly",
+      "severity": "high"
+    },
+    {
+      "gap": "Step outputs are journaled verbatim. Secret redaction covers only env maps and fetch header names/values passed as SecretHandles; exec/bash stdout+stderr, fetch response bodies and headers, agent prompts, and ctx.env.get's actual value all land in the journal unredacted. The journal is simultaneously weft's core asset, its debugging surface, and the artifact a user would share \u2014 and it accumulates repository content and whatever a shell command printed.",
+      "whoDoesItBetter": "OpenInference (attribute masking/privacy controls applied at instrumentation time), OTel GenAI conventions (instrumentation-level filtering and truncation of captured message content as an explicit expectation), Google ADK (state key scope prefixes where `temp:` is never persisted \u2014 a sanctioned escape hatch weft has no equivalent of), Microsoft Agent Framework (treats checkpoint storage as an explicit trust boundary with a documented threat model and a type allowlist)",
+      "severity": "high"
+    },
+    {
+      "gap": "The journal is used only for recovery, never for exploration. There is no fork-from-step, no branch-a-run, no rewind-and-edit-a-recorded-value, no per-step re-run, no bulk recovery after a bad change, and no rm/prune. `weft replay --dry` is the only introspection verb and it does not model the case it exists for \u2014 it skips positionsTrusted, ignores opts.defHash, and resets the budget and agent counter to empty, so its divergence report can differ from an actual resume of an edited script.",
+      "whoDoesItBetter": "DBOS Transact (forkWorkflow with startStep, applicationVersion and replacementChildren, plus BULK fork from the Conductor UI), LangGraph (update_state + fork-by-checkpoint_id with Studio exposing rewind/edit/re-run), Burr ((app_id, partition_key, sequence_id) as a universal fork address, with the tracker doubling as the persister), Claude Code (restart one agent in place from the workflow panel), Hatchet and Inngest (per-task and bulk replay from the dashboard), Mastra (restartAllActiveWorkflowRuns)",
+      "severity": "high"
+    },
+    {
+      "gap": "No machine-readable output anywhere. All 14 CLI verbs emit ANSI-painted human text only \u2014 no --json on ls, status, report, replay --dry, explain or diff \u2014 so scripting weft into CI means parsing terminal output. Missing verbs compound it: no `weft signal` (the daemon exposes POST /api/runs/:id/signal with no CLI peer), no reindex or search despite index-sqlite implementing search(), no way to view a step transcript or a captured patch blob, no --version.",
+      "whoDoesItBetter": "Essentially the whole field. Temporal, Restate and Trigger.dev all have CLI verbs designed for automation; gh-aw compiles to a checked-in artifact CI consumes directly; Braintrust runs evals through a CLI whose output a GitHub Action turns into PR comments. For a tool whose pitch is unattended durable runs, being unscriptable is a structural adoption blocker",
+      "severity": "high"
+    },
+    {
+      "gap": "A run blocked on a human holds a process and a lease rather than suspending to zero. There is no hibernation, no checkpoint-and-exit, no rehydrate-on-answer. Combined with the deliberate choice not to release the lease after a bounded cancel or shutdown, a backlog of pending reviews scales linearly in resident processes and blocks takeover until TTL expiry.",
+      "whoDoesItBetter": "Restate (a handler parked on an awakeable holds zero compute and is re-invoked on completion), Prefect (suspend_flow_run exits the process entirely and reschedules on resume, as a distinct primitive from pause_flow_run), Golem (idle workers suspend to zero memory and are resurrected by oplog replay), Cloudflare Agents (hibernation evicts an idle agent while keeping WebSockets alive), Vercel WDK (sleep() and createWebhook() free the process entirely), Trigger.dev (CRIU freeze so pre-wait code never re-runs)",
+      "severity": "high"
+    },
+    {
+      "gap": "Replay identity does not include the world. A step hashes kind, payload, schema and key \u2014 what the step could READ (the working tree an agent greps) is not in it, and declared read scopes are unbuilt (README deviation #5). The two guards are real but narrow: keyless ambiguity re-runs, and a workflow-body hash sets positionsTrusted. verifyServe mitigates for a handful of git ops, but most git writes have no verifier at all (add, fetch, pull, push, reset, apply, stash.*, branch.delete, clean, discard-checkout) and verifyServe is disabled entirely whenever testHooks are configured \u2014 so no fixture-driven test ever exercises it.",
+      "whoDoesItBetter": "Nobody solves this cleanly, which is worth saying \u2014 but Burr's statically validated reads=[]/writes=[] declarations show the shape of the answer, and PocketFlow's prep/exec/post contract (where exec is structurally forbidden from touching shared state, making retry safe by construction) is the idea weft's AST gate is best positioned to enforce as a checked property rather than an author's promise",
+      "severity": "high"
+    },
+    {
+      "gap": "The daemon and web UI are observation-only and unauthenticated. There is no POST /api/runs, so the browser surface cannot start a run; the only guard is a loopback plus Host/Origin check, so anything that can make a loopback-looking request to port 4781 can answer, cancel and resume every run in the repo; startDaemon has no port fallback; and the page is one hand-written HTML file with no step-level detail, no run-to-run diff, no patch or transcript viewer, no filtering, and a 200-record journal tail cap (README deviation #3).",
+      "whoDoesItBetter": "Trigger.dev (run explorer with timelines, payload/output inspection, tags, alerts, one-click replay), Burr (fully self-hosted OSS tracking UI over every state transition, no SaaS), Langfuse and Opik (full platforms), Windmill (per-flow graph with per-iteration results and step-level re-run), Claude Code (/workflows with per-agent drill-in and per-agent restart)",
+      "severity": "medium"
+    },
+    {
+      "gap": "No concurrency fairness, rate limiting, queues or priorities \u2014 and two silent footguns in the fan-out primitives: ctx.parallel's `concurrency` option is ignored unless EVERY task is a thunk (promise-form tasks fall through to Promise.all with no lane cap), and pipeline.run() defaults to concurrency = items.length, i.e. no pipeline-level cap at all. Only the global min(16, cpus-2) limiter bounds real work, and Semaphore.with releases on abort so timed-out-but-running steps can exceed it.",
+      "whoDoesItBetter": "Hatchet (concurrency keys with round-robin fairness strategies, rate limits as declarative consumable resources, priorities), Inngest (dynamic concurrency keys, throttle, rate limit, debounce, priority per function), Trigger.dev (named queues with per-queue limits and machine sizing), DBOS (durable queues with concurrency, rate limits, priority, partition keys), Temporal (task queues with per-namespace rate limits)",
+      "severity": "medium"
+    },
+    {
+      "gap": "Only three provider ids exist (claude, codex, mock) and the built-in price table is Claude-only, so a USD-only budget routed to Codex is refused at dispatch unless the host configures pricing. ProviderId is typed as \"claude\" | \"codex\" | (string & {}), so a third id typechecks and then fails at dispatch with a registry miss.",
+      "whoDoesItBetter": "opencode (Models.dev catalogue with OAuth and per-agent override), Cline (200+ models via OpenRouter plus Bedrock, Vertex, Ollama), OpenHands (LiteLLM for models and ACP for whole third-party agents), Vercel AI SDK (~30+ providers behind one interface), gh-aw and Copilot Agent HQ (Copilot/Claude/Codex/Gemini selectable), Helicone (an open, maintained 300+ model pricing database \u2014 the thing weft's USD ceiling actually depends on being current)",
+      "severity": "medium"
+    },
+    {
+      "gap": "No quality signal at all \u2014 validation is purely structural. weft can prove a step returned the declared shape and cannot say anything about whether the output was any good, whether a prompt change regressed the review step, or whether a run took the expected path. Given that the journal already IS a complete recording of every model interaction, a golden-trace conformance mode would be close to free.",
+      "whoDoesItBetter": "Google ADK (`adk conformance` records LLM requests/responses/tool calls into golden YAML and FAILS the command on deviation, designed to block a PR \u2014 the highest-leverage idea in the landscape for weft specifically), Braintrust (evals as versioned *.eval.ts source run by a CLI with a GitHub Action commenting score diffs, plus autoevals and trajectory-level agentbehavior specs), Langfuse and Opik (datasets seeded from production traces, online eval rules, G-Eval), Temporal (runReplayHistory as a determinism CI gate)",
+      "severity": "medium"
+    },
+    {
+      "gap": "Every Claude step pays an SDK-MCP tool round trip because native JSON mode is not wired up (README deviation #2). The schema lint that flags what the native path would reject exists; the native branch does not. Weft's own budget ceilings make this cost visible and then charge it on every single agent step.",
+      "whoDoesItBetter": "BAML (Schema-Aligned Parsing recovers valid structure from raw output in a sub-10ms Rust pass with zero extra model calls), Outlines (constrained decoding makes invalid output unrepresentable where logits are reachable), LangGraph's create_agent (ProviderStrategy auto-selecting native constrained decoding when the provider supports it, falling back to ToolStrategy), Vercel AI SDK, Codex adapter within weft itself \u2014 which already uses native outputSchema",
+      "severity": "medium"
+    },
+    {
+      "gap": "No AGENTS.md ingestion. A weft write step hands an agent a fresh worktree stripped of the repository conventions every other runner in the ecosystem reads by default \u2014 a convention now under Linux Foundation AAIF governance and honored by Codex, Claude Code, Copilot, Cursor, Aider, Jules, VS Code and 60,000+ repositories.",
+      "whoDoesItBetter": "OpenAI Codex, Claude Code, GitHub Copilot coding agent, Google Jules, goose, Cursor, Aider \u2014 effectively everyone. This is free interop weft is declining",
+      "severity": "medium"
+    },
+    {
+      "gap": "Declared-but-dead surface and small correctness debt: IntegrateOptions.order?: \"sequential\" is in the public API and never read; StepErrorCodes max_turns and git_failed are never produced anywhere (a GitError becomes code \"internal\"); human_denied appears only in a retry predicate; a duplicate explicit step key is logged rather than rejected, so two steps sharing a key both run and both become --reuse key candidates; provider-mock is the one package with no test directory; and the mock's glob matcher (* crosses /) differs from the testing package's picomatch fixture matcher (* stops at /), so the same pattern means two things depending on which table it is written in.",
+      "whoDoesItBetter": "Not a competitive gap so much as a credibility one \u2014 for a project whose entire pitch is that the plumbing between steps is typed rather than parsed, declared-and-unimplemented API surface is the wrong kind of detail to leave lying around",
+      "severity": "low"
+    },
+    {
+      "gap": "No blob garbage collection. BlobStore exposes only put/get/getText/has, so transcripts, patches, review artifacts and every >64KB step output accumulate indefinitely under .weft/blobs with no prune verb and no retention policy. Also no repo-root discovery: running any command from a subdirectory silently targets a different, empty .weft rather than erroring (verified).",
+      "whoDoesItBetter": "Trigger.dev, Langfuse and Temporal all have retention policies; every git-adjacent tool resolves the repo root by walking upward. Both are small fixes that currently make weft feel like a preview rather than a tool",
+      "severity": "low"
+    }
+  ],
+  "positioningStatement": "Weft is the only engine that treats a coding agent's spend, its diff, and its human as first-class durable primitives inside one journal \u2014 and it is a design preview with zero users, no npm release, and a security story it explicitly disclaims. Its defensible core is narrow and genuinely real: content-addressed step salvage guarded by a workflow-body hash so replay survives editing the script; verifyServe re-checking whether a journaled side effect still holds in the world before serving it, which nobody else in this landscape does at all; hard token AND USD ceilings inherited across a run tree with concurrency-aware admission that parks rather than refuses; and worktree-captured patches that land only at an explicit, journaled, conflict-policied ctx.integrate(). No project assembles that combination \u2014 the durable-execution engines (Temporal, Vercel WDK, Restate, DBOS, Inngest) have better durability infrastructure, better testing, and literally no git, schema, or cost awareness; the coding harnesses (Claude Code, Codex CLI, opencode, Cline, container-use) have better isolation enforcement, far better live observability, and overwhelming distribution but no crash-durable journal, no mid-run human gate, and only advisory cost warnings; the typed-IO libraries (Instructor, BAML, Pydantic AI) do the schema half better and nothing else. But weft's weakest links are not in its engine, they are at its edges, and they are load-bearing: a durable gate that no Slack message, email, or webhook ever reaches, so the promise that \"the answer can arrive hours later\" is true in mechanism and hollow in practice; run-level OTel only, so the richest per-step record in the field is invisible to every tool a team already runs; step outputs journaled verbatim including exec stdout, fetch bodies, and env values; a `strict` write scope that means live tool-gating on Claude and post-hoc diffing on Codex behind a single advertised provider interface with no conformance suite; and no way to fork, branch, or re-run one step from the journal it spent so much engineering effort building. The honest framing today is a credible reference implementation of durable coding workflows whose mechanism design is ahead of the ecosystem and whose surface area is well behind it \u2014 and the category's 2026 attrition (Flowise archived at 55k stars, Roo Code at 24k, Vibe Kanban sunsetting at 28k) says that being right about the mechanism is not what determines survival."
+}
