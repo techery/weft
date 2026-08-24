@@ -325,6 +325,9 @@ describe("the tool gate", () => {
       "diff -ul a.txt b.txt", // clustered short spelling still paginates
       "PATH=. grep todo src/a.ts", // a PATH override resolves ANY reader to ./grep
       "LD_PRELOAD=./x.so cat f.txt", // loader overrides run injected code
+      "./cat f.txt", // a path-qualified reader is whatever the REPO put there
+      "/repo/bin/grep todo src/a.ts",
+      "scripts/sort input.txt",
       "sort --o clobbered input.txt", // GNU sort abbreviates --output too
       "find . -e'x'ec touch changed \\;", // bash concatenates the quoted split back to -exec
       'find . -e"x"ec touch changed \\;',

@@ -1164,6 +1164,19 @@ export class Engine implements EngineHost {
         if (owner !== undefined) return this.answer(owner, requestId, answer, opts);
         throw new Error(`run ${runId}: no request ${requestId}`);
       }
+      // A TERMINAL run cannot consume an answer: accepting one against a
+      // journal that already holds run.cancelled/completed/failed reports
+      // success for a request nothing will ever serve. Resume the run first —
+      // it re-opens the pending request and the answer lands live.
+      let terminal: "complete" | "failed" | "cancelled" | undefined;
+      for (const r of records) {
+        if (r.ev.type === "run.completed") terminal = "complete";
+        else if (r.ev.type === "run.failed") terminal = "failed";
+        else if (r.ev.type === "run.cancelled") terminal = "cancelled";
+      }
+      if (terminal !== undefined) {
+        throw new Error(`run ${runId} is already ${terminal} — resume it before answering`);
+      }
       // An answer stands unless the owner journaled a rejection after it — then
       // the request is open again and a replacement is expected.
       let standing = false;

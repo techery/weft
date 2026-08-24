@@ -589,7 +589,7 @@ describe("codex review findings, round 3 (PR #1)", () => {
     const o1 = await h1.outcome();
     if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
     const id = o1.pending[0]!.id;
-    await t1.engine.cancel(h1.runId); // abandon: the answers below take the non-owning path
+    await t1.engine.shutdown(); // abandon: the answers below take the non-owning path
 
     // minLength rides the wire schema; a host without the real schema must still enforce it
     const t2 = reopen(t1);
@@ -616,7 +616,7 @@ describe("codex review findings, round 3 (PR #1)", () => {
     const o1 = await h1.outcome();
     if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
     const id = o1.pending[0]!.id;
-    await t1.engine.cancel(h1.runId);
+    await t1.engine.shutdown();
 
     const t2 = reopen(t1);
     await t2.engine.answer(h1.runId, id, { name: "wrong" }); // passes the wire schema
@@ -685,7 +685,7 @@ describe("codex review findings, round 3 (PR #1)", () => {
     const o1 = await h1.outcome();
     if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
     const id = o1.pending[0]!.id;
-    await t1.engine.cancel(h1.runId);
+    await t1.engine.shutdown();
 
     // Resume, then answer immediately from ANOTHER engine: the answer lands after the
     // resume read the journal, so only the owner's tailer can deliver it — usually
@@ -3297,5 +3297,69 @@ describe("codex review findings, round 39 (PR #1)", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("codex review findings, round 42 (PR #1)", () => {
+  test("a terminal run refuses answers instead of journaling one nothing will serve", async () => {
+    const def = defineWorkflow(
+      { name: "cangate", description: "c", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const v = await ctx.human.approve({ action: "land it" });
+        return { ok: v.approved };
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the gate");
+    const id = o1.pending[0]?.id ?? "";
+    await t1.engine.cancel(h1.runId);
+    await h1.result.catch(() => undefined);
+
+    // The request is still pending in the journal, but run.cancelled is
+    // terminal: an "accepted" answer here is a lie the CLI would relay.
+    const outside = reopen(t1);
+    await expect(outside.engine.answer(h1.runId, id, { approved: true })).rejects.toThrow(
+      /already cancelled/,
+    );
+    const answers = (await records(t1.journal, h1.runId)).filter((r) => r.ev.type === "human.answered");
+    expect(answers).toHaveLength(0);
+  });
+
+  test("a NEW ignored file with hostile whitespace in its name is still rolled back", async () => {
+    const FixResult = z.object({ summary: z.string() });
+    const hostile = " loot.txt"; // leading space: line output + trim() mangles it
+    const t = testEngine();
+    t.builder.on({ key: "fix:w" }, { summary: "edit" }, { writes: { "a.txt": "AGENT\n" } });
+    // The resolver fixes the conflict AND drops a NEW ignored file (visible
+    // only to the ignored-listing diff) whose name trim() used to destroy.
+    t.builder.on(
+      { key: "merge:fix:w" },
+      { resolved: true, notes: "fixed" },
+      { writes: { "a.txt": "RESOLVED\n", [hostile]: "LOOT\n" } },
+    );
+    const cwd = await tempRepo({ ".gitignore": "*loot.txt\n", "a.txt": "base\n" });
+    const def = defineWorkflow(
+      { description: "ww", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        const fix = await ctx.agent.detailed("fix", {
+          schema: FixResult,
+          key: "fix:w",
+          write: { paths: ["a.txt"] },
+        });
+        await ctx.bash("printf 'MAIN\\n' > a.txt");
+        await ctx.integrate([fix], { onConflict: "agent" });
+        return {};
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd });
+    await h.result;
+    // Trimmed to "loot.txt", the rollback removed a path that never existed
+    // and the real out-of-scope file survived the strict scope.
+    expect(existsSync(join(cwd, hostile))).toBe(false);
+    const recs = await records(t.journal, h.runId);
+    const violation = recs.find((r) => r.ev.type === "scope.violation" && r.ev.files.includes(hostile));
+    expect(violation).toBeDefined();
   });
 });

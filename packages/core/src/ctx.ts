@@ -1738,13 +1738,14 @@ export function buildCtx(rt: RunRuntime): Ctx {
    */
   async function listIgnoredFiles(): Promise<string[]> {
     const out = await gitHandle.raw(
-      ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"],
+      ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
       { allowFailure: true },
     );
-    return out.stdout
-      .split("\n")
-      .map((f) => f.trim())
-      .filter((f) => f !== "");
+    // -z: raw NUL-delimited entries, never trimmed — a name with leading or
+    // trailing whitespace (or a newline, which line output C-quotes) must
+    // round-trip VERBATIM into the scope check and the rollback, or both act
+    // on a spelling that names nothing while the real file survives.
+    return out.stdout.split("\0").filter((f) => f !== "");
   }
 
   /**

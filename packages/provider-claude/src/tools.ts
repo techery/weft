@@ -227,7 +227,11 @@ export function isReadOnlyCommand(command: string): boolean {
     // reader into arbitrary execution: `PATH=. diff a b` resolves ./diff, and
     // LD_PRELOAD/LD_* steer the dynamic loader. No read needs either.
     if (words.slice(0, i).some((w) => /^(?:PATH|LD_[A-Za-z0-9_]*)=/.test(w))) return false;
-    const name = head.split("/").pop() ?? head;
+    // A path-qualified spelling names an ARBITRARY executable, not the trusted
+    // system reader: `./cat` (or /repo/bin/cat) is whatever the repository put
+    // there. Only bare names, resolved through the (screened) PATH, count.
+    if (head.includes("/") || head.includes("\\")) return false;
+    const name = head;
     if (name === "git") {
       const sub = words[i + 1];
       if (sub === undefined || !READ_GIT_SUBCOMMANDS.has(sub)) return false;
