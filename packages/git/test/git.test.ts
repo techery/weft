@@ -410,6 +410,24 @@ describe("snapshot and revParse", () => {
     expect(await git.snapshot()).toEqual({ ref: sha });
   });
 
+  test("a snapshot survives git gc --prune=now (pinned, not dangling)", async () => {
+    const git = await initRepo();
+    await seed(git, { "a.txt": "one\n" }, "init");
+    await write(git, "a.txt", "changed\n");
+    const snap = await git.snapshot();
+
+    // The sha is journaled and read back across suspensions that can outlive
+    // gc's prune horizon — an unreferenced commit-tree object would be
+    // collected and every later fileAt/checkout against it would fail.
+    await execa("git", ["gc", "--prune=now", "--quiet"], { cwd: git.cwd });
+    expect(await git.revParse(snap.ref)).toBe(snap.ref);
+    expect((await git.fileAt(snap.ref, "a.txt")).content).toBe("changed\n");
+    const refs = await execa("git", ["for-each-ref", "refs/weft/snapshots", "--format=%(objectname)"], {
+      cwd: git.cwd,
+    });
+    expect(refs.stdout.trim()).toBe(snap.ref);
+  });
+
   test("revParse resolves refs and returns null for missing ones", async () => {
     const git = await initRepo();
     const sha = await seed(git, { "a.txt": "one\n" }, "init");

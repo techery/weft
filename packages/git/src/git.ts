@@ -275,8 +275,17 @@ export class GitCli implements Git {
       const headTree = (await this.raw(["rev-parse", "HEAD^{tree}"])).stdout.trim();
       // A tree identical to HEAD needs no commit; HEAD already describes the state.
       if (tree === headTree) return { ref: (await this.head()).sha };
-      const commit = await this.raw(["commit-tree", tree, "-p", "HEAD", "-m", "weft snapshot"], { env });
-      return { ref: commit.stdout.trim() };
+      const commit = (
+        await this.raw(["commit-tree", tree, "-p", "HEAD", "-m", "weft snapshot"], { env })
+      ).stdout.trim();
+      // PINNED, not dangling: the sha is journaled and read back across
+      // suspensions that can outlive gc's prune horizon, and an unreferenced
+      // commit-tree object is exactly what `git gc --prune` collects. The ref
+      // is content-addressed (same tree → same commit → same ref, idempotent)
+      // and namespaced so `git for-each-ref refs/weft/snapshots` audits or
+      // clears them; ordinary ref listings and log --all decorations skip it.
+      await this.raw(["update-ref", `refs/weft/snapshots/${commit}`, commit]);
+      return { ref: commit };
     } finally {
       await fsRm(indexFile, { force: true }).catch(() => undefined);
     }
