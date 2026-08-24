@@ -308,6 +308,10 @@ describe("the tool gate", () => {
       "git grep -iO needle", // ...clustered; bare -O still runs the default pager
       "rg --pre touch pattern src", // ripgrep EXECUTES the preprocessor on every file
       "rg --pre=touch pattern src",
+      "GIT_EXTERNAL_DIFF=touch git diff --ext-diff", // git EXECUTES the helper the env names
+      "git diff --ext-diff",
+      "git show --textconv HEAD", // textconv filters are external commands too
+      "GIT_PAGER=touch git log", // a GIT_* override on a "read" exists to steer helpers
     ]) {
       expect(await ask(options, "Bash", { command }), command).toEqual({
         behavior: "deny",

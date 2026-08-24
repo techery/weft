@@ -2694,3 +2694,34 @@ describe("codex review findings, round 31 (PR #1)", () => {
     expect(await h.result).toEqual({});
   });
 });
+
+describe("codex review findings, round 32 (PR #1)", () => {
+  test("two PROCESSES answering one suspended request: exactly one wins", async () => {
+    const def = defineWorkflow(
+      { name: "race3", description: "r", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const v = await ctx.human.approve({ action: "cross-process gate" });
+        return { ok: v.approved };
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o = await h1.outcome();
+    if (o.status !== "waiting_for_human") throw new Error("expected the gate");
+    const id = o.pending[0]?.id ?? "";
+    await t1.engine.shutdown(); // nobody owns the run: both answers take the journal path
+
+    // Two separate engines (as in the CLI and the daemon): per-engine
+    // serialization cannot see the other process — only the conditional append
+    // can. Un-CAS'd, both fold "unanswered", both append, both hear "accepted".
+    const b = reopen(t1);
+    const c = reopen(t1);
+    const [ra, rb] = await Promise.allSettled([
+      b.engine.answer(h1.runId, id, { approved: true }),
+      c.engine.answer(h1.runId, id, { approved: false }),
+    ]);
+    expect([ra, rb].map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+    const answers = (await records(t1.journal, h1.runId)).filter((r) => r.ev.type === "human.answered");
+    expect(answers).toHaveLength(1);
+  });
+});

@@ -1111,44 +1111,58 @@ export class Engine implements EngineHost {
       active.runtime.resolveAnswer(requestId, answer, "human");
       return;
     }
-    // Suspended run in another (or no) process: validate structurally and append; resume serves it.
-    const records: JournalRecord[] = [];
-    for await (const rec of this.journal.read(runId)) records.push(rec);
-    if (records.length === 0) throw new Error(`run ${runId} not found`);
-    const request = records.find((r) => r.ev.type === "human.requested" && r.ev.id === requestId)?.ev;
-    if (request?.type !== "human.requested") {
-      // The request may live in a DESCENDANT journal: a child suspended on a
-      // person while no process holds the tree. The parent-id flow must still
-      // reach it — follow the recorded child links.
-      const owner = await this.journalRequestOwner(records, requestId, new Set([runId]));
-      if (owner !== undefined) return this.answer(owner, requestId, answer, opts);
-      throw new Error(`run ${runId}: no request ${requestId}`);
+    // Suspended run in another (or no) process: validate structurally and append;
+    // resume serves it. The fold and the append are ONE atomic operation against
+    // other processes (mirroring cancel): a CLI and a daemon answering the same
+    // request concurrently could both fold "unanswered" before either append
+    // landed, journal BOTH answers, and both report "accepted" while replay
+    // honors only the first. appendIf re-checks the record count under the
+    // store's append lock; a lost race re-folds and finds the answer it lost to.
+    for (;;) {
+      const records: JournalRecord[] = [];
+      for await (const rec of this.journal.read(runId)) records.push(rec);
+      if (records.length === 0) throw new Error(`run ${runId} not found`);
+      const request = records.find((r) => r.ev.type === "human.requested" && r.ev.id === requestId)?.ev;
+      if (request?.type !== "human.requested") {
+        // The request may live in a DESCENDANT journal: a child suspended on a
+        // person while no process holds the tree. The parent-id flow must still
+        // reach it — follow the recorded child links.
+        const owner = await this.journalRequestOwner(records, requestId, new Set([runId]));
+        if (owner !== undefined) return this.answer(owner, requestId, answer, opts);
+        throw new Error(`run ${runId}: no request ${requestId}`);
+      }
+      // An answer stands unless the owner journaled a rejection after it — then
+      // the request is open again and a replacement is expected.
+      let standing = false;
+      for (const r of records) {
+        if (r.ev.type === "human.answered" && r.ev.id === requestId) standing = true;
+        else if (r.ev.type === "human.rejected" && r.ev.id === requestId) standing = false;
+      }
+      if (standing) throw new Error(`run ${runId}: request ${requestId} is already answered`);
+      const issues = structuralCheck(request.schema, answer);
+      if (issues.length > 0) {
+        throw new StepError(
+          "invalid_answer",
+          `answer does not match the request schema: ${issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`,
+          { step: { kind: "human", key: requestId, runId } },
+        );
+      }
+      const events: JournalEvent[] = [
+        {
+          type: "human.answered",
+          id: requestId,
+          answer,
+          answeredBy: "human",
+          ...(opts.channel ? { channel: opts.channel } : {}),
+        },
+      ];
+      if (!this.journal.appendIf) {
+        // No conditional append: accept the race (single-process hosts don't race themselves).
+        await this.journal.append(runId, events);
+        return;
+      }
+      if (await this.journal.appendIf(runId, records.length, events)) return;
     }
-    // An answer stands unless the owner journaled a rejection after it — then the
-    // request is open again and a replacement is expected.
-    let standing = false;
-    for (const r of records) {
-      if (r.ev.type === "human.answered" && r.ev.id === requestId) standing = true;
-      else if (r.ev.type === "human.rejected" && r.ev.id === requestId) standing = false;
-    }
-    if (standing) throw new Error(`run ${runId}: request ${requestId} is already answered`);
-    const issues = structuralCheck(request.schema, answer);
-    if (issues.length > 0) {
-      throw new StepError(
-        "invalid_answer",
-        `answer does not match the request schema: ${issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`,
-        { step: { kind: "human", key: requestId, runId } },
-      );
-    }
-    await this.journal.append(runId, [
-      {
-        type: "human.answered",
-        id: requestId,
-        answer,
-        answeredBy: "human",
-        ...(opts.channel ? { channel: opts.channel } : {}),
-      },
-    ]);
   }
 
   async signal(runId: string, name: string, payload: unknown): Promise<void> {
