@@ -323,6 +323,13 @@ describe("the tool gate", () => {
       "PATH=. grep todo src/a.ts", // a PATH override resolves ANY reader to ./grep
       "LD_PRELOAD=./x.so cat f.txt", // loader overrides run injected code
       "sort --o clobbered input.txt", // GNU sort abbreviates --output too
+      "find . -e'x'ec touch changed \\;", // bash concatenates the quoted split back to -exec
+      'find . -e"x"ec touch changed \\;',
+      "find . -exe\\c touch changed \\;", // ...and a backslash spelling resolves the same way
+      "find . -exe{c,c} touch changed \\;", // brace expansion forges options too
+      "git diff --out'put'=clobbered", // quoted splits of screened long options
+      "sort -'o' clobbered input.txt",
+      "find . -e*ec touch changed \\;", // a glob can expand to a repo file named "-exec"
     ]) {
       expect(await ask(options, "Bash", { command }), command).toEqual({
         behavior: "deny",
@@ -346,6 +353,13 @@ describe("the tool gate", () => {
       behavior: "allow",
     });
     expect(await ask(options, "Bash", { command: "diff -u a.txt b.txt" })).toEqual({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: "grep 'end$' src/a.ts" })).toEqual({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: 'grep -c "plain text" notes.md' })).toEqual({
+      behavior: "allow",
+    });
+    expect(await ask(options, "Bash", { command: "find . -name '*.ts' \\( -size +1k \\)" })).toEqual({
+      behavior: "allow",
+    });
     expect(await ask(options, "Bash", { command: "sort -u -r input.txt | head" })).toEqual({
       behavior: "allow",
     });

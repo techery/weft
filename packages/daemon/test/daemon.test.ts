@@ -451,6 +451,32 @@ describe("the web UI", () => {
   });
 });
 
+describe("the loopback guard", () => {
+  it("refuses rebound Hosts and cross-site Origins, serves local clients", async () => {
+    const h = await open(await repo());
+    // DNS rebinding: the page's hostname now resolves to 127.0.0.1, but the
+    // browser still sends the ATTACKER's Host — on every route, reads included.
+    const rebound = await h.app.request("/api/runs", { headers: { host: "attacker.example:4100" } });
+    expect(rebound.status).toBe(403);
+    // Plain cross-site: a hostile page can fire side-effecting POSTs blind;
+    // the browser stamps its Origin on them.
+    const csrf = await h.app.request("/api/runs/deadbeef/cancel", {
+      method: "POST",
+      headers: { host: "127.0.0.1:4100", origin: "https://attacker.example" },
+    });
+    expect(csrf.status).toBe(403);
+    // Honest local clients — with or without a port, IPv6 included — pass.
+    for (const host of ["127.0.0.1:4100", "localhost", "[::1]:4100"]) {
+      const res = await h.app.request("/api/runs", { headers: { host } });
+      expect(res.status, host).toBe(200);
+    }
+    const sameOrigin = await h.app.request("/api/runs", {
+      headers: { host: "127.0.0.1:4100", origin: "http://127.0.0.1:4100" },
+    });
+    expect(sameOrigin.status).toBe(200);
+  });
+});
+
 describe("startDaemon", () => {
   it("listens on loopback, reports the port it actually got, and closes", async () => {
     const cwd = await repo();

@@ -120,15 +120,105 @@ const READ_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "check-attr",
 ]);
 
+/**
+ * Resolve a command line into shell words per segment, the way bash hands them
+ * to the program: quotes concatenate (`-e'x'ec` IS `-exec`), backslashes
+ * escape. The screens below must see RESOLVED words — testing raw text lets a
+ * quoted spelling of a screened option walk straight past its regex. Returns
+ * null whenever the shell itself could compute or write something the words
+ * don't show: substitution, any expansion ($, backticks, braces, a glob that
+ * could expand to an option), redirection (fd duplication like 2>&1 excepted),
+ * or an unterminated quote.
+ */
+function shellWords(command: string): string[][] | null {
+  const segments: string[][] = [];
+  let words: string[] = [];
+  let word: string | undefined;
+  let wordHasGlob = false;
+  const push = (part: string) => {
+    word = (word ?? "") + part;
+  };
+  const endWord = (): boolean => {
+    // A glob can expand to a repository-controlled filename — including one
+    // named like "-exec" — so an option-shaped word must be fully literal.
+    if (word !== undefined && wordHasGlob && word.startsWith("-")) return false;
+    if (word !== undefined) words.push(word);
+    word = undefined;
+    wordHasGlob = false;
+    return true;
+  };
+  const endSegment = (): boolean => {
+    if (!endWord()) return false;
+    if (words.length > 0) segments.push(words);
+    words = [];
+    return true;
+  };
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i] as string;
+    if (ch === "'") {
+      const close = command.indexOf("'", i + 1);
+      if (close === -1) return null;
+      push(command.slice(i + 1, close));
+      i = close;
+    } else if (ch === '"') {
+      let out = "";
+      let j = i + 1;
+      for (; j < command.length && command[j] !== '"'; j++) {
+        const c = command[j] as string;
+        if (c === "$" || c === "`") return null; // expands inside double quotes
+        if (c === "\\" && j + 1 < command.length) {
+          out += command[j + 1];
+          j++;
+        } else out += c;
+      }
+      if (j >= command.length) return null;
+      push(out);
+      i = j;
+    } else if (ch === "\\") {
+      if (i + 1 >= command.length) return null;
+      push(command[i + 1] as string);
+      i++;
+    } else if (ch === "$" || ch === "`" || ch === "{") {
+      return null; // expansion, substitution, or brace expansion (-exe{c,c})
+    } else if (ch === ">") {
+      // Only fd duplication (2>&1, >&2) is harmless; every other > writes.
+      const dup = /^>&\d+/.exec(command.slice(i));
+      if (!dup || (word !== undefined && !/^\d+$/.test(word))) return null;
+      word = undefined; // drop the "2>&1" token entirely
+      wordHasGlob = false;
+      i += dup[0].length - 1;
+    } else if (ch === "<") {
+      if (command[i + 1] === "(") return null; // process substitution
+      // A plain input redirect only reads; its target becomes an ordinary
+      // (argument) word for the screens.
+      if (word !== undefined && !/^\d+$/.test(word)) return null;
+      word = undefined;
+      wordHasGlob = false;
+    } else if (ch === "&") {
+      if (command[i + 1] === ">") return null; // &> redirects
+      if (!endSegment()) return null;
+      if (command[i + 1] === "&") i++;
+    } else if (ch === "|") {
+      if (!endSegment()) return null;
+      if (command[i + 1] === "|") i++;
+    } else if (ch === ";" || ch === "\n") {
+      if (!endSegment()) return null;
+    } else if (ch === " " || ch === "\t" || ch === "\r") {
+      if (!endWord()) return null;
+    } else {
+      if (ch === "*" || ch === "?" || ch === "[") wordHasGlob = true;
+      push(ch);
+    }
+  }
+  if (!endSegment()) return null;
+  return segments;
+}
+
 export function isReadOnlyCommand(command: string): boolean {
-  // Substitution can run anything; redirection and process substitution write.
-  if (/[`]|\$\(|>{1,2}(?!&)|[<>]\(/.test(command)) return false;
-  // Fd duplication ("2>&1") is not a write; drop it so its `&` can't split a segment.
-  const plain = command.replace(/\d*>&\d+/g, " ");
-  for (const raw of plain.split(/\|\||&&|[;|\n&]/)) {
-    const seg = raw.trim();
-    if (seg === "") continue;
-    const words = seg.split(/\s+/);
+  const segments = shellWords(command);
+  if (segments === null) return false;
+  for (const words of segments) {
+    const seg = words.join(" ");
     let i = 0;
     while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] as string)) i++;
     const head = words[i];

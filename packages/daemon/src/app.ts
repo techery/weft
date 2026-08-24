@@ -40,6 +40,18 @@ const SSE_HEADERS = {
   "x-accel-buffering": "no",
 } as const;
 
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
+/** True when a Host header or Origin names a loopback host (any port). Unparseable = false. */
+function isLoopbackName(value: string): boolean {
+  try {
+    const url = new URL(value.includes("://") ? value : `http://${value}`);
+    return LOOPBACK_HOSTS.has(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Build the app over an assembled {@link Weft}. Kept separate from `startDaemon()` so
  * tests (and anything embedding the daemon) can drive every route through `app.request()`
@@ -48,6 +60,24 @@ const SSE_HEADERS = {
 export function createApp(weft: Weft): Hono {
   const app = new Hono();
   const engine = weft.engine;
+
+  // Loopback binding alone does not authenticate a BROWSER: a DNS-rebinding
+  // page re-resolves its own hostname to 127.0.0.1 and reaches this API as if
+  // same-origin (carrying the attacker's Host), and any cross-site page can
+  // fire side-effecting POSTs blind. Both arrive with a header an honest local
+  // client never sends — a non-loopback Host or a non-loopback Origin — so the
+  // guard runs before every route, answers/cancels/resumes included.
+  app.use("*", async (c, next) => {
+    const host = c.req.header("host");
+    if (host !== undefined && !isLoopbackName(host)) {
+      return c.json({ error: "forbidden: non-local Host header" }, 403);
+    }
+    const origin = c.req.header("origin");
+    if (origin !== undefined && !isLoopbackName(origin)) {
+      return c.json({ error: "forbidden: cross-site request" }, 403);
+    }
+    return next();
+  });
 
   app.get("/", (c) => c.body(INDEX_HTML, 200, { "content-type": "text/html; charset=utf-8" }));
 
