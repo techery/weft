@@ -188,20 +188,28 @@ export class Engine implements EngineHost {
     // The appended records flow into launch as the projection seed: the run is not
     // in the active map yet, so onRecords would otherwise drop run.created and the
     // first snapshots (and list filters) would miss the run's identity.
-    const created = await runtime.append([
-      {
-        type: "run.created",
-        runId,
-        workflow: { name, ...(opts.defHash !== undefined ? { defHash: opts.defHash } : {}) },
-        // Raw, not inputCheck.value: a transformed value (string → Date) would
-        // serialize lossily and hand a resumed execution a different input type.
-        input: rawInput,
-        cwd: opts.cwd,
-        depth: 0,
-        ...(opts.baseRef !== undefined ? { baseRef: opts.baseRef } : {}),
-        ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
-      },
-    ]);
+    let created: JournalRecord[];
+    try {
+      created = await runtime.append([
+        {
+          type: "run.created",
+          runId,
+          workflow: { name, ...(opts.defHash !== undefined ? { defHash: opts.defHash } : {}) },
+          // Raw, not inputCheck.value: a transformed value (string → Date) would
+          // serialize lossily and hand a resumed execution a different input type.
+          input: rawInput,
+          cwd: opts.cwd,
+          depth: 0,
+          ...(opts.baseRef !== undefined ? { baseRef: opts.baseRef } : {}),
+          ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
+        },
+      ]);
+    } catch (err) {
+      // The claim must not outlive a run that never began: a filesystem claim
+      // would block retries of this id until its TTL, a non-expiring store's forever.
+      await lease?.release().catch(() => undefined);
+      throw err;
+    }
     return this.launch(runtime, def, inputCheck.value, created, lease);
   }
 
@@ -242,6 +250,26 @@ export class Engine implements EngineHost {
     // The claim comes before the runtime exists: waking a run a daemon or CLI is
     // still executing would run it twice.
     const lease = await this.claimRun(runId);
+    try {
+      return this.resumeSetup(runId, records, created, def, opts, inputCheck.value, lease);
+    } catch (err) {
+      // Setup failed before drive() (whose finally owns the release from launch
+      // on): the claim must not outlive an execution that never started.
+      await lease?.release().catch(() => undefined);
+      throw err;
+    }
+  }
+
+  /** The claimed half of resume(); everything here throws to a lease-releasing catch. */
+  private resumeSetup(
+    runId: string,
+    records: JournalRecord[],
+    created: Extract<JournalEvent, { type: "run.created" }>,
+    def: WorkflowDefinition,
+    opts: ResumeOptions,
+    input: unknown,
+    lease: RunLease | undefined,
+  ): RunHandle {
     const replay = ReplayIndex.fromRecords(records);
     const shared: SharedRunResources = {
       // The journaled ceiling survives resume; spend restores from journaled usage.
@@ -262,7 +290,7 @@ export class Engine implements EngineHost {
       ...(created.baseRef !== undefined ? { baseRef: created.baseRef } : {}),
       ...(def.meta.defaults !== undefined ? { workflowDefaults: def.meta.defaults } : {}),
     });
-    return this.launch(runtime, def, inputCheck.value, records, lease);
+    return this.launch(runtime, def, input, records, lease);
   }
 
   /** Claim a run before executing it; throws when another live process owns it. */

@@ -52,6 +52,9 @@ const SPECS: RunSpec[] = [
         usage: { input: 1_000, output: 200, usd: 0.05 },
       },
       { key: "verify:pay", label: "Verify finding", usage: { input: 500, output: 100, usd: 0.02 } },
+      // The child run's roll-up: a parent's workflow step journals its child's
+      // total usage at completion (that is how the parent budget restores).
+      { key: "child:run-fix", kind: "workflow", usage: { input: 300, output: 700 } },
       { key: "check:tsc", kind: "check" },
     ],
     questions: ["Ship the refund fix?"],
@@ -90,7 +93,7 @@ describe("indexRun", () => {
       createdAt: expect.any(Number),
       updatedAt: expect.any(Number),
       agentSteps: 2, // the `check` step is not an agent step
-      tokens: 1_800,
+      tokens: 2_800,
       usd: 0.07,
     });
     expect(audit!.updatedAt).toBeGreaterThan(audit!.createdAt);
@@ -174,10 +177,12 @@ describe("search", () => {
 });
 
 describe("stats", () => {
-  test("sums runs, tokens, and usd across the index", async () => {
+  test("sums runs and ROOT-ROW spend: a child's usage already rides its parent's roll-up", async () => {
     const { index } = await seeded();
     const stats = index.stats();
     expect(stats.runs).toBe(3);
+    // run-audit (1,800 own + 1,000 rolled up from run-fix) + run-sweep (15).
+    // Adding run-fix's own row would count its 1,000 tokens twice.
     expect(stats.tokens).toBe(1_800 + 1_000 + 15);
     expect(stats.usd).toBeCloseTo(0.071, 10);
   });

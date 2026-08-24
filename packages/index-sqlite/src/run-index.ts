@@ -171,9 +171,15 @@ export class RunIndex {
 
   /** Totals across the whole index — what `weft ls` prints at the bottom. */
   stats(): RunIndexStats {
+    // Spend sums ROOT rows only: a parent's workflow-step completion already
+    // carries its children's usage (that is how the parent budget restores), so
+    // adding the child rows would count every sub-workflow's spend twice.
     const row = this.db
       .prepare(
-        "SELECT COUNT(*) AS runs, COALESCE(SUM(tokens), 0) AS tokens, COALESCE(SUM(usd), 0) AS usd FROM runs",
+        "SELECT COUNT(*) AS runs, " +
+          "COALESCE(SUM(CASE WHEN parent_run_id IS NULL THEN tokens ELSE 0 END), 0) AS tokens, " +
+          "COALESCE(SUM(CASE WHEN parent_run_id IS NULL THEN usd ELSE 0 END), 0) AS usd " +
+          "FROM runs",
       )
       .get();
     return {

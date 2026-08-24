@@ -81,7 +81,14 @@ export function resolveConfig(input: EngineConfigInput = {}): EngineConfig {
   return {
     defaults: {
       provider: input.defaults?.provider ?? "claude",
-      model: input.defaults?.model ?? DEFAULT_MODEL,
+      // DEFAULT_MODEL is a CLAUDE model: forced onto another default provider it
+      // would start every model-agnostic step with a name that provider rejects.
+      // A non-claude default provider left without a model picks its own default.
+      ...(input.defaults?.model !== undefined
+        ? { model: input.defaults.model }
+        : (input.defaults?.provider ?? "claude") === "claude"
+          ? { model: DEFAULT_MODEL }
+          : {}),
       effort: input.defaults?.effort ?? DEFAULT_EFFORT,
     },
     providers: input.providers ?? {},

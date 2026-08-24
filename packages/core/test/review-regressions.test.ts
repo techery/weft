@@ -1791,3 +1791,45 @@ describe("codex review findings, round 16 (PR #1)", () => {
     expect(() => tight.reserveCall({ kind: "agent" })).toThrow(/budget/);
   });
 });
+
+describe("codex review findings, round 17 (PR #1)", () => {
+  test("a non-claude default provider is not saddled with the Claude default model", async () => {
+    const { resolveConfig } = await import("@weft/core");
+    // No model configured: a codex default provider picks the SDK's own default.
+    expect(resolveConfig({ defaults: { provider: "codex" } }).defaults.model).toBeUndefined();
+    // Claude keeps its default, and an explicit model always wins.
+    expect(resolveConfig({}).defaults.model).toBe("claude-opus-5");
+    expect(resolveConfig({ defaults: { provider: "codex", model: "gpt-5.3-codex" } }).defaults.model).toBe(
+      "gpt-5.3-codex",
+    );
+  });
+
+  test("a failed creation append releases the run claim instead of blocking the id", async () => {
+    class FailingCreateStore extends MemoryJournalStore {
+      failNext = true;
+      override async append(runId: string, events: JournalEvent[]) {
+        if (this.failNext && events.some((ev) => ev.type === "run.created")) {
+          this.failNext = false;
+          throw new Error("disk full");
+        }
+        return super.append(runId, events);
+      }
+    }
+    const def = defineWorkflow(
+      { name: "leasefree", description: "l", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async () => ({ ok: true }),
+    );
+    const journal = new FailingCreateStore();
+    const engine = new Engine({
+      journal,
+      blobs: new MemoryBlobStore(),
+      providers: new ProviderRegistry(),
+    });
+    const cwd = await tempDir();
+    await expect(engine.start(def, { runId: "blocked", input: {}, cwd })).rejects.toThrow(/disk full/);
+    // Memory-store claims never expire: had the failed start kept its claim, this
+    // retry of the SAME id would refuse with "active in another process" forever.
+    const h = await engine.start(def, { runId: "blocked", input: {}, cwd });
+    expect(await h.result).toEqual({ ok: true });
+  });
+});
