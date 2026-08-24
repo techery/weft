@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import { shallowDiff } from "../src/commands/diff.ts";
+import { answerLine } from "../src/format.ts";
 import type { CliIo } from "../src/io.ts";
 import { buildProgram } from "../src/main.ts";
 
@@ -509,5 +510,19 @@ describe("bin/weft.js", () => {
     expect(stdout).toContain("weft");
     expect(stdout).toContain("Commands:");
     expect(stdout).toContain("doctor");
+  });
+});
+
+describe("answerLine", () => {
+  it("addresses the request's OWNING run, not the run being shown", () => {
+    const schema = { type: "object", properties: { go: { type: "boolean" } }, required: ["go"] };
+    // Request ids are run-local (h1, h2…): two parallel children can both hold
+    // an h1, and a parent-addressed answer would land on whichever pends first.
+    expect(answerLine("parent01", { id: "h1", kind: "ask", question: "?", schema, runId: "child007" })).toBe(
+      `weft answer child007 h1 '{"go":true}'`,
+    );
+    expect(answerLine("parent01", { id: "h1", kind: "ask", question: "?", schema })).toBe(
+      `weft answer parent01 h1 '{"go":true}'`,
+    );
   });
 });

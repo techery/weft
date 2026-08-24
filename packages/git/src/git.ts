@@ -381,8 +381,11 @@ export class GitCli implements Git {
   }
 
   async unmergedPaths(): Promise<string[]> {
-    const { stdout } = await this.plumb(["diff", "--name-only", "--diff-filter=U"]);
-    return [...new Set(splitLines(stdout))];
+    // -z: even with core.quotePath=false, a pathname holding a newline, tab,
+    // quote or backslash is C-quoted in line-oriented output — callers would
+    // try to resolve the quoted SPELLING, not the file.
+    const { stdout } = await this.plumb(["diff", "--name-only", "--diff-filter=U", "-z"]);
+    return [...new Set(stdout.split("\0").filter((path) => path !== ""))];
   }
 }
 

@@ -106,18 +106,31 @@ function threadOptions(req: AgentRequest): ThreadOptions {
 /** Node clamps a single timer past this to ~1ms, so long deadlines arm in chunks. */
 const MAX_TIMER_MS = 2_147_483_647;
 
-/** ctl.signal, widened with the step's own deadline when the engine set one. */
-function turnSignal(req: AgentRequest, ctl: RunControl): AbortSignal {
+/**
+ * ctl.signal, widened with the step's own deadline when the engine set one.
+ * `done` releases the deadline's timer: a chunked long deadline is otherwise
+ * cleared only on abort, so every SUCCESSFUL long-timeout turn would pin its
+ * timer (and the request it closes over) until the full deadline elapsed.
+ */
+function turnSignal(req: AgentRequest, ctl: RunControl): { signal: AbortSignal; done: () => void } {
   // The engine's own step timeout allows 10s of grace on top of this one, so the agent
   // is aborted cleanly before the step is torn down around it. AbortSignal.timeout()
   // inherits Node's timer ceiling, so long deadlines are chunked by hand.
-  if (req.timeoutMs === undefined || req.timeoutMs <= 0) return ctl.signal;
-  if (req.timeoutMs <= MAX_TIMER_MS) return AbortSignal.any([ctl.signal, AbortSignal.timeout(req.timeoutMs)]);
+  if (req.timeoutMs === undefined || req.timeoutMs <= 0) return { signal: ctl.signal, done: () => {} };
+  if (req.timeoutMs <= MAX_TIMER_MS) {
+    return { signal: AbortSignal.any([ctl.signal, AbortSignal.timeout(req.timeoutMs)]), done: () => {} };
+  }
   const timeout = new AbortController();
   const deadline = Date.now() + req.timeoutMs;
   let timer: NodeJS.Timeout | undefined;
+  let settled = false;
+  const done = (): void => {
+    settled = true;
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+  };
   const arm = (): void => {
-    if (ctl.signal.aborted) return;
+    if (settled || ctl.signal.aborted) return;
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
       timeout.abort(new Error(`codex: agent step timed out after ${req.timeoutMs}ms`));
@@ -127,14 +140,8 @@ function turnSignal(req: AgentRequest, ctl: RunControl): AbortSignal {
     timer.unref?.();
   };
   arm();
-  ctl.signal.addEventListener(
-    "abort",
-    () => {
-      if (timer) clearTimeout(timer);
-    },
-    { once: true },
-  );
-  return AbortSignal.any([ctl.signal, timeout.signal]);
+  ctl.signal.addEventListener("abort", done, { once: true });
+  return { signal: AbortSignal.any([ctl.signal, timeout.signal]), done };
 }
 
 async function runTurn(
@@ -147,12 +154,17 @@ async function runTurn(
   // rather than a request: an already-cancelled step never reaches the model, and a
   // turn that finished after cancellation is not reported as a result.
   if (ctl.signal.aborted) throw new Error(ABORTED);
-  const result = await thread.run(prompt, {
-    signal: turnSignal(req, ctl),
-    ...(req.schema !== undefined ? { outputSchema: req.schema } : {}),
-  });
-  if (ctl.signal.aborted) throw new Error(ABORTED);
-  return toResult(thread, result);
+  const deadline = turnSignal(req, ctl);
+  try {
+    const result = await thread.run(prompt, {
+      signal: deadline.signal,
+      ...(req.schema !== undefined ? { outputSchema: req.schema } : {}),
+    });
+    if (ctl.signal.aborted) throw new Error(ABORTED);
+    return toResult(thread, result);
+  } finally {
+    deadline.done();
+  }
 }
 
 function toResult(thread: CodexThreadLike, turn: RunResult): AgentResult {

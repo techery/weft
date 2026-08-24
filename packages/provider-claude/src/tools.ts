@@ -247,6 +247,11 @@ export function isReadOnlyCommand(command: string): boolean {
       // --fi / --tex here — so every --f…/--t… long option is refused
       // (--follow-symlinks is the only read nicety lost).
       if (sub === "cat-file" && /\s--[ft]/.test(seg)) return false;
+      // log/show --show-signature hands the commit to gpg --verify — an
+      // external program that also WRITES (a GNUPGHOME=. override materializes
+      // a keyring in the tree). --show-s… covers the abbreviations git accepts
+      // without touching --show-linear-break or --show-pulls.
+      if (/\s--show-s/.test(seg)) return false;
       if (words.slice(0, i).some((w) => /^GIT_[A-Za-z0-9_]*=/.test(w))) return false;
       // grep's -O/--open-files-in-pager EXECUTES the named pager on the matched
       // files (bare -O runs the default pager). Every spelling: bare, attached

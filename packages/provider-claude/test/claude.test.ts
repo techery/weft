@@ -316,6 +316,9 @@ describe("the tool gate", () => {
       "git cat-file --fi HEAD:README.md", // ...abbreviated down to --fi it still filters
       "git diff --out=clobbered", // abbreviation of --output writes a file all the same
       "GIT_PAGER=touch git log", // a GIT_* override on a "read" exists to steer helpers
+      "GNUPGHOME=. git log --show-signature", // hands the commit to gpg --verify, which WRITES a keyring
+      "git show --show-signature HEAD",
+      "git log --show-si", // git accepts unambiguous long-option abbreviations here too
       "PATH=. diff -l a.txt b.txt", // -l/--paginate EXECUTES `pr` from the supplied PATH
       "diff --paginate a.txt b.txt",
       "diff --pag a.txt b.txt", // GNU getopt accepts unambiguous abbreviations

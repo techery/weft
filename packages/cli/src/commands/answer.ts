@@ -47,7 +47,10 @@ export function answerCommand(io: CliIo): Command {
             io.out(pc.dim("cancelled — nothing was answered"));
             return;
           }
-          await weft.engine.answer(runId, request.id, value);
+          // Submit to the run that OWNS the request: ids are run-local, so a
+          // parent-addressed answer could land on a sibling child's request
+          // with the same id (and be validated against the wrong schema).
+          await weft.engine.answer(request.runId ?? runId, request.id, value);
           await refreshProjections(weft, runId);
           say(
             io,
@@ -78,8 +81,16 @@ async function pickRequest(
 ): Promise<PendingRequest | undefined> {
   const pending = await weft.engine.pending(runId);
   if (req !== undefined) {
-    const hit = pending.find((p) => p.id === req);
-    if (hit) return hit;
+    // Ids are run-local, so a parent-addressed lookup can hit SEVERAL children:
+    // answering "the first one" would resolve a request the caller never read.
+    const hits = pending.filter((p) => p.id === req);
+    if (hits.length === 1) return hits[0];
+    if (hits.length > 1) {
+      io.out(`request ${req} is pending in ${hits.length} runs — use the owning run id:`);
+      for (const request of hits) say(io, ...pendingLines(runId, request));
+      process.exitCode = 1;
+      return undefined;
+    }
     const known = pending.map((p) => p.id).join(", ") || "none";
     throw new Error(`run ${runId}: no pending request ${req} (pending: ${known})`);
   }

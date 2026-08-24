@@ -131,6 +131,8 @@ export interface AnswerableRequest {
   detail?: string;
   risk?: string;
   schema: unknown;
+  /** The run that OWNS the request, when it differs from the run being shown. */
+  runId?: string;
 }
 
 /**
@@ -147,7 +149,10 @@ export function pendingLines(runId: string, request: AnswerableRequest): string[
 }
 
 export function answerLine(runId: string, request: AnswerableRequest): string {
-  return `weft answer ${runId} ${request.id} '${sampleJson(request.schema)}'`;
+  // Request ids are run-LOCAL (h1, h2…): two parallel children can both hold an
+  // h1, and a parent-addressed answer would land on whichever pends first. The
+  // request's owning run id keeps the rendered command unambiguous.
+  return `weft answer ${request.runId ?? runId} ${request.id} '${sampleJson(request.schema)}'`;
 }
 
 /** A minimal value the journaled JSON Schema would accept, or `<json>` when unguessable. */

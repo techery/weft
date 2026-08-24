@@ -6,7 +6,7 @@ import type {
   TurnOptions,
 } from "@openai/codex-sdk";
 import type { AgentRequest } from "@weft/core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type CodexLike, type CodexThreadLike, createCodexProvider, renderTranscript } from "../src/index.ts";
 
 // ---------------------------------------------------------------------------
@@ -173,6 +173,21 @@ describe("createCodexProvider", () => {
     const opts = codex.threads[0]?.turnOptions[0];
     expect(opts?.outputSchema).toBe(SCHEMA);
     expect(opts?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("releases a chunked long-deadline timer once the turn completes", async () => {
+    vi.useFakeTimers();
+    try {
+      const codex = new FakeCodex([{ id: "t1", reply: turn("{}") }]);
+      const before = vi.getTimerCount();
+      // 30 days outlives Node's timer ceiling, so the deadline arms in chunks;
+      // a SUCCESSFUL turn used to leave the live chunk (and the request it
+      // closes over) pinned until day 30 — one leak per completed call.
+      await createCodexProvider({ codex }).run(request({ timeoutMs: 30 * 86_400_000 }), control());
+      expect(vi.getTimerCount()).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("tells the agent the final answer is JSON matching the schema", async () => {

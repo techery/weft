@@ -591,6 +591,22 @@ describe("unmergedPaths", () => {
     await git.raw(["merge", "--abort"]);
     expect(await git.unmergedPaths()).toEqual([]);
   });
+
+  test("a conflicted pathname with a quote and a newline comes back verbatim", async () => {
+    const git = await initRepo();
+    // Even with core.quotePath=false, line-oriented output C-quotes control
+    // bytes and quotes — callers would try to resolve the quoted SPELLING.
+    const name = 'we"ird\nname.txt';
+    await seed(git, { [name]: "one\n" }, "init");
+    await git.branchCreate("feature", { checkout: true });
+    await seed(git, { [name]: "feature\n" }, "feature edit");
+    await git.checkout("main");
+    await seed(git, { [name]: "main\n" }, "main edit");
+
+    const merge = await git.raw(["merge", "feature"], { allowFailure: true });
+    expect(merge.exitCode).not.toBe(0);
+    expect(await git.unmergedPaths()).toEqual([name]);
+  });
 });
 
 describe("remotes", () => {
