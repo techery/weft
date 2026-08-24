@@ -53,8 +53,18 @@ export function doctorCommand(io: CliIo): Command {
         let files: string[] = [];
         try {
           files = (await readdir(workflowsDir(weft))).filter((f) => f.endsWith(".ts"));
-        } catch {
-          // an absent directory is already reported by layoutChecks
+        } catch (err) {
+          // Only genuine ABSENCE is fine (layoutChecks already reports it). Any
+          // other failure — EACCES, EIO, a stray FILE named "workflows" — hides
+          // every workflow behind an empty scan, and "ready" over a directory
+          // nobody can read is a lie.
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+            checks.push({
+              verdict: "fail",
+              label: "workflows",
+              detail: `cannot read ${path.relative(cwd, workflowsDir(weft))}: ${(err as Error).message}`,
+            });
+          }
         }
         for (const file of files) {
           const full = path.resolve(workflowsDir(weft), file);

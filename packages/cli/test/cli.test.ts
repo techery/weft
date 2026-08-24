@@ -454,6 +454,21 @@ describe("weft doctor with unlisted files", () => {
     expect(doctored.text).toContain("problem");
     expect(doctored.text).not.toContain("ready");
   });
+
+  it("an UNREADABLE workflow directory fails instead of printing ready over an empty scan", async () => {
+    const root = await tempRoot();
+    // A stray FILE where the directory belongs: existsSync says "present", the
+    // registry scan and readdir both error — swallowed as "no workflows", the
+    // old doctor finished ready with every real workflow invisible.
+    await mkdir(path.join(root, ".weft"), { recursive: true });
+    await writeFile(path.join(root, ".weft", "workflows"), "not a directory\n");
+
+    const doctored = await cli("--cwd", root, "--mock", "doctor");
+    expect(doctored.text).toContain("cannot read");
+    expect(doctored.text).toContain("problem");
+    expect(doctored.text).not.toContain("ready");
+    expect(doctored.exitCode).toBe(1);
+  });
 });
 
 describe("diff field presence", () => {
