@@ -62,7 +62,11 @@ export class GitCli implements Git {
     args: string[],
     opts: { allowFailure?: boolean; input?: string; env?: Record<string, string> } = {},
   ): Promise<RawResult> {
-    const result = await execa("git", args, {
+    // A pathname-valued core.fsmonitor is a HOOK git executes on any worktree
+    // scan (status, diff, ls-files) — repository-configured code that a typed,
+    // approval-free read must never run. Disabled on EVERY invocation: for
+    // writes the fsmonitor is only a scan optimization, so nothing is lost.
+    const result = await execa("git", ["-c", "core.fsmonitor=false", ...args], {
       cwd: this.cwd,
       reject: false,
       stripFinalNewline: false,

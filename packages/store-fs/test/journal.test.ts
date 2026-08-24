@@ -4,7 +4,7 @@
  * processes; watch() serves the backlog before anything live; projections are
  * rebuildable from the JSONL alone.
  */
-import { appendFile, mkdir, readFile, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JournalRecord, RunState, TreePhase } from "@weft/core";
 import { reduceState, renderReport, renderTree } from "@weft/core";
@@ -585,5 +585,25 @@ describe("exists & validation", () => {
       await expect(store.snapshot(bad, { report: "x" })).rejects.toThrow(/invalid runId/);
       await expect(store.readSnapshot(bad)).rejects.toThrow(/invalid runId/);
     }
+  });
+});
+
+describe("exists (codex review round 61, PR #1)", () => {
+  test("surfaces a filesystem failure instead of reporting the run missing", async () => {
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    // Absence in both spellings stays false: no directory, and a FILE sitting
+    // where the run directory would be (ENOTDIR on the journal path).
+    expect(await store.exists("nope")).toBe(false);
+    await writeFile(join(dir, "flat"), "not a directory\n");
+    expect(await store.exists("flat")).toBe(false);
+    // A self-looping symlink makes stat fail with ELOOP — an error that is NOT
+    // absence. Folding it into false would let resume/cancel report "run not
+    // found" (and the descendant pending walks skip a child) over a journal
+    // that exists but cannot be read.
+    await mkdir(join(dir, "looped"), { recursive: true });
+    const target = join(dir, "looped", "journal.jsonl");
+    await symlink(target, target);
+    await expect(store.exists("looped")).rejects.toThrow();
   });
 });

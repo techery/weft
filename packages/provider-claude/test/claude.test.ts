@@ -338,6 +338,8 @@ describe("the tool gate", () => {
       "file --compile -m magic",
       "date -s '2020-01-01'", // date -s sets the SYSTEM clock (root containers)
       "sort --o clobbered input.txt", // GNU sort abbreviates --output too
+      "sort -S 10K --compress-program=./helper data.txt", // sort EXECUTES the compressor on its temp files
+      "sort --comp gzip data.txt", // ...and GNU getopt abbreviates it down to --co
       "find . -e'x'ec touch changed \\;", // bash concatenates the quoted split back to -exec
       'find . -e"x"ec touch changed \\;',
       "find . -exe\\c touch changed \\;", // ...and a backslash spelling resolves the same way
@@ -390,6 +392,9 @@ describe("the tool gate", () => {
       behavior: "allow",
     });
     expect(await ask(options, "Bash", { command: "sort -u -r input.txt | head" })).toEqual({
+      behavior: "allow",
+    });
+    expect(await ask(options, "Bash", { command: "sort --check input.txt" })).toEqual({
       behavior: "allow",
     });
     expect(await ask(options, "Bash", { command: "sort input.txt | uniq -c" })).toEqual({
@@ -586,6 +591,16 @@ describe("the tool gate", () => {
         stdio: "ignore",
       });
       expect(existsSync(marker)).toBe(false);
+      // blame runs .gitattributes textconv by DEFAULT (it has no ext-diff
+      // path): the wrapper's blame branch must disable it too.
+      await writeFile(join(cwd, ".gitattributes"), "*.txt diff=evil\n");
+      const tcMarker = join(cwd, "textconv-ran");
+      execFileSync("git", ["config", "diff.evil.textconv", `touch ${tcMarker} && cat`], { cwd });
+      execFileSync("bash", ["-c", "git blame a.txt"], { cwd, stdio: "ignore" });
+      expect(existsSync(tcMarker)).toBe(true);
+      await rm(tcMarker, { force: true });
+      execFileSync("bash", ["-c", `${GIT_READ_WRAPPER}git blame a.txt`], { cwd, stdio: "ignore" });
+      expect(existsSync(tcMarker)).toBe(false);
       // The optional index refresh is a WRITE: after a tracked file's stat
       // info changes, a plain `git status` rewrites .git/index — the wrapped
       // one (GIT_OPTIONAL_LOCKS=0) must leave it untouched.

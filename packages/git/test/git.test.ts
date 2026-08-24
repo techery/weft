@@ -311,6 +311,25 @@ describe("diff", () => {
     expect(existsSync(extMarker)).toBe(false);
     expect(existsSync(tcMarker)).toBe(false);
   });
+
+  test("typed reads never execute a core.fsmonitor hook (codex review round 61, PR #1)", async () => {
+    const git = await initRepo();
+    await seed(git, { "a.txt": "one\n" }, "init");
+    // A pathname-valued core.fsmonitor is a HOOK any worktree scan executes.
+    const marker = path.join(git.cwd, "fsmonitor-ran");
+    await writeFile(path.join(git.cwd, "hook.sh"), `#!/bin/sh\ntouch ${marker}\necho /\n`, { mode: 0o755 });
+    await execa("git", ["config", "core.fsmonitor", "./hook.sh"], { cwd: git.cwd });
+    // The vector is real: an unguarded plain status runs the configured hook.
+    await execa("git", ["status"], { cwd: git.cwd });
+    expect(existsSync(marker)).toBe(true);
+    await rm(marker, { force: true });
+    // Every typed invocation disables it — approval-free journaled reads must
+    // never run repository-configured code.
+    await git.status();
+    await git.diff();
+    await git.changedSince("HEAD");
+    expect(existsSync(marker)).toBe(false);
+  });
 });
 
 describe("log", () => {

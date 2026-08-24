@@ -229,13 +229,15 @@ function shellWords(command: string): string[][] | null {
  * git commands whose subcommand comes first, so `$1` is always it. And a
  * pathname-valued core.fsmonitor is a HOOK git runs on any worktree scan
  * (`status`, `diff`, `ls-files`), so every wrapped invocation disables it —
- * a read-only step must never execute repository-configured code. Every
+ * a read-only step must never execute repository-configured code. blame runs
+ * textconv by DEFAULT too (it has no ext-diff path), so it gets its own
+ * --no-textconv branch. Every
  * invocation also sets GIT_OPTIONAL_LOCKS=0: a plain `git status` opportunistically
  * REWRITES .git/index (the optional refresh), and a read-only step must
  * neither modify nor contend on the integration repository's index.
  */
 export const GIT_READ_WRAPPER =
-  'git() { case "$1" in diff|log|show) _s=$1; shift; GIT_OPTIONAL_LOCKS=0 command git -c core.fsmonitor=false "$_s" --no-ext-diff --no-textconv "$@";; *) GIT_OPTIONAL_LOCKS=0 command git -c core.fsmonitor=false "$@";; esac; }; ';
+  'git() { case "$1" in diff|log|show) _s=$1; shift; GIT_OPTIONAL_LOCKS=0 command git -c core.fsmonitor=false "$_s" --no-ext-diff --no-textconv "$@";; blame) shift; GIT_OPTIONAL_LOCKS=0 command git -c core.fsmonitor=false blame --no-textconv "$@";; *) GIT_OPTIONAL_LOCKS=0 command git -c core.fsmonitor=false "$@";; esac; }; ';
 
 export function isReadOnlyCommand(command: string): boolean {
   const segments = shellWords(command);
@@ -317,8 +319,10 @@ export function isReadOnlyCommand(command: string): boolean {
     // counts: separated (-o FILE), attached (-oFILE), clustered (-ro FILE), long
     // (--output FILE, --output=FILE) and its GNU abbreviations (--o…, sort's only
     // long option on o) — a short-option group ending in o takes the next word
-    // as its output file.
-    if (name === "sort" && /\s(?:-[a-zA-Z]*o|--o)/.test(seg)) return false;
+    // as its output file. --compress-program EXECUTES the named program on
+    // sort's temporary files (`--compress-program=./helper` runs a repository
+    // binary); --co… covers its abbreviations while --check stays --ch, allowed.
+    if (name === "sort" && /\s(?:-[a-zA-Z]*o|--o|--co)/.test(seg)) return false;
     // printf reads — unless bash's -v VAR form assigns the formatted result to
     // a shell VARIABLE: `printf -v PATH .` rewrites where every later bare
     // name in the chain resolves, turning the allow-listed readers into

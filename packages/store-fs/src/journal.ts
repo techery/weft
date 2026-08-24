@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, existsSync, promises as fs, fsyncSync, openSync, writeSync } from "node:fs";
+import { closeSync, promises as fs, fsyncSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import type {
   JournalEvent,
@@ -536,7 +536,18 @@ export class FsJournalStore implements JournalStore {
   }
 
   async exists(runId: string): Promise<boolean> {
-    return existsSync(this.journalPath(runId));
+    // Only ABSENCE is false: existsSync folds EACCES/ELOOP/EIO into "not
+    // found", and callers (resume, cancel, the descendant pending walks) rely
+    // on exists() to tell a never-journaled run from an UNREADABLE journal —
+    // a storage failure must surface, not report the run missing.
+    try {
+      await fs.stat(this.journalPath(runId));
+      return true;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return false;
+      throw err;
+    }
   }
 
   /**
