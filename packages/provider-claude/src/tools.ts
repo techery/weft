@@ -364,6 +364,8 @@ export function gitSubcommandOf(words: readonly string[]): string | undefined {
 /** Commands that publish work outside the machine: these go to the HITL broker at risk "high". */
 const RISKY_PATTERNS: readonly RegExp[] = [
   /\bgit\s+push\b/,
+  // The plumbing spellings of a push update remote refs all the same.
+  /\bgit\s+(?:send-pack|http-push)\b/,
   /\b(?:npm|pnpm|yarn|bun)\s+publish\b/,
   /\b(?:npm|pnpm|yarn|bun)\s+run\s+(?:deploy|publish|release)\b/,
   /\bcargo\s+publish\b/,
@@ -433,6 +435,81 @@ export function mutatesSharedGitMetadata(command: string): boolean {
   return false;
 }
 
+/**
+ * Git subcommands git itself ships (the ones agents plausibly reach). The risky
+ * screen treats anything OUTSIDE this set as a possible CONFIGURED ALIAS: with
+ * `alias.ship=push` already in the repository's config, `git ship origin
+ * HEAD:main` publishes with no "push" anywhere in the command — the expansion
+ * happens inside git, out of every textual screen's sight. Unknown names route
+ * to approval conservatively; a typo'd or exotic subcommand costs one prompt.
+ */
+const KNOWN_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  ...READ_GIT_SUBCOMMANDS,
+  "add",
+  "am",
+  "apply",
+  "archive",
+  "bisect",
+  "branch",
+  "bundle",
+  "checkout",
+  "cherry",
+  "cherry-pick",
+  "clean",
+  "clone",
+  "commit",
+  "commit-tree",
+  "config",
+  "diff-files",
+  "diff-index",
+  "diff-tree",
+  "difftool",
+  "fetch",
+  "format-patch",
+  "fsck",
+  "gc",
+  "hash-object",
+  "help",
+  "init",
+  "ls-remote",
+  "maintenance",
+  "merge",
+  "mergetool",
+  "mktree",
+  "mv",
+  "notes",
+  "pack-refs",
+  "prune",
+  "pull",
+  "range-diff",
+  "read-tree",
+  "rebase",
+  "remote",
+  "repack",
+  "replace",
+  "rerere",
+  "reset",
+  "restore",
+  "revert",
+  "rm",
+  "show-branch",
+  "show-ref",
+  "sparse-checkout",
+  "stash",
+  "submodule",
+  "switch",
+  "symbolic-ref",
+  "tag",
+  "update-index",
+  "update-ref",
+  "verify-commit",
+  "verify-tag",
+  "version",
+  "whatchanged",
+  "worktree",
+  "write-tree",
+]);
+
 export function isRiskyCommand(command: string): boolean {
   // The shell resolves quoting and backslash escapes BEFORE the program sees
   // its words — `git p'u'sh` and `git p\ush` both run `git push` — so
@@ -458,8 +535,20 @@ export function isRiskyCommand(command: string): boolean {
     if (/[$`]/.test(head)) return true;
     const name = head.split("/").pop() ?? head;
     if (name === "eval") return true;
-    if (name !== "git") continue;
-    const gitWords = words.slice(i);
+    // git can sit behind a WRAPPER (`command git …`, `env git …`, `sh -c git …`
+    // once quotes resolve): analyze from wherever git appears, not just the
+    // head. Over-matching an argument that merely looks like git routes the
+    // command to approval — the safe direction.
+    let gitAt = -1;
+    for (let j = i; j < words.length; j++) {
+      const w = words[j] as string;
+      if (w === "git" || w.endsWith("/git")) {
+        gitAt = j;
+        break;
+      }
+    }
+    if (gitAt === -1) continue;
+    const gitWords = words.slice(gitAt);
     // `git -c alias.ship=push ship …` runs whatever the alias expands to — the
     // expansion happens inside git, out of this screen's sight. Any alias
     // DEFINED on the command line routes to approval conservatively.
@@ -474,8 +563,14 @@ export function isRiskyCommand(command: string): boolean {
       if (/^--c[-a-z]*$/.test(w) && (gitWords[j + 1] ?? "").startsWith("alias.")) return true;
     }
     const sub = gitSubcommandOf(gitWords);
-    if (sub === "push") return true;
+    // send-pack and http-push are the PLUMBING spellings of a push: they update
+    // remote refs without the word "push" appearing anywhere.
+    if (sub === "push" || sub === "send-pack" || sub === "http-push") return true;
     if (sub !== undefined && /[$`]/.test(sub)) return true;
+    // A subcommand git does not ship is a CONFIGURED alias until proven
+    // otherwise — `git ship` with alias.ship=push already in the repository's
+    // config publishes with nothing for the patterns above to see.
+    if (sub !== undefined && !KNOWN_GIT_SUBCOMMANDS.has(sub)) return true;
   }
   return false;
 }

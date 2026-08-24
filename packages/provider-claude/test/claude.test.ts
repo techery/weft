@@ -868,6 +868,17 @@ describe("risky classification of dynamic commands", () => {
     expect(isRiskyCommand("SHIP=push git --config-env alias.ship=SHIP ship origin main")).toBe(true);
     expect(isRiskyCommand("SHIP=push git --c=alias.s=SHIP s origin main")).toBe(true);
     expect(isRiskyCommand("git --config-env=user.name=NAME status")).toBe(false);
+    // send-pack and http-push are the PLUMBING spellings of a push.
+    expect(isRiskyCommand("git send-pack git@example.com:org/repo.git HEAD:main")).toBe(true);
+    expect(isRiskyCommand("git -C . send-pack host:repo HEAD:main")).toBe(true);
+    // A subcommand git does not ship may be a CONFIGURED alias — with
+    // alias.ship=push already in the repo config, `git ship` publishes with no
+    // "push" in sight. Conservative approval, wrappers included.
+    expect(isRiskyCommand("git ship origin HEAD:main")).toBe(true);
+    expect(isRiskyCommand("command git ship origin HEAD:main")).toBe(true);
+    // Known non-publishing subcommands stay un-gated.
+    expect(isRiskyCommand("git ls-remote origin")).toBe(false);
+    expect(isRiskyCommand("git submodule update --init")).toBe(false);
     // Provably static commands stay un-gated: expansions in ARGUMENTS are fine.
     expect(isRiskyCommand("echo $HOME")).toBe(false);
     expect(isRiskyCommand("git status")).toBe(false);
