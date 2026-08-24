@@ -22,6 +22,17 @@ export class Budget {
   private chargedCalls = 0;
 
   constructor(limits: BudgetLimits = {}, parent?: Budget) {
+    // A ceiling must be a finite, non-negative number: Infinity silently turns a
+    // "hard ceiling" into no budget at all, and NaN lets the first paid probe
+    // through before every later comparison misbehaves.
+    for (const [name, value] of [
+      ["tokens", limits.tokens],
+      ["usd", limits.usd],
+    ] as const) {
+      if (value !== undefined && (!Number.isFinite(value) || value < 0)) {
+        throw new TypeError(`budget ${name} must be a finite, non-negative number; got ${value}`);
+      }
+    }
     this.limitTokens = limits.tokens;
     this.limitUsd = limits.usd;
     this.parent = parent;

@@ -2124,3 +2124,40 @@ describe("codex review findings, round 21 (PR #1)", () => {
     expect(head.stdout.trim()).toBe(sha);
   });
 });
+
+describe("codex review findings, round 22 (PR #1)", () => {
+  test("non-finite budget ceilings are refused up front", () => {
+    expect(() => new Budget({ tokens: Number.POSITIVE_INFINITY })).toThrow(/finite/);
+    expect(() => new Budget({ tokens: Number.NaN })).toThrow(/finite/);
+    expect(() => new Budget({ usd: Number.NaN })).toThrow(/finite/);
+    expect(() => new Budget({ tokens: -1 })).toThrow(/non-negative/);
+    // Computed child allocations go through the same gate.
+    const root = new Budget({ tokens: 1_000 });
+    expect(() => root.child({ fraction: Number.NaN })).toThrow(/finite/);
+    expect(() => root.child({ tokens: Number.POSITIVE_INFINITY })).toThrow(/finite/);
+    // Sane values still construct.
+    expect(new Budget({ tokens: 0 }).remainingTokens()).toBe(0);
+  });
+
+  test("the offload threshold measures UTF-8 bytes, not UTF-16 code units", async () => {
+    const t = testEngine();
+    // 40k CJK characters: 40k UTF-16 units but ~120KB of UTF-8 — inline under a
+    // 64KB threshold if .length is the measure, offloaded if bytes are.
+    t.builder.on({ prompt: /big/ }, { text: "漢".repeat(40_000) });
+    const def = defineWorkflow(
+      { name: "bigout", description: "b", input: z.object({}), output: z.object({ len: z.number() }) },
+      async (ctx) => {
+        const r = await ctx.agent("big", { schema: z.object({ text: z.string() }), key: "big" });
+        return { len: r.text.length };
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    expect(await h.result).toEqual({ len: 40_000 });
+    const recs = await records(t.journal, h.runId);
+    const completed = recs.find(
+      (r) => r.ev.type === "step.completed" && (r.ev.output as { $outputBlob?: string })?.$outputBlob,
+    );
+    // The journal record must carry a blob ref, not 120KB of inline JSON.
+    expect(completed).toBeDefined();
+  });
+});

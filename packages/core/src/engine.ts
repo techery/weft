@@ -660,6 +660,27 @@ export class Engine implements EngineHost {
     return false;
   }
 
+  /** The DURABLE descendant run whose journal holds `requestId`, found via recorded child links. */
+  private async journalRequestOwner(
+    parentRecords: JournalRecord[],
+    requestId: string,
+    seen: Set<string>,
+  ): Promise<string | undefined> {
+    const childIds = parentRecords.flatMap((r) =>
+      r.ev.type === "step.scheduled" && r.ev.childRunId !== undefined ? [r.ev.childRunId] : [],
+    );
+    for (const childId of childIds) {
+      if (seen.has(childId)) continue;
+      seen.add(childId);
+      const records: JournalRecord[] = [];
+      for await (const rec of this.journal.read(childId)) records.push(rec);
+      if (records.some((r) => r.ev.type === "human.requested" && r.ev.id === requestId)) return childId;
+      const deeper = await this.journalRequestOwner(records, requestId, seen);
+      if (deeper !== undefined) return deeper;
+    }
+    return undefined;
+  }
+
   /** The live descendant of `active` holding `requestId` as a pending wait, if any. */
   private requestOwner(active: ActiveRun, requestId: string): string | undefined {
     for (const childId of active.children) {
@@ -972,7 +993,14 @@ export class Engine implements EngineHost {
     for await (const rec of this.journal.read(runId)) records.push(rec);
     if (records.length === 0) throw new Error(`run ${runId} not found`);
     const request = records.find((r) => r.ev.type === "human.requested" && r.ev.id === requestId)?.ev;
-    if (request?.type !== "human.requested") throw new Error(`run ${runId}: no request ${requestId}`);
+    if (request?.type !== "human.requested") {
+      // The request may live in a DESCENDANT journal: a child suspended on a
+      // person while no process holds the tree. The parent-id flow must still
+      // reach it — follow the recorded child links.
+      const owner = await this.journalRequestOwner(records, requestId, new Set([runId]));
+      if (owner !== undefined) return this.answer(owner, requestId, answer, opts);
+      throw new Error(`run ${runId}: no request ${requestId}`);
+    }
     // An answer stands unless the owner journaled a rejection after it — then the
     // request is open again and a replacement is expected.
     let standing = false;

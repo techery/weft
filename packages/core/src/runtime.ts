@@ -345,7 +345,9 @@ export class RunRuntime {
 
   async offloadOutput(output: unknown): Promise<unknown> {
     const json = canonicalJson(output ?? null);
-    if (json.length <= this.host.config.limits.blobThresholdBytes) return output ?? null;
+    // blobThresholdBytes means BYTES on disk: .length counts UTF-16 code units,
+    // under which 40k CJK characters (~120KB of UTF-8) would stay inline.
+    if (Buffer.byteLength(json) <= this.host.config.limits.blobThresholdBytes) return output ?? null;
     const ref = await this.host.blobs.put(json, { kind: "step-output" });
     return { $outputBlob: ref.hash, size: ref.size, preview: json.slice(0, 200) };
   }

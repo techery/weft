@@ -374,6 +374,39 @@ export default defineWorkflow(
     expect(done.output).toEqual({ approved: true, note: "go" });
   });
 
+  it("surfaces and answers a CHILD's question for an untracked parent (host restart)", async () => {
+    const NESTED = `import { defineWorkflow, z } from "@weft/sdk";
+const child = defineWorkflow(
+  { name: "gatechild", description: "asks", input: z.object({}), output: z.object({ approved: z.boolean() }) },
+  async (ctx) => {
+    const v = await ctx.human.approve({ action: "child gate" });
+    return { approved: v.approved };
+  },
+);
+export default defineWorkflow(
+  { name: "nested", description: "parent of an asking child", input: z.object({}), output: z.object({ approved: z.boolean() }) },
+  async (ctx) => (await ctx.workflow(child, {})) as { approved: boolean },
+);
+`;
+    const starter = await session();
+    const { runId } = await json<{ runId: string }>(starter, "weft_run", { source: NESTED, input: {} });
+    const first = await json<WaitReply>(starter, "weft_wait", { runId });
+    expect(first.awaiting?.question).toContain("child gate");
+    const requestId = first.awaiting?.id ?? "";
+    await starter.weft.engine.shutdown(); // the owning process dies
+
+    // A fresh host has no handle for the parent, and the question lives only in
+    // the CHILD's journal: the poll must follow state.children, and the answer
+    // must route through the recorded child links — both on the PARENT id.
+    const other = await session(starter.cwd);
+    const polled = await json<WaitReply>(other, "weft_wait", { runId, timeout: "3s" });
+    expect(polled.awaiting?.id).toBe(requestId);
+    await json(other, "weft_answer", { runId, requestId, answer: { approved: true } });
+    const done = await json<WaitReply>(other, "weft_wait", { runId, timeout: "20s" });
+    expect(done.status).toBe("complete");
+    expect(done.output).toEqual({ approved: true });
+  });
+
   it("hands back the SDK source a session needs to write an inline workflow", async () => {
     const s = await session();
     const { types } = await json<{ types: string }>(s, "weft_types");

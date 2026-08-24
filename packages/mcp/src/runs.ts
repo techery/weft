@@ -98,10 +98,39 @@ async function pollWait(weft: Weft, runId: string, deadline: number): Promise<Wa
     const state = await weft.engine.state(runId);
     const terminal = terminalOf(state);
     if (terminal) return terminal;
-    const pending = state.humans.find((h) => h.status === "pending");
+    const pending = await pendingAcross(weft, state, new Set([runId]));
     if (pending) return { awaiting: awaitingOf(pending) };
     if (!(await tick(deadline))) return { status: "running" };
   }
+}
+
+/**
+ * The first pending request in this run OR any live descendant. A child
+ * suspended on a person suspends the whole tree, and after a host restart only
+ * the journals remember that — without following `state.children`, the
+ * advertised parent-id flow would report `running` forever.
+ */
+async function pendingAcross(
+  weft: Weft,
+  state: RunState,
+  seen: Set<string>,
+): Promise<RunState["humans"][number] | undefined> {
+  const own = state.humans.find((h) => h.status === "pending");
+  if (own) return own;
+  for (const { childRunId } of state.children) {
+    if (seen.has(childRunId)) continue;
+    seen.add(childRunId);
+    let child: RunState;
+    try {
+      child = await weft.engine.state(childRunId);
+    } catch {
+      continue; // scheduled but never journaled
+    }
+    if (terminalOf(child)) continue;
+    const deep = await pendingAcross(weft, child, seen);
+    if (deep) return deep;
+  }
+  return undefined;
 }
 
 function terminalOf(state: RunState): WaitResult | undefined {
