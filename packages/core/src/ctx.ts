@@ -230,7 +230,14 @@ export async function integrationBaseCommit(cwd: string, alsoInclude: string[] =
         env,
       },
     );
-    return stdout.trim();
+    const sha = stdout.trim();
+    // Pin the snapshot the same way GitCli.snapshot() pins its commits: a bare
+    // commit-tree result is UNREFERENCED, and a run can sit suspended on it for
+    // days (onConflict: "ask") — one `git gc --prune` while nobody holds the
+    // run and the skip/abort restore path has nothing left to check out. The
+    // ref is content-addressed, so re-pinning the same snapshot is idempotent.
+    await execa("git", ["update-ref", `refs/weft/snapshots/${sha}`, sha], { cwd });
+    return sha;
   } finally {
     await nodeFs.rm(indexFile, { force: true }).catch(() => undefined);
   }

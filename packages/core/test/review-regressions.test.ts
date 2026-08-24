@@ -6,6 +6,7 @@ import {
   type AgentProvider,
   Budget,
   Engine,
+  integrationBaseCommit,
   type JournalEvent,
   type JournalRecord,
   MemoryBlobStore,
@@ -3931,5 +3932,46 @@ describe("codex review findings, round 56 (PR #1)", () => {
     expect(current).toBe("main");
     const tip = (await execa("git", ["rev-parse", "feature"], { cwd })).stdout.trim();
     expect(tip).toBe(original);
+  });
+});
+
+describe("codex review findings, round 57 (PR #1)", () => {
+  test("an integration snapshot commit survives git gc while the run is suspended", async () => {
+    const cwd = await tempRepo({ "a.txt": "base\n" });
+    await writeFile(join(cwd, "a.txt"), "dirty\n");
+    const sha = await integrationBaseCommit(cwd);
+    // The run can sit at an onConflict:"ask" for days holding only this sha.
+    // A bare commit-tree result is unreferenced — one gc --prune and the
+    // skip/abort restore path has nothing left to check out.
+    await execa("git", ["gc", "--prune=now", "--quiet"], { cwd });
+    const { stdout } = await execa("git", ["rev-parse", "--verify", `${sha}^{commit}`], { cwd });
+    expect(stdout.trim()).toBe(sha);
+    const tree = (await execa("git", ["ls-tree", "--name-only", sha], { cwd })).stdout;
+    expect(tree).toContain("a.txt");
+  });
+
+  test("an answer loses its CAS to a terminal event and is refused, not retried", async () => {
+    const t = testEngine();
+    const def = defineWorkflow(
+      { name: "caslate", description: "c", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.human.ask({ question: "go?", schema: z.object({ go: z.boolean() }) });
+        return {};
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    h.result.catch(() => undefined);
+    const o = await h.outcome();
+    if (o.status !== "waiting_for_human") throw new Error("expected the ask");
+    // An EXTERNAL process (a CLI beside this owner) lands run.cancelled in the
+    // journal between the owner's pending check and its append. The owner's
+    // CAS fold must read the terminal event and refuse — retrying against the
+    // larger count would journal the answer AFTER the cancellation and briefly
+    // resume workflow code past its death.
+    await t.journal.append(h.runId, [{ type: "run.cancelled" }]);
+    await expect(t.engine.answer(h.runId, o.pending[0]?.id ?? "", { go: true })).rejects.toThrow(
+      /already cancelled/,
+    );
+    await t.engine.shutdown();
   });
 });

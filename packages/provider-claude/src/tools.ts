@@ -226,10 +226,13 @@ function shellWords(command: string): string[][] | null {
  * (`diff.<driver>.command` runs on every hunk; `diff.<driver>.textconv` runs
  * by DEFAULT on porcelain diffs). The wrapper forces --no-ext-diff
  * --no-textconv onto exactly those subcommands — the read gate only admits
- * git commands whose subcommand comes first, so `$1` is always it.
+ * git commands whose subcommand comes first, so `$1` is always it. And a
+ * pathname-valued core.fsmonitor is a HOOK git runs on any worktree scan
+ * (`status`, `diff`, `ls-files`), so every wrapped invocation disables it —
+ * a read-only step must never execute repository-configured code.
  */
 export const GIT_READ_WRAPPER =
-  'git() { case "$1" in diff|log|show) _s=$1; shift; command git "$_s" --no-ext-diff --no-textconv "$@";; *) command git "$@";; esac; }; ';
+  'git() { case "$1" in diff|log|show) _s=$1; shift; command git -c core.fsmonitor=false "$_s" --no-ext-diff --no-textconv "$@";; *) command git -c core.fsmonitor=false "$@";; esac; }; ';
 
 export function isReadOnlyCommand(command: string): boolean {
   const segments = shellWords(command);
@@ -364,6 +367,48 @@ const RISKY_PATTERNS: readonly RegExp[] = [
   /\bgh\s+(?:release\s+create|pr\s+merge)\b/,
   /\b(?:vercel|netlify|fly|flyctl|wrangler|heroku)\s+deploy\b/,
 ];
+
+/**
+ * Git subcommands that mutate REPOSITORY METADATA a linked worktree shares
+ * with the integration checkout: config (aliases, hook paths, fsmonitor),
+ * remotes (config again), shared refs, object pruning, and the worktree list
+ * itself. A strict write scope relies on worktree patch capture, which sees
+ * none of that — and a planted config value outlives the step and steers
+ * every later one. Deny-by-default: `git config user.email` (a read) is
+ * refused along with the writes; the one turn it costs is the price of not
+ * parsing config's full option grammar.
+ */
+const SHARED_GIT_METADATA_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "config",
+  "remote",
+  "gc",
+  "maintenance",
+  "prune",
+  "worktree",
+  "update-ref",
+  "symbolic-ref",
+  "reflog",
+  "filter-branch",
+  "replace",
+]);
+
+/** True when any segment runs a git subcommand that touches shared repository metadata. */
+export function mutatesSharedGitMetadata(command: string): boolean {
+  // Same resolution discipline as isRiskyCommand: the shell removes line
+  // continuations, quotes, and backslash escapes before git sees its words.
+  const resolved = command.replace(/\\\r?\n/g, "").replace(/[\\'"]/g, "");
+  for (const raw of resolved.replace(/\d*>&\d+/g, " ").split(/\|\||&&|[;|\n&]/)) {
+    const words = raw.trim().split(/\s+/);
+    let i = 0;
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] as string)) i++;
+    const head = words[i];
+    if (head === undefined) continue;
+    if ((head.split("/").pop() ?? head) !== "git") continue;
+    const sub = gitSubcommandOf(words.slice(i));
+    if (sub !== undefined && SHARED_GIT_METADATA_SUBCOMMANDS.has(sub)) return true;
+  }
+  return false;
+}
 
 export function isRiskyCommand(command: string): boolean {
   // The shell resolves quoting and backslash escapes BEFORE the program sees

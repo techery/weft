@@ -1,4 +1,6 @@
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
@@ -11,7 +13,7 @@ import {
   READ_ONLY_MESSAGE,
   STRUCTURED_OUTPUT_TOOL,
 } from "../src/index.ts";
-import { isRiskyCommand } from "../src/tools.ts";
+import { GIT_READ_WRAPPER, isRiskyCommand, mutatesSharedGitMetadata } from "../src/tools.ts";
 
 const SESSION = "sess-abc-123";
 const CWD = "/work/repo";
@@ -362,6 +364,8 @@ describe("the tool gate", () => {
       const updated = (decision as { updatedInput?: { command?: string } }).updatedInput;
       expect(updated?.command?.endsWith(command), command).toBe(true);
       expect(updated?.command, command).toContain("--no-ext-diff --no-textconv");
+      // A pathname-valued core.fsmonitor is a HOOK any worktree scan executes.
+      expect(updated?.command, command).toContain("-c core.fsmonitor=false");
     };
     expect(await ask(options, "Read", { file_path: `${CWD}/src/a.ts` })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Bash", { command: "rg -n 'todo' src 2>&1" })).toEqual({ behavior: "allow" });
@@ -507,6 +511,64 @@ describe("the tool gate", () => {
     expect(await ask(options, "Bash", { command: "pnpm test > /dev/null 2>&1" })).toEqual({
       behavior: "allow",
     });
+  });
+
+  test("a strict write scope denies shared git metadata mutations (codex review round 57, PR #1)", async () => {
+    const options = await gateContext(
+      request({ tools: { allowEdits: true }, writeScope: { paths: ["src/**"], mode: "strict" } }),
+    );
+    // A linked worktree's `git config` writes the INTEGRATION repository's
+    // shared .git/config: no path in the command, nothing for patch capture to
+    // see, and the planted value outlives the step.
+    for (const command of [
+      "git config weft.marker changed",
+      "git config core.fsmonitor ./hook.sh",
+      "git config user.email x", // deny-by-default: even the read spelling is refused
+      "git con'fig' weft.marker changed", // quoting resolves before git sees its words
+      "git -C . config weft.marker changed",
+      "git remote add mirror ./elsewhere", // remotes live in the same shared config
+      "git gc --prune=now", // prunes SHARED objects other steps still reference
+      "git worktree prune",
+      "git update-ref refs/heads/main HEAD",
+      "git reflog expire --all",
+      "echo ok && git config weft.marker changed", // any segment in a chain counts
+    ]) {
+      const denial = await ask(options, "Bash", { command });
+      expect(denial.behavior, command).toBe("deny");
+    }
+    // Worktree-local git stays available to a write agent.
+    expect(await ask(options, "Bash", { command: "git status" })).toEqual({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: "git add src/a.ts" })).toEqual({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: "git diff HEAD" })).toEqual({ behavior: "allow" });
+    expect(mutatesSharedGitMetadata("git commit -m config")).toBe(false); // an ARGUMENT named config is fine
+  });
+
+  test("the read wrapper suppresses a core.fsmonitor hook (codex review round 57, PR #1)", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "weft-fsmon-"));
+    try {
+      const git = (...args: string[]) => execFileSync("git", args, { cwd });
+      git("init", "-q");
+      git("config", "user.email", "t@t");
+      git("config", "user.name", "t");
+      await writeFile(join(cwd, "a.txt"), "x\n");
+      git("add", "-A");
+      git("commit", "-qm", "init");
+      const marker = join(cwd, "fsmonitor-ran");
+      await writeFile(join(cwd, "hook.sh"), `#!/bin/sh\ntouch ${marker}\necho /\n`, { mode: 0o755 });
+      git("config", "core.fsmonitor", "./hook.sh");
+      // The vector is real: an UNWRAPPED status executes the configured hook.
+      execFileSync("bash", ["-c", "git status"], { cwd, stdio: "ignore" });
+      expect(existsSync(marker)).toBe(true);
+      await rm(marker, { force: true });
+      // Wrapped the way the read gate rewrites every git command, it must not.
+      execFileSync("bash", ["-c", `${GIT_READ_WRAPPER}git status && git diff && git ls-files`], {
+        cwd,
+        stdio: "ignore",
+      });
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
   });
 
   test("a strict write scope denies COMPUTED destinations outright", async () => {

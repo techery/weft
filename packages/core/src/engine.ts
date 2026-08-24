@@ -1200,10 +1200,22 @@ export class Engine implements EngineHost {
       for (;;) {
         let count = 0;
         let standing = false;
+        let terminal: "complete" | "failed" | "cancelled" | undefined;
         for await (const rec of this.journal.read(runId)) {
           count++;
           if (rec.ev.type === "human.answered" && rec.ev.id === requestId) standing = true;
           else if (rec.ev.type === "human.rejected" && rec.ev.id === requestId) standing = false;
+          else if (rec.ev.type === "run.completed") terminal = "complete";
+          else if (rec.ev.type === "run.failed") terminal = "failed";
+          else if (rec.ev.type === "run.cancelled") terminal = "cancelled";
+        }
+        // An external process can land a TERMINAL event (a CLI's cancel beside
+        // this daemon) between the pending check and the append: the lost CAS
+        // must refuse, not retry against the larger count — appending the
+        // answer after run.cancelled reports "accepted" for a request nothing
+        // will ever serve, and briefly resumes workflow code past its death.
+        if (terminal !== undefined) {
+          throw new Error(`run ${runId} is already ${terminal} — resume it before answering`);
         }
         if (standing) throw new Error(`run ${runId}: request ${requestId} is already answered`);
         if (await this.journal.appendIf(runId, count, [ev])) {

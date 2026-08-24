@@ -16,6 +16,7 @@ import {
   GIT_READ_WRAPPER,
   isReadOnlyCommand,
   isRiskyCommand,
+  mutatesSharedGitMetadata,
   STRUCTURED_OUTPUT_TOOL,
 } from "./tools.ts";
 
@@ -182,6 +183,14 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
           (await commandEscapesWorktree(req.cwd, command)))
       ) {
         return deny(`shell access outside the worktree is ${scopeMessage}`);
+      }
+      // A linked worktree's `git config` writes the INTEGRATION repository's
+      // shared .git/config — no path in the command, nothing for patch capture
+      // to see, and the planted value (an alias, a hook path, core.fsmonitor)
+      // outlives the step and steers every later one. Same for remotes, shared
+      // refs, pruning, and the worktree list.
+      if (scope?.mode === "strict" && mutatesSharedGitMetadata(command)) {
+        return deny(`git repository metadata is shared beyond the worktree and is ${scopeMessage}`);
       }
       if (isRiskyCommand(command)) {
         const decision = await req.hitl.onPermission({ tool: toolName, input, risk: "high" });
