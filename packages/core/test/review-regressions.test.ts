@@ -3454,3 +3454,29 @@ describe("codex review findings, round 44 (PR #1)", () => {
     expect(peeled).toBe(original);
   });
 });
+
+describe("codex review findings, round 46 (PR #1)", () => {
+  test("a write step's declared gitignored output survives into the integration tree", async () => {
+    const FixResult = z.object({ summary: z.string() });
+    const t = testEngine();
+    t.builder.on({ key: "build" }, { summary: "built" }, { writes: { "dist/out.js": "BUILT\n" } });
+    const cwd = await tempRepo({ ".gitignore": "dist/\n", "a.txt": "base\n" });
+    const def = defineWorkflow(
+      { description: "bb", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        const fix = await ctx.agent.detailed("build it", {
+          schema: FixResult,
+          key: "build",
+          write: { paths: ["dist/**"] },
+        });
+        await ctx.integrate([fix]);
+        return {};
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd });
+    await h.result;
+    // `add -A` skipped the ignored dist/ output, so the capture was empty and
+    // the worktree cleanup silently deleted the agent's only deliverable.
+    expect(await readFile(join(cwd, "dist/out.js"), "utf8")).toBe("BUILT\n");
+  });
+});

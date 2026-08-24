@@ -523,6 +523,35 @@ describe("startDaemon", () => {
     expect(await run.result).toEqual({ approved: true });
   });
 
+  it("answering a CHILD after a daemon restart wakes the ROOT, not just the child", async () => {
+    const cwd = await repo();
+    await writeFile(path.join(cwd, ".weft", "workflows", "nested.ts"), NESTED, "utf8");
+    const first = await open(cwd);
+    const { def } = await resolveWorkflow(first.weft, "nested");
+    const run = await first.weft.engine.start(def, { input: {}, cwd });
+    const o = await run.outcome();
+    if (o.status !== "waiting_for_human") throw new Error("expected the child gate");
+    const pending = await getJson<Array<{ id: string; runId: string }>>(
+      first.app,
+      `/api/runs/${run.runId}/pending`,
+    );
+    const child = pending[0];
+    if (!child) throw new Error("expected the child request");
+    await first.weft.engine.shutdown();
+
+    // The UI posts to the request's OWNING run (the child). Waking only that
+    // child completes ITS journal while the parent's workflow step never
+    // re-executes — the selected root would stay nonterminal forever.
+    const fresh = await open(cwd);
+    const answered = await fresh.app.request(`/api/runs/${child.runId}/answer`, {
+      method: "POST",
+      body: JSON.stringify({ requestId: child.id, answer: { approved: true } }),
+      headers: { "content-type": "application/json" },
+    });
+    expect(answered.status).toBe(200);
+    await expect.poll(() => statusOf(fresh.app, run.runId), { timeout: 10_000 }).toBe("complete");
+  });
+
   it("stops even with an event stream still open", async () => {
     const cwd = await repo();
     const daemon = await startDaemon({ cwd, port: 0, providers: "mock" });

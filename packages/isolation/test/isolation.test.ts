@@ -158,6 +158,24 @@ describe("capturePatch", () => {
     expect(files).toEqual(["we\nird.txt"]);
   });
 
+  test("an allowed-but-gitignored output is captured, not lost with the worktree", async () => {
+    const repo = await initRepo();
+    await seed(repo, { ".gitignore": "dist/\n", "a.txt": "one\n" }, "init");
+    const handle = await addWorktree({ repoRoot: repo.cwd, dir: await worktreePath() });
+    await writeIn(handle.path, "dist/out.js", "BUILT\n");
+
+    // Without the declared scope the ignored output stays invisible…
+    expect((await capturePatch({ worktreePath: handle.path })).files).toEqual([]);
+    // …with it, the in-scope ignored file is force-staged into the patch
+    // instead of vanishing when the worktree is removed.
+    const { patch, files } = await capturePatch({
+      worktreePath: handle.path,
+      alsoInclude: ["dist/**"],
+    });
+    expect(files).toEqual(["dist/out.js"]);
+    expect(patch).toContain("BUILT");
+  });
+
   test("a rename reports BOTH paths, not just the destination", async () => {
     const repo = await initRepo();
     const body = `${"stable content line\n".repeat(20)}`;

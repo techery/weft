@@ -531,7 +531,13 @@ export function buildCtx(rt: RunRuntime): Ctx {
               let patch: PatchRef | null = null;
               let files: string[] = result.result.filesTouched ?? [];
               if (worktree && scope) {
-                const captured = await capturePatch({ worktreePath: worktree.path });
+                // The declared scope rides along so an allowed-but-gitignored
+                // output (a dist/** build artifact) is captured rather than
+                // deleted with the worktree.
+                const captured = await capturePatch({
+                  worktreePath: worktree.path,
+                  alsoInclude: [...(scope.paths ?? []), ...(scope.also ?? [])],
+                });
                 files = captured.files;
                 if (captured.patch.length > 0) {
                   const blob = await rt.host.blobs.put(captured.patch, { kind: "patch" });

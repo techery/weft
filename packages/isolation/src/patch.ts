@@ -8,19 +8,30 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGit } from "@weft/git";
 import type { ApplyOutcome } from "./index.ts";
+import { checkScope } from "./scope.ts";
 
 /**
  * Capture everything the agent changed in the worktree as one patch:
  * stage all (including untracked), then diff --cached against the base.
  * Returns an empty patch ("" and files: []) when nothing changed.
+ * `alsoInclude` names the declared write-scope patterns: an in-scope file that
+ * .gitignore also matches is force-staged, or a declared `dist/**` output
+ * would silently vanish with the worktree.
  */
-export async function capturePatch(opts: { worktreePath: string }): Promise<{
+export async function capturePatch(opts: { worktreePath: string; alsoInclude?: string[] }): Promise<{
   patch: string;
   files: string[];
 }> {
   const git = createGit(opts.worktreePath);
   // Staging first is what folds untracked files into the diff.
   await git.raw(["add", "-A"]);
+  if (opts.alsoInclude && opts.alsoInclude.length > 0) {
+    const ignored = splitNul(
+      (await git.raw(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"])).stdout,
+    );
+    const { inScope } = checkScope(ignored, { paths: opts.alsoInclude });
+    if (inScope.length > 0) await git.raw(["add", "-f", "--", ...inScope]);
+  }
   // -z: NUL-delimited, unquoted paths — a filename holding a newline must reach
   // checkScope() as ONE path, not two nonexistent ones. --no-renames: rename
   // detection (on by default since git 2.9) would list only the DESTINATION of

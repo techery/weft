@@ -331,12 +331,32 @@ async function refreshProjections(weft: Weft, runId: string): Promise<RunState |
  */
 function wakeIfSuspended(weft: Weft, runId: string): boolean {
   if (weft.engine.isActive(runId)) return false;
-  void persistedDefOf(weft, runId)
-    .then((def) => weft.engine.resume(runId, def !== undefined ? { def } : {}))
-    .then((handle) => handle.outcome())
-    .catch((err: unknown) => {
-      console.error(`weft daemon: waking run ${runId} failed: ${messageOf(err)}`);
-    });
+  void (async () => {
+    // The answered run may be a CHILD (requests are answered at their owning
+    // run): resuming it alone completes its journal while the inactive
+    // parent's workflow step never re-executes to consume the result — the
+    // selected root would stay nonterminal forever. Walk to the ROOT of the
+    // recorded tree and wake that; its resume re-enters the children.
+    let rootId = runId;
+    const seen = new Set([rootId]);
+    for (;;) {
+      let parentId: string | undefined;
+      try {
+        parentId = (await weft.engine.state(rootId)).parentRunId;
+      } catch {
+        break;
+      }
+      if (parentId === undefined || seen.has(parentId)) break;
+      seen.add(parentId);
+      rootId = parentId;
+    }
+    if (weft.engine.isActive(rootId)) return;
+    const def = await persistedDefOf(weft, rootId);
+    const handle = await weft.engine.resume(rootId, def !== undefined ? { def } : {});
+    await handle.outcome();
+  })().catch((err: unknown) => {
+    console.error(`weft daemon: waking run ${runId} failed: ${messageOf(err)}`);
+  });
   return true;
 }
 
