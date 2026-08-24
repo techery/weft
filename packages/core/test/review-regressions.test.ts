@@ -3363,3 +3363,61 @@ describe("codex review findings, round 42 (PR #1)", () => {
     expect(violation).toBeDefined();
   });
 });
+
+describe("codex review findings, round 44 (PR #1)", () => {
+  test("a settled long-deadline fetch clears its chunked timer", async () => {
+    vi.useFakeTimers();
+    try {
+      const { timeoutSignalOf } = await import("../src/ctx.ts");
+      const before = vi.getTimerCount();
+      // Past the ceiling: the chunked path arms a real timer per hop. Without
+      // cancel(), every settled fetch parks that chunk (controller and closure
+      // included) until the FULL deadline — days of retained handles.
+      const deadline = timeoutSignalOf(2_147_483_647 * 2);
+      expect(vi.getTimerCount()).toBe(before + 1);
+      deadline.cancel();
+      expect(vi.getTimerCount()).toBe(before);
+      expect(deadline.signal.aborted).toBe(false);
+      // Uncancelled, the chunks re-arm to the REAL deadline and then abort.
+      const armed = timeoutSignalOf(2_147_483_647 + 1_000);
+      await vi.advanceTimersByTimeAsync(2_147_483_647 + 1_100);
+      expect(armed.signal.aborted).toBe(true);
+      armed.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a completed create-and-checkout re-establishes its branch on resume", async () => {
+    const t1 = testEngine();
+    const cwd = await tempRepo({ "a.txt": "base\n" });
+    const def = defineWorkflow(
+      {
+        name: "brco",
+        description: "b",
+        input: z.object({}),
+        output: z.object({ current: z.string() }),
+      },
+      async (ctx) => {
+        await ctx.git.branch.create("feature", { checkout: true });
+        await ctx.human.ask({ question: "go on?", schema: z.object({ go: z.boolean() }) });
+        const b = await ctx.git.branches();
+        return { current: b.current };
+      },
+    );
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the ask");
+    await t1.engine.shutdown();
+    // The branch still EXISTS after an external switch — existence alone must
+    // not serve the completion, or the closing live steps run on main.
+    await execa("git", ["checkout", "main"], { cwd });
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the ask again");
+    await t2.engine.answer(h1.runId, o2.pending[0]?.id ?? "", { go: true });
+    expect(await h2.result).toEqual({ current: "feature" });
+  });
+});

@@ -73,22 +73,26 @@ function tail(s: string, n: number): string {
  * AbortSignal.timeout past Node's ~24.8-day timer ceiling fires IMMEDIATELY
  * (the overflowed delay clamps to 1ms), aborting a long-deadline fetch on the
  * spot. Chunk the countdown the same way sleep() does; unref'd so a pending
- * deadline never holds the process open.
+ * deadline never holds the process open. `cancel` clears the pending chunk —
+ * without it every completed long-deadline fetch parks its controller and
+ * closure in the timer table until the FULL deadline (days) elapses.
  */
-function timeoutSignalOf(ms: number): AbortSignal {
-  if (ms <= MAX_TIMER_MS) return AbortSignal.timeout(ms);
+export function timeoutSignalOf(ms: number): { signal: AbortSignal; cancel: () => void } {
+  if (ms <= MAX_TIMER_MS) return { signal: AbortSignal.timeout(ms), cancel: () => undefined };
   const controller = new AbortController();
   const deadline = Date.now() + ms;
+  let timer: NodeJS.Timeout | undefined;
   const arm = (): void => {
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
       controller.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
       return;
     }
-    setTimeout(arm, Math.min(remaining, MAX_TIMER_MS)).unref?.();
+    timer = setTimeout(arm, Math.min(remaining, MAX_TIMER_MS));
+    timer.unref?.();
   };
   arm();
-  return controller.signal;
+  return { signal: controller.signal, cancel: () => clearTimeout(timer) };
 }
 
 // ---------------------------------------------------------------------------
@@ -1183,11 +1187,12 @@ export function buildCtx(rt: RunRuntime): Ctx {
           });
         }
         const resolved = resolveSecretValues(init?.headers, ref);
+        const deadline = timeoutSignalOf(timeoutMs);
         const requestInit = {
           method,
           headers: resolved,
           ...(init?.body !== undefined ? { body: init.body } : {}),
-          signal: AbortSignal.any([timeoutSignalOf(timeoutMs), io.signal]),
+          signal: AbortSignal.any([deadline.signal, io.signal]),
         };
         let response: Response;
         try {
@@ -1271,19 +1276,26 @@ export function buildCtx(rt: RunRuntime): Ctx {
             }
           }, io.signal);
         } catch (err) {
+          deadline.cancel();
           if (err instanceof StepError) throw err;
           throw new StepError("fetch_failed", `${method} ${url}: ${(err as Error).message}`, {
             step: ref,
             cause: err,
           });
         }
-        const body = await response.text();
-        const headers: Record<string, string> = {};
-        response.headers.forEach((v, k) => {
-          headers[k] = v;
-        });
-        const raw = { status: response.status, headers, body };
-        return { value: await reviveTyped(raw), journalOutput: raw };
+        // The deadline stays armed through the body read (a stalled stream must
+        // still time out) and is cleared once the response fully settles.
+        try {
+          const body = await response.text();
+          const headers: Record<string, string> = {};
+          response.headers.forEach((v, k) => {
+            headers[k] = v;
+          });
+          const raw = { status: response.status, headers, body };
+          return { value: await reviveTyped(raw), journalOutput: raw };
+        } finally {
+          deadline.cancel();
+        }
       },
     });
   }) as Ctx["fetch"];
@@ -1481,8 +1493,28 @@ export function buildCtx(rt: RunRuntime): Ctx {
           `git.branch.create ${name}`,
           { name, from: opts?.from ?? null, checkout: opts?.checkout ?? false },
           opts,
-          () => gitHandle.branchCreate(name, opts ?? {}),
-          async () => (await gitHandle.revParse(name)) !== null,
+          async () => {
+            // Re-execution after a refused verify must be idempotent: the
+            // branch may already exist from the first pass — re-establish the
+            // checkout instead of failing on the duplicate create.
+            if (opts?.checkout && (await gitHandle.revParse(name)) !== null) {
+              await gitHandle.checkout(name);
+              return;
+            }
+            await gitHandle.branchCreate(name, opts ?? {});
+          },
+          async () => {
+            if ((await gitHandle.revParse(name)) === null) return false;
+            if (!opts?.checkout) return true;
+            // create-and-checkout only holds while the tree is still ON the
+            // branch (mirrors the checkout verifier): the ref surviving an
+            // external switch is not enough — later live commits would land
+            // on whatever branch HEAD moved to.
+            const current = await gitHandle.raw(["rev-parse", "--abbrev-ref", "HEAD"], {
+              allowFailure: true,
+            });
+            return current.exitCode === 0 && current.stdout.trim() === name;
+          },
         ),
       delete: (name, opts) =>
         gitWrite(

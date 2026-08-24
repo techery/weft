@@ -140,24 +140,43 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
         await weft.engine.answer(args.runId, args.requestId, args.answer, { channel: "mcp" });
         // A run whose owner exited has no runtime to deliver the answer into: wake it
         // so the journal serves it and weft_wait sees progress without an explicit
-        // weft_resume. Fire-and-forget and lease-protected — when a live process
-        // still owns the run, the claim is refused and its tailer delivers instead.
+        // weft_resume. The answered run may be a CHILD (awaiting.runId): resuming it
+        // alone completes its journal while the parent's workflow step never
+        // re-executes to consume the result — wake the ROOT of the recorded tree,
+        // whose resume re-enters the children. Fire-and-forget and lease-protected —
+        // when a live process still owns the run, the claim is refused and its
+        // tailer delivers instead.
         if (!weft.engine.isActive(args.runId)) {
-          const tracked = runs.get(args.runId);
-          void Promise.resolve(tracked?.def ?? persistedDefOf(weft, args.runId))
-            .then((def) => weft.engine.resume(args.runId, def !== undefined ? { def } : {}))
-            .then((handle) => {
-              runs.track({
-                handle,
-                ...(tracked?.ref !== undefined
-                  ? { ref: tracked.ref }
-                  : tracked?.def !== undefined
-                    ? { def: tracked.def }
-                    : {}),
-              });
-              return handle.outcome();
-            })
-            .catch(() => undefined);
+          let rootId = args.runId;
+          const seen = new Set([rootId]);
+          for (;;) {
+            let parentId: string | undefined;
+            try {
+              parentId = (await weft.engine.state(rootId)).parentRunId;
+            } catch {
+              break;
+            }
+            if (parentId === undefined || seen.has(parentId)) break;
+            seen.add(parentId);
+            rootId = parentId;
+          }
+          if (!weft.engine.isActive(rootId)) {
+            const tracked = runs.get(rootId);
+            void Promise.resolve(tracked?.def ?? persistedDefOf(weft, rootId))
+              .then((def) => weft.engine.resume(rootId, def !== undefined ? { def } : {}))
+              .then((handle) => {
+                runs.track({
+                  handle,
+                  ...(tracked?.ref !== undefined
+                    ? { ref: tracked.ref }
+                    : tracked?.def !== undefined
+                      ? { def: tracked.def }
+                      : {}),
+                });
+                return handle.outcome();
+              })
+              .catch(() => undefined);
+          }
         }
         return { ok: true };
       }),

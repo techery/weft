@@ -294,6 +294,33 @@ export default defineWorkflow(
     expect(done.output?.approved).toBe(true);
   });
 
+  it("answering an inactive CHILD after a restart wakes the whole tree", async () => {
+    const first = await session();
+    const { runId } = await json<{ runId: string }>(first, "weft_run", { source: NESTED });
+    const suspended = await json<WaitReply>(first, "weft_wait", { runId, timeout: "10s" });
+    const awaiting = suspended.awaiting;
+    expect(awaiting?.runId).toBeDefined();
+    expect(awaiting?.runId).not.toBe(runId);
+    // The server restarts: nothing owns the tree any more.
+    await first.client.close();
+    await first.server.close();
+    await first.weft.close();
+    open.splice(open.indexOf(first), 1);
+
+    const second = await session(first.cwd);
+    await json(second, "weft_answer", {
+      runId: awaiting?.runId,
+      requestId: awaiting?.id,
+      answer: { approved: true },
+    });
+    // Waking only the answered CHILD completes its journal while the parent's
+    // workflow step never re-executes to consume it — the parent-id wait would
+    // report "running" forever.
+    const done = await json<WaitReply>(second, "weft_wait", { runId, timeout: "10s" });
+    expect(done.status).toBe("complete");
+    expect(done.output?.approved).toBe(true);
+  });
+
   it("rejects an answer the request schema does not accept, and leaves the run waiting", async () => {
     const s = await session();
     const { runId } = await json<{ runId: string }>(s, "weft_run", { source: GATED });
