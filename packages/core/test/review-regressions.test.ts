@@ -2054,3 +2054,73 @@ describe("codex review findings, round 20 (PR #1)", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 });
+
+describe("codex review findings, round 21 (PR #1)", () => {
+  test("a paid child publishes the parent's budget into the parent projection", async () => {
+    const t = testEngine();
+    t.builder.on({ prompt: /probe/ }, { ok: true });
+    const child = defineWorkflow(
+      { name: "spender2", description: "s", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("probe", { schema: z.object({ ok: z.boolean() }), key: "c1" });
+        return {};
+      },
+    );
+    const parent = defineWorkflow(
+      { name: "watcher", description: "w", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.workflow(child, {});
+        return {};
+      },
+    );
+    const h = await t.engine.start(parent, { input: {}, cwd: await tempDir() });
+    await h.result;
+    // The child charged the shared budget in ITS journal; without a parent
+    // sample, the parent's displayed spend (projections and the index prefer
+    // the last budget.sampled) reads zero despite 150 durable tokens.
+    const state = reduceState(await records(t.journal, h.runId));
+    expect(state.budget?.tokens).toBe(150);
+  });
+
+  test("a journaled commit no longer on the branch re-executes instead of serving stale", async () => {
+    const cwd = await tempRepo();
+    const t1 = testEngine();
+    const def = defineWorkflow(
+      { name: "committer", description: "c", input: z.object({}), output: z.object({ sha: z.string() }) },
+      async (ctx) => {
+        await ctx.bash("echo data > out.txt && git add out.txt");
+        const c = (await ctx.git.commit({ message: "add out" })) as { sha: string };
+        await ctx.human.approve({ action: "publish?" });
+        return { sha: c.sha };
+      },
+    );
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the gate");
+    const recs1 = await records(t1.journal, h1.runId);
+    const firstSha = recs1
+      .map((r) => (r.ev.type === "step.completed" ? (r.ev.output as { sha?: string }) : undefined))
+      .find((o) => typeof o?.sha === "string")?.sha as string;
+    await t1.engine.shutdown();
+
+    // An external actor resets the branch: the commit now lives only in the
+    // object database and reflog — revParse still finds it, the branch does not.
+    await execa("git", ["reset", "--hard", "HEAD~1"], { cwd });
+    await execa("bash", ["-c", "echo data > out.txt && git add out.txt"], { cwd });
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the gate again");
+    await t2.engine.answer(h1.runId, o2.pending[0]?.id ?? "", { approved: true });
+    const { sha } = (await h2.result) as { sha: string };
+    // Served stale, the run would report the FIRST sha while HEAD still sat on
+    // the reset base — the promised write absent from the branch. Re-executed,
+    // the reported commit IS the branch head again. (The re-commit can even
+    // reproduce firstSha byte-for-byte — same tree, parent, and second — so the
+    // reachability of the OUTPUT is the assertion, not its value.)
+    expect(typeof firstSha).toBe("string");
+    const head = await execa("git", ["rev-parse", "HEAD"], { cwd });
+    expect(head.stdout.trim()).toBe(sha);
+  });
+});

@@ -809,18 +809,23 @@ export function buildCtx(rt: RunRuntime): Ctx {
       newChildRunId: () => randomUUID().slice(0, 8),
       revive: (journaled) => (journaled as { output: unknown }).output,
       execute: async (io) => {
-        const childRunId = io.childRunId ?? randomUUID().slice(0, 8);
-        const { output, usage } = await rt.host.executeChildRun({
+        const result = await rt.host.executeChildRun({
           parent: rt,
           name,
           ...(typeof defOrName === "string" ? {} : { def: defOrName }),
           input,
-          childRunId,
+          childRunId: io.childRunId ?? randomUUID().slice(0, 8),
           ...(opts.key !== undefined ? { key: opts.key } : {}),
           ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
           waitBridge: { markWaiting: io.markWaiting, unmarkWaiting: io.unmarkWaiting },
         });
-        return { value: output, journalOutput: { childRunId, output }, usage };
+        // The engine may have swapped a COLLIDING id for a fresh one: journal
+        // the id the child actually ran under.
+        return {
+          value: result.output,
+          journalOutput: { childRunId: result.childRunId, output: result.output },
+          usage: result.usage,
+        };
       },
     });
   }
@@ -1251,7 +1256,17 @@ export function buildCtx(rt: RunRuntime): Ctx {
         { message: opts.message, paths: opts.paths ?? null },
         opts,
         () => gitHandle.commit({ message: opts.message, ...(opts.paths ? { paths: opts.paths } : {}) }),
-        async (journaled) => (await gitHandle.revParse(journaled.sha)) !== null,
+        async (journaled) => {
+          if ((await gitHandle.revParse(journaled.sha)) === null) return false;
+          // Object existence is not enough: after an external reset the commit
+          // lingers in the object database and reflog while the branch no
+          // longer contains it — the write this step promises is gone. Serve
+          // only while the commit is still HEAD or an ancestor of it.
+          const reach = await gitHandle.raw(["merge-base", "--is-ancestor", journaled.sha, "HEAD"], {
+            allowFailure: true,
+          });
+          return reach.exitCode === 0;
+        },
       ),
     checkout: (ref, opts) =>
       gitWrite(
@@ -1525,19 +1540,32 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
   async function restorePatchFiles(snapRef: string, files: string[]): Promise<void> {
     for (const file of files) {
-      const inSnap = await gitHandle
-        .raw(["cat-file", "-e", `${snapRef}:${file.replace(/\/$/, "")}`], { allowFailure: true })
-        .then((r) => r.exitCode === 0);
-      if (inSnap) {
+      // Genuine ABSENCE from the snapshot is exit 1 (dangling object) or git's
+      // explicit "not in this tree" fatals; any OTHER failure is a repository or
+      // object-store error — reading it as absence would send a tracked file
+      // into the deletion branch below.
+      const probe = await gitHandle.raw(["cat-file", "-e", `${snapRef}:${file.replace(/\/$/, "")}`], {
+        allowFailure: true,
+      });
+      const missingFromSnap =
+        probe.exitCode === 1 || /does not exist in|exists on disk, but not in/.test(probe.stderr);
+      if (probe.exitCode !== 0 && !missingFromSnap) {
+        throw new StepError(
+          "exec_failed",
+          `rollback probe failed for ${file}: ${probe.stderr.trim() || `exit ${probe.exitCode}`}`,
+          { step: { kind: "git", key: file, runId: rt.runId } },
+        );
+      }
+      // Every rollback operation must SUCCEED: swallowing a failure here would
+      // let a skipped integration continue on top of a half-applied patch.
+      if (probe.exitCode === 0) {
         // Worktree-only: `checkout <ref> -- <file>` would write the INDEX too,
         // silently destroying whatever the caller had staged for this file.
-        await gitHandle.raw(["restore", "--worktree", "--source", snapRef, "--", file], {
-          allowFailure: true,
-        });
+        await gitHandle.raw(["restore", "--worktree", "--source", snapRef, "--", file]);
       } else {
         // recursive: a NEW ignored directory entry (from the --directory listing)
         // rolls back whole; on a plain file the flag is inert.
-        await nodeFs.rm(resolveInCwd(file), { recursive: true, force: true }).catch(() => undefined);
+        await nodeFs.rm(resolveInCwd(file), { recursive: true, force: true });
       }
     }
   }

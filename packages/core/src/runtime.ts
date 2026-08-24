@@ -80,7 +80,7 @@ export interface EngineHost {
   clock(): number;
   registerPending(runtime: RunRuntime, request: PendingRequest): void;
   resolvePending(runtime: RunRuntime, id: string): void;
-  executeChildRun(spec: ChildRunSpec): Promise<{ output: unknown; usage: Usage }>;
+  executeChildRun(spec: ChildRunSpec): Promise<{ output: unknown; usage: Usage; childRunId: string }>;
   onRecords(runtime: RunRuntime, records: JournalRecord[]): void;
 }
 

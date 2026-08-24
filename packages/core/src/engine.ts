@@ -648,6 +648,18 @@ export class Engine implements EngineHost {
     this.active.get(runtime.runId)?.pending.set(request.id, request);
   }
 
+  /** True when the journal at childId was created BY this parent for this workflow. */
+  private async ownsChildJournal(childId: string, parentRunId: string, workflow: string): Promise<boolean> {
+    for await (const rec of this.journal.read(childId)) {
+      return (
+        rec.ev.type === "run.created" &&
+        rec.ev.parentRunId === parentRunId &&
+        rec.ev.workflow.name === workflow
+      );
+    }
+    return false;
+  }
+
   /** The live descendant of `active` holding `requestId` as a pending wait, if any. */
   private requestOwner(active: ActiveRun, requestId: string): string | undefined {
     for (const childId of active.children) {
@@ -668,7 +680,9 @@ export class Engine implements EngineHost {
     if (active?.parentBridge && !runtime.hasPendingWaits()) active.parentBridge.unmarkWaiting();
   }
 
-  async executeChildRun(spec: ChildRunSpec): Promise<{ output: unknown; usage: import("@weft/sdk").Usage }> {
+  async executeChildRun(
+    spec: ChildRunSpec,
+  ): Promise<{ output: unknown; usage: import("@weft/sdk").Usage; childRunId: string }> {
     const parent = spec.parent;
     let def: WorkflowDefinition | undefined;
     if (spec.def !== undefined) {
@@ -694,8 +708,24 @@ export class Engine implements EngineHost {
       reuse: parent.shared.reuse,
     };
 
-    const childId = spec.childRunId;
-    const resuming = await this.journal.exists(childId);
+    let childId = spec.childRunId;
+    let resuming = await this.journal.exists(childId);
+    if (resuming && !(await this.ownsChildJournal(childId, parent.runId, def.meta.name ?? spec.name))) {
+      // An eight-hex collision with an UNRELATED run: adopting it would replay a
+      // stranger's input and append terminal records into their journal. Nothing
+      // of ours lives there — take a fresh, free id (the completed step journals
+      // the id it actually used).
+      let attempts = 0;
+      do {
+        if (++attempts > 16) {
+          throw new StepError("exec_failed", "could not allocate a child run id (16 collisions)", {
+            step: { kind: "workflow", key: spec.key ?? spec.name, runId: parent.runId },
+          });
+        }
+        childId = randomUUID().slice(0, 8);
+      } while (await this.journal.exists(childId));
+      resuming = false;
+    }
     // Spend THIS parent already journaled for THIS child (failed passes roll a
     // delta onto their step.failed): the child journal contains it too, so both
     // the restore below and every roll-up report the DIFFERENCE — otherwise a
@@ -826,7 +856,19 @@ export class Engine implements EngineHost {
     };
     try {
       const output = await handle.result;
-      return { output, usage: rollUp() };
+      const usage = rollUp();
+      if (usage.input > 0 || usage.output > 0 || usage.usd > 0) {
+        // The child's charges landed in ITS journal; the parent's displayed
+        // budget (projections and the index prefer the LAST sample) must see
+        // them too, or a paid child leaves the parent's spend reading zero.
+        // Best-effort: the sample is display, never truth.
+        await parent
+          .append([
+            { type: "budget.sampled", tokens: parent.budget.spentTokens(), usd: parent.budget.spentUsd() },
+          ])
+          .catch(() => undefined);
+      }
+      return { output, usage, childRunId: childId };
     } catch (err) {
       const stepError = StepError.from(err, {
         kind: "workflow",
@@ -841,6 +883,11 @@ export class Engine implements EngineHost {
       if (!isCancellation(stepError)) {
         const usage = rollUp();
         if (usage.input > 0 || usage.output > 0 || usage.usd > 0 || usage.samples > 0) {
+          await parent
+            .append([
+              { type: "budget.sampled", tokens: parent.budget.spentTokens(), usd: parent.budget.spentUsd() },
+            ])
+            .catch(() => undefined);
           const detail =
             typeof stepError.detail === "object" && stepError.detail !== null ? stepError.detail : {};
           throw new StepError(stepError.code, stepError.message, {

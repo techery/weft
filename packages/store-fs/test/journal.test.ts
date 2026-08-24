@@ -4,7 +4,7 @@
  * processes; watch() serves the backlog before anything live; projections are
  * rebuildable from the JSONL alone.
  */
-import { appendFile, readFile, stat, utimes, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JournalRecord, RunState, TreePhase } from "@weft/core";
 import { reduceState, renderReport, renderTree } from "@weft/core";
@@ -512,6 +512,20 @@ describe("appendIf", () => {
     expect(await canceller.appendIf("run-a", 1, [{ type: "run.cancelled" }])).toBeUndefined();
     const recs = await drain(canceller, "run-a");
     expect(recs.map((r) => r.ev.type)).toEqual(["run.created", "run.completed"]);
+  });
+});
+
+describe("read failures", () => {
+  test("an unreadable journal surfaces instead of reading as an empty run", async () => {
+    const dir = await tempDir();
+    // journal.jsonl as a DIRECTORY: readFile fails with EISDIR — a real storage
+    // fault, not absence. Swallowed, resume/state/indexing would report this
+    // durable run as "not found".
+    await mkdir(join(dir, "run-x", "journal.jsonl"), { recursive: true });
+    const store = new FsJournalStore(dir);
+    await expect(drain(store, "run-x")).rejects.toThrow(/EISDIR/);
+    // True absence still reads as an empty run.
+    expect(await drain(store, "run-absent")).toEqual([]);
   });
 });
 

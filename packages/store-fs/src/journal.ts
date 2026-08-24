@@ -19,6 +19,12 @@ interface RunCache {
   watchers: Set<(records: JournalRecord[]) => void>;
 }
 
+/** True only for genuine path ABSENCE — the one condition safe to read as "no journal". */
+function absent(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
 /**
  * JSONL journal, one directory per run. Appends are a single write + fsync per
  * batch; indices are monotonic per run. watch() serves in-process appends
@@ -55,8 +61,11 @@ export class FsJournalStore implements JournalStore {
         byteOffset += Buffer.byteLength(lines[i] as string) + 1;
         if ((lines[i] as string).trim().length > 0) count++;
       }
-    } catch {
-      // no journal yet
+    } catch (err) {
+      // Only ABSENCE means "no journal yet". EACCES/EIO would seed a zero cache
+      // over a real journal — the next append's reconcile-and-truncate would
+      // then be reasoning from a lie about a file it cannot even read.
+      if (!absent(err)) throw err;
     }
     cached = { count, byteOffset, watchers: new Set() };
     this.cache.set(runId, cached);
@@ -97,8 +106,8 @@ export class FsJournalStore implements JournalStore {
       try {
         const { size } = await fs.stat(this.journalPath(runId));
         if (size > cached.byteOffset) await fs.truncate(this.journalPath(runId), cached.byteOffset);
-      } catch {
-        // no journal yet
+      } catch (err) {
+        if (!absent(err)) throw err; // a stat failure is not "no journal yet"
       }
       // Indices are TENTATIVE until the payload is durably on disk: a stringify or
       // I/O failure that had already advanced the cache would poison every later
@@ -226,7 +235,8 @@ export class FsJournalStore implements JournalStore {
     let size = 0;
     try {
       size = (await fs.stat(this.journalPath(runId))).size;
-    } catch {
+    } catch (err) {
+      if (!absent(err)) throw err;
       return; // no journal yet
     }
     if (size <= cached.byteOffset) return;
@@ -258,7 +268,11 @@ export class FsJournalStore implements JournalStore {
     let raw: string;
     try {
       raw = await fs.readFile(path, "utf8");
-    } catch {
+    } catch (err) {
+      // An absent journal reads as an empty run; an UNREADABLE one must not —
+      // resume/state/indexing would report a durable run as "not found" and
+      // hide the storage failure.
+      if (!absent(err)) throw err;
       return;
     }
     // The final element is "" when the file ends with \n, or a crashed writer's
@@ -332,7 +346,10 @@ export class FsJournalStore implements JournalStore {
       entries = (await fs.readdir(this.runsDir, { withFileTypes: true }))
         .filter((e) => e.isDirectory())
         .map((e) => e.name);
-    } catch {
+    } catch (err) {
+      // A runs directory that does not exist yet lists nothing; one that cannot
+      // be READ must not masquerade as empty.
+      if (!absent(err)) throw err;
       return [];
     }
     const out: RunSummary[] = [];
