@@ -347,7 +347,9 @@ export interface GitApi {
   ): Promise<void>;
   reset(opts: { to: string; mode?: "soft" | "mixed" | "hard" } & GitWriteOpts): Promise<void>;
   apply(opts: { patch: string; threeWay?: boolean } & GitWriteOpts): Promise<void>;
-  tag(name: string, opts?: { ref?: string } & GitWriteOpts): Promise<void>;
+  /** Returns the COMMIT the tag points at — journaled so resume can verify the
+   * tag was not re-pointed (git tag -f) while the run was suspended. */
+  tag(name: string, opts?: { ref?: string } & GitWriteOpts): Promise<{ sha: string }>;
   branch: {
     create(name: string, opts?: { from?: string; checkout?: boolean } & GitWriteOpts): Promise<void>;
     delete(name: string, opts?: { force?: boolean } & GitWriteOpts): Promise<void>;

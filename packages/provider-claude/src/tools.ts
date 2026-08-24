@@ -289,11 +289,12 @@ export function isReadOnlyCommand(command: string): boolean {
     // long option on o) — a short-option group ending in o takes the next word
     // as its output file.
     if (name === "sort" && /\s(?:-[a-zA-Z]*o|--o)/.test(seg)) return false;
-    // uniq reads — unless a SECOND positional argument names its output file
-    // (`uniq input output` WRITES output). Conservative: two option-free words
-    // refuse the command, a separated flag argument (-f 2) included; `-` counts
-    // (it is stdin, and whatever follows it is the output).
-    if (name === "uniq") {
+    // uniq and xxd read — unless a SECOND positional argument names an output
+    // file (`uniq input output` and `xxd input output` both WRITE output).
+    // Conservative: two option-free words refuse the command, a separated flag
+    // argument (-f 2, -c 16) included; `-` counts (it is stdin, and whatever
+    // follows it is the output).
+    if (name === "uniq" || name === "xxd") {
       const positional = words.slice(i + 1).filter((w) => !(w.startsWith("-") && w.length > 1));
       if (positional.length > 1) return false;
       continue;

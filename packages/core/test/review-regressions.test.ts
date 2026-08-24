@@ -3420,4 +3420,37 @@ describe("codex review findings, round 44 (PR #1)", () => {
     await t2.engine.answer(h1.runId, o2.pending[0]?.id ?? "", { go: true });
     expect(await h2.result).toEqual({ current: "feature" });
   });
+
+  test("a replayed tag is re-established when someone re-pointed it with -f", async () => {
+    const t1 = testEngine();
+    const cwd = await tempRepo({ "a.txt": "base\n" });
+    const def = defineWorkflow(
+      { name: "tagged", description: "t", input: z.object({}), output: z.object({ sha: z.string() }) },
+      async (ctx) => {
+        const head = await ctx.git.head();
+        const tag = await ctx.git.tag("release", { ref: head.sha });
+        await ctx.human.ask({ question: "publish?", schema: z.object({ go: z.boolean() }) });
+        return { sha: tag.sha };
+      },
+    );
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the ask");
+    const original = (await execa("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
+    await t1.engine.shutdown();
+    // Someone re-points the tag while the run is suspended: the NAME still
+    // resolves, so existence alone would serve the stale completion and a
+    // later live push would publish the wrong commit.
+    await execa("git", ["commit", "--allow-empty", "-m", "drift"], { cwd });
+    await execa("git", ["tag", "-f", "release", "HEAD"], { cwd });
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the ask again");
+    await t2.engine.answer(h1.runId, o2.pending[0]?.id ?? "", { go: true });
+    expect(await h2.result).toEqual({ sha: original });
+    const peeled = (await execa("git", ["rev-parse", "release^{commit}"], { cwd })).stdout.trim();
+    expect(peeled).toBe(original);
+  });
 });

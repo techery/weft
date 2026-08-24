@@ -330,6 +330,7 @@ describe("the tool gate", () => {
       "scripts/sort input.txt",
       "git reflog expire --expire=now --all", // reflog's mutating forms destroy recovery history
       "git reflog delete HEAD@{1}",
+      "xxd input.bin clobbered.txt", // xxd's SECOND positional is an output file
       "sort --o clobbered input.txt", // GNU sort abbreviates --output too
       "find . -e'x'ec touch changed \\;", // bash concatenates the quoted split back to -exec
       'find . -e"x"ec touch changed \\;',
@@ -363,6 +364,7 @@ describe("the tool gate", () => {
     expect(await ask(options, "Bash", { command: "git reflog show HEAD" })).toEqual({
       behavior: "allow",
     });
+    expect(await ask(options, "Bash", { command: "xxd input.bin" })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Bash", { command: "diff -u a.txt b.txt" })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Bash", { command: "grep 'end$' src/a.ts" })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Bash", { command: 'grep -c "plain text" notes.md' })).toEqual({

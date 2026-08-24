@@ -1483,8 +1483,30 @@ export function buildCtx(rt: RunRuntime): Ctx {
         `git.tag ${name}`,
         { name, ref: opts?.ref ?? null },
         opts,
-        () => gitHandle.tag(name, opts?.ref ? { ref: opts.ref } : {}),
-        async () => (await gitHandle.revParse(name)) !== null,
+        async () => {
+          if ((await gitHandle.revParse(name)) === null) {
+            await gitHandle.tag(name, opts?.ref ? { ref: opts.ref } : {});
+          } else {
+            // Re-execution after a refused verify: the tag stands at the wrong
+            // target — re-establish it (a fresh first run never lands here, so
+            // the name already passed tag()'s validation once).
+            await gitHandle.raw(["tag", "-f", name, ...(opts?.ref ? [opts.ref] : [])]);
+          }
+          // The tagged COMMIT rides the journal so resume can tell "this tag
+          // still points where this step put it" from "someone re-pointed it
+          // with tag -f while the run was suspended".
+          const peeled = await gitHandle.raw(["rev-parse", "--verify", `${name}^{commit}`]);
+          return { sha: peeled.stdout.trim() };
+        },
+        async (journaled) => {
+          const peeled = await gitHandle.raw(["rev-parse", "--verify", `${name}^{commit}`], {
+            allowFailure: true,
+          });
+          if (peeled.exitCode !== 0) return false;
+          // A journal from before the sha was recorded can only verify existence.
+          const j = journaled as { sha?: string } | null | undefined;
+          return j?.sha === undefined || peeled.stdout.trim() === j.sha;
+        },
       ),
     branch: {
       create: (name, opts) =>
