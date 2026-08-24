@@ -172,15 +172,29 @@ async function tick(deadline: number): Promise<boolean> {
   return true;
 }
 
+/** Node's signed-32-bit setTimeout ceiling (~24.8 days); longer delays clamp to ~1ms. */
+const MAX_TIMER_MS = 2_147_483_647;
+
 async function race<T>(promise: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
   if (ms <= 0) return TIMED_OUT;
   let timer: NodeJS.Timeout | undefined;
+  const deadline = Date.now() + ms;
   try {
     return await Promise.race([
       promise,
       new Promise<typeof TIMED_OUT>((resolve) => {
-        timer = setTimeout(() => resolve(TIMED_OUT), ms);
-        timer.unref?.();
+        // A "30d" wait would overflow the timer and "time out" on the spot —
+        // arm the deadline in ceiling-sized chunks like the polling path.
+        const arm = (): void => {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) {
+            resolve(TIMED_OUT);
+            return;
+          }
+          timer = setTimeout(arm, Math.min(remaining, MAX_TIMER_MS));
+          timer.unref?.();
+        };
+        arm();
       }),
     ]);
   } finally {

@@ -316,6 +316,17 @@ export default defineWorkflow(
     expect(done.status).toBe("complete");
   });
 
+  it("honors a wait deadline beyond Node's timer ceiling instead of expiring instantly", async () => {
+    const s = await session();
+    const { runId } = await json<{ runId: string }>(s, "weft_run", { source: SLEEPY });
+    // "30d" overflows the signed-32-bit timer: the race's one-shot setTimeout
+    // clamped to ~1ms and reported { status: "running" } before the run's
+    // 800ms sleep ever finished.
+    const done = await json<WaitReply>(s, "weft_wait", { runId, timeout: "30d" });
+    expect(done.status).toBe("complete");
+    expect((done.output as { slept?: boolean } | undefined)?.slept).toBe(true);
+  });
+
   it("answers and resumes a run from a second session over the same repo", async () => {
     const cwd = await tempRepo();
     await mkdir(path.join(cwd, ".weft", "workflows"), { recursive: true });

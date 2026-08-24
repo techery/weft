@@ -476,7 +476,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
               // record carries exactly what was charged for the resume-time restore.
               const failed = err as { detail?: { usage?: Usage } };
               const carried = failed.detail?.usage;
-              if (carried && (carried.input > 0 || carried.output > 0)) {
+              // Request-priced providers can report a paid failure as USD alone
+              // (input/output both 0): that spend is just as real.
+              if (carried && (carried.input > 0 || carried.output > 0 || (carried.usd ?? 0) > 0)) {
                 // An aborted attempt may already be abandoned: charge, don't journal.
                 const priced = chargeUsage(carried, { journal: !io.signal.aborted });
                 failed.detail = { ...failed.detail, usage: priced };
@@ -665,12 +667,17 @@ export function buildCtx(rt: RunRuntime): Ctx {
       // so usage accumulates across turns, and turns preceding a failure are
       // charged too (the exhausted/error throws carry the spend for the caller).
       const used: Usage = { input: 0, output: 0 };
+      // Each turn normalizes on its own: a malformed turn reporting a NEGATIVE
+      // component would otherwise subtract spend earlier turns really burned,
+      // and Budget.charge's clamp only sees the already-corrupted sum.
+      const positive = (v: number | undefined): number =>
+        typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0;
       const addUsage = (u: Usage | undefined) => {
         if (!u) return;
-        used.input += u.input ?? 0;
-        used.output += u.output ?? 0;
-        if (u.cacheRead !== undefined) used.cacheRead = (used.cacheRead ?? 0) + u.cacheRead;
-        if (u.usd !== undefined) used.usd = (used.usd ?? 0) + u.usd;
+        used.input += positive(u.input);
+        used.output += positive(u.output);
+        if (u.cacheRead !== undefined) used.cacheRead = (used.cacheRead ?? 0) + positive(u.cacheRead);
+        if (u.usd !== undefined) used.usd = (used.usd ?? 0) + positive(u.usd);
       };
       let attempts = 1;
       let result: AgentResult;
@@ -685,7 +692,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
         throw new StepError("provider_error", `${providerId}: ${(err as Error).message}`, {
           step: stepRef,
           cause: err,
-          ...(used.input > 0 || used.output > 0 ? { detail: { usage: { ...used } } } : {}),
+          ...(used.input > 0 || used.output > 0 || (used.usd ?? 0) > 0
+            ? { detail: { usage: { ...used } } }
+            : {}),
         });
       }
       addUsage(result.usage);

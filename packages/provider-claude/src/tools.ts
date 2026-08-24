@@ -140,11 +140,12 @@ export function isReadOnlyCommand(command: string): boolean {
       // The diff family's --output=<file> sends the result to a FILE: a "read"
       // subcommand alone is not proof of read-only behavior.
       if (/\s--output\b/.test(seg)) return false;
-      // --ext-diff and --textconv EXECUTE external helpers git picks up from
-      // config or environment (`GIT_EXTERNAL_DIFF=touch git diff --ext-diff`
-      // runs touch); and a GIT_* assignment prefix exists precisely to steer
-      // git toward such helpers — a read never needs one.
-      if (/\s--(?:ext-diff|textconv)\b/.test(seg)) return false;
+      // --ext-diff, --textconv and --filters EXECUTE external helpers git picks
+      // up from config or environment (`GIT_EXTERNAL_DIFF=touch git diff
+      // --ext-diff` runs touch; `cat-file --filters` runs the path's configured
+      // clean/smudge commands); and a GIT_* assignment prefix exists precisely
+      // to steer git toward such helpers — a read never needs one.
+      if (/\s--(?:ext-diff|textconv|filters)\b/.test(seg)) return false;
       if (words.slice(0, i).some((w) => /^GIT_[A-Za-z0-9_]*=/.test(w))) return false;
       // grep's -O/--open-files-in-pager EXECUTES the named pager on the matched
       // files (bare -O runs the default pager). Every spelling: bare, attached

@@ -311,6 +311,7 @@ describe("the tool gate", () => {
       "GIT_EXTERNAL_DIFF=touch git diff --ext-diff", // git EXECUTES the helper the env names
       "git diff --ext-diff",
       "git show --textconv HEAD", // textconv filters are external commands too
+      "git cat-file --filters HEAD:README.md", // runs the path's clean/smudge commands
       "GIT_PAGER=touch git log", // a GIT_* override on a "read" exists to steer helpers
     ]) {
       expect(await ask(options, "Bash", { command }), command).toEqual({
@@ -325,6 +326,9 @@ describe("the tool gate", () => {
       behavior: "allow",
     });
     expect(await ask(options, "Bash", { command: "find src -name '*.ts'" })).toEqual({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: "git cat-file -p HEAD:README.md" })).toEqual({
+      behavior: "allow",
+    });
     expect(await ask(options, "Bash", { command: "sort -u -r input.txt | head" })).toEqual({
       behavior: "allow",
     });

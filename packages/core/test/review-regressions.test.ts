@@ -2994,3 +2994,88 @@ describe("codex review findings, round 34 (PR #1)", () => {
     await expect(h2.result).rejects.toMatchObject({ code: "budget_exceeded" });
   });
 });
+
+describe("codex review findings, round 35 (PR #1)", () => {
+  test("a failed turn that cost only USD still charges and journals its spend", async () => {
+    // A request-priced provider: the turn burned real money but zero tokens.
+    const paidFailure: AgentProvider = {
+      id: "claude",
+      capabilities: () => ({
+        structured: "tool",
+        permissionHook: false,
+        sessionResume: false,
+        reportsUsd: true,
+      }),
+      run: () =>
+        Promise.reject(
+          Object.assign(new Error("burned the request fee, returned nothing"), {
+            usage: { input: 0, output: 0, usd: 0.5 },
+          }),
+        ),
+      repair: () => Promise.reject(new Error("no session to repair")),
+    };
+    const providers = new ProviderRegistry();
+    providers.register(paidFailure);
+    const journal = new MemoryJournalStore();
+    const engine = new Engine({ journal, blobs: new MemoryBlobStore(), providers });
+    const def = defineWorkflow(
+      { name: "usdonly", description: "u", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("pay by request", { schema: z.object({ ok: z.boolean() }), key: "u1" });
+        return {};
+      },
+    );
+    const h = await engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(h.result).rejects.toMatchObject({ code: "provider_error" });
+    const recs = await records(journal, h.runId);
+    // The spend rides the failure record (what a resume restores)…
+    const failed = recs.find((r) => r.ev.type === "step.failed")?.ev;
+    if (failed?.type !== "step.failed") throw new Error("expected step.failed");
+    expect((failed.error.detail as { usage?: { usd?: number } }).usage?.usd).toBeCloseTo(0.5, 6);
+    // …and the live budget really charged it.
+    const sampled = recs.filter((r) => r.ev.type === "budget.sampled").at(-1)?.ev;
+    if (sampled?.type !== "budget.sampled") throw new Error("expected budget.sampled");
+    expect(sampled.usd).toBeCloseTo(0.5, 6);
+  });
+
+  test("a repair turn reporting negative usage cannot erase earlier turns' spend", async () => {
+    // First turn: invalid output, 100 real input tokens. Repair turn: valid
+    // output, but a malformed NEGATIVE usage report. Summed raw, the -100
+    // cancels the first turn before Budget.charge's clamp ever sees it.
+    const negativeRepair: AgentProvider = {
+      id: "claude",
+      capabilities: () => ({
+        structured: "tool",
+        permissionHook: false,
+        sessionResume: false,
+        reportsUsd: true,
+      }),
+      run: () =>
+        Promise.resolve({ output: {}, usage: { input: 100, output: 0, usd: 0.25 }, sessionId: "s1" }),
+      repair: () =>
+        Promise.resolve({
+          output: { ok: true },
+          usage: { input: -100, output: 0, usd: -0.25 },
+          sessionId: "s1",
+        }),
+    };
+    const providers = new ProviderRegistry();
+    providers.register(negativeRepair);
+    const journal = new MemoryJournalStore();
+    const engine = new Engine({ journal, blobs: new MemoryBlobStore(), providers });
+    const def = defineWorkflow(
+      { name: "negrepair", description: "n", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        return await ctx.agent("try again", { schema: z.object({ ok: z.boolean() }), key: "n1" });
+      },
+    );
+    const h = await engine.start(def, { input: {}, cwd: await tempDir() });
+    expect(await h.result).toEqual({ ok: true });
+    const recs = await records(journal, h.runId);
+    const completed = recs.find((r) => r.ev.type === "step.completed" && r.ev.usage !== undefined)?.ev;
+    if (completed?.type !== "step.completed") throw new Error("expected the agent completion");
+    // The paid first turn survives the malformed repair report.
+    expect(completed.usage?.input).toBe(100);
+    expect(completed.usage?.usd).toBeCloseTo(0.25, 6);
+  });
+});
