@@ -159,6 +159,38 @@ describe("checkSource", () => {
     expect(d?.rule).toBe("no-date-now");
   });
 
+  it("flags WeakRef and FinalizationRegistry (GC timing is not deterministic)", () => {
+    const rules = checkSource(
+      [`const r = new WeakRef({});`, `const reg = new FinalizationRegistry(() => {});`].join("\n"),
+      "gc.ts",
+    ).map((d) => d.rule);
+    expect(rules).toEqual(["no-gc-globals", "no-gc-globals"]);
+  });
+
+  it("does not flag a workflow's own binding named WeakRef", () => {
+    expect(checkSource(`const WeakRef = 1; export const x = { WeakRef: 2 };`, "own.ts")).toEqual([]);
+  });
+
+  it("flags locale-sensitive formatting and collation", () => {
+    const rules = checkSource(
+      [
+        `const a = (1000.5).toLocaleString("de-DE");`,
+        `const b = ["a", "b"].sort((x, y) => x.localeCompare(y));`,
+        `const c = d.toLocaleDateString();`,
+      ].join("\n"),
+      "locale.ts",
+    ).map((d) => d.rule);
+    expect(rules).toEqual(["no-locale", "no-locale", "no-locale"]);
+  });
+
+  it("flags Intl, including through computed access", () => {
+    const rules = checkSource(
+      [`const f = new Intl.DateTimeFormat();`, `const g = Intl["NumberFormat"];`].join("\n"),
+      "intl.ts",
+    ).map((d) => d.rule);
+    expect(rules).toEqual(["no-intl", "no-intl"]);
+  });
+
   it("flags argless new Date() but not new Date(value)", () => {
     const lines = [
       `const ok = new Date(1234);`,

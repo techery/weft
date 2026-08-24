@@ -3,8 +3,8 @@
 Durable, journaled, schema-validated multi-agent coding workflows in TypeScript.
 
 Weft runs multi-agent coding workflows you write as ordinary TypeScript programs. Every step — an agent
-turn, a human answer, a shell command, an HTTP call, a git read — returns a schema-validated value, never
-prose and never `null`. Every run is journaled to an append-only event log, so it survives a crash, a
+turn, a human answer, a shell command, an HTTP call, a git read — returns a schema-validated value, so the
+plumbing between steps is typed rather than parsed. Every run is journaled to an append-only event log, so it survives a crash, a
 reboot, or an overnight wait on a human, and resumes from the line it stopped on. The same script runs on
 Claude (Agent SDK) or Codex (Codex SDK), from a terminal or from inside a Claude Code / Codex session over
 MCP, and leaves behind two records of what happened: the mechanical journal and a generated report.
@@ -16,12 +16,17 @@ Status: design preview. See [Status and honest deviations](#status-and-honest-de
 - **The graph is your code.** `await` is a sequential edge, `ctx.parallel` fans out and joins,
   `ctx.pipeline` runs independent lanes, `if` on a typed field is a conditional edge, `while` is a bounded
   loop. There is no separate graph DSL to keep in sync with the program.
-- **Every step returns a schema-validated value.** `schema` is required on `agent`, `human.*`, `check`, and
-  workflow I/O. Invalid output is repaired in the same session with the validation errors fed back, not
-  thrown away; there is no free-text channel to parse.
+- **Every step returns a schema-validated value.** `schema` is required on `agent`, `human.*`, and workflow
+  I/O (`ctx.check` returns a fixed `{ status, evidence }`). Invalid output is repaired in the same session
+  with the validation errors fed back, not thrown away. A `z.string()` field is still prose — the guarantee
+  is that what flows *between* steps has a shape you declared, not that prose is gone. Steps that opt out
+  say so: `onError: "null"` yields `T | null`, and `ctx.exec`/`bash`/`fetch` without a `schema` hand back
+  the raw result.
 - **Durable by journaled replay, and replay is edit-tolerant.** Side effects are journaled steps; resume
   re-executes your code and serves completed steps from the journal. Reordering steps is free, rewording a
-  prompt re-runs that step and what depended on it, and a cache miss re-runs rather than lying.
+  prompt re-runs that step and what depended on it, and a cache miss re-runs rather than lying. Identity is
+  content plus `key`: give each call a distinct `key` when two of them could share a prompt and schema, or
+  replay re-runs them rather than guess which journaled answer belongs to which.
 - **Humans are steps.** `ctx.gate` and `ctx.human.ask/approve/review` suspend the run durably. The answer
   can arrive hours later from the CLI, the web UI, or the session that started the run, and it is validated
   like any other output. Auto-approvals by policy are still recorded.
@@ -201,11 +206,11 @@ Only `journal.jsonl` has to survive; every other file in that directory is rebui
 | --- | --- |
 | `@techery/weft-sdk` | `defineWorkflow`, the `ctx` types, the Zod re-export. Zero runtime deps beyond Zod. |
 | `@techery/weft-core` | Scheduler, replayer, journal model, budget, HITL broker, projections. No SDK imports. |
-| `@techery/weft-gate` | TS parse, AST rules, esbuild bundling, sandboxed loader, unawaited-promise check. |
+| `@techery/weft-gate` | TS parse, the AST rule set (clock, randomness, timers, network, env, imports, GC and locale globals), esbuild bundling, the sandboxed loader. |
 | `@techery/weft-store-fs`, `@techery/weft-index-sqlite` | JournalStore and BlobStore on the filesystem; an optional derived `node:sqlite` run index. |
 | `@techery/weft-provider-claude`, `@techery/weft-provider-codex`, `@techery/weft-provider-mock` | `AgentProvider` adapters behind a shared conformance suite (structured output, repair, scope, abort, usage). |
 | `@techery/weft-git` | `ctx.git.*`: typed read/write git operations with fixed risk tiers. |
-| `@techery/weft-isolation` | Worktrees, patch capture, scope checks, 3-way merge, conflict handling. |
+| `@techery/weft-isolation` | Worktrees, patch capture, scope checks. (Merge and conflict handling live with `ctx.integrate` in `@techery/weft-core`.) |
 | `@techery/weft-stdlib` | Typed patterns: `adversarialVerify`, `judgePanel`, `loopUntilDry`, `integrationLedger`, `finalReport`, … |
 | `@techery/weft-testing` | `runWorkflow` harness, mock fixtures, journal assertions, store conformance suites. |
 | `@techery/weft-host` | Engine assembly shared by the hosts: config loading, stores, providers, workflow registry. |
@@ -276,6 +281,9 @@ This repository implements the design in the two design documents. Where it does
    thread; the loader currently evaluates the bundled script in a `vm` context whose globals are replaced.
    Either way it is a determinism fence, not a security boundary — workflow scripts are our own agents'. The
    upgrade path (worker thread, or `isolated-vm` if untrusted scripts ever appear) is behind the same seam.
+   The fence is two-layered by design: the AST rules reject the named form at parse time with a fix-it, and
+   the replaced globals stop the computed form (`globalThis["Da" + "te"]`) at run time. The AST half is
+   syntactic and evadable on purpose — it is the cheap early warning, not the boundary.
 2. **The Claude adapter uses the terminating `structured_output` tool only.** Native JSON mode is not wired
    up yet, so every Claude step pays for the SDK-MCP tool round trip even when its schema would fit the
    native path. The schema lint that flags what the native path would reject exists; the native branch does
@@ -285,7 +293,14 @@ This repository implements the design in the two design documents. Where it does
    rather than the component-based UI the design describes.
 4. **TypeScript is pinned to 5.9.** The gate needs the in-process compiler API to parse workflow scripts and
    apply its AST rules; the native 7.x compiler does not expose it yet. Unpinning waits on that API.
-5. **OpenTelemetry spans cover runs, not steps.** One span per run, with the run id as the trace id. The
+5. **Replay identity is content plus `key`, and the world is not in it.** A step's identity hashes its
+   kind, payload, schema, and `key`. What the step could *read* — the working tree an agent greps — is not
+   hashed, which is the trade edit-tolerant replay makes for not forcing you to version every change. Two
+   guards narrow it: a keyless step whose content matches several journaled entries re-runs instead of
+   guessing, and a resume compares a hash of the workflow body so step positions are only trusted when the
+   script did not change. Declared read scopes (`reads:`), which would put the tree hash in the key, are not
+   built.
+6. **OpenTelemetry spans cover runs, not steps.** One span per run, with the run id as the trace id. The
    per-step spans the design describes are not emitted yet, so step-level latency has to come from the
    journal.
 
