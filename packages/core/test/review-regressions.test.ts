@@ -3884,3 +3884,52 @@ describe("codex review findings, round 54 (PR #1)", () => {
     }
   });
 });
+
+describe("codex review findings, round 56 (PR #1)", () => {
+  test("a fresh tag onto an existing name surfaces the collision instead of force-moving it", async () => {
+    const t = testEngine();
+    const cwd = await tempRepo({ "a.txt": "base\n" });
+    // Someone else's tag, planted BEFORE the workflow ever runs, pointing at
+    // the pre-drift commit.
+    const original = (await execa("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
+    await execa("git", ["tag", "release", "HEAD"], { cwd });
+    await execa("git", ["commit", "--allow-empty", "-m", "drift"], { cwd });
+    const def = defineWorkflow(
+      { name: "tagclash", description: "t", input: z.object({}), output: z.object({ sha: z.string() }) },
+      async (ctx) => {
+        const head = await ctx.git.head();
+        const tag = await ctx.git.tag("release", { ref: head.sha });
+        return { sha: tag.sha };
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd });
+    // The first execution has no refused journal entry to justify -f: the
+    // collision must fail the step, exactly like plain `git tag` would.
+    await expect(h.result).rejects.toThrow(/already exists/);
+    const peeled = (await execa("git", ["rev-parse", "release^{commit}"], { cwd })).stdout.trim();
+    expect(peeled).toBe(original);
+  });
+
+  test("a fresh create-and-checkout onto an existing branch fails instead of hijacking it", async () => {
+    const t = testEngine();
+    const cwd = await tempRepo({ "a.txt": "base\n" });
+    const original = (await execa("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
+    await execa("git", ["branch", "feature"], { cwd });
+    await execa("git", ["commit", "--allow-empty", "-m", "drift"], { cwd });
+    const def = defineWorkflow(
+      { name: "brclash", description: "b", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.git.branch.create("feature", { checkout: true });
+        return {};
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd });
+    // Absorbing the collision would silently drop later live commits onto the
+    // pre-existing branch (and ignore any `from`); `git checkout -b` refuses.
+    await expect(h.result).rejects.toThrow(/already exists/);
+    const current = (await execa("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd })).stdout.trim();
+    expect(current).toBe("main");
+    const tip = (await execa("git", ["rev-parse", "feature"], { cwd })).stdout.trim();
+    expect(tip).toBe(original);
+  });
+});

@@ -113,6 +113,14 @@ export interface StepIO {
   /** The ORIGINAL schedule time when resuming an incomplete step (sleep deadlines anchor here). */
   priorScheduledAt?: number;
   childRunId?: string;
+  /**
+   * True when a journaled COMPLETION for this occurrence was refused by
+   * verifyServe: the effect stood once and is being re-established. Recovery
+   * shortcuts that tolerate an already-present effect (an existing branch or
+   * tag) must key on this — on a first execution the same condition is a
+   * COLLISION with someone else's ref and has to surface, not be absorbed.
+   */
+  reExecuting?: boolean;
   appendAttempt(detail?: string): Promise<void>;
   /** Mark the step as a durable wait (sleep/signal): it stops counting as live work. */
   markWaiting(): void;
@@ -575,6 +583,7 @@ export class RunRuntime {
             scheduledAt,
             ...(priorScheduledAt !== undefined ? { priorScheduledAt } : {}),
             ...(childRunId !== undefined ? { childRunId } : {}),
+            ...(refused !== undefined ? { reExecuting: true } : {}),
             appendAttempt: async (detail?: string) => {
               // An ABANDONED attempt (timed out past the drain window, still
               // running as a zombie) must not keep writing to the journal.

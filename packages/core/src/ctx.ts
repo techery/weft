@@ -1422,7 +1422,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     action: string,
     args: unknown,
     opts: GitWriteOpts | undefined,
-    run: () => Promise<T>,
+    run: (io: StepIO) => Promise<T>,
     verifyServe?: (journaled: T) => Promise<boolean>,
   ): Promise<T> {
     const risk = maxRisk(GIT_WRITE_RISK[op], opts?.risk);
@@ -1437,7 +1437,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
       label: action,
       payload: { op: `git.${op}`, args: args ?? null },
       ...(verifyServe && !rt.host.testHooks ? { verifyServe: (j) => verifyServe(j as T) } : {}),
-      execute: async () => ({ value: await gitHooked(op, args, run) }),
+      execute: async (io) => ({ value: await gitHooked(op, args, () => run(io)) }),
     });
   }
 
@@ -1562,14 +1562,16 @@ export function buildCtx(rt: RunRuntime): Ctx {
         `git.tag ${name}`,
         { name, ref: opts?.ref ?? null },
         opts,
-        async () => {
-          if ((await gitHandle.revParse(name)) === null) {
-            await gitHandle.tag(name, opts?.ref ? { ref: opts.ref } : {});
-          } else {
-            // Re-execution after a refused verify: the tag stands at the wrong
-            // target — re-establish it (a fresh first run never lands here, so
-            // the name already passed tag()'s validation once).
+        async (io) => {
+          if (io.reExecuting && (await gitHandle.revParse(name)) !== null) {
+            // Re-execution after a refused verify: THIS step planted the tag
+            // once and it now stands at the wrong target — re-establish it.
+            // Only that provenance justifies -f; on a first execution an
+            // existing name is someone else's tag, and the plain create below
+            // surfaces the collision instead of silently moving it.
             await gitHandle.raw(["tag", "-f", name, ...(opts?.ref ? [opts.ref] : [])]);
+          } else {
+            await gitHandle.tag(name, opts?.ref ? { ref: opts.ref } : {});
           }
           // The tagged COMMIT rides the journal so resume can tell "this tag
           // still points where this step put it" from "someone re-pointed it
@@ -1594,11 +1596,15 @@ export function buildCtx(rt: RunRuntime): Ctx {
           `git.branch.create ${name}`,
           { name, from: opts?.from ?? null, checkout: opts?.checkout ?? false },
           opts,
-          async () => {
+          async (io) => {
             // Re-execution after a refused verify must be idempotent: the
-            // branch may already exist from the first pass — re-establish the
-            // checkout instead of failing on the duplicate create.
-            if (opts?.checkout && (await gitHandle.revParse(name)) !== null) {
+            // branch already exists from THIS step's first pass — re-establish
+            // the checkout instead of failing on the duplicate create. That
+            // provenance is the whole justification: on a first execution an
+            // existing name is someone else's branch, and quietly checking it
+            // out (ignoring `from`) would land later commits on it — let the
+            // plain create fail on the collision instead.
+            if (io.reExecuting && opts?.checkout && (await gitHandle.revParse(name)) !== null) {
               await gitHandle.checkout(name);
               return;
             }
