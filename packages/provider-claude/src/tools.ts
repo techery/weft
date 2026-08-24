@@ -283,6 +283,13 @@ export function isReadOnlyCommand(command: string): boolean {
     // Clustered spellings count (-lu, -tl), and --pag… covers the long form's
     // unambiguous abbreviations without catching --palette.
     if (name === "diff" && /\s-[a-zA-Z]*l|\s--pag/.test(seg)) return false;
+    // tree reads — unless -o/--output sends the listing to a FILE.
+    if (name === "tree" && /\s-[a-zA-Z]*o|\s--o/.test(seg)) return false;
+    // file reads — unless -C/--compile WRITES a compiled magic.mgc.
+    if (name === "file" && /\s-[a-zA-Z]*C|\s--comp/.test(seg)) return false;
+    // date reads — unless -s/--set SETS the system clock (containers often run
+    // as root, where it would actually land).
+    if (name === "date" && /\s-[a-zA-Z]*s|\s--set/.test(seg)) return false;
     // sort reads — unless -o/--output turns it into a file writer. Every spelling
     // counts: separated (-o FILE), attached (-oFILE), clustered (-ro FILE), long
     // (--output FILE, --output=FILE) and its GNU abbreviations (--o…, sort's only
