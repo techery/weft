@@ -286,6 +286,31 @@ describe("diff", () => {
     expect(patch).toBe("");
     expect(stats).toEqual({ files: 0, insertions: 0, deletions: 0 });
   });
+
+  test("never executes .gitattributes diff drivers or textconv (codex review round 55, PR #1)", async () => {
+    const git = await initRepo();
+    // A repository-attached helper: diff.evil.command replaces the hunk
+    // machinery and diff.evil.textconv rewrites blobs — both EXECUTE on plain
+    // porcelain `git diff`/`show <commit>`/`blame` unless explicitly disabled.
+    // Each drops a marker file when it runs.
+    const sha = await seed(git, { "a.txt": "one\ntwo\n", ".gitattributes": "*.txt diff=evil\n" }, "init");
+    const extMarker = path.join(git.cwd, "ran-ext-diff");
+    const tcMarker = path.join(git.cwd, "ran-textconv");
+    await execa("git", ["config", "diff.evil.command", `touch ${extMarker}`], { cwd: git.cwd });
+    await execa("git", ["config", "diff.evil.textconv", `touch ${tcMarker} && cat`], { cwd: git.cwd });
+    await write(git, "a.txt", "one\ntwo\nthree\n");
+
+    const { patch, stats } = await git.diff();
+    expect(patch).toContain("+three");
+    expect(stats).toEqual({ files: 1, insertions: 1, deletions: 0 });
+
+    expect((await git.show(sha)).content).toContain("+one");
+    expect((await git.show(`${sha}:a.txt`)).content).toBe("one\ntwo\n");
+    expect((await git.blame("a.txt", { lines: [1, 1] })).lines[0]?.content).toBe("one");
+
+    expect(existsSync(extMarker)).toBe(false);
+    expect(existsSync(tcMarker)).toBe(false);
+  });
 });
 
 describe("log", () => {

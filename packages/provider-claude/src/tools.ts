@@ -167,7 +167,10 @@ function shellWords(command: string): string[][] | null {
         const c = command[j] as string;
         if (c === "$" || c === "`") return null; // expands inside double quotes
         if (c === "\\" && j + 1 < command.length) {
-          out += command[j + 1];
+          // Backslash-newline is a line continuation even inside double quotes:
+          // bash deletes both characters. Keeping the newline would split a
+          // screened option ("--ou\<NL>t") past its regex.
+          if (command[j + 1] !== "\n") out += command[j + 1];
           j++;
         } else out += c;
       }
@@ -176,7 +179,10 @@ function shellWords(command: string): string[][] | null {
       i = j;
     } else if (ch === "\\") {
       if (i + 1 >= command.length) return null;
-      push(command[i + 1] as string);
+      // Backslash-newline is a line continuation: bash deletes BOTH characters,
+      // joining the line with no word break. Pushing the newline instead would
+      // let `git diff --ou\<NL>t=f` carry a screened option past its regex.
+      if (command[i + 1] !== "\n") push(command[i + 1] as string);
       i++;
     } else if (ch === "$" || ch === "`" || ch === "{") {
       return null; // expansion, substitution, or brace expansion (-exe{c,c})
@@ -307,6 +313,13 @@ export function isReadOnlyCommand(command: string): boolean {
     // long option on o) — a short-option group ending in o takes the next word
     // as its output file.
     if (name === "sort" && /\s(?:-[a-zA-Z]*o|--o)/.test(seg)) return false;
+    // printf reads — unless bash's -v VAR form assigns the formatted result to
+    // a shell VARIABLE: `printf -v PATH .` rewrites where every later bare
+    // name in the chain resolves, turning the allow-listed readers into
+    // repository-controlled executables. Attached (-vPATH) and clustered
+    // spellings count; bash printf has no long options, but --v… is refused
+    // for symmetry with the abbreviation screens above.
+    if (name === "printf" && /\s-[a-zA-Z]*v|\s--v/.test(seg)) return false;
     // uniq and xxd read — unless a SECOND positional argument names an output
     // file (`uniq input output` and `xxd input output` both WRITE output).
     // Conservative: two option-free words refuse the command, a separated flag
@@ -358,7 +371,10 @@ export function isRiskyCommand(command: string): boolean {
   // classification must match against the resolved text. Stripping is for
   // MATCHING only and errs toward the stricter reading: a "push" inside a
   // quoted string routes to approval rather than sailing past.
-  const resolved = command.replace(/[\\'"]/g, "");
+  // Backslash-newline first: bash deletes the PAIR as a line continuation, so
+  // `git pu\<NL>sh` runs `git push`. The generic strip alone would leave the
+  // newline behind, splitting the reassembled word across two segments.
+  const resolved = command.replace(/\\\r?\n/g, "").replace(/[\\'"]/g, "");
   if (RISKY_PATTERNS.some((re) => re.test(resolved))) return true;
   // `git -C . push` is still a push: resolve the effective subcommand per segment
   // instead of trusting adjacency in the raw string.

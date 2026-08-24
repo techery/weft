@@ -343,6 +343,10 @@ describe("the tool gate", () => {
       "git diff --out'put'=clobbered", // quoted splits of screened long options
       "sort -'o' clobbered input.txt",
       "find . -e*ec touch changed \\;", // a glob can expand to a repo file named "-exec"
+      "git diff --ou\\\nt=clobbered", // backslash-newline continuation reassembles --out
+      'git diff "--ou\\\nt=clobbered"', // ...and continuations join inside double quotes too
+      "printf -v PATH .", // printf -v ASSIGNS a shell variable — here, where readers resolve
+      "printf -vPATH . ; cat f.txt", // attached spelling, steering the next reader in the chain
     ]) {
       expect(await ask(options, "Bash", { command }), command).toEqual({
         behavior: "deny",
@@ -386,6 +390,9 @@ describe("the tool gate", () => {
       behavior: "allow",
     });
     expect(await ask(options, "Bash", { command: "uniq input.txt" })).toEqual({ behavior: "allow" });
+    // Plain printf stays a reader; a line continuation joins like bash joins.
+    expect(await ask(options, "Bash", { command: "printf 'x\\n' one two" })).toEqual({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: "ca\\\nt notes.txt" })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Grep", { pattern: "todo" })).toEqual({ behavior: "allow" });
   });
 
@@ -743,6 +750,11 @@ describe("risky classification of dynamic commands", () => {
     // Backslash escapes resolve the same way quotes do: `git p\ush` IS a push.
     expect(isRiskyCommand("git p\\ush origin main")).toBe(true);
     expect(isRiskyCommand("git -C . pu\\sh origin main")).toBe(true);
+    // Backslash-NEWLINE is a line continuation: bash deletes the pair, so
+    // `git pu\<NL>sh` reassembles into one `push` word, not two segments.
+    expect(isRiskyCommand("git pu\\\nsh origin main")).toBe(true);
+    expect(isRiskyCommand("git -C . pu\\\nsh origin main")).toBe(true);
+    expect(isRiskyCommand("git sta\\\ntus")).toBe(false);
     // --config-env loads an alias from the ENVIRONMENT — the -c escape hatch
     // in another spelling, abbreviations included.
     expect(isRiskyCommand("SHIP=push git --config-env=alias.ship=SHIP ship origin main")).toBe(true);

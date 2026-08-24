@@ -92,8 +92,16 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
     let names: string[];
     try {
       names = await readdir(dir);
-    } catch {
-      return []; // no .weft/workflows yet — an empty registry, not an error
+    } catch (err) {
+      // Only ABSENCE means an empty registry: no .weft/workflows yet (ENOENT),
+      // or a path component that is a file (ENOTDIR). Any other failure —
+      // EACCES, ELOOP, EIO — is a directory that EXISTS but cannot be read,
+      // and reporting it as "no workflows" would silently hide every workflow.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return [];
+      throw new GateError(`cannot read workflow directory ${dir}: ${(err as Error).message}`, [], {
+        cause: err,
+      });
     }
     return names
       .filter((n) => n.endsWith(".ts") && !n.endsWith(".d.ts"))

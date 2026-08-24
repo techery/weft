@@ -181,7 +181,12 @@ export class GitCli implements Git {
   }
 
   async diff(range: GitRange = {}): Promise<{ patch: string; stats: GitDiffStats }> {
-    const args = diffArgs(range);
+    // A repository can attach EXECUTABLE helpers to plain `git diff` through
+    // .gitattributes: `diff.<driver>.command` replaces the hunk machinery and
+    // `diff.<driver>.textconv` rewrites the blobs, both running by default on
+    // porcelain diffs. A typed READ must never execute repository-controlled
+    // code, so both invocations disable them explicitly.
+    const args = ["--no-ext-diff", "--no-textconv", ...diffArgs(range)];
     const { stdout } = await this.raw(["diff", ...args]);
     const numstat = await this.plumb(["diff", "--numstat", ...args]);
     return { patch: stdout, stats: parseNumstat(numstat.stdout) };
@@ -218,12 +223,17 @@ export class GitCli implements Git {
   }
 
   async show(ref: string): Promise<{ content: string }> {
-    const { stdout } = await this.raw(["show", refArg(ref)]);
+    // Showing a COMMIT renders its patch, which runs .gitattributes textconv
+    // helpers by default — the same repository-controlled execution diff()
+    // refuses. Blob refs ignore the flags, so they are safe unconditionally.
+    const { stdout } = await this.raw(["show", "--no-ext-diff", "--no-textconv", refArg(ref)]);
     return { content: stdout };
   }
 
   async blame(path: string, opts: { lines?: [number, number] } = {}): Promise<{ lines: GitBlameLine[] }> {
-    const args = ["blame", "--line-porcelain"];
+    // blame also honors .gitattributes textconv by default; --no-textconv keeps
+    // this a pure read (blame has no ext-diff path to disable).
+    const args = ["blame", "--no-textconv", "--line-porcelain"];
     if (opts.lines) args.push("-L", `${opts.lines[0]},${opts.lines[1]}`);
     args.push("--", path);
     const { stdout } = await this.plumb(args);

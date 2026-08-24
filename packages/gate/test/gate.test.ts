@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { type Ctx, isZodSchema, validateSchema } from "@weft/sdk";
@@ -801,6 +801,18 @@ describe("createWorkflowRegistry", () => {
     expect(await registry.list()).toEqual([]);
     expect(await registry.get("review")).toBeUndefined();
     await expect(registry.load("review")).rejects.toThrow(/not found/);
+  });
+
+  it("propagates a directory that exists but cannot be read (codex review round 55, PR #1)", async () => {
+    // A self-referential symlink makes readdir fail with ELOOP — an error that
+    // is NOT absence. Reporting it as an empty registry would silently hide
+    // every workflow; it must surface instead. (EACCES is the everyday case,
+    // but tests run as root, where permission bits do not bite.)
+    const dir = path.join(await tempDir(), "workflows");
+    await symlink(dir, dir);
+    const registry = createWorkflowRegistry({ dir });
+    await expect(registry.list()).rejects.toThrow(/cannot read workflow directory/);
+    await expect(registry.load("review")).rejects.toThrow(/cannot read workflow directory/);
   });
 
   it("passes its allow-list down to the gate", async () => {
