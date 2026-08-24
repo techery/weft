@@ -38,9 +38,11 @@ const INSTRUCTIONS = `Weft runs durable, journaled, schema-validated multi-agent
 The loop:
   1. weft_run { workflow | source, input } -> { runId }, immediately; the run continues in the background.
   2. weft_wait { runId } long-polls and returns the next change.
-  3. If it returns { awaiting: { id, question, schema, … } }, ask YOUR user that question, then
-     weft_answer { runId, requestId: awaiting.id, answer } and wait again. Never answer on their behalf,
-     and never guess a value the schema rejects — the error tells you what it wanted.
+  3. If it returns { awaiting: { runId, id, question, schema, … } }, ask YOUR user that question, then
+     weft_answer { runId: awaiting.runId, requestId: awaiting.id, answer } and wait again on the ORIGINAL
+     runId. awaiting.runId names the request's OWNING run — often a child of the one you waited on; request
+     ids are run-local, so answering the wrong run can hit another child's request. Never answer on the
+     user's behalf, and never guess a value the schema rejects — the error tells you what it wanted.
   4. { status: "complete", output } ends the loop. { status: "running" } just means the timeout expired: wait again.
 
 Every reply is JSON — read its fields, do not summarise from prose. weft_report explains a finished

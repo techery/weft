@@ -3783,3 +3783,104 @@ describe("codex review findings, round 52 (PR #1)", () => {
     expect(await h2.result).toEqual({ a: 1, b: 2 });
   });
 });
+
+describe("codex review findings, round 54 (PR #1)", () => {
+  test("skipping a conflicted patch AFTER a restart restores the pre-conflict tree", async () => {
+    const FixResult = z.object({ summary: z.string() });
+    const t1 = testEngine();
+    t1.builder.on({ key: "fix:s" }, { summary: "edit" }, { writes: { "a.txt": "AGENT\n" } });
+    const cwd = await tempRepo({ "a.txt": "base\n" });
+    const def = defineWorkflow(
+      { description: "ss", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        const fix = await ctx.agent.detailed("fix", {
+          schema: FixResult,
+          key: "fix:s",
+          write: { paths: ["a.txt"] },
+        });
+        await ctx.bash("printf 'MAIN\\n' > a.txt");
+        await ctx.integrate([fix], { onConflict: "ask" });
+        return {};
+      },
+    );
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the conflict ask");
+    await t1.engine.shutdown();
+
+    // The tree holds conflict markers while the run is suspended. A resume that
+    // re-snapshots (capturing the markers) or re-applies (stacking onto them)
+    // would make "skip" restore corruption instead of the pre-apply state.
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the ask again");
+    await t2.engine.answer(h1.runId, o2.pending[0]?.id ?? "", { resolution: "skip" });
+    await h2.result;
+    const content = await readFile(join(cwd, "a.txt"), "utf8");
+    expect(content).toBe("MAIN\n");
+    expect(content).not.toContain("<<<<<<<");
+  });
+
+  test("a human answer that legitimately matches the timeout sentinel is NOT a timeout", async () => {
+    const def = defineWorkflow(
+      {
+        name: "senti",
+        description: "s",
+        input: z.object({}),
+        output: z.object({ v: z.string() }),
+      },
+      async (ctx) => {
+        const a = await ctx.human.ask({
+          question: "how should timeouts read?",
+          schema: z.object({ $timeout: z.string() }),
+        });
+        return { v: a.$timeout };
+      },
+    );
+    const t = testEngine();
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o = await h.outcome();
+    if (o.status !== "waiting_for_human") throw new Error("expected the ask");
+    // The VALUE matches the engine's timeout marker, but a human sent it: only
+    // provenance (answeredBy === "timeout") may trigger the timeout path.
+    await t.engine.answer(h.runId, o.pending[0]?.id ?? "", { $timeout: "deny" });
+    expect(await h.result).toEqual({ v: "deny" });
+  });
+
+  test("a HEAD request stays a HEAD across a manual 303 redirect", async () => {
+    let seenMethod = "";
+    const target = createServer((req, res) => {
+      seenMethod = req.method ?? "";
+      res.end();
+    });
+    await new Promise<void>((r) => target.listen(0, () => r()));
+    const tPort = (target.address() as { port: number }).port;
+    const hopper = createServer((_req, res) => {
+      res.writeHead(303, { location: `http://127.0.0.1:${tPort}/see-other` });
+      res.end();
+    });
+    await new Promise<void>((r) => hopper.listen(0, () => r()));
+    const hPort = (hopper.address() as { port: number }).port;
+    try {
+      // fetchAllow forces the MANUAL redirect path, which rewrote EVERY 303 to
+      // GET; native fetch keeps a HEAD a HEAD.
+      const t = testEngine({ config: { fetchAllow: ["localhost", "127.0.0.1"] } });
+      const def = defineWorkflow(
+        { name: "heady", description: "h", input: z.object({}), output: z.object({ status: z.number() }) },
+        async (ctx) => {
+          const res = (await ctx.fetch(`http://localhost:${hPort}/go`, { method: "HEAD" })) as {
+            status: number;
+          };
+          return { status: res.status };
+        },
+      );
+      const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+      expect(await h.result).toEqual({ status: 200 });
+      expect(seenMethod).toBe("HEAD");
+    } finally {
+      target.close();
+      hopper.close();
+    }
+  });
+});

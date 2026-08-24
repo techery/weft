@@ -7,7 +7,14 @@ import { promises as nodeFs } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { createGit, GIT_WRITE_RISK, type Git, type GitWriteOp } from "@weft/git";
-import { addWorktree, applyPatchToTree, capturePatch, checkScope, removeWorktree } from "@weft/isolation";
+import {
+  type ApplyOutcome,
+  addWorktree,
+  applyPatchToTree,
+  capturePatch,
+  checkScope,
+  removeWorktree,
+} from "@weft/isolation";
 import {
   type AgentFn,
   type AgentOptions,
@@ -1312,11 +1319,12 @@ export function buildCtx(rt: RunRuntime): Ctx {
                   { step: ref },
                 );
               }
-              // Method rewriting, the way native fetch does it: 303 always becomes a
-              // GET, and so does a POST answered with 301/302 — endpoints using
-              // POST-then-303 must not receive a second POST.
+              // Method rewriting, the way native fetch does it: a 303 rewrites
+              // to GET unless the method already is GET or HEAD (Fetch keeps a
+              // HEAD a HEAD), and so does a POST answered with 301/302 —
+              // endpoints using POST-then-303 must not receive a second POST.
               if (
-                res.status === 303 ||
+                (res.status === 303 && hopMethod !== "GET" && hopMethod !== "HEAD") ||
                 ((res.status === 301 || res.status === 302) && hopMethod === "POST")
               ) {
                 hopMethod = "GET";
@@ -2004,15 +2012,41 @@ export function buildCtx(rt: RunRuntime): Ctx {
             if (state && !value.applied) state.discarded = true;
           },
           execute: async () => {
-            const baseTree = await treeHash(rt.cwd);
-            // Rollback snapshot must include untracked files (stash-create cannot):
-            // a user's pre-existing untracked file that a patch collides with is
-            // restored on skip/abort, never deleted as patch-created. The patch's
-            // own targets ride along force-added, so even an IGNORED pre-existing
-            // collision file is restorable rather than removed.
-            const snapRef = await integrationBaseCommit(rt.cwd, patch.files);
-            const patchText = await rt.host.blobs.getText(patch.ref);
-            const applied = await applyPatchToTree({ repoRoot: rt.cwd, patch: patchText });
+            // Snapshot and apply are NESTED journaled steps: a resume mid-ask
+            // re-executes this integrate step against a tree the first apply
+            // already conflicted — a fresh snapshot would capture the markers
+            // (so skip/abort "restores" corruption), and a second apply would
+            // stack onto them. Served completions reuse the PRE-conflict
+            // snapshot (pinned under refs/weft/snapshots, gc-safe) and the
+            // first pass's apply outcome without touching the tree again.
+            const { baseTree, snapRef } = await rt.runStep<{ baseTree: string; snapRef: string }>({
+              kind: "sideeffect",
+              label: `integrate:snapshot:${patch.key}`,
+              payload: { op: "integrate.snapshot", key: patch.key, ref: patch.ref },
+              execute: async () => ({
+                value: {
+                  baseTree: await treeHash(rt.cwd),
+                  // Rollback snapshot must include untracked files (stash-create
+                  // cannot): a user's pre-existing untracked file that a patch
+                  // collides with is restored on skip/abort, never deleted as
+                  // patch-created. The patch's own targets ride along
+                  // force-added, so even an IGNORED pre-existing collision file
+                  // is restorable rather than removed.
+                  snapRef: await integrationBaseCommit(rt.cwd, patch.files),
+                },
+              }),
+            });
+            const applied = await rt.runStep<ApplyOutcome>({
+              kind: "sideeffect",
+              label: `integrate:apply:${patch.key}`,
+              payload: { op: "integrate.apply", key: patch.key, ref: patch.ref },
+              execute: async () => ({
+                value: await applyPatchToTree({
+                  repoRoot: rt.cwd,
+                  patch: await rt.host.blobs.getText(patch.ref),
+                }),
+              }),
+            });
             if (applied.ok) {
               const resultTree = await treeHash(rt.cwd);
               await rt.append([

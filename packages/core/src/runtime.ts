@@ -945,7 +945,11 @@ export class RunRuntime {
     outcome: HumanOutcome,
     wrapped: boolean,
   ): Promise<HumanOutcome> {
+    // Provenance first: the sentinel is only the ENGINE's timeout marker when
+    // the timeout path produced it — a human whose schema legitimately accepts
+    // { $timeout: "deny" } must get their answer back, not a human_timeout.
     if (
+      outcome.answeredBy === "timeout" &&
       typeof outcome.answer === "object" &&
       outcome.answer !== null &&
       (outcome.answer as { $timeout?: unknown }).$timeout === "deny"
