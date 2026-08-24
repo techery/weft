@@ -152,6 +152,9 @@ export function isReadOnlyCommand(command: string): boolean {
       if (/\s-(?:delete|exec|execdir|ok|okdir|fls|fprint\w*)\b/.test(seg)) return false;
       continue;
     }
+    // ripgrep reads — unless --pre EXECUTES a preprocessor command on every
+    // searched file (`rg --pre touch pattern file` runs `touch file`).
+    if (name === "rg" && /\s--pre\b/.test(seg)) return false;
     // sort reads — unless -o/--output turns it into a file writer. Every spelling
     // counts: separated (-o FILE), attached (-oFILE), clustered (-ro FILE), long
     // (--output FILE, --output=FILE) — a short-option group ending in o takes the

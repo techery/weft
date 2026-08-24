@@ -1132,10 +1132,20 @@ export function buildCtx(rt: RunRuntime): Ctx {
         let response: Response;
         try {
           response = await rt.host.globalLimiter.with(async () => {
-            if (!allow) return globalThis.fetch(url, requestInit);
-            // With an allow-list, redirects are followed by hand so EVERY hop is
-            // validated — native fetch would silently carry an allowed host onto a
-            // forbidden (or internal) one.
+            // The manual hop-by-hop path serves TWO masters: an allow-list must
+            // validate every hop, and secret-backed or credential headers must be
+            // stripped when a redirect crosses origins — native fetch preserves a
+            // custom header like X-Api-Key across origins, leaking the resolved
+            // secret. Delegate to native redirects only when NEITHER applies.
+            const carriesCredentials = Object.entries(init?.headers ?? {}).some(
+              ([name, v]) =>
+                isSecretHandle(v) ||
+                ["authorization", "cookie", "proxy-authorization"].includes(name.toLowerCase()),
+            );
+            if (!allow && !carriesCredentials) return globalThis.fetch(url, requestInit);
+            // Redirects are followed by hand so EVERY hop is validated — native
+            // fetch would silently carry an allowed host onto a forbidden (or
+            // internal) one.
             let target = url;
             let hopMethod = method;
             let hopBody = init?.body;

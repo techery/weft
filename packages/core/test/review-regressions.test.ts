@@ -2515,3 +2515,76 @@ describe("codex review findings, round 28 (PR #1)", () => {
     expect(await h.result).toEqual({ ok: true });
   });
 });
+
+describe("codex review findings, round 29 (PR #1)", () => {
+  test("secret headers are stripped on redirects even with NO fetch allow-list", async () => {
+    process.env["WEFT_R29_KEY"] = "shhh";
+    let seenAtTarget: Record<string, string | string[] | undefined> = {};
+    const target = createServer((req, res) => {
+      seenAtTarget = req.headers;
+      res.end("landed");
+    });
+    await new Promise<void>((r) => target.listen(0, () => r()));
+    const tPort = (target.address() as { port: number }).port;
+    const hopper = createServer((_req, res) => {
+      res.writeHead(302, { location: `http://127.0.0.1:${tPort}/land` });
+      res.end();
+    });
+    await new Promise<void>((r) => hopper.listen(0, () => r()));
+    const hPort = (hopper.address() as { port: number }).port;
+    try {
+      // The DEFAULT config: no fetchAllow. Native fetch preserves custom headers
+      // like x-api-key across origins, so delegating redirects to it leaks the
+      // resolved secret — the manual hop path must engage for credentialed
+      // requests even when every host is allowed.
+      const t = testEngine();
+      const def = defineWorkflow(
+        { name: "leaky2", description: "l", input: z.object({}), output: z.object({ status: z.number() }) },
+        async (ctx) => {
+          const res = (await ctx.fetch(`http://localhost:${hPort}/go`, {
+            headers: { "x-api-key": ctx.secret("WEFT_R29_KEY"), "x-plain": "keep" },
+          })) as { status: number };
+          return { status: res.status };
+        },
+      );
+      const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+      expect(await h.result).toEqual({ status: 200 });
+      expect(seenAtTarget["x-plain"]).toBe("keep");
+      expect(seenAtTarget["x-api-key"]).toBeUndefined();
+    } finally {
+      target.close();
+      hopper.close();
+      delete process.env["WEFT_R29_KEY"];
+    }
+  });
+
+  test("two concurrent answers to one approval: exactly one is accepted and journaled", async () => {
+    const t = testEngine();
+    const def = defineWorkflow(
+      { name: "race2", description: "r", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const v = await ctx.human.approve({ action: "land it" });
+        return { ok: v.approved };
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o = await h.outcome();
+    if (o.status !== "waiting_for_human") throw new Error("expected the gate");
+    const id = o.pending[0]?.id ?? "";
+    // Fired in the same tick: un-serialized, BOTH passed the pending check,
+    // BOTH journaled, and both callers heard "accepted" — while replay honors
+    // only the first. One must win, the other must be refused.
+    const [a, b] = await Promise.allSettled([
+      t.engine.answer(h.runId, id, { approved: true }),
+      t.engine.answer(h.runId, id, { approved: false }),
+    ]);
+    const outcomes = [a, b].map((r) => r.status).sort();
+    expect(outcomes).toEqual(["fulfilled", "rejected"]);
+    const answers = (await records(t.journal, h.runId)).filter((r) => r.ev.type === "human.answered");
+    expect(answers).toHaveLength(1);
+    // The journaled answer is the one whose caller heard "accepted".
+    const winner = answers[0]?.ev.type === "human.answered" ? answers[0].ev.answer : undefined;
+    expect(winner).toEqual(a.status === "fulfilled" ? { approved: true } : { approved: false });
+    await h.result.catch(() => undefined);
+  });
+});

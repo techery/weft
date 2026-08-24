@@ -115,6 +115,8 @@ export class Engine implements EngineHost {
   private readonly providerLimiters = new Map<string, Semaphore>();
   private readonly registry: WorkflowRegistry | undefined;
   private readonly active = new Map<string, ActiveRun>();
+  /** Per-request answer serialization: `${runId}\0${requestId}` → in-flight delivery. */
+  private readonly answerChains = new Map<string, Promise<void>>();
   private readonly clockFn: () => number;
 
   constructor(opts: EngineOptions) {
@@ -1016,6 +1018,33 @@ export class Engine implements EngineHost {
         { step: { kind: "human", key: requestId, runId } },
       );
     }
+    // Serialized PER REQUEST: two concurrent callers could both pass the pending
+    // check before either append lands — both human.answered records journal and
+    // both callers hear "accepted", while replay honors only the first. The
+    // second caller must run after the first and be refused.
+    const key = `${runId} ${requestId}`;
+    const prev = this.answerChains.get(key) ?? Promise.resolve();
+    const chained = prev
+      .catch(() => undefined)
+      .then(() => this.answerSerialized(runId, requestId, answer, opts));
+    const marker = chained.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.answerChains.set(key, marker);
+    try {
+      return await chained;
+    } finally {
+      if (this.answerChains.get(key) === marker) this.answerChains.delete(key);
+    }
+  }
+
+  private async answerSerialized(
+    runId: string,
+    requestId: string,
+    answer: unknown,
+    opts: { channel?: string } = {},
+  ): Promise<void> {
     const active = this.active.get(runId);
     if (active) {
       const wait = active.runtime.pendingWait(requestId);
@@ -1025,6 +1054,14 @@ export class Engine implements EngineHost {
         // actually owns it, so callers can answer through the id they polled.
         const owner = this.requestOwner(active, requestId);
         if (owner !== undefined) return this.answer(owner, requestId, answer, opts);
+        // Distinguish "already answered" (a serialized concurrent caller lost
+        // the race) from an id nobody ever requested.
+        let standing = false;
+        for (const r of active.records) {
+          if (r.ev.type === "human.answered" && r.ev.id === requestId) standing = true;
+          else if (r.ev.type === "human.rejected" && r.ev.id === requestId) standing = false;
+        }
+        if (standing) throw new Error(`run ${runId}: request ${requestId} is already answered`);
         throw new Error(`run ${runId}: no pending request ${requestId}`);
       }
       const issues = structuralCheck(wait.request.schema, answer);
