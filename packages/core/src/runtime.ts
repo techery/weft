@@ -493,6 +493,10 @@ export class RunRuntime {
         childRunId = prior.childRunId;
         priorScheduledAt = prior.at;
       }
+      // A verify-refused COMPLETED step re-executes under a fresh seq: it must
+      // re-enter the SAME child run (whose journal replays it), never spawn a
+      // fresh one and re-run everything from scratch.
+      childRunId ??= this.replay?.childRunIdOf(hash, spec.kind);
       childRunId ??= spec.newChildRunId?.();
     }
 

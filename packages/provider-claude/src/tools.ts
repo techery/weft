@@ -372,6 +372,11 @@ export function isRiskyCommand(command: string): boolean {
       const w = gitWords[j] as string;
       if (w.startsWith("-calias.")) return true;
       if (w === "-c" && (gitWords[j + 1] ?? "").startsWith("alias.")) return true;
+      // --config-env=alias.ship=VAR loads the alias from the environment — the
+      // same escape hatch as -c alias.*. The prefix form covers the
+      // abbreviations git accepts (--config-env is its only --c… global).
+      if (/^--c[-a-z]*=alias\./.test(w)) return true;
+      if (/^--c[-a-z]*$/.test(w) && (gitWords[j + 1] ?? "").startsWith("alias.")) return true;
     }
     const sub = gitSubcommandOf(gitWords);
     if (sub === "push") return true;

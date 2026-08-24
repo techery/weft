@@ -888,16 +888,26 @@ export class Engine implements EngineHost {
     // failed-then-resumed child would count twice.
     const parentActive = this.active.get(parent.runId);
     const priorRolled = { input: 0, output: 0, usd: 0, samples: 0 };
+    const foldPrior = (u: import("@weft/sdk").Usage | undefined) => {
+      if (!u) return;
+      priorRolled.input += u.input ?? 0;
+      priorRolled.output += u.output ?? 0;
+      priorRolled.usd += u.usd ?? 0;
+      priorRolled.samples += u.samples ?? 1;
+    };
     for (const rec of parentActive?.records ?? []) {
-      if (rec.ev.type !== "step.failed") continue;
-      const detail = rec.ev.error.detail as
-        | { usage?: import("@weft/sdk").Usage; childRunId?: string }
-        | undefined;
-      if (detail?.childRunId !== childId || !detail.usage) continue;
-      priorRolled.input += detail.usage.input ?? 0;
-      priorRolled.output += detail.usage.output ?? 0;
-      priorRolled.usd += detail.usage.usd ?? 0;
-      priorRolled.samples += detail.usage.samples ?? 1;
+      if (rec.ev.type === "step.failed") {
+        const detail = rec.ev.error.detail as
+          | { usage?: import("@weft/sdk").Usage; childRunId?: string }
+          | undefined;
+        if (detail?.childRunId === childId) foldPrior(detail.usage);
+      } else if (rec.ev.type === "step.completed") {
+        // A COMPLETED pass rolled the child's spend onto this record, which the
+        // parent's resume already restored — re-entering the child (the
+        // workflow step never serves) must restore only the delta beyond it.
+        const out = rec.ev.output as { childRunId?: unknown } | null | undefined;
+        if (out && typeof out === "object" && out.childRunId === childId) foldPrior(rec.ev.usage);
+      }
     }
     // Journaled raw, validated on EVERY execution (mirrors start/resume): the
     // journal's JSON can't hold a transform's output faithfully, so a resumed

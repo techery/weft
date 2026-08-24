@@ -272,6 +272,26 @@ export class ReplayIndex {
     return this.humansByHash.get(hash)?.find((e) => !e.consumed);
   }
 
+  /**
+   * The child run id a step with this identity ran under, wherever it
+   * survives: the COMPLETED entry's journaled output names the id actually
+   * used (collisions regenerate it), the scheduled record is the fallback.
+   * Lets a verify-refused workflow step re-enter ITS child on re-execution
+   * instead of spawning a fresh one and re-running everything from scratch.
+   */
+  childRunIdOf(hash: string, kind: StepKind): string | undefined {
+    const completed = this.byHash
+      .get(hash)
+      ?.filter((e) => e.kind === kind)
+      .at(-1);
+    const out = completed?.output as { childRunId?: unknown } | null | undefined;
+    if (out && typeof out === "object" && typeof out.childRunId === "string") return out.childRunId;
+    return this.scheduledByHash
+      .get(hash)
+      ?.filter((e) => e.kind === kind && e.childRunId !== undefined)
+      .at(-1)?.childRunId;
+  }
+
   matchIncompleteScheduled(hash: string, kind: StepKind): ScheduledEntry | undefined {
     return this.scheduledByHash.get(hash)?.find((e) => !e.consumed && !e.completed && e.kind === kind);
   }

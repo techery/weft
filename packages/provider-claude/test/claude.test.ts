@@ -727,6 +727,12 @@ describe("risky classification of dynamic commands", () => {
     // Backslash escapes resolve the same way quotes do: `git p\ush` IS a push.
     expect(isRiskyCommand("git p\\ush origin main")).toBe(true);
     expect(isRiskyCommand("git -C . pu\\sh origin main")).toBe(true);
+    // --config-env loads an alias from the ENVIRONMENT — the -c escape hatch
+    // in another spelling, abbreviations included.
+    expect(isRiskyCommand("SHIP=push git --config-env=alias.ship=SHIP ship origin main")).toBe(true);
+    expect(isRiskyCommand("SHIP=push git --config-env alias.ship=SHIP ship origin main")).toBe(true);
+    expect(isRiskyCommand("SHIP=push git --c=alias.s=SHIP s origin main")).toBe(true);
+    expect(isRiskyCommand("git --config-env=user.name=NAME status")).toBe(false);
     // Provably static commands stay un-gated: expansions in ARGUMENTS are fine.
     expect(isRiskyCommand("echo $HOME")).toBe(false);
     expect(isRiskyCommand("git status")).toBe(false);

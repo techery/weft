@@ -103,6 +103,17 @@ function isSecretHandle(v: unknown): v is SecretHandle {
   return typeof v === "object" && v !== null && typeof (v as SecretHandle).__weftSecret === "string";
 }
 
+/**
+ * Header names that carry credentials in the wild: the well-known trio plus
+ * anything credential-SHAPED (x-api-key, x-auth-token, session ids) whose
+ * value is a literal rather than a ctx.secret() handle — native fetch would
+ * carry such a header across a cross-origin redirect verbatim. Matching errs
+ * broad on purpose: a harmless header stripped at an origin change costs a
+ * retry; a leaked literal key costs the key.
+ */
+const CREDENTIAL_HEADER =
+  /^(?:authorization|cookie|proxy-authorization)$|key|token|secret|auth|session|credential/i;
+
 /** Journal-safe view of an env/header map: secret handles become `<redacted:NAME>`. Never touches env. */
 function journalSecretMap(map: Record<string, string | SecretHandle> | undefined): Record<string, string> {
   const journalSafe: Record<string, string> = {};
@@ -810,18 +821,22 @@ export function buildCtx(rt: RunRuntime): Ctx {
         // The suppression must be DURABLE: with only step.failed on record, a
         // resume re-runs this paid optional step, and a now-successful attempt
         // would change control flow. A sentinel completion replays as the same
-        // declared fallback (reviveDetailed serves it as value: null).
+        // declared fallback (reviveDetailed serves it as value: null). If the
+        // marker cannot be journaled, the ORIGINAL failure propagates — a null
+        // that would silently un-suppress on resume is worse than the error.
         if (err.step.seq !== undefined && err.step.runId === rt.runId) {
-          await rt
-            .append([
+          try {
+            await rt.append([
               {
                 type: "step.completed",
                 seq: err.step.seq,
                 output: { $suppressed: true },
                 attempts: err.attempts ?? 1,
               },
-            ])
-            .catch(() => undefined);
+            ]);
+          } catch {
+            throw err;
+          }
         }
         return null;
       }
@@ -966,6 +981,13 @@ export function buildCtx(rt: RunRuntime): Ctx {
       reuseIncomplete: true,
       newChildRunId: () => randomUUID().slice(0, 8),
       revive: (journaled) => (journaled as { output: unknown }).output,
+      // The child DEFINITION is invisible to this step's identity hash (a name,
+      // input, and budget stay equal across code edits), so a served completion
+      // would freeze an edited child's stale results forever. Never serve:
+      // re-enter the child instead — ITS journal is the replay authority, so an
+      // unedited child replays entirely from records at no provider cost while
+      // an edited one re-runs exactly the steps that changed.
+      verifyServe: async () => false,
       execute: async (io) => {
         const result = await rt.host.executeChildRun({
           parent: rt,
@@ -1258,9 +1280,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
             // custom header like X-Api-Key across origins, leaking the resolved
             // secret. Delegate to native redirects only when NEITHER applies.
             const carriesCredentials = Object.entries(init?.headers ?? {}).some(
-              ([name, v]) =>
-                isSecretHandle(v) ||
-                ["authorization", "cookie", "proxy-authorization"].includes(name.toLowerCase()),
+              ([name, v]) => isSecretHandle(v) || CREDENTIAL_HEADER.test(name),
             );
             if (!allow && !carriesCredentials) return globalThis.fetch(url, requestInit);
             // Redirects are followed by hand so EVERY hop is validated — native
@@ -1318,13 +1338,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
                     .map(([name]) => name.toLowerCase()),
                 );
                 hopHeaders = Object.fromEntries(
-                  Object.entries(hopHeaders ?? {}).filter(([name]) => {
-                    const lower = name.toLowerCase();
-                    return (
-                      !["authorization", "cookie", "proxy-authorization"].includes(lower) &&
-                      !secretNames.has(lower)
-                    );
-                  }),
+                  Object.entries(hopHeaders ?? {}).filter(
+                    ([name]) => !CREDENTIAL_HEADER.test(name) && !secretNames.has(name.toLowerCase()),
+                  ),
                 );
               }
               target = next.toString();

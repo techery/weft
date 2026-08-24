@@ -3621,3 +3621,122 @@ describe("codex review findings, round 49 (PR #1)", () => {
     await expect(h.result).rejects.toMatchObject({ code: "invalid_input" });
   }, 60_000);
 });
+
+describe("codex review findings, round 50 (PR #1)", () => {
+  test("an edited child re-runs on resume; an unedited one replays from its own journal", async () => {
+    const N = z.object({ n: z.number() });
+    const mkChild = (prompt: string) =>
+      defineWorkflow({ name: "editable", description: "e", input: z.object({}), output: N }, async (ctx) =>
+        ctx.agent(prompt, { schema: N, key: "c1" }),
+      );
+    const mkParent = (child: ReturnType<typeof mkChild>) =>
+      defineWorkflow({ name: "edithold", description: "e", input: z.object({}), output: N }, async (ctx) => {
+        const r = (await ctx.workflow(child, {}, { key: "kid" })) as { n: number };
+        await ctx.human.ask({ question: "go on?", schema: z.object({ go: z.boolean() }) });
+        return r;
+      });
+    const t1 = testEngine();
+    t1.builder.on({ prompt: /first/ }, { n: 1 });
+    const h1 = await t1.engine.start(mkParent(mkChild("first wording")), {
+      input: {},
+      cwd: await tempDir(),
+    });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the ask");
+    await t1.engine.shutdown();
+
+    // UNEDITED resume: the child is re-entered but replays entirely from its
+    // own journal — NO mock rules exist here, so any re-dispatch would fail.
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def: mkParent(mkChild("first wording")) });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the unedited replay to hold");
+    await t2.engine.shutdown();
+
+    // EDITED child: the parent-level identity (name, input, budget) is
+    // unchanged, so a served completion would freeze { n: 1 } forever.
+    const t3 = reopen(t2);
+    t3.builder.on({ prompt: /second/ }, { n: 2 });
+    const h3 = await t3.engine.resume(h1.runId, { def: mkParent(mkChild("second wording")) });
+    const o3 = await h3.outcome();
+    if (o3.status !== "waiting_for_human") throw new Error("expected the ask after the edit");
+    await t3.engine.answer(h1.runId, o3.pending[0]?.id ?? "", { go: true });
+    expect(await h3.result).toEqual({ n: 2 });
+  });
+
+  test("a suppression marker that cannot be journaled fails the run, not un-suppresses later", async () => {
+    class FailsSuppression extends MemoryJournalStore {
+      override async append(runId: string, events: JournalEvent[]): Promise<JournalRecord[]> {
+        if (
+          events.some(
+            (e) =>
+              e.type === "step.completed" &&
+              typeof e.output === "object" &&
+              e.output !== null &&
+              (e.output as { $suppressed?: boolean }).$suppressed === true,
+          )
+        ) {
+          throw new Error("disk full");
+        }
+        return super.append(runId, events);
+      }
+    }
+    const journal = new FailsSuppression();
+    const builder = mock();
+    builder.on({ key: "opt" }, () => {
+      throw new Error("outage");
+    });
+    const providers = new ProviderRegistry();
+    providers.register(builder.provider("claude"));
+    providers.register(builder.provider("codex"));
+    const engine = new Engine({ journal, blobs: new MemoryBlobStore(), providers });
+    const def = defineWorkflow(
+      { name: "optfail", description: "o", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("maybe", { schema: z.object({ ok: z.boolean() }), key: "opt", onError: "null" });
+        return {};
+      },
+    );
+    const h = await engine.start(def, { input: {}, cwd: await tempDir() });
+    // A null without its durable marker would silently un-suppress on resume:
+    // the ORIGINAL failure must surface instead.
+    await expect(h.result).rejects.toMatchObject({ code: "provider_error" });
+  });
+
+  test("a LITERAL credential-shaped header does not follow a cross-origin redirect", async () => {
+    let seenAtTarget: Record<string, string | string[] | undefined> = {};
+    const target = createServer((req, res) => {
+      seenAtTarget = req.headers;
+      res.end("landed");
+    });
+    await new Promise<void>((r) => target.listen(0, () => r()));
+    const tPort = (target.address() as { port: number }).port;
+    const hopper = createServer((_req, res) => {
+      res.writeHead(302, { location: `http://127.0.0.1:${tPort}/land` });
+      res.end();
+    });
+    await new Promise<void>((r) => hopper.listen(0, () => r()));
+    const hPort = (hopper.address() as { port: number }).port;
+    try {
+      // NO fetchAllow: the native-redirect path used to carry a literal
+      // x-api-key across the localhost → 127.0.0.1 origin change verbatim.
+      const t = testEngine();
+      const def = defineWorkflow(
+        { name: "leaky2", description: "l", input: z.object({}), output: z.object({ status: z.number() }) },
+        async (ctx) => {
+          const res = (await ctx.fetch(`http://localhost:${hPort}/go`, {
+            headers: { "x-api-key": "literal-secret", "x-plain": "keep" },
+          })) as { status: number };
+          return { status: res.status };
+        },
+      );
+      const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+      expect(await h.result).toEqual({ status: 200 });
+      expect(seenAtTarget["x-plain"]).toBe("keep");
+      expect(seenAtTarget["x-api-key"]).toBeUndefined();
+    } finally {
+      target.close();
+      hopper.close();
+    }
+  });
+});
