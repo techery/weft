@@ -690,12 +690,30 @@ export class Engine implements EngineHost {
     return false;
   }
 
-  /** The DURABLE descendant run whose journal holds `requestId`, found via recorded child links. */
+  /**
+   * The DURABLE descendant run whose journal holds `requestId`, found via
+   * recorded child links. Request ids are RUN-LOCAL (every child's first ask is
+   * h1), so the search targets the descendant where the request is STANDING —
+   * routing to the first sibling that ever used the id would answer a request
+   * that is already closed and refuse the one actually waiting.
+   */
   private async journalRequestOwner(
     parentRecords: JournalRecord[],
     requestId: string,
     seen: Set<string>,
   ): Promise<string | undefined> {
+    const owners = await this.journalRequestOwners(parentRecords, requestId, seen);
+    // With no PENDING owner anywhere, still route to a run that knows the id,
+    // so the caller's error names the real state ("already answered").
+    return owners.pending ?? owners.requested;
+  }
+
+  private async journalRequestOwners(
+    parentRecords: JournalRecord[],
+    requestId: string,
+    seen: Set<string>,
+  ): Promise<{ pending?: string; requested?: string }> {
+    const out: { pending?: string; requested?: string } = {};
     const childIds = parentRecords.flatMap((r) =>
       r.ev.type === "step.scheduled" && r.ev.childRunId !== undefined ? [r.ev.childRunId] : [],
     );
@@ -704,11 +722,22 @@ export class Engine implements EngineHost {
       seen.add(childId);
       const records: JournalRecord[] = [];
       for await (const rec of this.journal.read(childId)) records.push(rec);
-      if (records.some((r) => r.ev.type === "human.requested" && r.ev.id === requestId)) return childId;
-      const deeper = await this.journalRequestOwner(records, requestId, seen);
-      if (deeper !== undefined) return deeper;
+      let requested = false;
+      let standing = false;
+      for (const r of records) {
+        if (r.ev.type === "human.requested" && r.ev.id === requestId) {
+          requested = true;
+          standing = true;
+        } else if (r.ev.type === "human.answered" && r.ev.id === requestId) standing = false;
+        else if (r.ev.type === "human.rejected" && r.ev.id === requestId) standing = true;
+      }
+      if (requested && standing) return { pending: childId };
+      if (requested) out.requested ??= childId;
+      const deeper = await this.journalRequestOwners(records, requestId, seen);
+      if (deeper.pending !== undefined) return deeper;
+      out.requested ??= deeper.requested;
     }
-    return undefined;
+    return out;
   }
 
   /** The live descendant of `active` holding `requestId` as a pending wait, if any. */

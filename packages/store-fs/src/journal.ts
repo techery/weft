@@ -191,8 +191,22 @@ export class FsJournalStore implements JournalStore {
             const aside = `${lockPath}.stale-${randomUUID().slice(0, 8)}`;
             await fs.rename(lockPath, aside);
             const grabbedAge = Date.now() - (await fs.stat(aside)).mtimeMs;
-            if (grabbedAge > 10_000) await fs.rm(aside, { force: true });
-            else await fs.rename(aside, lockPath);
+            if (grabbedAge > 10_000) {
+              await fs.rm(aside, { force: true });
+            } else {
+              // Fresh after all (renewed inside our stat window): put it back
+              // WITHOUT clobbering — link() fails where a rename() would
+              // silently REPLACE a lock a faster contender created during the
+              // gap, handing two processes the same critical section. If a
+              // contender did squeeze in, its lock stands; the orphaned copy
+              // is removed (owner-checked release consults the PATH, never it).
+              try {
+                await fs.link(aside, lockPath);
+              } catch (err) {
+                if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+              }
+              await fs.rm(aside, { force: true });
+            }
             continue; // then retry the exclusive create at once
           }
         } catch {

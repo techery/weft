@@ -2296,3 +2296,65 @@ describe("codex review findings, round 24 (PR #1)", () => {
     }
   });
 });
+
+describe("codex review findings, round 25 (PR #1)", () => {
+  test("a run-local request id routes to the sibling where it is STANDING, not the first user", async () => {
+    // Request ids restart per run: two sibling children each have an "h1".
+    // Sibling A's is long answered; sibling B's is the one a person must reach.
+    const journal = new MemoryJournalStore();
+    const ask = (over: Record<string, unknown> = {}) => ({
+      type: "human.requested" as const,
+      id: "h1",
+      seq: 1,
+      hash: "hh",
+      kind: "ask" as const,
+      question: "which?",
+      schema: { type: "object", properties: { pick: { type: "string" } } },
+      ...over,
+    });
+    await journal.append("parent00", [
+      { type: "run.created", runId: "parent00", workflow: { name: "p" }, input: {}, cwd: "/r", depth: 0 },
+      { type: "step.scheduled", seq: 1, hash: "a", kind: "workflow", key: "a", childRunId: "child-aa" },
+      { type: "step.scheduled", seq: 2, hash: "b", kind: "workflow", key: "b", childRunId: "child-bb" },
+    ]);
+    await journal.append("child-aa", [
+      {
+        type: "run.created",
+        runId: "child-aa",
+        workflow: { name: "a" },
+        input: {},
+        cwd: "/r",
+        depth: 1,
+        parentRunId: "parent00",
+      },
+      ask(),
+      { type: "human.answered", id: "h1", answer: { pick: "done" }, answeredBy: "human" },
+      { type: "run.completed", output: {} },
+    ]);
+    await journal.append("child-bb", [
+      {
+        type: "run.created",
+        runId: "child-bb",
+        workflow: { name: "b" },
+        input: {},
+        cwd: "/r",
+        depth: 1,
+        parentRunId: "parent00",
+      },
+      ask(),
+    ]);
+    const engine = new Engine({
+      journal,
+      blobs: new MemoryBlobStore(),
+      providers: new ProviderRegistry(),
+    });
+    // Routed to the first EVER user of "h1" (child-aa), this throws
+    // "already answered"; the standing request in child-bb must win instead.
+    await engine.answer("parent00", "h1", { pick: "left" });
+    const recs = await records(journal, "child-bb");
+    const answered = recs.find((r) => r.ev.type === "human.answered");
+    expect(answered?.ev.type === "human.answered" ? answered.ev.answer : undefined).toEqual({
+      pick: "left",
+    });
+  });
+});
