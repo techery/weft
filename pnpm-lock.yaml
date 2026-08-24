@@ -4,9 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-overrides:
-  '@techery/weft-sdk': link:../../../Library/pnpm/global/5/node_modules/@techery/weft-sdk
-
 importers:
 
   .:
@@ -336,8 +333,6 @@ importers:
       '@types/picomatch':
         specifier: ^4.0.2
         version: 4.0.3
-
-  todo-app: {}
 
 packages:
 

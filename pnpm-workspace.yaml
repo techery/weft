@@ -3,5 +3,3 @@ packages:
 onlyBuiltDependencies:
   - esbuild
   - "@biomejs/biome"
-overrides:
-  '@techery/weft-sdk': link:../../../Library/pnpm/global/5/node_modules/@techery/weft-sdk
