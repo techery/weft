@@ -184,7 +184,22 @@ fix above:
   the helper is edited — even when the root's resume had already seen that same bundle
   move. A child now starts from the root's answer rather than from `true`.
 
-The pattern is the finding. Across four review rounds, the large majority of later defects
+A fifth pass found two more, both again inside earlier fixes and both the same species
+as the fix that preceded them:
+
+- **A zombie provider held its budget admission slot forever.** The concurrency permit
+  was released on abort; the budget reservation, added in the same round, was not — and
+  until the first call is priced, admission lets exactly one through. A timed-out call
+  that ignored its signal left a phantom in flight, so its own retry and every other lane
+  parked in `reserveCall` permanently: a hang, arriving with the fix that made admission
+  wait rather than refuse.
+- **`GIT_EXTERNAL_DIFF` was emptied rather than removed.** An empty value is not "unset" —
+  git runs it and dies with `cannot run :`. The identical trap `-c diff.external=` sprang
+  earlier in this same review, walked back into one layer over, and every existing test
+  missed it because weft's own diff calls all pass `--no-ext-diff`. Only the public `raw`
+  escape hatch is exposed, which is now what the regression test uses.
+
+The pattern is the finding. Across five review rounds, the large majority of later defects
 lived in the fixes for earlier ones, not in the code originally audited — and the deeper
 version of that: a fix aimed at one path leaves the sibling paths untouched, so the
 question after every fix is which other callers reach the same code. A fix is new code and
@@ -196,7 +211,7 @@ needs the same adversarial pass as anything else.
 pnpm install                 ✓
 pnpm typecheck               ✓  tsc --strict, 175 files
 pnpm lint                    ✓  biome, 1 info
-pnpm test                    ✓  692 passed (692), 41 files, 38.5s
+pnpm test                    ✓  694 passed (694), 41 files, 40.5s
 weft doctor                  ✓  ready
 weft check                   ✓  all workflows gate clean
 npx tsx examples/*/main.ts   ✓  all seven run offline

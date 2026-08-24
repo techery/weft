@@ -387,6 +387,21 @@ export function buildCtx(rt: RunRuntime): Ctx {
             // all sail past a nearly-dry ceiling before the first charge lands. This
             // WAITS for a slot — a ceiling schedules the fan-out, it does not shrink it.
             const releaseCall = await rt.budget.reserveCall(stepRef, io.signal);
+            // Released on ABORT as well as on settlement, for the same reason the
+            // concurrency permit is. A step timeout stops WAITING for an attempt that
+            // ignores its signal, but the `finally` below is what hands this reservation
+            // back — and a promise that never settles never reaches it. The pool would
+            // then carry a phantom in-flight call forever: `wake()` never fires, so the
+            // retry and every parked fan-out lane sit in `reserveCall` for good, and the
+            // "nothing in flight, so this call genuinely does not fit" escape never
+            // triggers either. A hang, reintroduced by the fix that made admission wait.
+            //
+            // Under-counting in-flight calls for a zombie is the right trade: admission is
+            // a scheduling heuristic, and the hard ceiling is enforced by charge() and
+            // checkBeforeStep — a late-settling attempt's spend still lands there.
+            // `releaseCall` is idempotent, so the `finally` staying as it is costs nothing.
+            if (io.signal.aborted) releaseCall();
+            else io.signal.addEventListener("abort", releaseCall, { once: true });
             try {
               if (useWorktree) {
                 // Per-ATTEMPT path: a retry after a timeout must never remove and

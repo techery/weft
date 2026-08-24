@@ -67,6 +67,38 @@ describe("external diff drivers cannot hijack a captured patch", () => {
     expect(await readFile(join(repo, "a.txt"), "utf8")).toBe("line1\nEDITED\n");
   });
 
+  test("a raw diff still works with GIT_EXTERNAL_DIFF in the environment", async () => {
+    // `raw` is the escape hatch: it carries no `--no-ext-diff`, because a caller passes
+    // whatever argv they want. That makes it the one place an environment override has to
+    // be handled by REMOVING the variable rather than overriding it — an empty
+    // GIT_EXTERNAL_DIFF is not "unset", it is the command to run, and git dies with
+    // "cannot run : No such file or directory". Exactly the trap `-c diff.external=`
+    // sprang, one layer over, and the other tests here all miss it because every weft
+    // diff-family call passes the flag.
+    const repo = await repoWith({ "a.txt": "one\n" });
+    await writeFile(join(repo, "a.txt"), "two\n");
+    const { createGit } = await import("@techery/weft-git");
+    const git = createGit(repo);
+
+    const previous = process.env.GIT_EXTERNAL_DIFF;
+    process.env.GIT_EXTERNAL_DIFF = "echo HIJACKED";
+    let raw: { stdout: string; exitCode: number };
+    let staged: { stdout: string; exitCode: number };
+    try {
+      raw = await git.raw(["diff"]);
+      staged = await git.raw(["diff", "--cached", "--name-only"]);
+    } finally {
+      if (previous === undefined) delete process.env.GIT_EXTERNAL_DIFF;
+      else process.env.GIT_EXTERNAL_DIFF = previous;
+    }
+
+    expect(raw.exitCode).toBe(0);
+    expect(raw.stdout).toContain("diff --git");
+    // Removed, not merely overridden: the operator's helper must not run either.
+    expect(raw.stdout).not.toContain("HIJACKED");
+    expect(staged.exitCode).toBe(0);
+  });
+
   test("ctx.git reads still work with diff.external configured", async () => {
     // Regression guard: `-c diff.external=` would make git die with "cannot run :".
     const repo = await repoWith({ "a.txt": "one\n" });

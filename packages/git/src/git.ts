@@ -28,15 +28,21 @@ import { GitError } from "./index.ts";
  * `GIT_EXTERNAL_DIFF` names a program git runs INSTEAD of producing a diff, and it comes
  * from the operator's shell, not the repository. Left alone, every captured patch is
  * whatever that program printed — `capturePatch` would journal it, `git apply` would
- * refuse it, and the agent's work would be silently lost. Emptied here (git treats an
- * empty value as unset) so no weft invocation can be hijacked by it.
+ * refuse it, and the agent's work would be silently lost.
+ *
+ * REMOVED, not emptied. An empty value is not "unset": git takes it as the command to run
+ * and dies with `cannot run : No such file or directory` on any diff that does not also
+ * pass `--no-ext-diff` — the same trap `-c diff.external=` sprang, walked back into one
+ * layer over. `undefined` drops the key from the child's environment (execa merges over
+ * `process.env`, and a key with no value is not passed), leaving git with no external
+ * differ at all rather than a broken one.
  */
-const GIT_ENV: Record<string, string> = {
+const GIT_ENV: Record<string, string | undefined> = {
   GIT_TERMINAL_PROMPT: "0",
   GIT_PAGER: "cat",
   GIT_OPTIONAL_LOCKS: "0",
   LC_ALL: "C",
-  GIT_EXTERNAL_DIFF: "",
+  GIT_EXTERNAL_DIFF: undefined,
 };
 
 /** Prefix for commands whose output we parse: keeps non-ASCII paths unquoted. */
@@ -86,10 +92,11 @@ export class GitCli implements Git {
     // approval-free read must never run. Disabled on EVERY invocation: for
     // writes the fsmonitor is only a scan optimization, so nothing is lost.
     //
-    // `diff.external` is the same hazard, but it CANNOT be disabled this way: git reads
-    // an empty value as the command to run and dies with "cannot run :". `--no-ext-diff`
-    // on each diff-family call is the documented override, and it beats the config and
-    // the environment variable both — see NO_EXT_DIFF.
+    // `diff.external` is the same hazard and CANNOT be disabled this way: git reads an
+    // empty value as the command to run and dies with "cannot run :", and unlike the
+    // environment variable there is no config key to un-set from out here. `--no-ext-diff`
+    // on each diff-family call is the documented override, and it beats the config and the
+    // environment variable both — see NO_EXT_DIFF.
     const result = await execa("git", ["-c", "core.fsmonitor=false", ...args], {
       cwd: this.cwd,
       reject: false,
