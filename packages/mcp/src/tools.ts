@@ -9,7 +9,6 @@
  * message: an answer that fails the request schema tells the session what to fix, and the
  * session can fix it without a person.
  */
-import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -23,6 +22,7 @@ import {
   persistInlineScript,
   persistWorkflowRef,
   type RunListFilter,
+  reserveRunId,
   resolveWorkflow,
   type Weft,
   type WorkflowDefinition,
@@ -281,8 +281,10 @@ async function startRun(weft: Weft, runs: RunStore, args: RunArgs): Promise<Trac
   // Provenance rides with the run: inline source persists its bundled script, a
   // path ref records the path — any later host can reconstruct the definition.
   // Persisted BEFORE the run launches: a crash after start() must never leave a
-  // durable run no other process can find a definition for.
-  const runId = randomUUID().slice(0, 8);
+  // durable run no other process can find a definition for. The id is reserved
+  // by an exclusive directory create, so a collision can never write into an
+  // EXISTING run's directory.
+  const runId = await reserveRunId(weft);
   if (inline?.code !== undefined) await persistInlineScript(weft, runId, inline.code);
   else if (args.workflow !== undefined && isWorkflowPathRef(args.workflow)) {
     await persistWorkflowRef(weft, runId, args.workflow);

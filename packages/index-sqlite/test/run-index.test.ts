@@ -177,14 +177,37 @@ describe("search", () => {
 });
 
 describe("stats", () => {
-  test("sums runs and ROOT-ROW spend: a child's usage already rides its parent's roll-up", async () => {
+  test("sums each run's OWN spend exactly once — workflow roll-ups excluded", async () => {
     const { index } = await seeded();
     const stats = index.stats();
     expect(stats.runs).toBe(3);
-    // run-audit (1,800 own + 1,000 rolled up from run-fix) + run-sweep (15).
-    // Adding run-fix's own row would count its 1,000 tokens twice.
+    // run-audit's own steps (1,800) + run-fix's own step (1,000) + run-sweep (15).
+    // run-audit's workflow roll-up of run-fix does NOT count again: every token
+    // is attributed to the run that actually spent it.
     expect(stats.tokens).toBe(1_800 + 1_000 + 15);
     expect(stats.usd).toBeCloseTo(0.071, 10);
+  });
+
+  test("child spend that no completed parent step ever rolled up still counts", async () => {
+    const store = new MemoryJournalStore({ now: steppingClock() });
+    const index = openIndex();
+    // The child failed (or the parent stopped mid-child): its spend exists ONLY
+    // in its own journal. A root-only sum would silently lose these tokens.
+    index.indexRun(
+      "run-parent",
+      await seedRun(store, { runId: "run-parent", workflow: "audit", status: "executing" }),
+    );
+    index.indexRun(
+      "run-child",
+      await seedRun(store, {
+        runId: "run-child",
+        workflow: "fix",
+        parentRunId: "run-parent",
+        status: "failed",
+        steps: [{ key: "burn", usage: { input: 100, output: 50, usd: 0.004 } }],
+      }),
+    );
+    expect(index.stats()).toEqual({ runs: 2, tokens: 150, usd: 0.004 });
   });
 
   test("an empty index sums to zero rather than null", () => {

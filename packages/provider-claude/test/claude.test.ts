@@ -301,6 +301,9 @@ describe("the tool gate", () => {
       "uniq input.txt clobbered", // the second positional IS uniq's output file
       "uniq - clobbered", // stdin in, still a written output
       "git diff --output=clobbered", // a "read" git subcommand writing a file
+      `git grep --open-files-in-pager='sh -c "touch pwn"' needle`, // grep EXECUTES its pager
+      "git grep -O'touch pwn' needle", // ...attached spelling
+      "git grep -iO needle", // ...clustered; bare -O still runs the default pager
     ]) {
       expect(await ask(options, "Bash", { command }), command).toEqual({
         behavior: "deny",

@@ -140,6 +140,10 @@ export function isReadOnlyCommand(command: string): boolean {
       // The diff family's --output=<file> sends the result to a FILE: a "read"
       // subcommand alone is not proof of read-only behavior.
       if (/\s--output\b/.test(seg)) return false;
+      // grep's -O/--open-files-in-pager EXECUTES the named pager on the matched
+      // files (bare -O runs the default pager). Every spelling: bare, attached
+      // (-Ocmd), clustered (-iO), long with or without a value.
+      if (/\s-[a-zA-Z]*O|\s--open-files-in-pager/.test(seg)) return false;
       continue;
     }
     // find reads — unless told to delete or execute.

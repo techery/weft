@@ -109,16 +109,22 @@ export class FsJournalStore implements JournalStore {
         const rec: JournalRecord = { i: base + offset, at, ev };
         return rec;
       });
-      const payload = records.map((r) => JSON.stringify(r)).join("\n") + "\n";
+      const payload = Buffer.from(records.map((r) => JSON.stringify(r)).join("\n") + "\n");
       const fd = openSync(this.journalPath(runId), "a");
       try {
-        writeSync(fd, payload);
+        // writeSync may return SHORT without throwing; treating a partial write
+        // as landed would fsync torn JSON and advance the cache past bytes that
+        // never hit the file — loop until the whole payload is down.
+        let written = 0;
+        while (written < payload.length) {
+          written += writeSync(fd, payload, written, payload.length - written);
+        }
         fsyncSync(fd);
       } finally {
         closeSync(fd);
       }
       cached.count = base + records.length;
-      cached.byteOffset += Buffer.byteLength(payload);
+      cached.byteOffset += payload.length;
       for (const w of cached.watchers) w(records);
       return records;
     });
@@ -150,7 +156,13 @@ export class FsJournalStore implements JournalStore {
       try {
         const fd = openSync(lockPath, "wx");
         try {
-          writeSync(fd, token);
+          // Looped like the journal write: a torn token would fail the
+          // owner-checked release and strand our own lock until staleness.
+          const tokenBuf = Buffer.from(token);
+          let written = 0;
+          while (written < tokenBuf.length) {
+            written += writeSync(fd, tokenBuf, written, tokenBuf.length - written);
+          }
         } finally {
           closeSync(fd);
         }

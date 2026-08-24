@@ -3,7 +3,6 @@
  * ways and they compose: `--args '{…}'` first, then the dynamic `--flag value` pairs over
  * it, so a saved JSON blob can be tweaked from the shell without re-typing it.
  */
-import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
@@ -12,6 +11,7 @@ import {
   parseBudget,
   persistInlineScript,
   persistWorkflowRef,
+  reserveRunId,
   resolveWorkflow,
   type Weft,
   type WorkflowDefinition,
@@ -52,8 +52,10 @@ export function runCommand(io: CliIo): Command {
         // and path refs record the path — a later `weft resume` re-resolves either.
         // Registry names need nothing; the journaled name finds them. Persisted
         // BEFORE the run launches: a crash after start() must never leave a
-        // durable run no other process can find a definition for.
-        const runId = randomUUID().slice(0, 8);
+        // durable run no other process can find a definition for. The id is
+        // reserved by an exclusive directory create, so a collision can never
+        // write into an EXISTING run's directory.
+        const runId = await reserveRunId(weft);
         if (code !== undefined) await persistInlineScript(weft, runId, code);
         else if (isWorkflowPathRef(ref)) await persistWorkflowRef(weft, runId, ref);
         const handle = await weft.engine

@@ -10,6 +10,7 @@
  * const run = await weft.engine.start(def, { input, cwd: weft.cwd, defHash: hash });
  * ```
  */
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
@@ -148,6 +149,28 @@ export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
       if (pending) (await pending).close();
     },
   };
+}
+
+/**
+ * Reserve a fresh run id by CREATING its run directory exclusively. Provenance
+ * (script.ts / workflow.json) is written into that directory BEFORE the engine
+ * journals anything — without the exclusive create, a random-id collision with
+ * an existing run would overwrite THAT run's persisted definition, and the old
+ * run would later resume with the new workflow.
+ */
+export async function reserveRunId(weft: Weft): Promise<string> {
+  await mkdir(weft.runsDir, { recursive: true });
+  for (let attempt = 0; attempt < 16; attempt++) {
+    const runId = randomUUID().slice(0, 8);
+    try {
+      await mkdir(join(weft.runsDir, runId));
+      return runId;
+    } catch (err) {
+      // Only a collision retries; a broken filesystem surfaces.
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+  }
+  throw new Error("could not reserve a run id after 16 collisions");
 }
 
 /**

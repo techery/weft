@@ -8,7 +8,7 @@ import { reduceState } from "@weft/core";
  * Bump to invalidate every local index. The rows are a fold over journals, so a
  * mismatched database is dropped and rebuilt rather than migrated.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /** Default cap on `search()`; the index exists to make `ls` fast, not to page. */
 export const DEFAULT_SEARCH_LIMIT = 50;
@@ -50,14 +50,17 @@ const CREATE_TABLE = `
     agent_steps   INTEGER NOT NULL,
     tokens        INTEGER NOT NULL,
     usd           REAL NOT NULL,
+    own_tokens    INTEGER NOT NULL,
+    own_usd       REAL NOT NULL,
     search_text   TEXT NOT NULL
   )
 `;
 
 const UPSERT = `
   INSERT INTO runs
-    (run_id, workflow, status, created_at, updated_at, parent_run_id, agent_steps, tokens, usd, search_text)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    (run_id, workflow, status, created_at, updated_at, parent_run_id, agent_steps, tokens, usd,
+     own_tokens, own_usd, search_text)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(run_id) DO UPDATE SET
     workflow      = excluded.workflow,
     status        = excluded.status,
@@ -67,6 +70,8 @@ const UPSERT = `
     agent_steps   = excluded.agent_steps,
     tokens        = excluded.tokens,
     usd           = excluded.usd,
+    own_tokens    = excluded.own_tokens,
+    own_usd       = excluded.own_usd,
     search_text   = excluded.search_text
 `;
 
@@ -116,6 +121,8 @@ export class RunIndex {
         row.agentSteps,
         row.tokens,
         row.usd,
+        row.ownTokens,
+        row.ownUsd,
         row.searchText,
       );
   }
@@ -171,14 +178,16 @@ export class RunIndex {
 
   /** Totals across the whole index — what `weft ls` prints at the bottom. */
   stats(): RunIndexStats {
-    // Spend sums ROOT rows only: a parent's workflow-step completion already
-    // carries its children's usage (that is how the parent budget restores), so
-    // adding the child rows would count every sub-workflow's spend twice.
+    // Spend sums each run's OWN (non-roll-up) usage across EVERY row: a token
+    // counts exactly once, at the run that spent it. Summing display tokens
+    // would double-count children through their parents' workflow-step
+    // roll-ups, and summing roots only would LOSE child spend no completed
+    // parent step ever rolled up (a failed child, a parent stopped mid-child).
     const row = this.db
       .prepare(
         "SELECT COUNT(*) AS runs, " +
-          "COALESCE(SUM(CASE WHEN parent_run_id IS NULL THEN tokens ELSE 0 END), 0) AS tokens, " +
-          "COALESCE(SUM(CASE WHEN parent_run_id IS NULL THEN usd ELSE 0 END), 0) AS usd " +
+          "COALESCE(SUM(own_tokens), 0) AS tokens, " +
+          "COALESCE(SUM(own_usd), 0) AS usd " +
           "FROM runs",
       )
       .get();
@@ -199,6 +208,8 @@ export class RunIndex {
 // ---------------------------------------------------------------------------
 
 interface IndexRow extends IndexedRun {
+  ownTokens: number;
+  ownUsd: number;
   searchText: string;
 }
 
@@ -206,6 +217,7 @@ function summarize(runId: string, records: JournalRecord[]): IndexRow | undefine
   if (records.length === 0) return undefined;
   const state = reduceState(records);
   const { tokens, usd } = spendOf(records, state.steps);
+  const own = ownSpendOf(records);
   const terms = [
     state.workflow,
     ...state.steps.flatMap((s) => [s.key, s.label]),
@@ -220,6 +232,8 @@ function summarize(runId: string, records: JournalRecord[]): IndexRow | undefine
     agentSteps: state.steps.filter((s) => s.kind === "agent").length,
     tokens,
     usd,
+    ownTokens: own.tokens,
+    ownUsd: own.usd,
     searchText: terms
       .filter((t): t is string => typeof t === "string" && t !== "")
       .join(" ")
@@ -241,6 +255,35 @@ function spendOf(records: JournalRecord[], steps: StepState[]): { tokens: number
     if (!step.usage) continue;
     tokens += (step.usage.input ?? 0) + (step.usage.output ?? 0);
     usd += step.usage.usd ?? 0;
+  }
+  return { tokens, usd };
+}
+
+/**
+ * Spend the run's OWN steps incurred — workflow-kind roll-ups excluded. A
+ * workflow step's usage restates its child run's journal (that is how a parent
+ * budget restores); the child row already carries that spend itself.
+ */
+function ownSpendOf(records: JournalRecord[]): { tokens: number; usd: number } {
+  const workflowSeqs = new Set<number>();
+  let tokens = 0;
+  let usd = 0;
+  const fold = (u: { input?: number; output?: number; usd?: number } | undefined, seq: number) => {
+    if (!u || workflowSeqs.has(seq)) return;
+    tokens += (u.input ?? 0) + (u.output ?? 0);
+    usd += u.usd ?? 0;
+  };
+  for (const { ev } of records) {
+    if (ev.type === "step.scheduled") {
+      if (ev.kind === "workflow") workflowSeqs.add(ev.seq);
+    } else if (ev.type === "step.completed" || ev.type === "step.attempt") {
+      fold(ev.usage, ev.seq);
+    } else if (ev.type === "step.failed") {
+      fold(
+        (ev.error.detail as { usage?: { input?: number; output?: number; usd?: number } } | undefined)?.usage,
+        ev.seq,
+      );
+    }
   }
   return { tokens, usd };
 }

@@ -32,6 +32,7 @@ export {
   persistedDefOf,
   persistInlineScript,
   persistWorkflowRef,
+  reserveRunId,
   resolveWorkflow,
 } from "./weft.ts";
 
