@@ -222,8 +222,24 @@ function valueType(v: unknown): string {
   return typeof v;
 }
 
+/**
+ * Order-independent structural equality for enum/const checks: JSON objects are
+ * unordered, so `{a:1,b:2}` must equal `{b:2,a:1}` — a stringify comparison
+ * would reject a semantically valid answer over property entry order.
+ */
 function deepEqual(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((v, i) => deepEqual(v, b[i]));
+  }
+  if (typeof a === "object" && a !== null && typeof b === "object" && b !== null) {
+    const ka = Object.keys(a).sort();
+    const kb = Object.keys(b).sort();
+    if (ka.length !== kb.length || ka.some((k, i) => k !== kb[i])) return false;
+    return ka.every((k) => deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+  }
+  return false;
 }
 
 /**

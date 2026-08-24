@@ -1099,17 +1099,37 @@ export class Engine implements EngineHost {
           );
         }
       }
-      await active.runtime.append([
-        {
-          type: "human.answered",
-          id: requestId,
-          answer,
-          answeredBy: "human",
-          ...(opts.channel ? { channel: opts.channel } : {}),
-        },
-      ]);
-      active.runtime.resolveAnswer(requestId, answer, "human");
-      return;
+      const ev: JournalEvent = {
+        type: "human.answered",
+        id: requestId,
+        answer,
+        answeredBy: "human",
+        ...(opts.channel ? { channel: opts.channel } : {}),
+      };
+      if (!this.journal.appendIf) {
+        await active.runtime.append([ev]);
+        active.runtime.resolveAnswer(requestId, answer, "human");
+        return;
+      }
+      // The OWNER's append participates in the same CAS as everyone else's: an
+      // external process (a CLI beside this daemon) — or this run's own
+      // deadline — can land an answer for this request between the pending
+      // check above and this append. Exactly one may succeed; the loser
+      // re-folds, finds the winner, and is refused.
+      for (;;) {
+        let count = 0;
+        let standing = false;
+        for await (const rec of this.journal.read(runId)) {
+          count++;
+          if (rec.ev.type === "human.answered" && rec.ev.id === requestId) standing = true;
+          else if (rec.ev.type === "human.rejected" && rec.ev.id === requestId) standing = false;
+        }
+        if (standing) throw new Error(`run ${runId}: request ${requestId} is already answered`);
+        if (await this.journal.appendIf(runId, count, [ev])) {
+          active.runtime.resolveAnswer(requestId, answer, "human");
+          return;
+        }
+      }
     }
     // Suspended run in another (or no) process: validate structurally and append;
     // resume serves it. The fold and the append are ONE atomic operation against

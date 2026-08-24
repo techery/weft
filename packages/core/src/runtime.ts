@@ -1045,7 +1045,29 @@ export class RunRuntime {
       policy === "default"
         ? wrapWireValue(request.timeoutDefault ?? null, wait.wrapped)
         : TIMEOUT_DENY_MARKER;
-    await this.append([{ type: "human.answered", id, answer, answeredBy: "timeout" }]);
+    // The deadline settles under the SAME atomicity contract as Engine.answer():
+    // a human submission from another process can land between this timer firing
+    // and this append — un-CAS'd, both would journal, both look accepted, and
+    // the workflow could proceed with the OPPOSITE of the accepted decision.
+    // On losing, the winner's delivery settles the wait; the default never
+    // overwrites a real answer.
+    const event: JournalEvent = { type: "human.answered", id, answer, answeredBy: "timeout" };
+    if (this.host.journal.appendIf) {
+      for (;;) {
+        if (this.fencedWith || this.detachedFromHost) return;
+        let count = 0;
+        let standing = false;
+        for await (const rec of this.host.journal.read(this.runId)) {
+          count++;
+          if (rec.ev.type === "human.answered" && rec.ev.id === id) standing = true;
+          else if (rec.ev.type === "human.rejected" && rec.ev.id === id) standing = false;
+        }
+        if (standing) return; // a real answer won this request
+        if (await this.host.journal.appendIf(this.runId, count, [event])) break;
+      }
+    } else {
+      await this.append([event]);
+    }
     this.resolveAnswer(id, answer, "timeout");
   }
 

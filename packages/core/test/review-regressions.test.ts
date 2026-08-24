@@ -2787,3 +2787,107 @@ describe("codex review findings, round 33 (PR #1)", () => {
     expect(violation).toBeDefined();
   });
 });
+
+describe("codex review findings, round 33 (PR #1)", () => {
+  test("object enum/const equality ignores property entry order", async () => {
+    const { structuralCheck } = await import("../src/jsonschema.ts");
+    const schema = { enum: [{ a: 1, b: { c: [1, 2] } }] };
+    // JSON objects are unordered: the same value entered in another order must pass.
+    expect(structuralCheck(schema, { b: { c: [1, 2] }, a: 1 })).toEqual([]);
+    expect(structuralCheck(schema, { a: 1, b: { c: [2, 1] } }).length).toBeGreaterThan(0);
+    expect(structuralCheck({ const: { x: 1, y: 2 } }, { y: 2, x: 1 })).toEqual([]);
+  });
+
+  test("the OWNER and an outside process answering concurrently: one wins, one record", async () => {
+    const def = defineWorkflow(
+      { name: "race4", description: "r", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const v = await ctx.human.approve({ action: "owner-vs-outside" });
+        return { ok: v.approved };
+      },
+    );
+    const t1 = testEngine();
+    const h = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o = await h.outcome();
+    if (o.status !== "waiting_for_human") throw new Error("expected the gate");
+    const id = o.pending[0]?.id ?? "";
+    // The run stays LIVE in t1 (the owner path); the outside engine takes the
+    // journal path. Un-CAS'd on the owner side, both appends land and both
+    // callers hear "accepted".
+    const outside = reopen(t1);
+    const [a, b] = await Promise.allSettled([
+      t1.engine.answer(h.runId, id, { approved: true }),
+      outside.engine.answer(h.runId, id, { approved: false }),
+    ]);
+    expect([a, b].map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+    const answers = (await records(t1.journal, h.runId)).filter((r) => r.ev.type === "human.answered");
+    expect(answers).toHaveLength(1);
+    // The run's outcome matches the caller that was told "accepted".
+    const winnerApproved = a.status === "fulfilled";
+    expect(await h.result).toEqual({ ok: winnerApproved });
+  });
+
+  test("a deadline default never overwrites a human answer that already landed", async () => {
+    vi.useFakeTimers();
+    try {
+      // The tailer's delivery is HELD, so the externally-appended answer sits in
+      // the journal undelivered when the deadline fires — exactly the window
+      // where the un-CAS'd timeout used to journal a second answer and resolve
+      // the wait with the OPPOSITE decision.
+      class HeldTailer extends MemoryJournalStore {
+        release!: () => void;
+        private gate = new Promise<void>((r) => {
+          this.release = r;
+        });
+        override async *watch(
+          runId: string,
+          opts?: { fromIndex?: number; signal?: AbortSignal },
+        ): AsyncGenerator<Awaited<ReturnType<MemoryJournalStore["append"]>>[number]> {
+          for await (const rec of super.watch(runId, opts)) {
+            await this.gate;
+            yield rec;
+          }
+        }
+      }
+      const journal = new HeldTailer();
+      const engine = new Engine({
+        journal,
+        blobs: new MemoryBlobStore(),
+        providers: new ProviderRegistry(),
+      });
+      const def = defineWorkflow(
+        {
+          name: "deadlinerace",
+          description: "d",
+          input: z.object({}),
+          output: z.object({ go: z.boolean() }),
+        },
+        async (ctx) => {
+          const a = await ctx.human.ask({
+            question: "go?",
+            schema: z.object({ go: z.boolean() }),
+            timeout: "5s",
+            onTimeout: { default: { go: false } },
+          });
+          return { go: a.go };
+        },
+      );
+      const h = await engine.start(def, { input: {}, cwd: await tempDir() });
+      const o = await h.outcome();
+      if (o.status !== "waiting_for_human") throw new Error("expected the ask");
+      const id = o.pending[0]?.id ?? "";
+      // A human answer lands durably (another process's CAS append)…
+      await journal.append(h.runId, [
+        { type: "human.answered", id, answer: { go: true }, answeredBy: "human" },
+      ]);
+      // …then the deadline fires before the tailer delivered it.
+      await vi.advanceTimersByTimeAsync(6_000);
+      journal.release();
+      expect(await h.result).toEqual({ go: true });
+      const answers = (await records(journal, h.runId)).filter((r) => r.ev.type === "human.answered");
+      expect(answers).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
