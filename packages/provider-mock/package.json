@@ -1,0 +1,24 @@
+{
+  "name": "@weft/provider-mock",
+  "version": "0.1.0",
+  "description": "Mock AgentProvider for tests and replay verification.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@weft/core": "workspace:*",
+    "picomatch": "^4.0.5",
+    "@weft/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/picomatch": "^4.0.2"
+  }
+}

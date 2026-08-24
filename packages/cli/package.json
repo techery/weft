@@ -1,0 +1,31 @@
+{
+  "name": "@weft/cli",
+  "version": "0.1.0",
+  "description": "weft CLI: run, resume, answer, check, explain, report, diff, ui, doctor.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "bin": {
+    "weft": "./bin/weft.js"
+  },
+  "dependencies": {
+    "@weft/host": "workspace:*",
+    "@weft/core": "workspace:*",
+    "@weft/sdk": "workspace:*",
+    "@weft/daemon": "workspace:*",
+    "commander": "^15.0.0",
+    "@clack/prompts": "^1.7.0",
+    "log-update": "^8.0.0",
+    "picocolors": "^1.1.1",
+    "tsx": "^4.23.12",
+    "@weft/gate": "workspace:*"
+  }
+}

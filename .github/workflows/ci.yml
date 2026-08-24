@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (biome)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+
+  typecheck:
+    name: Typecheck (tsc strict)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+
+  test:
+    name: Test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      # The suites build real git repos (worktrees, stash-create snapshots, commits);
+      # most configure a repo-local identity, the global one is belt and suspenders.
+      - name: Configure git identity
+        run: |
+          git config --global user.name "weft-ci"
+          git config --global user.email "ci@weft.invalid"
+          git config --global init.defaultBranch main
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+
+  smoke:
+    name: Examples & CLI smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Configure git identity
+        run: |
+          git config --global user.name "weft-ci"
+          git config --global user.email "ci@weft.invalid"
+          git config --global init.defaultBranch main
+      - run: pnpm install --frozen-lockfile
+      # Every example is deterministic and offline (03 builds a throwaway git repo).
+      - name: Run all examples
+        run: |
+          for dir in examples/0*/; do
+            echo "::group::$dir"
+            npx tsx "$dir/main.ts"
+            echo "::endgroup::"
+          done
+      - name: CLI smoke (help, doctor, gate check of the bundled workflows)
+        run: |
+          node packages/cli/bin/weft.js --help
+          node packages/cli/bin/weft.js doctor
+          node packages/cli/bin/weft.js check

@@ -1,0 +1,576 @@
+/**
+ * Tool-name and command screening for the permission gate. The tool names and
+ * their input field names (`file_path`, `notebook_path`, `command`) are the
+ * Claude Code built-in tool shapes; see the pin comment in index.ts.
+ */
+
+/** The one tool this provider adds: calling it is how an agent ends its task. */
+export const STRUCTURED_OUTPUT_TOOL = "structured_output";
+
+/** The sdk-mcp server the tool is served from; the model sees `mcp__weft__structured_output`. */
+export const MCP_SERVER_NAME = "weft";
+
+/** Every built-in that mutates a file. All are denied outright on a read-only step. */
+export const EDIT_TOOLS: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+/** MCP tools arrive fully qualified (`mcp__<server>__<tool>`); the gate reasons about the bare name. */
+export function baseToolName(toolName: string): string {
+  if (!toolName.startsWith("mcp__")) return toolName;
+  const parts = toolName.split("__");
+  return parts[parts.length - 1] ?? toolName;
+}
+
+/** The file an edit tool targets, or undefined when the input carries no usable path. */
+export function editTargetPath(input: Record<string, unknown>): string | undefined {
+  const path = input.file_path ?? input.notebook_path;
+  return typeof path === "string" && path.length > 0 ? path : undefined;
+}
+
+/**
+ * Obvious filesystem writes in a shell command. Deliberately over-eager: on a
+ * read-only step a false deny costs the agent one turn, a false allow costs a
+ * mutated tree.
+ */
+const WRITE_PATTERNS: readonly RegExp[] = [
+  // Output redirection (`> f`, `>> f`, `2>f`) but not fd duplication (`2>&1`).
+  />{1,2}(?!&)/,
+  /(?:^|[\s;&|(])(?:rm|mv|cp|touch|tee|truncate|mkdir)\b/,
+  /(?:^|[\s;&|(])sed\b[^;&|]*\s(?:-i\b|--in-place)/,
+];
+
+export function isWriteCommand(command: string): boolean {
+  return WRITE_PATTERNS.some((re) => re.test(command));
+}
+
+/**
+ * Deny-by-default screen for Bash on a READ-ONLY step. A blocklist cannot hold that
+ * contract — `git checkout -- f`, `npm install`, `chmod`, `python -c 'open(...)'` all
+ * mutate without matching any write pattern — so a command chain passes only when
+ * every segment starts with a command known not to write, with no redirection or
+ * substitution to smuggle one in. Over-eager on purpose: a false deny costs the
+ * agent one turn, a false allow costs a mutated tree.
+ */
+const READ_COMMANDS: ReadonlySet<string> = new Set([
+  "ls",
+  "cat",
+  "head",
+  "tail",
+  "grep",
+  "rg",
+  "wc",
+  "sort",
+  "uniq",
+  "cut",
+  "tr",
+  // "env" is deliberately absent: with arguments it LAUNCHES another command.
+  "echo",
+  "printf",
+  "pwd",
+  "which",
+  "type",
+  "file",
+  "stat",
+  "du",
+  "df",
+  "printenv",
+  "diff",
+  "cmp",
+  "tree",
+  "basename",
+  "dirname",
+  "realpath",
+  "readlink",
+  "jq",
+  "date",
+  "true",
+  "false",
+  "test",
+  "sleep",
+  "md5sum",
+  "sha1sum",
+  "sha256sum",
+  "column",
+  "nl",
+  "strings",
+  "xxd",
+  "od",
+]);
+
+/** Git subcommands that read the repository without mutating tree, index, or refs. */
+const READ_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "status",
+  "log",
+  "diff",
+  "show",
+  "blame",
+  "rev-parse",
+  "rev-list",
+  "ls-files",
+  "ls-tree",
+  "cat-file",
+  "describe",
+  "shortlog",
+  "grep",
+  "reflog",
+  "count-objects",
+  "merge-base",
+  "name-rev",
+  "var",
+  "check-ignore",
+  "check-attr",
+]);
+
+/**
+ * Resolve a command line into shell words per segment, the way bash hands them
+ * to the program: quotes concatenate (`-e'x'ec` IS `-exec`), backslashes
+ * escape. The screens below must see RESOLVED words — testing raw text lets a
+ * quoted spelling of a screened option walk straight past its regex. Returns
+ * null whenever the shell itself could compute or write something the words
+ * don't show: substitution, any expansion ($, backticks, braces, a glob that
+ * could expand to an option), redirection (fd duplication like 2>&1 excepted),
+ * or an unterminated quote.
+ */
+function shellWords(command: string): string[][] | null {
+  const segments: string[][] = [];
+  let words: string[] = [];
+  let word: string | undefined;
+  let wordHasGlob = false;
+  const push = (part: string) => {
+    word = (word ?? "") + part;
+  };
+  const endWord = (): boolean => {
+    // A glob can expand to a repository-controlled filename — including one
+    // named like "-exec" — so an option-shaped word must be fully literal.
+    if (word !== undefined && wordHasGlob && word.startsWith("-")) return false;
+    if (word !== undefined) words.push(word);
+    word = undefined;
+    wordHasGlob = false;
+    return true;
+  };
+  const endSegment = (): boolean => {
+    if (!endWord()) return false;
+    if (words.length > 0) segments.push(words);
+    words = [];
+    return true;
+  };
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i] as string;
+    if (ch === "'") {
+      const close = command.indexOf("'", i + 1);
+      if (close === -1) return null;
+      push(command.slice(i + 1, close));
+      i = close;
+    } else if (ch === '"') {
+      let out = "";
+      let j = i + 1;
+      for (; j < command.length && command[j] !== '"'; j++) {
+        const c = command[j] as string;
+        if (c === "$" || c === "`") return null; // expands inside double quotes
+        if (c === "\\" && j + 1 < command.length) {
+          // Backslash-newline is a line continuation even inside double quotes:
+          // bash deletes both characters. Keeping the newline would split a
+          // screened option ("--ou\<NL>t") past its regex.
+          if (command[j + 1] !== "\n") out += command[j + 1];
+          j++;
+        } else out += c;
+      }
+      if (j >= command.length) return null;
+      push(out);
+      i = j;
+    } else if (ch === "\\") {
+      if (i + 1 >= command.length) return null;
+      // Backslash-newline is a line continuation: bash deletes BOTH characters,
+      // joining the line with no word break. Pushing the newline instead would
+      // let `git diff --ou\<NL>t=f` carry a screened option past its regex.
+      if (command[i + 1] !== "\n") push(command[i + 1] as string);
+      i++;
+    } else if (ch === "$" || ch === "`" || ch === "{") {
+      return null; // expansion, substitution, or brace expansion (-exe{c,c})
+    } else if (ch === ">") {
+      // Only fd duplication (2>&1, >&2) is harmless; every other > writes.
+      const dup = /^>&\d+/.exec(command.slice(i));
+      if (!dup || (word !== undefined && !/^\d+$/.test(word))) return null;
+      word = undefined; // drop the "2>&1" token entirely
+      wordHasGlob = false;
+      i += dup[0].length - 1;
+    } else if (ch === "<") {
+      if (command[i + 1] === "(") return null; // process substitution
+      // A plain input redirect only reads; its target becomes an ordinary
+      // (argument) word for the screens.
+      if (word !== undefined && !/^\d+$/.test(word)) return null;
+      word = undefined;
+      wordHasGlob = false;
+    } else if (ch === "&") {
+      if (command[i + 1] === ">") return null; // &> redirects
+      if (!endSegment()) return null;
+      if (command[i + 1] === "&") i++;
+    } else if (ch === "|") {
+      if (!endSegment()) return null;
+      if (command[i + 1] === "|") i++;
+    } else if (ch === ";" || ch === "\n") {
+      if (!endSegment()) return null;
+    } else if (ch === " " || ch === "\t" || ch === "\r") {
+      if (!endWord()) return null;
+    } else {
+      if (ch === "*" || ch === "?" || ch === "[") wordHasGlob = true;
+      push(ch);
+    }
+  }
+  if (!endSegment()) return null;
+  return segments;
+}
+
+/**
+ * Prefix for read-only Bash commands that reach git: a repository can attach
+ * EXECUTABLE helpers to plain `git diff`/`log`/`show` through .gitattributes
+ * (`diff.<driver>.command` runs on every hunk; `diff.<driver>.textconv` runs
+ * by DEFAULT on porcelain diffs). The wrapper forces --no-ext-diff
+ * --no-textconv onto exactly those subcommands — the read gate only admits
+ * git commands whose subcommand comes first, so `$1` is always it. And a
+ * pathname-valued core.fsmonitor is a HOOK git runs on any worktree scan
+ * (`status`, `diff`, `ls-files`), so every wrapped invocation disables it —
+ * a read-only step must never execute repository-configured code. blame runs
+ * textconv by DEFAULT too (it has no ext-diff path), so it gets its own
+ * --no-textconv branch. Every
+ * invocation also sets GIT_OPTIONAL_LOCKS=0: a plain `git status` opportunistically
+ * REWRITES .git/index (the optional refresh), and a read-only step must
+ * neither modify nor contend on the integration repository's index.
+ */
+export const GIT_READ_WRAPPER =
+  'git() { case "$1" in diff|log|show) _s=$1; shift; GIT_OPTIONAL_LOCKS=0 command git -c core.fsmonitor=false "$_s" --no-ext-diff --no-textconv "$@";; blame) shift; GIT_OPTIONAL_LOCKS=0 command git -c core.fsmonitor=false blame --no-textconv "$@";; *) GIT_OPTIONAL_LOCKS=0 command git -c core.fsmonitor=false "$@";; esac; }; ';
+
+export function isReadOnlyCommand(command: string): boolean {
+  const segments = shellWords(command);
+  if (segments === null) return false;
+  for (const words of segments) {
+    const seg = words.join(" ");
+    let i = 0;
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] as string)) i++;
+    const head = words[i];
+    if (head === undefined) return false;
+    // An env override that changes WHICH code runs turns any allow-listed
+    // reader into arbitrary execution: `PATH=. diff a b` resolves ./diff, and
+    // LD_PRELOAD/LD_* steer the dynamic loader. No read needs either.
+    if (words.slice(0, i).some((w) => /^(?:PATH|LD_[A-Za-z0-9_]*)=/.test(w))) return false;
+    // A path-qualified spelling names an ARBITRARY executable, not the trusted
+    // system reader: `./cat` (or /repo/bin/cat) is whatever the repository put
+    // there. Only bare names, resolved through the (screened) PATH, count.
+    if (head.includes("/") || head.includes("\\")) return false;
+    const name = head;
+    if (name === "git") {
+      const sub = words[i + 1];
+      if (sub === undefined || !READ_GIT_SUBCOMMANDS.has(sub)) return false;
+      // reflog READS — except its expire/delete forms, which destroy the
+      // recovery history a read-only step must leave alone.
+      if (sub === "reflog" && words.slice(i + 2).some((w) => w === "expire" || w === "delete")) {
+        return false;
+      }
+      // The diff family's --output=<file> sends the result to a FILE: a "read"
+      // subcommand alone is not proof of read-only behavior. Prefix form: git
+      // accepts unambiguous long-option abbreviations, so --out(=x) works too.
+      if (/\s--out/.test(seg)) return false;
+      // --ext-diff and --textconv EXECUTE external helpers git picks up from
+      // config or environment (`GIT_EXTERNAL_DIFF=touch git diff --ext-diff`
+      // runs touch); and a GIT_* assignment prefix exists precisely to steer
+      // git toward such helpers — a read never needs one. Prefixes cover the
+      // abbreviations git accepts (--ext-d, --textc) while --extended-regexp
+      // and --text stay allowed.
+      if (/\s--ext(?!ended)|\s--textc/.test(seg)) return false;
+      // cat-file: --filters runs the path's clean/smudge commands and
+      // --textconv its textconv command, and git accepts abbreviations down to
+      // --fi / --tex here — so every --f…/--t… long option is refused
+      // (--follow-symlinks is the only read nicety lost).
+      if (sub === "cat-file" && /\s--[ft]/.test(seg)) return false;
+      // log/show --show-signature hands the commit to gpg --verify — an
+      // external program that also WRITES (a GNUPGHOME=. override materializes
+      // a keyring in the tree). --show-s… covers the abbreviations git accepts
+      // without touching --show-linear-break or --show-pulls.
+      if (/\s--show-s/.test(seg)) return false;
+      if (words.slice(0, i).some((w) => /^GIT_[A-Za-z0-9_]*=/.test(w))) return false;
+      // grep's -O/--open-files-in-pager EXECUTES the named pager on the matched
+      // files (bare -O runs the default pager). Every spelling: bare, attached
+      // (-Ocmd), clustered (-iO), long abbreviated (--op…) with or without a
+      // value — --only-matching stays --on, untouched.
+      if (/\s-[a-zA-Z]*O|\s--op/.test(seg)) return false;
+      continue;
+    }
+    // find reads — unless told to delete, execute, or WRITE: every f-action
+    // (-fls, -fprint, -fprint0, -fprintf) sends output to a named file.
+    if (name === "find") {
+      if (/\s-(?:delete|exec|execdir|ok|okdir|fls|fprint\w*)\b/.test(seg)) return false;
+      continue;
+    }
+    // ripgrep reads — unless --pre EXECUTES a preprocessor command on every
+    // searched file (`rg --pre touch pattern file` runs `touch file`).
+    if (name === "rg" && /\s--pre\b/.test(seg)) return false;
+    // GNU diff reads — unless -l/--paginate pipes the output through the `pr`
+    // program resolved from PATH (a repository-local `pr` would execute).
+    // Clustered spellings count (-lu, -tl), and --pag… covers the long form's
+    // unambiguous abbreviations without catching --palette.
+    if (name === "diff" && /\s-[a-zA-Z]*l|\s--pag/.test(seg)) return false;
+    // tree reads — unless -o/--output sends the listing to a FILE.
+    if (name === "tree" && /\s-[a-zA-Z]*o|\s--o/.test(seg)) return false;
+    // file reads — unless -C/--compile WRITES a compiled magic.mgc.
+    if (name === "file" && /\s-[a-zA-Z]*C|\s--comp/.test(seg)) return false;
+    // date reads — unless -s/--set SETS the system clock (containers often run
+    // as root, where it would actually land).
+    if (name === "date" && /\s-[a-zA-Z]*s|\s--set/.test(seg)) return false;
+    // sort reads — unless -o/--output turns it into a file writer. Every spelling
+    // counts: separated (-o FILE), attached (-oFILE), clustered (-ro FILE), long
+    // (--output FILE, --output=FILE) and its GNU abbreviations (--o…, sort's only
+    // long option on o) — a short-option group ending in o takes the next word
+    // as its output file. --compress-program EXECUTES the named program on
+    // sort's temporary files (`--compress-program=./helper` runs a repository
+    // binary); --co… covers its abbreviations while --check stays --ch, allowed.
+    if (name === "sort" && /\s(?:-[a-zA-Z]*o|--o|--co)/.test(seg)) return false;
+    // printf reads — unless bash's -v VAR form assigns the formatted result to
+    // a shell VARIABLE: `printf -v PATH .` rewrites where every later bare
+    // name in the chain resolves, turning the allow-listed readers into
+    // repository-controlled executables. Attached (-vPATH) and clustered
+    // spellings count; bash printf has no long options, but --v… is refused
+    // for symmetry with the abbreviation screens above.
+    if (name === "printf" && /\s-[a-zA-Z]*v|\s--v/.test(seg)) return false;
+    // uniq and xxd read — unless a SECOND positional argument names an output
+    // file (`uniq input output` and `xxd input output` both WRITE output).
+    // Conservative: two option-free words refuse the command, a separated flag
+    // argument (-f 2, -c 16) included; `-` counts (it is stdin, and whatever
+    // follows it is the output).
+    if (name === "uniq" || name === "xxd") {
+      const positional = words.slice(i + 1).filter((w) => !(w.startsWith("-") && w.length > 1));
+      if (positional.length > 1) return false;
+      continue;
+    }
+    if (!READ_COMMANDS.has(name)) return false;
+  }
+  return true;
+}
+
+/**
+ * The effective git subcommand, skipping global options — `git -C . push` is still a
+ * push. The listed flags consume a separate argument; every other leading `-x` is a
+ * bare global flag.
+ */
+export function gitSubcommandOf(words: readonly string[]): string | undefined {
+  const takesArg = new Set(["-C", "-c", "--exec-path", "--git-dir", "--work-tree", "--namespace"]);
+  let i = 1;
+  while (i < words.length) {
+    const word = words[i] as string;
+    if (!word.startsWith("-")) return word;
+    i += takesArg.has(word) ? 2 : 1;
+  }
+  return undefined;
+}
+
+/** Commands that publish work outside the machine: these go to the HITL broker at risk "high". */
+const RISKY_PATTERNS: readonly RegExp[] = [
+  /\bgit\s+push\b/,
+  // The plumbing spellings of a push update remote refs all the same.
+  /\bgit\s+(?:send-pack|http-push)\b/,
+  /\b(?:npm|pnpm|yarn|bun)\s+publish\b/,
+  /\b(?:npm|pnpm|yarn|bun)\s+run\s+(?:deploy|publish|release)\b/,
+  /\bcargo\s+publish\b/,
+  /\b(?:make|just)\s+(?:deploy|publish|release)\b/,
+  /\bdocker\s+push\b/,
+  /\bkubectl\s+(?:apply|rollout)\b/,
+  /\bterraform\s+apply\b/,
+  /\bgh\s+(?:release\s+create|pr\s+merge)\b/,
+  /\b(?:vercel|netlify|fly|flyctl|wrangler|heroku)\s+deploy\b/,
+];
+
+/**
+ * Git subcommands that mutate REPOSITORY METADATA a linked worktree shares
+ * with the integration checkout: config (aliases, hook paths, fsmonitor),
+ * remotes (config again), shared refs (branches, tags, notes, the stash,
+ * remote-tracking refs), object pruning, and the worktree list itself. A
+ * strict write scope relies on worktree patch capture, which sees none of
+ * that — and a planted config value or a `git branch leaked` outlives the
+ * step, invisible to cleanup. Deny-by-default: `git config user.email` and
+ * `git checkout -- file` (worktree-local spellings) are refused along with
+ * the writes; the one turn they cost is the price of not parsing each
+ * subcommand's full option grammar to split its ref-creating forms
+ * (`checkout -b`, `switch -c`) from its local ones.
+ */
+const SHARED_GIT_METADATA_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "config",
+  "remote",
+  "gc",
+  "maintenance",
+  "prune",
+  "worktree",
+  "update-ref",
+  "symbolic-ref",
+  "reflog",
+  "filter-branch",
+  "replace",
+  "branch",
+  "tag",
+  "checkout",
+  "switch",
+  "stash",
+  "notes",
+  "fetch",
+  "pull",
+]);
+
+/** True when any segment runs a git subcommand that touches shared repository metadata. */
+export function mutatesSharedGitMetadata(command: string): boolean {
+  // Same resolution discipline as isRiskyCommand: the shell removes line
+  // continuations, quotes, and backslash escapes before git sees its words.
+  const resolved = command.replace(/\\\r?\n/g, "").replace(/[\\'"]/g, "");
+  for (const raw of resolved.replace(/\d*>&\d+/g, " ").split(/\|\||&&|[;|\n&]/)) {
+    const words = raw.trim().split(/\s+/);
+    // ANY position, not just the segment head: wrappers re-execute their tail
+    // (`command git branch x`, `env git branch x`, `sh -c git branch x` once
+    // quotes resolve, nice/nohup/timeout/xargs chains), and unwrapping each
+    // wrapper's own option grammar is a losing game. Scanning every word can
+    // over-deny an argument that merely LOOKS like git (`grep git config
+    // README`) — in a strict scope that costs one turn, the safe direction.
+    for (let j = 0; j < words.length; j++) {
+      const w = words[j] as string;
+      if (w !== "git" && !w.endsWith("/git")) continue;
+      const sub = gitSubcommandOf(words.slice(j));
+      if (sub !== undefined && SHARED_GIT_METADATA_SUBCOMMANDS.has(sub)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Git subcommands git itself ships (the ones agents plausibly reach). The risky
+ * screen treats anything OUTSIDE this set as a possible CONFIGURED ALIAS: with
+ * `alias.ship=push` already in the repository's config, `git ship origin
+ * HEAD:main` publishes with no "push" anywhere in the command — the expansion
+ * happens inside git, out of every textual screen's sight. Unknown names route
+ * to approval conservatively; a typo'd or exotic subcommand costs one prompt.
+ */
+const KNOWN_GIT_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  ...READ_GIT_SUBCOMMANDS,
+  "add",
+  "am",
+  "apply",
+  "archive",
+  "bisect",
+  "branch",
+  "bundle",
+  "checkout",
+  "cherry",
+  "cherry-pick",
+  "clean",
+  "clone",
+  "commit",
+  "commit-tree",
+  "config",
+  "diff-files",
+  "diff-index",
+  "diff-tree",
+  "difftool",
+  "fetch",
+  "format-patch",
+  "fsck",
+  "gc",
+  "hash-object",
+  "help",
+  "init",
+  "ls-remote",
+  "maintenance",
+  "merge",
+  "mergetool",
+  "mktree",
+  "mv",
+  "notes",
+  "pack-refs",
+  "prune",
+  "pull",
+  "range-diff",
+  "read-tree",
+  "rebase",
+  "remote",
+  "repack",
+  "replace",
+  "rerere",
+  "reset",
+  "restore",
+  "revert",
+  "rm",
+  "show-branch",
+  "show-ref",
+  "sparse-checkout",
+  "stash",
+  "submodule",
+  "switch",
+  "symbolic-ref",
+  "tag",
+  "update-index",
+  "update-ref",
+  "verify-commit",
+  "verify-tag",
+  "version",
+  "whatchanged",
+  "worktree",
+  "write-tree",
+]);
+
+export function isRiskyCommand(command: string): boolean {
+  // The shell resolves quoting and backslash escapes BEFORE the program sees
+  // its words — `git p'u'sh` and `git p\ush` both run `git push` — so
+  // classification must match against the resolved text. Stripping is for
+  // MATCHING only and errs toward the stricter reading: a "push" inside a
+  // quoted string routes to approval rather than sailing past.
+  // Backslash-newline first: bash deletes the PAIR as a line continuation, so
+  // `git pu\<NL>sh` runs `git push`. The generic strip alone would leave the
+  // newline behind, splitting the reassembled word across two segments.
+  const resolved = command.replace(/\\\r?\n/g, "").replace(/[\\'"]/g, "");
+  if (RISKY_PATTERNS.some((re) => re.test(resolved))) return true;
+  // `git -C . push` is still a push: resolve the effective subcommand per segment
+  // instead of trusting adjacency in the raw string.
+  for (const raw of resolved.replace(/\d*>&\d+/g, " ").split(/\|\||&&|[;|\n&]/)) {
+    const words = raw.trim().split(/\s+/);
+    let i = 0;
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] as string)) i++;
+    const head = words[i];
+    if (head === undefined) continue;
+    // `op=push; git "$op" origin HEAD:main` IS a push, assembled out of this
+    // screen's sight. A dynamic EXECUTABLE, an eval, or a dynamic git
+    // subcommand cannot be proven non-publishing — route them to the broker.
+    if (/[$`]/.test(head)) return true;
+    const name = head.split("/").pop() ?? head;
+    if (name === "eval") return true;
+    // git can sit behind a WRAPPER (`command git …`, `env git …`, `sh -c git …`
+    // once quotes resolve): analyze from wherever git appears, not just the
+    // head. Over-matching an argument that merely looks like git routes the
+    // command to approval — the safe direction.
+    let gitAt = -1;
+    for (let j = i; j < words.length; j++) {
+      const w = words[j] as string;
+      if (w === "git" || w.endsWith("/git")) {
+        gitAt = j;
+        break;
+      }
+    }
+    if (gitAt === -1) continue;
+    const gitWords = words.slice(gitAt);
+    // `git -c alias.ship=push ship …` runs whatever the alias expands to — the
+    // expansion happens inside git, out of this screen's sight. Any alias
+    // DEFINED on the command line routes to approval conservatively.
+    for (let j = 1; j < gitWords.length; j++) {
+      const w = gitWords[j] as string;
+      if (w.startsWith("-calias.")) return true;
+      if (w === "-c" && (gitWords[j + 1] ?? "").startsWith("alias.")) return true;
+      // --config-env=alias.ship=VAR loads the alias from the environment — the
+      // same escape hatch as -c alias.*. The prefix form covers the
+      // abbreviations git accepts (--config-env is its only --c… global).
+      if (/^--c[-a-z]*=alias\./.test(w)) return true;
+      if (/^--c[-a-z]*$/.test(w) && (gitWords[j + 1] ?? "").startsWith("alias.")) return true;
+    }
+    const sub = gitSubcommandOf(gitWords);
+    // send-pack and http-push are the PLUMBING spellings of a push: they update
+    // remote refs without the word "push" appearing anywhere.
+    if (sub === "push" || sub === "send-pack" || sub === "http-push") return true;
+    if (sub !== undefined && /[$`]/.test(sub)) return true;
+    // A subcommand git does not ship is a CONFIGURED alias until proven
+    // otherwise — `git ship` with alias.ship=push already in the repository's
+    // config publishes with nothing for the patterns above to see.
+    if (sub !== undefined && !KNOWN_GIT_SUBCOMMANDS.has(sub)) return true;
+  }
+  return false;
+}

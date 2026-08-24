@@ -1,0 +1,30 @@
+{
+  "name": "@weft/core",
+  "version": "0.1.0",
+  "description": "Weft engine: scheduler, replayer, journal model, budget, HITL broker, projections.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@weft/sdk": "workspace:*",
+    "@weft/git": "workspace:*",
+    "@weft/isolation": "workspace:*",
+    "@opentelemetry/api": "^1.9.1",
+    "execa": "^10.0.1",
+    "tinyglobby": "^0.2.17",
+    "picomatch": "^4.0.5",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/picomatch": "^4.0.2",
+    "@weft/provider-mock": "workspace:*"
+  }
+}

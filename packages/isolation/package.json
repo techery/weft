@@ -1,0 +1,25 @@
+{
+  "name": "@weft/isolation",
+  "version": "0.1.0",
+  "description": "Worktrees, patch capture, write-scope checks, 3-way merge.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@weft/git": "workspace:*",
+    "execa": "^10.0.1",
+    "picomatch": "^4.0.5",
+    "@weft/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/picomatch": "^4.0.2"
+  }
+}

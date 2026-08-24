@@ -1,0 +1,23 @@
+{
+  "name": "@weft/stdlib",
+  "version": "0.1.0",
+  "description": "Typed workflow patterns: adversarialVerify, judgePanel, loopUntilDry, …",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@weft/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@weft/core": "workspace:*",
+    "@weft/provider-mock": "workspace:*"
+  }
+}

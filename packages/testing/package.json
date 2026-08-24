@@ -1,0 +1,26 @@
+{
+  "name": "@weft/testing",
+  "version": "0.1.0",
+  "description": "runWorkflow harness, mock fixtures, journal assertions, conformance suites.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@weft/core": "workspace:*",
+    "@weft/sdk": "workspace:*",
+    "@weft/provider-mock": "workspace:*",
+    "@weft/store-fs": "workspace:*",
+    "picomatch": "^4.0.5"
+  },
+  "devDependencies": {
+    "@types/picomatch": "^4.0.2"
+  }
+}

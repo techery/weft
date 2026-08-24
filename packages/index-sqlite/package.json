@@ -1,0 +1,22 @@
+{
+  "name": "@weft/index-sqlite",
+  "version": "0.1.0",
+  "description": "Optional node:sqlite index over local runs, derived from journals.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@weft/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@weft/store-fs": "workspace:*"
+  }
+}

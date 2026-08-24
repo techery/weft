@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.tgz
+.weft/runs/
+*.log
+.DS_Store
+coverage/
+.turbo/
+.weft/blobs/
+.weft/index.sqlite

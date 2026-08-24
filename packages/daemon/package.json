@@ -1,0 +1,22 @@
+{
+  "name": "@weft/daemon",
+  "version": "0.1.0",
+  "description": "Local daemon: web UI, SSE watch, answers, signals, wake-ups.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@weft/host": "workspace:*",
+    "@weft/core": "workspace:*",
+    "hono": "^4.13.3",
+    "@hono/node-server": "^2.1.1"
+  }
+}

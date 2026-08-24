@@ -1,0 +1,29 @@
+{
+  "name": "@weft/host",
+  "version": "0.1.0",
+  "description": "Engine assembly: config loading, stores, providers, registry wiring for hosts.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "dependencies": {
+    "@weft/core": "workspace:*",
+    "@weft/gate": "workspace:*",
+    "@weft/store-fs": "workspace:*",
+    "@weft/index-sqlite": "workspace:*",
+    "@weft/provider-mock": "workspace:*",
+    "@weft/provider-claude": "workspace:*",
+    "@weft/provider-codex": "workspace:*",
+    "@weft/git": "workspace:*",
+    "@weft/isolation": "workspace:*",
+    "@weft/sdk": "workspace:*",
+    "zod": "^4.4.3"
+  }
+}
