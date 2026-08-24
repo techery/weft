@@ -378,8 +378,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
           let workCwd = rt.cwd;
           let worktree: { path: string; base: string } | undefined;
           // Reserved, not just checked: parallel dispatches against one pool must not
-          // all sail past a nearly-dry ceiling before the first charge lands.
-          const releaseCall = rt.budget.reserveCall(stepRef);
+          // all sail past a nearly-dry ceiling before the first charge lands. This
+          // WAITS for a slot — a ceiling schedules the fan-out, it does not shrink it.
+          const releaseCall = await rt.budget.reserveCall(stepRef, io.signal);
           try {
             if (useWorktree) {
               // Per-ATTEMPT path: a retry after a timeout must never remove and

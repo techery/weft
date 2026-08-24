@@ -15,6 +15,7 @@ import {
   type WorkflowDefinition,
 } from "@techery/weft-sdk";
 import { Budget } from "./budget.ts";
+import { sha256Hex } from "./canonical.ts";
 import { type EngineConfig, type EngineConfigInput, resolveConfig } from "./config.ts";
 import { buildCtx } from "./ctx.ts";
 import type { JournalEvent, JournalRecord } from "./events.ts";
@@ -33,6 +34,31 @@ import {
 import type { BlobStore, JournalStore, RunLease, RunListFilter, RunSummary } from "./stores.ts";
 
 const tracer = trace.getTracer("weft");
+
+/**
+ * The engine's own version stamp for a workflow body, journaled with the run and
+ * compared on resume to decide whether step POSITIONS still name the same call sites.
+ *
+ * Deliberately not the host's `defHash`: that is a bundle hash, absent for library
+ * callers and computed over material (imports, the gate's wrapper) a body-level
+ * comparison should not react to. Comparing the body's own source instead means the
+ * protection works for every caller, with no plumbing to forget. It is not a content
+ * address — two genuinely different workflows sharing a body text would collide — and
+ * that is fine, because a false "unchanged" only restores the previous behaviour.
+ */
+function definitionHash(def: WorkflowDefinition): string {
+  return sha256Hex(`${def.meta.name ?? ""}\n${def.run.toString()}`);
+}
+
+/**
+ * Whether the script being resumed is the one the journal was written by. A run created
+ * before `defHash` was journaled carries none; treat that as unchanged, because the only
+ * thing the answer gates is an extra re-run, and an old journal should not start paying
+ * for one.
+ */
+function scriptUnchanged(current: string, journaled: string | undefined): boolean {
+  return journaled === undefined || journaled === current;
+}
 
 export interface WorkflowRegistry {
   get(name: string): Promise<WorkflowDefinition | undefined>;
@@ -62,6 +88,8 @@ export interface StartOptions {
 export interface ResumeOptions {
   def?: WorkflowDefinition;
   reuse?: ReuseMode;
+  /** Bundle content hash of the script being resumed; recorded, not compared. */
+  defHash?: string;
 }
 
 export type RunOutcome =
@@ -201,7 +229,11 @@ export class Engine implements EngineHost {
         {
           type: "run.created",
           runId,
-          workflow: { name, ...(opts.defHash !== undefined ? { defHash: opts.defHash } : {}) },
+          workflow: {
+            name,
+            ...(opts.defHash !== undefined ? { defHash: opts.defHash } : {}),
+            bodyHash: definitionHash(def),
+          },
           // Raw, not inputCheck.value: a transformed value (string → Date) would
           // serialize lossily and hand a resumed execution a different input type.
           input: rawInput,
@@ -296,6 +328,12 @@ export class Engine implements EngineHost {
       abort: new AbortController(),
       agentCounter: { count: agentDispatches, warned: false },
       reuse: opts.reuse ?? "content",
+      // An edited script moves every step after the edit, so a step's seq no longer
+      // names the same call site the journal recorded it at. Salvage by content still
+      // works — that is the point of edit-tolerant replay — but a KEYLESS step whose
+      // content matches several journaled entries can no longer be resolved by position,
+      // and replay re-runs it instead of serving whichever entry landed at its seq.
+      positionsTrusted: scriptUnchanged(definitionHash(def), created.workflow.bodyHash),
     };
     // A crash AFTER a durable budget.sampled but BEFORE the paid step's terminal
     // record leaves that call's spend visible ONLY in the sample: the cumulative

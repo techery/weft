@@ -1,4 +1,5 @@
 import type { JournalRecord } from "@techery/weft-core";
+import { mock } from "@techery/weft-provider-mock";
 import { defineWorkflow, z } from "@techery/weft-sdk";
 import { afterAll, describe, expect, test } from "vitest";
 import { cleanupRepos, reopen, tempDir, testEngine } from "./helpers.ts";
@@ -307,5 +308,100 @@ describe("replay & edit-tolerant resume", () => {
     const h2 = await t3.engine.resume(h1.runId, { def: parent });
     expect(await h2.result).toEqual({ ok: true });
     expect(t3.builder.calls).toHaveLength(0);
+  });
+});
+
+describe("replay identity: a cache hit must not lie", () => {
+  const Colours = z.object({ before: z.string(), after: z.string() });
+  const Answer = z.object({ answer: z.string() });
+
+  /**
+   * Two probes ask the same question either side of a change to the world. Their prompt
+   * and schema are identical and neither carries a `key`, so the journal cannot tell
+   * them apart by content. Deleting the first slides the second into seq 1 — where the
+   * fast path would hand it the deleted probe's PRE-change answer.
+   */
+  test("deleting one of two identical keyless steps re-runs rather than serving the stale entry", async () => {
+    let world = "RED";
+    const both = defineWorkflow(
+      { name: "world", description: "world", input: z.object({}), output: Colours },
+      async (ctx) => {
+        const before = await ctx.agent("what colour is the build?", { schema: Answer });
+        world = "GREEN";
+        const after = await ctx.agent("what colour is the build?", { schema: Answer });
+        await ctx.human.approve({ action: "ship?" });
+        return { before: before.answer, after: after.answer };
+      },
+    );
+    const onlyAfter = defineWorkflow(
+      { name: "world", description: "world", input: z.object({}), output: Colours },
+      async (ctx) => {
+        world = "GREEN";
+        const after = await ctx.agent("what colour is the build?", { schema: Answer });
+        await ctx.human.approve({ action: "ship?" });
+        return { before: "n/a", after: after.answer };
+      },
+    );
+
+    const answerWorld = () => mock().on({}, () => ({ answer: world }));
+    const t1 = testEngine({ builder: answerWorld() });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(both, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    expect(await h1.result).toEqual({ before: "RED", after: "GREEN" });
+
+    world = "GREEN";
+    const t2 = reopen(t1, { builder: answerWorld() });
+    const h2 = await t2.engine.resume(h1.runId, { def: onlyAfter });
+    const o2 = await h2.outcome();
+    if (o2.status === "waiting_for_human") {
+      await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    }
+    // The pre-change "RED" must not survive the edit.
+    expect((await h2.result) as { after: string }).toMatchObject({ after: "GREEN" });
+
+    const recs = await records(t2.journal, h1.runId);
+    expect(
+      recs.some((r) => r.ev.type === "replay.diverged" && /ambiguous keyless identity/.test(r.ev.reason)),
+    ).toBe(true);
+  });
+
+  test("an unchanged resume of the same two identical steps still costs zero calls", async () => {
+    let calls = 0;
+    const def = defineWorkflow(
+      { name: "twice", description: "twice", input: z.object({}), output: Colours },
+      async (ctx) => {
+        const before = await ctx.agent("what colour is the build?", { schema: Answer });
+        const after = await ctx.agent("what colour is the build?", { schema: Answer });
+        await ctx.human.approve({ action: "ship?" });
+        return { before: before.answer, after: after.answer };
+      },
+    );
+    const counting = () =>
+      mock().on({}, () => {
+        calls++;
+        return { answer: "RED" };
+      });
+
+    const t1 = testEngine({ builder: counting() });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    await h1.result;
+    expect(calls).toBe(2);
+
+    const t2 = reopen(t1, { builder: counting() });
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status === "waiting_for_human") {
+      await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    }
+    await h2.result;
+    // Edit-tolerant replay is unaffected when the script did not change.
+    expect(calls).toBe(2);
   });
 });

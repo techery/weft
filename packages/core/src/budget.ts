@@ -3,7 +3,7 @@
  * pool shared with children. A child budget charges its parent chain, so a
  * sub-allocation can never exceed what the parent has left.
  */
-import { BudgetExceededError, type BudgetView, type Usage } from "@techery/weft-sdk";
+import { BudgetExceededError, type BudgetView, CancelledError, type Usage } from "@techery/weft-sdk";
 
 export interface BudgetLimits {
   tokens?: number;
@@ -20,6 +20,9 @@ export class Budget {
   // whole pool (children included) shares one view of concurrent exposure.
   private inflightCalls = 0;
   private chargedCalls = 0;
+  // Callers parked in reserveCall, woken whenever the pool's view changes (a charge
+  // lands, or a call releases). Held at the ROOT so one queue serves the whole tree.
+  private readonly waiters = new Set<() => void>();
 
   constructor(limits: BudgetLimits = {}, parent?: Budget) {
     // A ceiling must be a finite, non-negative number: Infinity silently turns a
@@ -63,6 +66,17 @@ export class Budget {
     this.usd += nonNegative(usage.usd);
     if (this.parent) this.parent.charge(usage);
     else this.chargedCalls++; // one cost sample per charged call, counted once at the root
+    // The first charge is what turns an unpriced pool into a priced one: parked
+    // callers must re-evaluate now, not when the call finally releases.
+    this.root().wake();
+  }
+
+  /** Release every parked caller so each re-tests admission against the new figures. */
+  private wake(): void {
+    if (this.waiters.size === 0) return;
+    const woken = [...this.waiters];
+    this.waiters.clear();
+    for (const resolve of woken) resolve();
   }
 
   /**
@@ -131,38 +145,62 @@ export class Budget {
   }
 
   /**
-   * Reserve one in-flight provider call. `checkBeforeStep` alone lets N parallel calls
-   * all pass against a nearly-dry pool (nothing has charged yet), overspending by
-   * N × call-cost; this gate holds the ceiling across concurrency. Nobody declares a
-   * call's cost up front, so the observed average per charged call stands in for it —
-   * and with no history yet, calls probe ONE at a time. Returns a release fn for the
-   * dispatch site's finally.
+   * Admission test for one more concurrent provider call: `undefined` when it fits,
+   * otherwise the reason it does not. `checkBeforeStep` alone lets N parallel calls all
+   * pass against a nearly-dry pool (nothing has charged yet), overspending by
+   * N × call-cost; this holds the ceiling across concurrency. Nobody declares a call's
+   * cost up front, so the observed average per charged call stands in for it — and with
+   * no history yet, calls probe ONE at a time to price the pool.
    */
-  reserveCall(stepRef: { key?: string; kind?: string }): () => void {
-    this.checkBeforeStep(stepRef);
-    const root = this.root();
+  private admits(): string | undefined {
     const rt = this.remainingTokens();
     const ru = this.remainingUsd();
-    if (rt !== null || ru !== null) {
-      const samples = root.chargedCalls;
-      const refuse = (why: string): never => {
+    if (rt === null && ru === null) return undefined; // unbounded on both axes
+    const root = this.root();
+    const samples = root.chargedCalls;
+    if (samples === 0) {
+      return root.inflightCalls > 0 ? "while an unpriced call is in flight" : undefined;
+    }
+    // The observed average stands in for the declared cost nobody provides: this call
+    // plus everything in flight must fit in what is left.
+    const fits = (remaining: number | null, spent: number): boolean =>
+      remaining === null || remaining >= (root.inflightCalls + 1) * (spent / samples);
+    return fits(rt, root.tokens) && fits(ru, root.usd) ? undefined : "at the observed per-call cost";
+  }
+
+  /**
+   * Reserve one in-flight provider call, WAITING for a slot rather than refusing one.
+   *
+   * A ceiling is a scheduling constraint, not an error: refusing here turned every
+   * cold-start fan-out into N−1 dropped lanes, because nothing has been priced yet and
+   * the first call is always the only one that fits. Parking instead costs latency
+   * until the first charge lands and then admits at the observed width, which is what
+   * the ceiling was actually for.
+   *
+   * It still refuses — but only when waiting cannot help: the pool is exhausted, or
+   * nothing is in flight to release and this one call already does not fit.
+   *
+   * Returns a release fn for the dispatch site's finally.
+   */
+  async reserveCall(stepRef: { key?: string; kind?: string }, signal?: AbortSignal): Promise<() => void> {
+    const root = this.root();
+    for (;;) {
+      if (signal?.aborted) {
+        throw new CancelledError("run cancelled while waiting for budget", stepRef);
+      }
+      this.checkBeforeStep(stepRef); // hard ceiling reached: waiting cannot help
+      const why = this.admits();
+      if (why === undefined) break;
+      if (root.inflightCalls === 0) {
+        // Nothing is in flight, so no release will ever change the answer: this single
+        // call genuinely does not fit in what is left.
         throw new BudgetExceededError(
           `budget cannot cover step ${stepRef.key ?? stepRef.kind ?? "?"} ${why} ` +
-            `(${root.inflightCalls} in flight; remaining tokens=${rt}, usd=${ru})`,
+            `(0 in flight; remaining tokens=${this.remainingTokens()}, usd=${this.remainingUsd()})`,
           stepRef,
         );
-      };
-      if (samples === 0) {
-        // No cost observed yet: calls probe ONE at a time so a parallel fan-out
-        // cannot multiply an unknown cost past the ceiling.
-        if (root.inflightCalls > 0) refuse("while an unpriced call is in flight");
-      } else {
-        // The observed average stands in for the declared cost nobody provides:
-        // this call plus everything in flight must fit in what is left.
-        const fits = (remaining: number | null, spent: number): boolean =>
-          remaining === null || remaining >= (root.inflightCalls + 1) * (spent / samples);
-        if (!fits(rt, root.tokens) || !fits(ru, root.usd)) refuse("at the observed per-call cost");
       }
+      await root.parkUntilChange(signal);
     }
     root.inflightCalls++;
     let released = false;
@@ -170,8 +208,25 @@ export class Budget {
       if (!released) {
         released = true;
         root.inflightCalls--;
+        root.wake();
       }
     };
+  }
+
+  /** Park until a charge lands or a call releases; an abort rejects the wait. */
+  private parkUntilChange(signal: AbortSignal | undefined): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const onWake = (): void => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      };
+      const onAbort = (): void => {
+        this.waiters.delete(onWake);
+        reject(new CancelledError("run cancelled while waiting for budget", {}));
+      };
+      this.waiters.add(onWake);
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
   }
 
   view(): BudgetView {

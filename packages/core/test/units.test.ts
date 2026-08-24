@@ -91,11 +91,16 @@ describe("Semaphore", () => {
 
 describe("OrderedDelivery", () => {
   test("delivers strictly in journaled order while pure", async () => {
-    const d = new OrderedDelivery([10, 20, 30], () => 0);
+    // `busy` is what tells the watchdog a continuation is still on its way: the runtime
+    // counts live dispatches plus replay-path I/O. While the step that will deliver 10
+    // is still working, the replay has not quiesced and 20 must stay parked.
+    let busy = 1;
+    const d = new OrderedDelivery([10, 20, 30], () => busy);
     const done: number[] = [];
     const p20 = d.deliver(20).then(() => done.push(20));
     await new Promise((r) => setTimeout(r, 5));
     expect(done).toEqual([]);
+    busy = 0;
     await d.deliver(10).then(() => done.push(10));
     await p20;
     await d.deliver(30).then(() => done.push(30));

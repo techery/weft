@@ -251,15 +251,44 @@ export class ReplayIndex {
     kind: StepKind,
     key: string | undefined,
     reuse: ReuseMode,
-  ): { entry: CompletedEntry; via: "seq" | "salvage" | "key" } | undefined {
+    /**
+     * True when the workflow script is byte-identical to the one that produced this
+     * journal. Step positions only mean something under that condition.
+     */
+    positionsTrusted = true,
+  ): { entry: CompletedEntry; via: "seq" | "salvage" | "key"; ambiguous?: true } | undefined {
+    const sameKind = (this.byHash.get(hash) ?? []).filter((e) => e.kind === kind);
+    /**
+     * A KEYLESS step is identified by its content alone, so two call sites sharing a
+     * prompt and schema are indistinguishable here — and an agent step reads the
+     * repository, so "same prompt" never means "same world". Two ways that bites:
+     *
+     *  - Off-position (salvage): the match is picked by journal order, so a later call
+     *    site can consume an earlier one's answer.
+     *  - On-position, but the SCRIPT CHANGED: deleting the first of two identical probes
+     *    slides the second into seq 1, where the fast path hands it the deleted probe's
+     *    answer. That is the case that reads as correct and is not.
+     *
+     * Either way the caller re-runs instead of guessing: a re-run costs a call, a wrong
+     * entry costs the truth. An explicit `key` disambiguates and keeps full salvage.
+     */
+    const ambiguousKeyless = key === undefined && sameKind.length > 1;
+
     const fast = this.bySeq.get(seq);
     if (fast && !fast.consumed && fast.hash === hash && fast.kind === kind) {
-      return { entry: fast, via: "seq" };
+      return ambiguousKeyless && !positionsTrusted
+        ? { entry: fast, via: "seq", ambiguous: true }
+        : { entry: fast, via: "seq" };
     }
-    const byHash = this.byHash.get(hash);
-    if (byHash) {
-      const entry = byHash.find((e) => !e.consumed && e.kind === kind);
-      if (entry) return { entry, via: entry.seq === seq ? "seq" : "salvage" };
+    {
+      const entry = sameKind.find((e) => !e.consumed);
+      if (entry) {
+        if (entry.seq === seq && !(ambiguousKeyless && !positionsTrusted)) {
+          return { entry, via: "seq" };
+        }
+        if (ambiguousKeyless) return { entry, via: "salvage", ambiguous: true };
+        return { entry, via: "salvage" };
+      }
     }
     if (reuse === "key" && key !== undefined) {
       const byKey = this.byKey.get(key);
@@ -286,23 +315,35 @@ export class ReplayIndex {
   }
 }
 
+/** Consecutive drained event-loop turns with no progress that count as a stall. */
+const QUIET_TURNS = 3;
+
 /**
  * Delivers cached completions in journaled order while replay is "pure" (no live
  * dispatch yet). A stall — an order the edited code never requests — is broken by a
  * quiescence watchdog rather than deadlocking; the first live dispatch flushes
  * everything (strict ordering is meaningless once new work interleaves).
+ *
+ * The stall test counts drained event-loop TURNS, not milliseconds. A wall-clock timer
+ * made the decision depend on how fast the machine was: the same journal replayed on a
+ * slower box could skip forward at a different point, assign different seq numbers, and
+ * change what the NEXT resume's fast path matched — replay was not a pure function of
+ * the journal. A turn count is machine-independent, and `busy()` (live dispatches plus
+ * replay-path I/O still in flight) keeps a turn from counting as quiet while any
+ * continuation is still on its way.
  */
 export class OrderedDelivery {
   private orders: number[];
   private cursor = 0;
   private parked = new Map<number, () => void>();
   private strict: boolean;
-  private watchdog: NodeJS.Timeout | undefined;
+  private watchdog: NodeJS.Immediate | NodeJS.Timeout | undefined;
   private lastProgress = 0;
 
   constructor(
     orders: number[],
-    private readonly inflightLive: () => number,
+    /** Live dispatches plus replay-path I/O in flight; zero means nothing is coming. */
+    private readonly busy: () => number,
   ) {
     this.orders = orders;
     this.strict = orders.length > 0;
@@ -330,7 +371,7 @@ export class OrderedDelivery {
   breakOrder(): void {
     if (!this.strict) return;
     this.strict = false;
-    if (this.watchdog) clearTimeout(this.watchdog);
+    if (this.watchdog) this.clearWatchdog();
     const parked = [...this.parked.entries()].sort((a, b) => a[0] - b[0]);
     this.parked.clear();
     for (const [, resolve] of parked) resolve();
@@ -372,31 +413,48 @@ export class OrderedDelivery {
     }
   }
 
-  private quietChecks = 0;
+  private quietTurns = 0;
+
+  /** The handle is an Immediate or a Timeout depending on which arm ran; clear either. */
+  private clearWatchdog(): void {
+    const handle = this.watchdog;
+    this.watchdog = undefined;
+    if (handle === undefined) return;
+    if (typeof (handle as NodeJS.Immediate).hasRef === "function" && !("refresh" in handle)) {
+      clearImmediate(handle as NodeJS.Immediate);
+    } else {
+      clearTimeout(handle as NodeJS.Timeout);
+    }
+  }
 
   private armWatchdog(): void {
     if (this.watchdog || !this.strict) return;
     const seen = this.lastProgress;
-    this.watchdog = setTimeout(() => {
+    const check = (): void => {
       this.watchdog = undefined;
       if (!this.strict || this.parked.size === 0) return;
-      if (this.lastProgress === seen && this.inflightLive() === 0) {
-        // Two consecutive quiet checks with parked deliveries: the expected order
+      if (this.lastProgress === seen && this.busy() === 0) {
+        // A drained turn with parked deliveries and nothing in flight: no continuation
+        // can arrive to claim the expected order. After QUIET_TURNS of that, the order
         // was edited away — skip forward rather than deadlock.
-        this.quietChecks++;
-        if (this.quietChecks >= 2) {
-          this.quietChecks = 0;
+        this.quietTurns++;
+        if (this.quietTurns >= QUIET_TURNS) {
+          this.quietTurns = 0;
           const smallest = Math.min(...this.parked.keys());
           while (this.cursor < this.orders.length && this.orders[this.cursor]! < smallest) this.cursor++;
           this.flush();
         }
       } else {
-        this.quietChecks = 0;
+        this.quietTurns = 0;
       }
       if (this.parked.size > 0) this.armWatchdog();
-    }, 50);
-    // Deliberately NOT unref'd: while a delivery is parked this timer may be the
-    // only handle keeping a one-shot resume process alive; unref'ing it lets Node
+    };
+    // A drained turn is the unit while nothing is in flight. When something IS in
+    // flight the turn cannot be quiet anyway, so fall back to a coarse timer rather
+    // than spinning setImmediate hot for the length of a provider call.
+    this.watchdog = this.busy() === 0 ? setImmediate(check) : setTimeout(check, 50);
+    // Deliberately NOT unref'd: while a delivery is parked this handle may be the
+    // only thing keeping a one-shot resume process alive; unref'ing it lets Node
     // exit 0 with the run half-replayed. It re-arms only while parked deliveries
     // exist, so it never outlives the replay.
   }

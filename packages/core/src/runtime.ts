@@ -89,6 +89,14 @@ export interface SharedRunResources {
   abort: AbortController;
   agentCounter: { count: number; warned: boolean };
   reuse: ReuseMode;
+  /**
+   * False when the workflow script differs from the one that produced the journal being
+   * replayed. Step positions carry no meaning across an edit, so a keyless step whose
+   * content matches several journaled entries must re-run rather than take the entry
+   * that happens to sit at its seq. Defaults to trusted (a fresh run, or a resume of an
+   * unchanged script).
+   */
+  positionsTrusted?: boolean;
 }
 
 export interface PatchState {
@@ -255,6 +263,12 @@ export class RunRuntime {
   private humanCounter = 0;
   private agentOrdinal = 0;
   private inflightLive = 0;
+  /**
+   * Steps between "matched the journal" and "parked for delivery", i.e. doing replay-path
+   * I/O (a blob load, a salvage record). The stall watchdog must not read a turn as quiet
+   * while one of these is still on its way to `deliver()`.
+   */
+  private inflightServing = 0;
   private liveDispatched = false;
   private consumedEntries = 0;
   private appendChain: Promise<unknown> = Promise.resolve();
@@ -274,7 +288,10 @@ export class RunRuntime {
     this.humanCounter = opts.replay?.maxHumanId ?? 0;
     this.dry = opts.dry ?? false;
     this.dryIndex = (opts.replay?.maxJournalIndex ?? -1) + 1;
-    this.delivery = new OrderedDelivery(opts.replay?.completionOrders() ?? [], () => this.inflightLive);
+    this.delivery = new OrderedDelivery(
+      opts.replay?.completionOrders() ?? [],
+      () => this.inflightLive + this.inflightServing,
+    );
   }
 
   get budget(): Budget {
@@ -445,38 +462,77 @@ export class RunRuntime {
     };
 
     // ---- serve from journal ----
-    let match = this.replay?.matchStep(seq, hash, spec.kind, spec.key, this.shared.reuse);
-    let refused: import("./replay.ts").CompletedEntry | undefined;
-    if (match && spec.verifyServe) {
-      const loaded = await this.loadOutput(match.entry.output);
-      if (!(await spec.verifyServe(loaded))) {
-        refused = match.entry;
-        match.entry.consumed = true;
-        this.consumedEntries++;
+    // Everything from here to `deliver()` is replay-path work in flight: counted so the
+    // stall watchdog cannot read a turn as quiet while this step is still on its way.
+    this.inflightServing++;
+    let servingCounted = true;
+    const doneServing = (): void => {
+      if (servingCounted) {
+        servingCounted = false;
+        this.inflightServing--;
+      }
+    };
+    let refused: CompletedEntry | undefined;
+    try {
+      let match = this.replay?.matchStep(
+        seq,
+        hash,
+        spec.kind,
+        spec.key,
+        this.shared.reuse,
+        this.shared.positionsTrusted !== false,
+      );
+      if (match?.ambiguous) {
+        // Two keyless call sites share this content: salvaging would guess which one the
+        // journaled answer belongs to. Re-run, and say why — `weft replay --dry` surfaces
+        // this as a divergence so the cost is visible before a model is called.
+        this.log(
+          `ambiguous replay identity for ${spec.kind} step #${seq}: more than one journaled ` +
+            `step shares this prompt and schema — give each call a distinct \`key\` to reuse them`,
+        );
         await this.append([
           {
             type: "replay.diverged",
             seq,
-            reason: `journaled effect for ${spec.key ?? hash.slice(0, 12)} no longer holds`,
+            reason: `ambiguous keyless identity (${spec.kind}): several journaled steps share this content`,
           },
         ]);
         match = undefined;
       }
-    }
-    if (match) {
-      const { entry, via } = match;
-      entry.consumed = true;
-      this.consumedEntries++;
-      this.hitCount++;
-      if (via !== "seq") {
-        this.salvageCount++;
-        await this.append([{ type: "replay.salvaged", seq, fromSeq: entry.seq }]);
+      if (match && spec.verifyServe) {
+        const loaded = await this.loadOutput(match.entry.output);
+        if (!(await spec.verifyServe(loaded))) {
+          refused = match.entry;
+          match.entry.consumed = true;
+          this.consumedEntries++;
+          await this.append([
+            {
+              type: "replay.diverged",
+              seq,
+              reason: `journaled effect for ${spec.key ?? hash.slice(0, 12)} no longer holds`,
+            },
+          ]);
+          match = undefined;
+        }
       }
-      await this.delivery.deliver(entry.order);
-      const loaded = structuredClone(await this.loadOutput(entry.output));
-      const value = spec.revive ? await spec.revive(loaded, entry) : (loaded as T);
-      await spec.onSettle?.(value, { served: true, entry });
-      return value;
+      if (match) {
+        const { entry, via } = match;
+        entry.consumed = true;
+        this.consumedEntries++;
+        this.hitCount++;
+        if (via !== "seq") {
+          this.salvageCount++;
+          await this.append([{ type: "replay.salvaged", seq, fromSeq: entry.seq }]);
+        }
+        doneServing();
+        await this.delivery.deliver(entry.order);
+        const loaded = structuredClone(await this.loadOutput(entry.output));
+        const value = spec.revive ? await spec.revive(loaded, entry) : (loaded as T);
+        await spec.onSettle?.(value, { served: true, entry });
+        return value;
+      }
+    } finally {
+      doneServing();
     }
 
     // ---- live ----
