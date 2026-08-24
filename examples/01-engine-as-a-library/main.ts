@@ -5,7 +5,7 @@
  *
  * The engine is just a class: hand it a journal store, a blob store, and a provider
  * registry, and it will run a workflow definition you built in the same process. Here
- * the stores are in-memory and the provider is `@weft/provider-mock`, so the whole run
+ * the stores are in-memory and the provider is `@techery/weft-provider-mock`, so the whole run
  * is deterministic and free — the same shape a test, a daemon, or the CLI would use,
  * only with the fs stores and a real vendor adapter swapped in.
  *
@@ -20,9 +20,9 @@ import {
   ProviderRegistry,
   reduceState,
   renderReport,
-} from "@weft/core";
-import { mock } from "@weft/provider-mock";
-import { defineWorkflow, z } from "@weft/sdk";
+} from "@techery/weft-core";
+import { mock } from "@techery/weft-provider-mock";
+import { defineWorkflow, z } from "@techery/weft-sdk";
 
 // ---------------------------------------------------------------------------
 // The workflow — defined inline, exactly as a .weft/workflows/*.ts file would be

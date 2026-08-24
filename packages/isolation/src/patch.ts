@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createGit } from "@weft/git";
+import { createGit } from "@techery/weft-git";
 import type { ApplyOutcome } from "./index.ts";
 import { checkScope } from "./scope.ts";
 

@@ -18,9 +18,9 @@ import {
   type RunHandle,
   type RunState,
   reduceState,
-} from "@weft/core";
-import { type MockAgentBuilder, mock } from "@weft/provider-mock";
-import type { WorkflowDefinition } from "@weft/sdk";
+} from "@techery/weft-core";
+import { type MockAgentBuilder, mock } from "@techery/weft-provider-mock";
+import type { WorkflowDefinition } from "@techery/weft-sdk";
 import {
   type BashFixtures,
   buildTestHooks,

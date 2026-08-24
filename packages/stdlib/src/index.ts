@@ -1,12 +1,12 @@
 /**
- * @weft/stdlib — typed workflow patterns over `ctx`.
+ * @techery/weft-stdlib — typed workflow patterns over `ctx`.
  *
  * Every pattern takes `ctx` first, spawns ordinary keyed steps, and returns plain
  * typed data, so a pattern is replayable, salvageable, and inspectable exactly like
  * hand-written workflow code. Nothing here is engine-privileged.
  *
  * ```ts
- * import { adversarialVerify, finalReport } from "@weft/stdlib";
+ * import { adversarialVerify, finalReport } from "@techery/weft-stdlib";
  * ```
  */
 export type {

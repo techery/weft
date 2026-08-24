@@ -5,12 +5,12 @@
  *
  * ```jsonc
  * // .mcp.json
- * { "mcpServers": { "weft": { "command": "npx", "args": ["-y", "@weft/mcp"] } } }
+ * { "mcpServers": { "weft": { "command": "npx", "args": ["-y", "@techery/weft-mcp"] } } }
  * ```
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createWeft, type Weft } from "@weft/host";
+import { createWeft, type Weft } from "@techery/weft-host";
 import { registerTools } from "./tools.ts";
 
 /** Kept in step with package.json; reported to the client on initialize. */
@@ -60,7 +60,7 @@ export async function createWeftMcpServer(opts: CreateWeftMcpServerOptions): Pro
   return { server, weft };
 }
 
-/** stdio entry point: `npx @weft/mcp` from a session's MCP config. */
+/** stdio entry point: `npx @techery/weft-mcp` from a session's MCP config. */
 export async function main(): Promise<void> {
   const { server } = await createWeftMcpServer({ cwd: process.cwd() });
   // stdout is the transport — anything this process wants to say goes to stderr.

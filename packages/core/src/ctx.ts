@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as nodeFs } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve as resolvePath } from "node:path";
-import { createGit, GIT_WRITE_RISK, type Git, type GitWriteOp } from "@weft/git";
+import { createGit, GIT_WRITE_RISK, type Git, type GitWriteOp } from "@techery/weft-git";
 import {
   type ApplyOutcome,
   addWorktree,
@@ -14,7 +14,7 @@ import {
   capturePatch,
   checkScope,
   removeWorktree,
-} from "@weft/isolation";
+} from "@techery/weft-isolation";
 import {
   type AgentFn,
   type AgentOptions,
@@ -49,7 +49,7 @@ import {
   type Usage,
   validateSchema,
   type WorkflowDefinitionLike,
-} from "@weft/sdk";
+} from "@techery/weft-sdk";
 import { execa } from "execa";
 import picomatch from "picomatch";
 import { glob as tinyGlob } from "tinyglobby";
@@ -1064,7 +1064,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         },
       }),
     stat: (path) =>
-      rt.runStep<import("@weft/sdk").FsStatResult>({
+      rt.runStep<import("@techery/weft-sdk").FsStatResult>({
         kind: "fs",
         payload: { op: "fs.stat", path },
         label: `stat:${path}`,

@@ -15,9 +15,9 @@ import {
   ProviderRegistry,
   ReplayIndex,
   reduceState,
-} from "@weft/core";
-import { mock } from "@weft/provider-mock";
-import { defineWorkflow, z } from "@weft/sdk";
+} from "@techery/weft-core";
+import { mock } from "@techery/weft-provider-mock";
+import { defineWorkflow, z } from "@techery/weft-sdk";
 import { execa } from "execa";
 import { afterAll, describe, expect, test, vi } from "vitest";
 import { cleanupRepos, reopen, tempDir, tempRepo, testEngine } from "./helpers.ts";
@@ -1796,7 +1796,7 @@ describe("codex review findings, round 16 (PR #1)", () => {
 
 describe("codex review findings, round 17 (PR #1)", () => {
   test("a non-claude default provider is not saddled with the Claude default model", async () => {
-    const { resolveConfig } = await import("@weft/core");
+    const { resolveConfig } = await import("@techery/weft-core");
     // No model configured: a codex default provider picks the SDK's own default.
     expect(resolveConfig({ defaults: { provider: "codex" } }).defaults.model).toBeUndefined();
     // Claude keeps its default, and an explicit model always wins.
@@ -2362,7 +2362,7 @@ describe("codex review findings, round 25 (PR #1)", () => {
 
 describe("codex review findings, round 26 (PR #1)", () => {
   test("a cyclic value is reported as unjournalable at its path, not a stack overflow", async () => {
-    const { jsonUnsafeAt } = await import("@weft/core");
+    const { jsonUnsafeAt } = await import("@techery/weft-core");
     const loop: Record<string, unknown> = { x: 1 };
     loop["self"] = loop;
     expect(jsonUnsafeAt(loop)).toMatch(/\$\.self \(circular reference\)/);

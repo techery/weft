@@ -11,7 +11,7 @@
  */
 import type { AddressInfo } from "node:net";
 import { type ServerType, serve } from "@hono/node-server";
-import { createWeft, type Weft } from "@weft/host";
+import { createWeft, type Weft } from "@techery/weft-host";
 import { createApp } from "./app.ts";
 
 /** The design's default port; `weft ui` prints whatever it actually got. */

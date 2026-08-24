@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { dirname, join } from "node:path";
-import type { BlobMeta, BlobRef, BlobStore } from "@weft/core";
+import type { BlobMeta, BlobRef, BlobStore } from "@techery/weft-core";
 
 /**
  * Content-addressed blob directory: blobs/<aa>/<sha256>. Writes are idempotent

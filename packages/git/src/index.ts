@@ -1,9 +1,9 @@
 /**
- * @weft/git — typed git operations over the git CLI.
+ * @techery/weft-git — typed git operations over the git CLI.
  *
  * This package is the low-level layer: it runs git and parses porcelain output into
  * typed values. It does NOT journal, gate, or apply approval policy — the engine
- * (`@weft/core`) wraps these ops as journaled, risk-tiered steps. `@weft/isolation`
+ * (`@techery/weft-core`) wraps these ops as journaled, risk-tiered steps. `@techery/weft-isolation`
  * builds worktrees and patch capture on top of it.
  */
 import type {
@@ -14,7 +14,7 @@ import type {
   GitRange,
   GitStatusResult,
   Risk,
-} from "@weft/sdk";
+} from "@techery/weft-sdk";
 
 export type {
   GitBlameLine,
@@ -23,7 +23,7 @@ export type {
   GitFileStatus,
   GitRange,
   GitStatusResult,
-} from "@weft/sdk";
+} from "@techery/weft-sdk";
 
 export interface RawResult {
   stdout: string;

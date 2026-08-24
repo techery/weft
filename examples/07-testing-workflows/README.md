@@ -1,6 +1,6 @@
 # 07 · Testing workflows
 
-`@weft/testing`'s `runWorkflow` drives a real engine over memory stores with fixtures
+`@techery/weft-testing`'s `runWorkflow` drives a real engine over memory stores with fixtures
 for everything that would leave the sandbox — zero model calls, zero git repos. This
 example runs it under plain `node:assert` to show there is no test-runner magic; the
 same API backs the vitest suites in `packages/*/test`.

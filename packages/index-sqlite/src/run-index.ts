@@ -1,8 +1,8 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { JournalRecord, JournalStore, RunStatus, RunSummary, StepState } from "@weft/core";
-import { reduceState } from "@weft/core";
+import type { JournalRecord, JournalStore, RunStatus, RunSummary, StepState } from "@techery/weft-core";
+import { reduceState } from "@techery/weft-core";
 
 /**
  * Bump to invalidate every local index. The rows are a fold over journals, so a

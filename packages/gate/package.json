@@ -1,9 +1,28 @@
 {
-  "name": "@weft/gate",
+  "name": "@techery/weft-gate",
   "version": "0.1.0",
   "description": "Workflow gate: AST rules, esbuild bundling, sandboxed loader.",
-  "type": "module",
+  "keywords": [
+    "weft",
+    "workflow",
+    "agents",
+    "ai",
+    "durable",
+    "typescript"
+  ],
   "license": "MIT",
+  "author": "Techery",
+  "homepage": "https://github.com/techery/weft/tree/main/packages/gate#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/techery/weft.git",
+    "directory": "packages/gate"
+  },
+  "bugs": {
+    "url": "https://github.com/techery/weft/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
   "engines": {
     "node": ">=22.12"
   },
@@ -13,8 +32,29 @@
       "default": "./src/index.ts"
     }
   },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist"
+  },
   "dependencies": {
-    "@weft/sdk": "workspace:*",
+    "@techery/weft-sdk": "workspace:*",
     "esbuild": "^0.28.2",
     "typescript": "~5.9.3",
     "zod": "^4.4.3"

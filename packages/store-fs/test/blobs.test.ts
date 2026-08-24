@@ -4,7 +4,7 @@
  */
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { sha256Hex } from "@weft/core";
+import { sha256Hex } from "@techery/weft-core";
 import { afterEach, describe, expect, test } from "vitest";
 import { FsBlobStore } from "../src/blobs.ts";
 import { createFsStores } from "../src/index.ts";

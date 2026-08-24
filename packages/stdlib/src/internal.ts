@@ -2,7 +2,7 @@
  * Shared plumbing for the patterns. Nothing here is exported from the package root:
  * it exists so every pattern spells routing overrides and key composition the same way.
  */
-import type { Effort, ProviderId } from "@weft/sdk";
+import type { Effort, ProviderId } from "@techery/weft-sdk";
 
 /** Routing overrides every pattern forwards verbatim to the steps it spawns. */
 export interface Routing {

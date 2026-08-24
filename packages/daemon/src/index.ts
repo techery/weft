@@ -1,5 +1,5 @@
 /**
- * @weft/daemon — the local host. An HTTP API over `weft.engine`, the journal as SSE, and
+ * @techery/weft-daemon — the local host. An HTTP API over `weft.engine`, the journal as SSE, and
  * one self-contained page that is the rich surface for every local run whichever host
  * started it (C10). It also wakes suspended runs: an answer or a signal that arrives for
  * a run no process is holding is resumed here so the waiting step actually receives it.

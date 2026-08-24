@@ -5,8 +5,8 @@
  * whose branch fails outright counts as a refute vote too — a claim never survives
  * because nobody managed to check it.
  */
-import type { Ctx } from "@weft/sdk";
-import { z } from "@weft/sdk";
+import type { Ctx } from "@techery/weft-sdk";
+import { z } from "@techery/weft-sdk";
 import { positiveInt, type Routing, routing } from "./internal.ts";
 
 /** Default panel size: three refuters, so two of them must agree to kill a claim. */

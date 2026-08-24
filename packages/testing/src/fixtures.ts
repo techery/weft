@@ -5,8 +5,8 @@
  * matched exactly first and then as globs (picomatch: `*` stops at `/`, `**`
  * crosses it). Anything a table does not answer falls through to the real thing.
  */
-import type { TestHooks } from "@weft/core";
-import type { ExecResult, FetchResult } from "@weft/sdk";
+import type { TestHooks } from "@techery/weft-core";
+import type { ExecResult, FetchResult } from "@techery/weft-sdk";
 import picomatch from "picomatch";
 
 /** A canned git result, or a function of the op's journaled args. */

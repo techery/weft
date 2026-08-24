@@ -1,14 +1,14 @@
 /**
- * @weft/stdlib — quality patterns as plain typed helpers over ctx: nothing here is
+ * @techery/weft-stdlib — quality patterns as plain typed helpers over ctx: nothing here is
  * engine-privileged, so every pattern replays, salvages, and budgets like the
  * hand-written steps it expands into.
  *
  *   npx tsx examples/06-stdlib-patterns/main.ts
  */
-import { Engine, MemoryBlobStore, MemoryJournalStore, ProviderRegistry } from "@weft/core";
-import { mock } from "@weft/provider-mock";
-import { defineWorkflow, z } from "@weft/sdk";
-import { adversarialVerify, finalReport, loopUntilDry } from "@weft/stdlib";
+import { Engine, MemoryBlobStore, MemoryJournalStore, ProviderRegistry } from "@techery/weft-core";
+import { mock } from "@techery/weft-provider-mock";
+import { defineWorkflow, z } from "@techery/weft-sdk";
+import { adversarialVerify, finalReport, loopUntilDry } from "@techery/weft-stdlib";
 
 const Finding = z.object({ file: z.string(), claim: z.string() });
 type Finding = z.infer<typeof Finding>;

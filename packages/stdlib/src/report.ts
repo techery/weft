@@ -3,8 +3,8 @@
  * same markdown, byte for byte, so a report can be diffed between runs and a
  * workflow's last step never spends a token on formatting.
  */
-import type { Ctx } from "@weft/sdk";
-import { z } from "@weft/sdk";
+import type { Ctx } from "@techery/weft-sdk";
+import { z } from "@techery/weft-sdk";
 
 export interface ReportSection {
   heading: string;

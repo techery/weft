@@ -3,8 +3,8 @@
  * every attempt and names one best. The winner is the attempt with the most best-votes,
  * ties broken by mean score, so a single generous judge cannot carry a weak attempt.
  */
-import type { AnySchema, Ctx, InferOut } from "@weft/sdk";
-import { StepError, z } from "@weft/sdk";
+import type { AnySchema, Ctx, InferOut } from "@techery/weft-sdk";
+import { StepError, z } from "@techery/weft-sdk";
 import { asPromptJson, prefixed, type Routing, routing } from "./internal.ts";
 
 /** What one judge returns: a score per attempt, the index it ranks best, and why. */

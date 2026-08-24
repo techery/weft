@@ -1,9 +1,28 @@
 {
-  "name": "@weft/store-fs",
+  "name": "@techery/weft-store-fs",
   "version": "0.1.0",
   "description": "Filesystem JournalStore and BlobStore (JSONL + content-addressed blobs).",
-  "type": "module",
+  "keywords": [
+    "weft",
+    "workflow",
+    "agents",
+    "ai",
+    "durable",
+    "typescript"
+  ],
   "license": "MIT",
+  "author": "Techery",
+  "homepage": "https://github.com/techery/weft/tree/main/packages/store-fs#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/techery/weft.git",
+    "directory": "packages/store-fs"
+  },
+  "bugs": {
+    "url": "https://github.com/techery/weft/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
   "engines": {
     "node": ">=22.12"
   },
@@ -13,7 +32,28 @@
       "default": "./src/index.ts"
     }
   },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist"
+  },
   "dependencies": {
-    "@weft/core": "workspace:*"
+    "@techery/weft-core": "workspace:*"
   }
 }

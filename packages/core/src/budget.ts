@@ -3,7 +3,7 @@
  * pool shared with children. A child budget charges its parent chain, so a
  * sub-allocation can never exceed what the parent has left.
  */
-import { BudgetExceededError, type BudgetView, type Usage } from "@weft/sdk";
+import { BudgetExceededError, type BudgetView, type Usage } from "@techery/weft-sdk";
 
 export interface BudgetLimits {
   tokens?: number;

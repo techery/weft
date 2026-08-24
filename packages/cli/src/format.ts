@@ -3,7 +3,7 @@
  * of a projection — the CLI never derives run facts of its own, it only formats what
  * `reduceState` / `renderTree` already computed.
  */
-import type { RunState, StepState, TreeNode } from "@weft/host";
+import type { RunState, StepState, TreeNode } from "@techery/weft-host";
 import pc from "picocolors";
 import { stepMark } from "./io.ts";
 

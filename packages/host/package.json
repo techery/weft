@@ -1,9 +1,28 @@
 {
-  "name": "@weft/host",
+  "name": "@techery/weft-host",
   "version": "0.1.0",
   "description": "Engine assembly: config loading, stores, providers, registry wiring for hosts.",
-  "type": "module",
+  "keywords": [
+    "weft",
+    "workflow",
+    "agents",
+    "ai",
+    "durable",
+    "typescript"
+  ],
   "license": "MIT",
+  "author": "Techery",
+  "homepage": "https://github.com/techery/weft/tree/main/packages/host#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/techery/weft.git",
+    "directory": "packages/host"
+  },
+  "bugs": {
+    "url": "https://github.com/techery/weft/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
   "engines": {
     "node": ">=22.12"
   },
@@ -13,17 +32,38 @@
       "default": "./src/index.ts"
     }
   },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist"
+  },
   "dependencies": {
-    "@weft/core": "workspace:*",
-    "@weft/gate": "workspace:*",
-    "@weft/store-fs": "workspace:*",
-    "@weft/index-sqlite": "workspace:*",
-    "@weft/provider-mock": "workspace:*",
-    "@weft/provider-claude": "workspace:*",
-    "@weft/provider-codex": "workspace:*",
-    "@weft/git": "workspace:*",
-    "@weft/isolation": "workspace:*",
-    "@weft/sdk": "workspace:*",
+    "@techery/weft-core": "workspace:*",
+    "@techery/weft-gate": "workspace:*",
+    "@techery/weft-store-fs": "workspace:*",
+    "@techery/weft-index-sqlite": "workspace:*",
+    "@techery/weft-provider-mock": "workspace:*",
+    "@techery/weft-provider-claude": "workspace:*",
+    "@techery/weft-provider-codex": "workspace:*",
+    "@techery/weft-git": "workspace:*",
+    "@techery/weft-isolation": "workspace:*",
+    "@techery/weft-sdk": "workspace:*",
     "zod": "^4.4.3"
   }
 }

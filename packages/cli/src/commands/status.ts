@@ -2,7 +2,7 @@
  * `weft status <run>` — one run at a glance: header, cost, tree, and whatever it is
  * waiting on, with the command that unblocks it.
  */
-import { renderTree } from "@weft/host";
+import { renderTree } from "@techery/weft-host";
 import { Command } from "commander";
 import pc from "picocolors";
 import { openWeft } from "../context.ts";

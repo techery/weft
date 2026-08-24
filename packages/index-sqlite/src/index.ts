@@ -1,5 +1,5 @@
 /**
- * @weft/index-sqlite — an optional `node:sqlite` index over local runs, derived
+ * @techery/weft-index-sqlite — an optional `node:sqlite` index over local runs, derived
  * from their journals. It makes `weft ls` / search / the UI's run list fast
  * without ever becoming a source of truth: the file can be deleted at any time
  * and `RunIndex.rebuild(journalStore)` puts it back.

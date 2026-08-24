@@ -1,13 +1,19 @@
 /**
- * @weft/provider-mock — a scripted AgentProvider for tests and replay
+ * @techery/weft-provider-mock — a scripted AgentProvider for tests and replay
  * verification. Fixtures match on the step's key (globs), receive the real
  * request, and their outputs go through the engine's normal schema validation —
  * a fixture that wouldn't pass in production fails the test.
  */
 import { promises as fs } from "node:fs";
 import { dirname, join } from "node:path";
-import type { AgentProvider, AgentRequest, AgentResult, ProviderCapabilities, RunControl } from "@weft/core";
-import type { SchemaIssue, Usage } from "@weft/sdk";
+import type {
+  AgentProvider,
+  AgentRequest,
+  AgentResult,
+  ProviderCapabilities,
+  RunControl,
+} from "@techery/weft-core";
+import type { SchemaIssue, Usage } from "@techery/weft-sdk";
 
 /**
  * Fixture globs are plain string patterns, not path patterns: `*` matches ANY

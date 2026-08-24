@@ -5,7 +5,7 @@
  * addressing. Each suite is a `describe()` block; call it at the top level of a
  * test file with a factory that builds a fresh store per test.
  */
-import type { BlobStore, JournalEvent, JournalRecord, JournalStore } from "@weft/core";
+import type { BlobStore, JournalEvent, JournalRecord, JournalStore } from "@techery/weft-core";
 import { describe, expect, test } from "vitest";
 
 export interface StoreFixture<T> {

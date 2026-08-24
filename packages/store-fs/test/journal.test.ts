@@ -6,8 +6,8 @@
  */
 import { appendFile, mkdir, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { JournalRecord, RunState, TreePhase } from "@weft/core";
-import { reduceState, renderReport, renderTree } from "@weft/core";
+import type { JournalRecord, RunState, TreePhase } from "@techery/weft-core";
+import { reduceState, renderReport, renderTree } from "@techery/weft-core";
 import { afterEach, describe, expect, test } from "vitest";
 import { FsJournalStore } from "../src/journal.ts";
 import { logged, removeTemps, runCreated, sleep, tempDir, waitFor } from "./helpers.ts";

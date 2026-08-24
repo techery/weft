@@ -3,7 +3,7 @@
  * (the prompt, the command, the URL) and outputs that were offloaded to the blob store, so
  * `weft explain` and `weft diff` go to the journal and the blobs for those two.
  */
-import { type JournalRecord, renderReport, renderTree, type StepState, type Weft } from "@weft/host";
+import { type JournalRecord, renderReport, renderTree, type StepState, type Weft } from "@techery/weft-host";
 
 /**
  * Re-derive `state.json` / `tree.json` / `report.md` after this process appended to the

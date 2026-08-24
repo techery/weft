@@ -1,9 +1,9 @@
 /**
  * `weft ui` — hand this repo's engine to the local daemon and print the URL. The daemon is
- * loaded through a computed specifier so `@weft/cli` never links it at build or test time:
+ * loaded through a computed specifier so `@techery/weft` never links it at build or test time:
  * the rich surface is optional, and a checkout without it still has every other command.
  */
-import type { Weft } from "@weft/host";
+import type { Weft } from "@techery/weft-host";
 import { Command } from "commander";
 import pc from "picocolors";
 import { openWeft } from "../context.ts";
@@ -38,18 +38,20 @@ export function uiCommand(io: CliIo): Command {
 
       let daemon: DaemonModule;
       try {
-        const specifier = "@weft/daemon";
+        const specifier = "@techery/weft-daemon";
         daemon = (await import(specifier)) as DaemonModule;
       } catch (err) {
         await weft.close();
         throw new Error(
-          `the web UI needs @weft/daemon, which is not available here (${(err as Error).message}). ` +
+          `the web UI needs @techery/weft-daemon, which is not available here (${(err as Error).message}). ` +
             "Everything else — run, status, explain, answer — works without it.",
         );
       }
       if (typeof daemon.startDaemon !== "function") {
         await weft.close();
-        throw new Error("@weft/daemon does not export startDaemon() — upgrade it, or use the CLI commands");
+        throw new Error(
+          "@techery/weft-daemon does not export startDaemon() — upgrade it, or use the CLI commands",
+        );
       }
 
       const handle = (await daemon.startDaemon({ weft, port })) ?? {};
