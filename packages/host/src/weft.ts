@@ -208,15 +208,25 @@ export async function persistWorkflowRef(weft: Weft, runId: string, ref: string)
  * lookup by the journaled name covers those.
  */
 export async function persistedDefOf(weft: Weft, runId: string): Promise<WorkflowDefinition | undefined> {
+  let raw: string;
   try {
-    const raw = JSON.parse(await readFile(join(weft.runsDir, runId, "workflow.json"), "utf8")) as {
-      ref?: string;
-    };
-    if (typeof raw.ref === "string") return (await resolveWorkflow(weft, raw.ref)).def;
-  } catch {
-    // absent, or the file moved away: fall through to a persisted script
+    raw = await readFile(join(weft.runsDir, runId, "workflow.json"), "utf8");
+  } catch (err) {
+    // Only ABSENCE falls through (a registry or inline run). Any other failure
+    // must surface: swallowed, resume() would fall back to a registry lookup by
+    // the journaled NAME — and a different workflow wearing that name would
+    // silently run in this run's place.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
+    return inlineDefOf(weft, runId);
   }
-  return inlineDefOf(weft, runId);
+  const parsed = JSON.parse(raw) as { ref?: unknown };
+  if (typeof parsed.ref !== "string") {
+    throw new Error(`run ${runId}: workflow.json carries no usable ref`);
+  }
+  // A moved file or a failed gate throws here — the caller must see WHY the
+  // recorded definition is unavailable, never a quiet fallback.
+  return (await resolveWorkflow(weft, parsed.ref)).def;
 }
 
 /**
@@ -228,7 +238,11 @@ export async function inlineDefOf(weft: Weft, runId: string): Promise<WorkflowDe
   let code: string;
   try {
     code = await readFile(file, "utf8");
-  } catch {
+  } catch (err) {
+    // Same contract as workflow.json above: absence means "not an inline run";
+    // anything else is a real failure the caller must see.
+    const code_ = (err as NodeJS.ErrnoException).code;
+    if (code_ !== "ENOENT" && code_ !== "ENOTDIR") throw err;
     return undefined;
   }
   const allowBare = mergedAllowBare(weft.config);

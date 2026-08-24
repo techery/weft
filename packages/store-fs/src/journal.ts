@@ -233,8 +233,17 @@ export class FsJournalStore implements JournalStore {
     const fh = await fs.open(this.journalPath(runId), "r");
     try {
       const buf = Buffer.alloc(size - cached.byteOffset);
-      await fh.read(buf, 0, buf.length, cached.byteOffset);
-      const lines = buf.toString("utf8").split("\n");
+      // read() may return SHORT: parsing the zero-filled remainder would stop
+      // the fold mid-file, and appendLocked would then truncate the committed
+      // records past it as a "torn tail". Loop until the range is consumed
+      // (bytesRead 0 = the file shrank since stat; fold only what arrived).
+      let filled = 0;
+      while (filled < buf.length) {
+        const { bytesRead } = await fh.read(buf, filled, buf.length - filled, cached.byteOffset + filled);
+        if (bytesRead === 0) break;
+        filled += bytesRead;
+      }
+      const lines = buf.toString("utf8", 0, filled).split("\n");
       for (let i = 0; i < lines.length - 1; i++) {
         cached.byteOffset += Buffer.byteLength(lines[i]!) + 1;
         if (lines[i]!.trim().length > 0) cached.count++;

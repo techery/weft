@@ -114,6 +114,18 @@ export default defineWorkflow(
     expect(await resumed.result).toEqual({ ok: true });
   });
 
+  it("a recorded path ref that no longer resolves SURFACES instead of silently falling back", async () => {
+    const { weft } = await mockWeft();
+    // The run recorded "./flows/moved.ts", and that file has since moved away.
+    // Swallowed, resume() would fall back to a registry lookup by the journaled
+    // NAME — possibly a different workflow — so the failure must propagate.
+    await persistWorkflowRef(weft, "run-moved", "./flows/moved.ts");
+    await expect(persistedDefOf(weft, "run-moved")).rejects.toThrow();
+    // ABSENCE of any persisted definition still falls through quietly: that is
+    // the normal registry-run case.
+    expect(await persistedDefOf(weft, "run-never-persisted")).toBeUndefined();
+  });
+
   it("runs a registry workflow end to end and leaves the run on disk", async () => {
     const { weft, root } = await mockWeft();
 
