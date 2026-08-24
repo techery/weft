@@ -325,10 +325,17 @@ export function buildCtx(rt: RunRuntime): Ctx {
             // list them separately: a resolver dropping a NEW ignored file out of
             // scope must still be caught.
             let inPlaceSnap: string | undefined;
+            let ignoredListingBefore: string[] | undefined;
             let ignoredBefore: Set<string> | undefined;
+            let ignoredManifestBefore: Map<string, string> | undefined;
             if (mode.writeInPlace && scope) {
               inPlaceSnap = await integrationBaseCommit(workCwd);
-              ignoredBefore = new Set(await listIgnoredFiles());
+              ignoredListingBefore = await listIgnoredFiles();
+              ignoredBefore = new Set(ignoredListingBefore);
+              // The listing diff only sees NEW top-level entries; edits (or new
+              // files) INSIDE a pre-existing ignored file or directory need a
+              // stat manifest to become visible at all.
+              ignoredManifestBefore = await ignoredStatManifest(ignoredListingBefore);
             }
             let finalPrompt = prompt;
             if (scope) {
@@ -526,6 +533,38 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 // directory stay out of reach of a tree diff.)
                 const afterSnap = await integrationBaseCommit(workCwd);
                 const newIgnored = (await listIgnoredFiles()).filter((f) => !ignoredBefore?.has(f));
+                // Pre-existing ignored content re-walked with the SAME entry list:
+                // an edit, deletion, or new file inside an already-ignored path is
+                // invisible to both the tree diff and the listing diff.
+                const changedIgnored =
+                  ignoredManifestBefore !== undefined && ignoredListingBefore !== undefined
+                    ? diffIgnoredManifest(
+                        ignoredManifestBefore,
+                        await ignoredStatManifest(ignoredListingBefore),
+                      )
+                    : [];
+                if (changedIgnored.length > 0) {
+                  await rt.append([
+                    {
+                      type: "scope.violation",
+                      seq: io.seq,
+                      key: opts.key ?? label,
+                      files: changedIgnored,
+                      mode: scope.mode,
+                    },
+                  ]);
+                  if (scope.mode === "strict") {
+                    // No snapshot holds ignored content, so there is nothing to
+                    // restore FROM: failing loudly beats laundering the edit into
+                    // a completed result — or deleting a user's pre-existing file.
+                    throw new StepError(
+                      "scope_violation",
+                      `in-place step modified pre-existing ignored path(s) with no restorable snapshot: ${changedIgnored.join(", ")}`,
+                      { step: stepRef },
+                    );
+                  }
+                  files = [...files, ...changedIgnored];
+                }
                 if (afterSnap !== inPlaceSnap || newIgnored.length > 0) {
                   const changed =
                     afterSnap !== inPlaceSnap
@@ -1139,13 +1178,23 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 );
               }
               // Credentials are origin-bound: crossing origins drops them, the way
-              // native fetch strips authorization on cross-origin redirects.
+              // native fetch strips authorization on cross-origin redirects — and
+              // EVERY header a SecretHandle backed counts as a credential, whatever
+              // it is called: an X-Api-Key must not follow a redirect off-origin.
               if (next.origin !== new URL(target).origin) {
+                const secretNames = new Set(
+                  Object.entries(init?.headers ?? {})
+                    .filter(([, v]) => isSecretHandle(v))
+                    .map(([name]) => name.toLowerCase()),
+                );
                 hopHeaders = Object.fromEntries(
-                  Object.entries(hopHeaders ?? {}).filter(
-                    ([name]) =>
-                      !["authorization", "cookie", "proxy-authorization"].includes(name.toLowerCase()),
-                  ),
+                  Object.entries(hopHeaders ?? {}).filter(([name]) => {
+                    const lower = name.toLowerCase();
+                    return (
+                      !["authorization", "cookie", "proxy-authorization"].includes(lower) &&
+                      !secretNames.has(lower)
+                    );
+                  }),
                 );
               }
               target = next.toString();
@@ -1585,6 +1634,53 @@ export function buildCtx(rt: RunRuntime): Ctx {
       .split("\n")
       .map((f) => f.trim())
       .filter((f) => f !== "");
+  }
+
+  /**
+   * Stat manifest (path → "size:mtime") of the files under the given ignored
+   * entries, walked with a cap so a giant node_modules cannot stall a step.
+   * Re-walking the SAME entry list after a dispatch exposes edits, deletions,
+   * and new files inside pre-existing ignored paths — content no tree snapshot
+   * or listing diff can see.
+   */
+  const IGNORED_MANIFEST_CAP = 10_000;
+  async function ignoredStatManifest(entries: string[]): Promise<Map<string, string>> {
+    const manifest = new Map<string, string>();
+    const walk = async (rel: string): Promise<void> => {
+      if (manifest.size > IGNORED_MANIFEST_CAP) return;
+      const clean = rel.replace(/\/$/, "");
+      let stat: import("node:fs").Stats;
+      try {
+        stat = await nodeFs.stat(resolveInCwd(clean));
+      } catch {
+        return;
+      }
+      if (stat.isDirectory()) {
+        let names: string[] = [];
+        try {
+          names = await nodeFs.readdir(resolveInCwd(clean));
+        } catch {
+          return;
+        }
+        for (const name of names.sort()) await walk(`${clean}/${name}`);
+      } else {
+        manifest.set(clean, `${stat.size}:${Math.floor(stat.mtimeMs)}`);
+      }
+    };
+    for (const entry of entries) await walk(entry);
+    return manifest;
+  }
+
+  /** Paths whose stat changed, vanished, or appeared inside the walked entries. */
+  function diffIgnoredManifest(before: Map<string, string>, after: Map<string, string>): string[] {
+    const changed: string[] = [];
+    for (const [path, sig] of before) {
+      if (after.get(path) !== sig) changed.push(path);
+    }
+    for (const path of after.keys()) {
+      if (!before.has(path)) changed.push(path);
+    }
+    return changed;
   }
 
   async function integrate(

@@ -2383,3 +2383,86 @@ describe("codex review findings, round 26 (PR #1)", () => {
     });
   });
 });
+
+describe("codex review findings, round 27 (PR #1)", () => {
+  test("a secret-backed custom header does not follow a cross-origin redirect", async () => {
+    process.env["WEFT_R27_KEY"] = "shhh";
+    let seenAtTarget: Record<string, string | string[] | undefined> = {};
+    const target = createServer((req, res) => {
+      seenAtTarget = req.headers;
+      res.end("landed");
+    });
+    await new Promise<void>((r) => target.listen(0, () => r()));
+    const tPort = (target.address() as { port: number }).port;
+    const hopper = createServer((_req, res) => {
+      res.writeHead(302, { location: `http://127.0.0.1:${tPort}/land` });
+      res.end();
+    });
+    await new Promise<void>((r) => hopper.listen(0, () => r()));
+    const hPort = (hopper.address() as { port: number }).port;
+    try {
+      const t = testEngine({ config: { fetchAllow: ["localhost", "127.0.0.1"] } });
+      const def = defineWorkflow(
+        { name: "leaky", description: "l", input: z.object({}), output: z.object({ status: z.number() }) },
+        async (ctx) => {
+          const res = (await ctx.fetch(`http://localhost:${hPort}/go`, {
+            headers: { "x-api-key": ctx.secret("WEFT_R27_KEY"), "x-plain": "keep" },
+          })) as { status: number };
+          return { status: res.status };
+        },
+      );
+      const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+      expect(await h.result).toEqual({ status: 200 });
+      // Ordinary headers cross; the SecretHandle-backed one must NOT follow the
+      // localhost → 127.0.0.1 origin change, whatever it is named.
+      expect(seenAtTarget["x-plain"]).toBe("keep");
+      expect(seenAtTarget["x-api-key"]).toBeUndefined();
+    } finally {
+      target.close();
+      hopper.close();
+      delete process.env["WEFT_R27_KEY"];
+    }
+  });
+
+  test("a strict in-place resolver editing a PRE-EXISTING ignored file fails loudly", async () => {
+    const FixResult = z.object({ summary: z.string() });
+    const t = testEngine();
+    t.builder.on({ key: "fix:p" }, { summary: "edit" }, { writes: { "a.txt": "AGENT\n" } });
+    // The resolver fixes the conflict AND tampers with an ignored file that
+    // existed before the step: no tree snapshot or listing diff can see it,
+    // and no snapshot can restore it.
+    t.builder.on(
+      { key: "merge:fix:p" },
+      { resolved: true, notes: "fixed" },
+      { writes: { "a.txt": "RESOLVED\n", "secrets.env": "TAMPERED CONTENT\n" } },
+    );
+    const cwd = await tempRepo({
+      ".gitignore": "secrets.env\n",
+      "a.txt": "base\n",
+      "secrets.env": "ORIGINAL\n",
+    });
+    const def = defineWorkflow(
+      { description: "mp", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        const fix = await ctx.agent.detailed("fix", {
+          schema: FixResult,
+          key: "fix:p",
+          write: { paths: ["a.txt"] },
+        });
+        await ctx.bash("printf 'MAIN\\n' > a.txt");
+        await ctx.integrate([fix], { onConflict: "agent" });
+        return {};
+      },
+    );
+    const handle = await t.engine.start(def, { input: {}, cwd });
+    await expect(handle.result).rejects.toMatchObject({ code: "scope_violation" });
+    const recs = await records(t.journal, handle.runId);
+    const violation = recs.find(
+      (r) => r.ev.type === "scope.violation" && r.ev.files.includes("secrets.env"),
+    )?.ev;
+    if (violation?.type !== "scope.violation") throw new Error("missing scope.violation");
+    // The file is NOT silently deleted (there is nothing to restore it from) —
+    // the run fails instead of laundering or destroying the edit.
+    expect(existsSync(join(cwd, "secrets.env"))).toBe(true);
+  });
+});

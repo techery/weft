@@ -515,6 +515,26 @@ describe("appendIf", () => {
   });
 });
 
+describe("stolen locks", () => {
+  test("a lock replaced while the holder was stalled is detected and refused", async () => {
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    const lock = join(dir, "y.lock");
+    const locked = store as unknown as {
+      withFileLock<T>(lockPath: string, what: string, fn: () => Promise<T>): Promise<T>;
+    };
+    const attempt = locked.withFileLock(lock, "run y", async () => {
+      // A thief replaced the lock, as after a SIGSTOP past the stale threshold.
+      // Blind mtime renewal would freshen the THIEF's lock and hide the theft;
+      // the identity check on the next renewal tick must flag the mutex lost.
+      await writeFile(lock, "thief-token");
+      await sleep(3_200); // across one renewal tick
+      return "finished";
+    });
+    await expect(attempt).rejects.toThrow(/stolen/);
+  }, 10_000);
+});
+
 describe("read failures", () => {
   test("an unreadable journal surfaces instead of reading as an empty run", async () => {
     const dir = await tempDir();

@@ -11,10 +11,16 @@ import { removeTemps, tempDir } from "./helpers.ts";
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
-  const utimes = (async () => {
-    throw new Error("EIO: metadata write failed");
-  }) as typeof actual.promises.utimes;
-  return { ...actual, promises: { ...actual.promises, utimes } };
+  // Renewal starts by verifying the token at the lock path: failing that read
+  // is the earliest (and immediate) renewal failure — no real I/O involved, so
+  // fake timers can pump the rejection deterministically.
+  const readFile = (async (path: unknown, ...rest: unknown[]) => {
+    if (typeof path === "string" && path.endsWith(".lock")) {
+      throw new Error("EIO: cannot read lock");
+    }
+    return (actual.promises.readFile as (...args: unknown[]) => Promise<unknown>)(path, ...rest);
+  }) as typeof actual.promises.readFile;
+  return { ...actual, promises: { ...actual.promises, readFile } };
 });
 
 afterEach(removeTemps);

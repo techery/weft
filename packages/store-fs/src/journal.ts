@@ -239,16 +239,26 @@ export class FsJournalStore implements JournalStore {
     let renewalMisses = 0;
     let lost = false;
     const renew = setInterval(() => {
-      const now = new Date();
-      void fs.utimes(lockPath, now, now).then(
-        () => {
-          renewalMisses = 0;
-        },
-        () => {
+      // Renewal verifies IDENTITY first: a process paused past the stale
+      // threshold (SIGSTOP, VM freeze) can wake to find its lock stolen and
+      // replaced — blindly touching mtime then would renew the CONTENDER's
+      // lock and hide the theft.
+      void fs
+        .readFile(lockPath, "utf8")
+        .then((holder) => {
+          if (holder !== token) {
+            lost = true;
+            return;
+          }
+          const now = new Date();
+          return fs.utimes(lockPath, now, now).then(() => {
+            renewalMisses = 0;
+          });
+        })
+        .catch(() => {
           renewalMisses++;
           if (renewalMisses >= 4) lost = true;
-        },
-      );
+        });
     }, 2_500);
     renew.unref?.();
     const mutex: LockMutex = { held: () => !lost };
