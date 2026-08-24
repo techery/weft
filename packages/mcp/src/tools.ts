@@ -116,7 +116,18 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
       annotations: { readOnlyHint: true },
     },
     async (args) =>
-      reply(() => waitForChange(weft, runs, args.runId, parseTimeout(args.timeout ?? DEFAULT_TIMEOUT))),
+      reply(() => {
+        // A failed automatic wake (recorded by weft_answer's fire-and-forget
+        // resume) would otherwise read as `running` forever: surface it as the
+        // error it is, with the fix in hand.
+        const wakeFailure = runs.takeWakeFailure(args.runId);
+        if (wakeFailure !== undefined) {
+          throw new Error(
+            `the automatic wake after weft_answer failed: ${wakeFailure} — fix the workflow (or its file) and call weft_resume`,
+          );
+        }
+        return waitForChange(weft, runs, args.runId, parseTimeout(args.timeout ?? DEFAULT_TIMEOUT));
+      }),
   );
 
   server.registerTool(
@@ -161,10 +172,12 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
             rootId = parentId;
           }
           if (!weft.engine.isActive(rootId)) {
-            const tracked = runs.get(rootId);
-            void Promise.resolve(tracked?.def ?? persistedDefOf(weft, rootId))
-              .then((def) => weft.engine.resume(rootId, def !== undefined ? { def } : {}))
+            const woken = rootId;
+            const tracked = runs.get(woken);
+            void Promise.resolve(tracked?.def ?? persistedDefOf(weft, woken))
+              .then((def) => weft.engine.resume(woken, def !== undefined ? { def } : {}))
               .then((handle) => {
+                runs.clearWakeFailure(woken);
                 runs.track({
                   handle,
                   ...(tracked?.ref !== undefined
@@ -175,7 +188,17 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
                 });
                 return handle.outcome();
               })
-              .catch(() => undefined);
+              .catch((err: unknown) => {
+                const message = err instanceof Error ? err.message : String(err);
+                // A refused CLAIM is the designed no-op: a live owner still
+                // holds the run and its tailer delivers the answer. Everything
+                // else (the workflow file deleted, a gate refusal) is a wake
+                // nothing will retry — the answer already reported ok, so
+                // without retention every later `weft_wait` reads `running`
+                // forever. Kept for the next wait to surface.
+                if (/active in another process/.test(message)) return;
+                runs.noteWakeFailure(woken, message);
+              });
           }
         }
         return { ok: true };

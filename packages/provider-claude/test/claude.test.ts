@@ -633,6 +633,41 @@ describe("the tool gate", () => {
     }
   });
 
+  test("a strict write scope brokers every writable command (codex review round 63, PR #1)", async () => {
+    const seen: PermissionRequest[] = [];
+    let verdict: PermissionDecision = { behavior: "deny", message: "not in this step" };
+    const decide = async (req: PermissionRequest) => {
+      seen.push(req);
+      return verdict;
+    };
+    const options = await gateContext(
+      request({
+        tools: { allowEdits: true },
+        writeScope: { paths: ["src/**"], mode: "strict" },
+        hitl: { onPermission: decide, onAsk: async () => ({}) },
+      }),
+    );
+    // No lexical screen can bound a destination computed INSIDE the program —
+    // this writes /tmp/weft-marker with no slash-after-separator, no `..`, and
+    // no expansion token in sight. Strict Bash is deny-by-default: everything
+    // that can write goes to the broker at high risk.
+    const computed = `python -c 'open(chr(47)+"tmp/weft-marker","w").write("x")'`;
+    expect((await ask(options, "Bash", { command: computed })).behavior).toBe("deny");
+    expect(await ask(options, "Bash", { command: "pnpm build" })).toEqual({
+      behavior: "deny",
+      message: "not in this step",
+    });
+    expect(seen).toHaveLength(2);
+    expect(seen.every((r) => r.risk === "high")).toBe(true);
+    // Approval — a human, or the policy's whitelist — lets the build run.
+    verdict = { behavior: "allow" };
+    expect(await ask(options, "Bash", { command: "pnpm build" })).toEqual({ behavior: "allow" });
+    expect(seen).toHaveLength(3);
+    // Provably read-only commands stay unbrokered.
+    expect(await ask(options, "Bash", { command: "cat notes.txt" })).toEqual({ behavior: "allow" });
+    expect(seen).toHaveLength(3);
+  });
+
   test("a strict write scope denies writes through a symlink that escapes the worktree", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "weft-gate-"));
     const outside = await mkdtemp(join(tmpdir(), "weft-outside-"));

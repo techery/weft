@@ -491,6 +491,41 @@ export default defineWorkflow(
     expect(done.output).toEqual({ approved: true, note: "go" });
   });
 
+  it("a failed automatic wake surfaces on the next wait (codex review round 63, PR #1)", async () => {
+    const cwd = await tempRepo();
+    await mkdir(path.join(cwd, ".weft", "workflows"), { recursive: true });
+    const file = path.join(cwd, ".weft", "workflows", "gated.ts");
+    await writeFile(file, GATED, "utf8");
+
+    const starter = await session(cwd);
+    const { runId } = await json<{ runId: string }>(starter, "weft_run", { workflow: "gated" });
+    const suspended = await json<WaitReply>(starter, "weft_wait", { runId, timeout: "10s" });
+    const requestId = suspended.awaiting?.id;
+    expect(requestId).toBeDefined();
+    await starter.weft.engine.shutdown(); // the owning process dies
+
+    // The workflow file is GONE by the time a fresh host answers: weft_answer
+    // reports ok, then its fire-and-forget wake fails to resume. Swallowed,
+    // the journal holds an answered request, nothing pending, and every later
+    // wait reads `running` forever — the failure must surface instead.
+    await rm(file);
+    const other = await session(cwd);
+    await json(other, "weft_answer", { runId, requestId, answer: { approved: true, note: "go" } });
+    let failure = "";
+    await expect
+      .poll(
+        async () => {
+          const reply = await call(other, "weft_wait", { runId, timeout: "1s" });
+          if (reply.isError) failure = reply.text;
+          return reply.isError;
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    expect(failure).toContain("automatic wake");
+    expect(failure).toContain("weft_resume");
+  }, 20_000);
+
   it("surfaces and answers a CHILD's question for an untracked parent (host restart)", async () => {
     const NESTED = `import { defineWorkflow, z } from "@weft/sdk";
 const child = defineWorkflow(

@@ -62,6 +62,28 @@ export interface TrackedRun {
 /** The handles this server owns. Runs it never started are served from the journal. */
 export class RunStore {
   private readonly runs = new Map<string, TrackedRun>();
+  private readonly wakeFailures = new Map<string, string>();
+
+  /**
+   * The automatic wake after `weft_answer` is fire-and-forget: its failure (a
+   * deleted workflow file, a gate refusal) happens AFTER the answer already
+   * reported ok. Recorded here so the next `weft_wait` on the run surfaces it
+   * instead of reporting `running` forever over a run nothing will resume.
+   */
+  noteWakeFailure(runId: string, message: string): void {
+    this.wakeFailures.set(runId, message);
+  }
+
+  /** Consume the recorded wake failure for this run, if any. */
+  takeWakeFailure(runId: string): string | undefined {
+    const message = this.wakeFailures.get(runId);
+    if (message !== undefined) this.wakeFailures.delete(runId);
+    return message;
+  }
+
+  clearWakeFailure(runId: string): void {
+    this.wakeFailures.delete(runId);
+  }
 
   track(run: TrackedRun): TrackedRun {
     this.runs.set(run.handle.runId, run);

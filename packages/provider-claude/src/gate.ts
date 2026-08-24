@@ -192,6 +192,22 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
       if (scope?.mode === "strict" && mutatesSharedGitMetadata(command)) {
         return deny(`git repository metadata is shared beyond the worktree and is ${scopeMessage}`);
       }
+      // The lexical screens above catch the cheap escapes, but no textual check
+      // can bound what a program does INTERNALLY: `python -c
+      // 'open(chr(47)+"tmp/x","w")'` computes its absolute destination at run
+      // time, and repository executables are opaque. A strict scope is a
+      // GUARANTEE, so its shell is deny-by-default: only provably read-only
+      // commands run unbrokered; anything that can write goes to the approval
+      // broker at high risk, where policy whitelists the project's trusted
+      // build commands. (`warn` mode keeps the frictionless shell and relies
+      // on post-hoc patch capture instead.)
+      if (scope?.mode === "strict" && !isReadOnlyCommand(command)) {
+        const decision = await req.hitl.onPermission({ tool: toolName, input, risk: "high" });
+        if (decision.behavior === "deny") {
+          return deny(decision.message ?? `a writable shell command under a strict scope needs approval`);
+        }
+        return allow;
+      }
       if (isRiskyCommand(command)) {
         const decision = await req.hitl.onPermission({ tool: toolName, input, risk: "high" });
         if (decision.behavior === "deny") return deny(decision.message ?? "denied by the approval policy");
