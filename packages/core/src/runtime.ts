@@ -708,17 +708,31 @@ export class RunRuntime {
     // is always what wins. An execution that ignores its abort signal past the
     // drain window is unstoppable in-process; the bound keeps the run live.
     stepAbort?.abort();
+    // A provider can settle DURING the drain with money already spent (a billed
+    // result, or a cancellation carrying accumulated usage). The timeout error
+    // is still what wins — but it must CARRY that spend, because its
+    // step.failed / step.attempt record is the only place a later resume can
+    // restore the charge from. Past the drain the zombie's spend is memory-only
+    // by design (the run has moved on; nothing it does may be observable).
+    let lateUsage: Usage | undefined;
     await Promise.race([
       promise.then(
-        () => undefined,
-        () => undefined,
+        (outcome) => {
+          lateUsage = (outcome as { usage?: Usage } | null | undefined)?.usage;
+        },
+        (err) => {
+          lateUsage = (err as { detail?: { usage?: Usage } } | null)?.detail?.usage;
+        },
       ),
       new Promise<void>((resolve) => {
         const drain = setTimeout(resolve, 5_000);
         drain.unref?.();
       }),
     ]);
-    throw new StepError("timeout", `step timed out after ${timeoutMs}ms`, { step: ref });
+    throw new StepError("timeout", `step timed out after ${timeoutMs}ms`, {
+      step: ref,
+      ...(lateUsage !== undefined ? { detail: { usage: lateUsage } } : {}),
+    });
   }
 
   // -- humans ---------------------------------------------------------------
@@ -914,16 +928,13 @@ export class RunRuntime {
       if (request.deadline !== undefined) {
         const remaining = request.deadline - this.host.clock();
         if (remaining <= 0) {
-          void this.applyHumanTimeout(request.id);
+          this.fireHumanTimeout(request.id);
         } else {
           // ref'd on purpose: a one-shot process whose only pending work is this
           // deadline must stay alive to apply the timeout policy (cleared on answer)
           // Chunked past Node's timer ceiling; applyHumanTimeout re-arms if it
           // fires with time still left on the real deadline.
-          wait.timer = setTimeout(
-            () => void this.applyHumanTimeout(request.id),
-            Math.min(remaining, MAX_TIMER_MS),
-          );
+          wait.timer = setTimeout(() => this.fireHumanTimeout(request.id), Math.min(remaining, MAX_TIMER_MS));
         }
       }
       queueMicrotask(() => this.checkIdle());
@@ -1064,6 +1075,23 @@ export class RunRuntime {
     };
   }
 
+  /**
+   * The deadline timer's entry point: applyHumanTimeout reads and appends to the
+   * journal, and a store failure there must neither become an unhandled rejection
+   * (killing a long-lived host) nor silently drop the deadline forever — the
+   * request would stay pending with no timer left to apply its policy. Re-arm a
+   * short retry while the wait is still open; an answered/settled wait stops it.
+   */
+  private fireHumanTimeout(id: string): void {
+    this.applyHumanTimeout(id).catch((err) => {
+      if (!this.pendingWaits.has(id)) return;
+      const message = err instanceof Error ? err.message : String(err);
+      this.log(`applying the deadline for ${id} failed (${message}); retrying in 5s`);
+      const wait = this.pendingWaits.get(id);
+      if (wait) wait.timer = setTimeout(() => this.fireHumanTimeout(id), 5_000);
+    });
+  }
+
   private async applyHumanTimeout(id: string): Promise<void> {
     if (this.detachedFromHost) return; // the next owner applies deadlines, not us
     const wait = this.pendingWaits.get(id);
@@ -1072,7 +1100,7 @@ export class RunRuntime {
     // A chunked long deadline fires early by design: re-arm for the remainder.
     const remaining = (request.deadline ?? 0) - this.host.clock();
     if (remaining > 0) {
-      wait.timer = setTimeout(() => void this.applyHumanTimeout(id), Math.min(remaining, MAX_TIMER_MS));
+      wait.timer = setTimeout(() => this.fireHumanTimeout(id), Math.min(remaining, MAX_TIMER_MS));
       return;
     }
     const policy = request.onTimeout ?? "deny";

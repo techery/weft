@@ -562,9 +562,15 @@ export function buildCtx(rt: RunRuntime): Ctx {
             // a retry or a terminal state whose lease is released. Nothing this
             // zombie does may be observable: charge the spend in memory (the money
             // is gone either way) but journal nothing, capture nothing, and stop.
+            // The priced usage rides the cancellation so a settle INSIDE the drain
+            // window reaches the timeout record (withTimeout harvests it) — the
+            // billed result would otherwise vanish from every later resume's
+            // budget restore.
             if (io.signal.aborted) {
-              chargeUsage(result.usage, { journal: false });
-              throw new CancelledError(`${label}: attempt abandoned after its timeout`, stepRef);
+              const priced = chargeUsage(result.usage, { journal: false });
+              const abandoned = new CancelledError(`${label}: attempt abandoned after its timeout`, stepRef);
+              (abandoned as { detail?: { usage?: Usage } }).detail = { usage: priced };
+              throw abandoned;
             }
             const usage = chargeUsage(result.usage);
 

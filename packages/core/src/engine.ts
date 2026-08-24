@@ -10,6 +10,7 @@ import {
   isCancellation,
   isWorkflowDefinition,
   StepError,
+  type Usage,
   validateSchema,
   type WorkflowDefinition,
 } from "@weft/sdk";
@@ -307,10 +308,18 @@ export class Engine implements EngineHost {
     }
     const restoreTokens = Math.max(replay.totalUsage.tokens, sampled.tokens);
     const restoreUsd = Math.max(replay.totalUsage.usd, sampled.usd);
+    // A child that journaled paid work but whose parent step never journaled a
+    // terminal record (crash mid-child) restores its spend only when the step
+    // re-enters executeChildRun — and an EDIT that removes that call skips it
+    // entirely, handing the pool back money the tree already spent. Walk the
+    // durable descendant journals for spend the parent's own records do not
+    // represent.
+    const descendants = await this.descendantDurableUsage(runId, records, new Set([runId]));
     shared.budget.restore(
-      restoreTokens,
-      restoreUsd,
+      restoreTokens + descendants.tokens,
+      restoreUsd + descendants.usd,
       replay.totalUsage.samples +
+        descendants.samples +
         (restoreTokens > replay.totalUsage.tokens || restoreUsd > replay.totalUsage.usd ? 1 : 0),
     );
     const runtime = new RunRuntime({
@@ -335,6 +344,81 @@ export class Engine implements EngineHost {
    * whole amount. Only journals whose run.created names this parent count: an
    * eight-hex collision with an unrelated run must not import its dispatches.
    */
+  /**
+   * Durable spend across descendant journals that these records do NOT already
+   * count. A completed roll-up (step.completed usage), a retry record, or a
+   * failed step's carried detail put a child's spend into replay.totalUsage —
+   * per child, whatever the child's own journal holds BEYOND those roll-ups is
+   * money the pool spent that no other restore path will bring back once the
+   * calling step is edited away. Clamped per child at zero: a roll-up above the
+   * child's journal (a priced total the child never sampled) must not subtract
+   * from siblings. Parentage-verified like the dispatch walk below.
+   */
+  private async descendantDurableUsage(
+    parentId: string,
+    records: JournalRecord[],
+    seen: Set<string>,
+  ): Promise<{ tokens: number; usd: number; samples: number }> {
+    const childBySeq = new Map<number, string>();
+    const childIds = new Set<string>();
+    for (const rec of records) {
+      if (rec.ev.type === "step.scheduled" && rec.ev.childRunId !== undefined) {
+        childBySeq.set(rec.ev.seq, rec.ev.childRunId);
+        childIds.add(rec.ev.childRunId);
+      } else if (rec.ev.type === "step.completed") {
+        const out = rec.ev.output as { childRunId?: unknown } | null | undefined;
+        if (out && typeof out === "object" && typeof out.childRunId === "string") {
+          childBySeq.set(rec.ev.seq, out.childRunId);
+          childIds.add(out.childRunId);
+        }
+      }
+    }
+    // Per child, the spend the PARENT journal already restores via replay.totalUsage.
+    const rolled = new Map<string, { tokens: number; usd: number }>();
+    const addRolled = (seq: number, usage: Usage | undefined) => {
+      const childId = childBySeq.get(seq);
+      if (childId === undefined || !usage) return;
+      const prior = rolled.get(childId) ?? { tokens: 0, usd: 0 };
+      prior.tokens += (usage.input ?? 0) + (usage.output ?? 0);
+      prior.usd += usage.usd ?? 0;
+      rolled.set(childId, prior);
+    };
+    for (const rec of records) {
+      if (rec.ev.type === "step.completed" || rec.ev.type === "step.attempt") {
+        addRolled(rec.ev.seq, rec.ev.usage);
+      } else if (rec.ev.type === "step.failed") {
+        addRolled(rec.ev.seq, (rec.ev.error.detail as { usage?: Usage } | undefined)?.usage);
+      }
+    }
+    const total = { tokens: 0, usd: 0, samples: 0 };
+    for (const childId of childIds) {
+      if (seen.has(childId)) continue;
+      seen.add(childId);
+      if (!(await this.journal.exists(childId))) continue;
+      const childRecords: JournalRecord[] = [];
+      for await (const r of this.journal.read(childId)) childRecords.push(r);
+      const created = childRecords.find((r) => r.ev.type === "run.created")?.ev;
+      if (created?.type !== "run.created" || created.parentRunId !== parentId) continue;
+      const childReplay = ReplayIndex.fromRecords(childRecords);
+      let childSampled = { tokens: 0, usd: 0 };
+      for (const r of childRecords) {
+        if (r.ev.type === "budget.sampled") childSampled = { tokens: r.ev.tokens, usd: r.ev.usd };
+      }
+      const deeper = await this.descendantDurableUsage(childId, childRecords, seen);
+      const durableTokens = Math.max(childReplay.totalUsage.tokens, childSampled.tokens) + deeper.tokens;
+      const durableUsd = Math.max(childReplay.totalUsage.usd, childSampled.usd) + deeper.usd;
+      const already = rolled.get(childId) ?? { tokens: 0, usd: 0 };
+      const extraTokens = Math.max(0, durableTokens - already.tokens);
+      const extraUsd = Math.max(0, durableUsd - already.usd);
+      total.tokens += extraTokens;
+      total.usd += extraUsd;
+      if (extraTokens > 0 || extraUsd > 0) {
+        total.samples += Math.max(1, childReplay.totalUsage.samples + deeper.samples);
+      }
+    }
+    return total;
+  }
+
   private async descendantAgentDispatches(
     parentId: string,
     records: JournalRecord[],
@@ -1464,11 +1548,13 @@ export class Engine implements EngineHost {
     for (const { childRunId } of state.children) {
       if (seen.has(childRunId)) continue;
       seen.add(childRunId);
-      try {
-        out.push(...(await this.pendingAcrossTree(childRunId, seen)));
-      } catch {
-        // scheduled but never journaled
-      }
+      // Only confirmed ABSENCE is skippable: a child scheduled but never
+      // journaled has nothing to report yet. A journal that EXISTS but cannot
+      // be read must surface instead — swallowing it reports "nothing to
+      // answer" over a child whose outstanding approval simply could not be
+      // loaded, and every caller walks away from a stuck run.
+      if (!(await this.journal.exists(childRunId))) continue;
+      out.push(...(await this.pendingAcrossTree(childRunId, seen)));
     }
     return out;
   }

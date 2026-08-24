@@ -4012,3 +4012,191 @@ describe("codex review findings, round 58 (PR #1)", () => {
     expect(peeled.stdout.trim()).toBe(original);
   });
 });
+
+describe("codex review findings, round 59 (PR #1)", () => {
+  test("a billed result landing in the drain window journals its spend on the timeout", async () => {
+    // A provider that ignores its abort and settles shortly AFTER the timeout
+    // fires — inside the bounded drain — with real money already spent.
+    const lagging: AgentProvider = {
+      id: "claude",
+      capabilities: () => ({
+        structured: "native",
+        permissionHook: false,
+        sessionResume: false,
+        reportsUsd: false,
+      }),
+      async run(_req, ctl) {
+        await new Promise<void>((resolve) => {
+          if (ctl.signal.aborted) return resolve();
+          ctl.signal.addEventListener("abort", () => setTimeout(resolve, 25), { once: true });
+        });
+        return { output: { ok: true }, usage: { input: 400, output: 100 } };
+      },
+      async repair() {
+        throw new Error("unused");
+      },
+    };
+    const journal = new MemoryJournalStore();
+    const providers = new ProviderRegistry();
+    providers.register(lagging);
+    const engine = new Engine({ journal, blobs: new MemoryBlobStore(), providers });
+    const def = defineWorkflow(
+      { name: "drainbill", description: "d", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("slow", { schema: z.object({ ok: z.boolean() }), key: "slow", timeout: "100ms" });
+        return {};
+      },
+    );
+    const h = await engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(h.result).rejects.toMatchObject({ code: "timeout" });
+    // The timeout record is the ONLY durable trace of the drained attempt's
+    // spend: without it a resume restores a budget that never saw this call.
+    const recs = await records(journal, h.runId);
+    const failed = recs.find((r) => r.ev.type === "step.failed")?.ev;
+    if (failed?.type !== "step.failed") throw new Error("expected step.failed");
+    const usage = (failed.error.detail as { usage?: { input: number; output: number } } | undefined)?.usage;
+    expect(usage).toMatchObject({ input: 400, output: 100 });
+  });
+
+  test("a crashed child's durable spend survives an edited resume that skips it", async () => {
+    const Ok = z.object({ ok: z.boolean() });
+    const child = defineWorkflow(
+      { name: "crashkid", description: "c", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("pay one", { schema: Ok, key: "c1" });
+        await ctx.human.ask({ question: "go on?", schema: z.object({ go: z.boolean() }) });
+        return {};
+      },
+    );
+    const mkParent = (skipChild: boolean) =>
+      defineWorkflow(
+        { name: "crashpar", description: "c", input: z.object({}), output: z.object({}) },
+        async (ctx) => {
+          if (!skipChild) await ctx.workflow(child, {}, { key: "kid" });
+          await ctx.agent("pay two", { schema: Ok, key: "p2" });
+          return {};
+        },
+      );
+    const t1 = testEngine();
+    t1.builder.on({ prompt: /pay/ }, { ok: true });
+    const h1 = await t1.engine.start(mkParent(false), {
+      input: {},
+      cwd: await tempDir(),
+      budget: { tokens: 200 },
+    });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the child to suspend");
+    // A crash, not a cancel: the cancellation branch's sampled floor never
+    // runs, so the child's 150 charged tokens live ONLY in the child journal.
+    await t1.engine.shutdown();
+
+    // Resumed with edited code that skips the child call entirely, nothing
+    // re-enters executeChildRun — the descendant walk is all that stands
+    // between the 200-token ceiling and paying for p2 out of replenished money.
+    const t2 = reopen(t1);
+    t2.builder.on({ prompt: /pay/ }, { ok: true });
+    const h2 = await t2.engine.resume(h1.runId, { def: mkParent(true) });
+    await expect(h2.result).rejects.toMatchObject({ code: "budget_exceeded" });
+  });
+
+  test("pending() surfaces an unreadable child journal instead of hiding its request", async () => {
+    class FailsChildRead extends MemoryJournalStore {
+      failFor: string | undefined;
+      override async *read(runId: string, fromIndex = 0): AsyncIterable<JournalRecord> {
+        if (runId === this.failFor) throw new Error("EIO: child journal unreadable");
+        yield* super.read(runId, fromIndex);
+      }
+    }
+    const journal = new FailsChildRead();
+    const t = testEngine();
+    const builder = t.builder;
+    const providers = new ProviderRegistry();
+    providers.register(builder.provider("claude"));
+    providers.register(builder.provider("codex"));
+    const engine = new Engine({ journal, blobs: new MemoryBlobStore(), providers });
+    const child = defineWorkflow(
+      { name: "pendkid", description: "p", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.human.ask({ question: "approve?", schema: z.object({ go: z.boolean() }) });
+        return {};
+      },
+    );
+    const parent = defineWorkflow(
+      { name: "pendpar", description: "p", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.workflow(child, {}, { key: "kid" });
+        return {};
+      },
+    );
+    const h = await engine.start(parent, { input: {}, cwd: await tempDir() });
+    const o = await h.outcome();
+    if (o.status !== "waiting_for_human") throw new Error("expected the child to suspend");
+    const childRunId = (await records(journal, h.runId)).find(
+      (r) => r.ev.type === "step.scheduled" && r.ev.childRunId !== undefined,
+    )?.ev as { childRunId?: string } | undefined;
+    if (!childRunId?.childRunId) throw new Error("expected a scheduled child");
+    // The owner exits: a LATER process (a CLI answering by parent id) folds the
+    // tree from the journal alone — the case the swallowed read error breaks.
+    await engine.shutdown();
+
+    const outside = new Engine({ journal, blobs: new MemoryBlobStore(), providers: new ProviderRegistry() });
+    // Readable: the child's request is visible through the parent.
+    expect((await outside.pending(h.runId)).map((p) => p.runId)).toContain(childRunId.childRunId);
+    // Unreadable is NOT "nothing pending": the storage failure must surface —
+    // reporting an empty list sends every caller away from a stuck run.
+    journal.failFor = childRunId.childRunId;
+    await expect(outside.pending(h.runId)).rejects.toThrow(/unreadable/);
+  });
+
+  test("a failed deadline append retries instead of dying unhandled", async () => {
+    vi.useFakeTimers();
+    try {
+      class FlakyTimeoutAppend extends MemoryJournalStore {
+        failures = 1;
+        override async appendIf(
+          runId: string,
+          expected: number,
+          events: JournalEvent[],
+        ): Promise<JournalRecord[] | undefined> {
+          if (
+            this.failures > 0 &&
+            events.some((e) => e.type === "human.answered" && e.answeredBy === "timeout")
+          ) {
+            this.failures--;
+            throw new Error("EIO: transient store failure");
+          }
+          return super.appendIf(runId, expected, events);
+        }
+      }
+      const journal = new FlakyTimeoutAppend();
+      const engine = new Engine({
+        journal,
+        blobs: new MemoryBlobStore(),
+        providers: new ProviderRegistry(),
+      });
+      const def = defineWorkflow(
+        { name: "flakydead", description: "f", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+        async (ctx) => {
+          const go = await ctx.human.approve({
+            action: "soon?",
+            timeout: "1s",
+            onTimeout: { default: { approved: false } },
+          });
+          return { ok: go.approved };
+        },
+      );
+      const h = await engine.start(def, { input: {}, cwd: await tempDir() });
+      const o = await h.outcome();
+      if (o.status !== "waiting_for_human") throw new Error("expected suspension");
+      // The deadline fires and its append FAILS: the rejection must be caught
+      // (an unhandled one kills a long-lived host) and the deadline re-armed —
+      // dropping it would leave the request pending forever.
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect((await records(journal, h.runId)).some((r) => r.ev.type === "human.answered")).toBe(false);
+      await vi.advanceTimersByTimeAsync(5_100);
+      expect(await h.result).toEqual({ ok: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
