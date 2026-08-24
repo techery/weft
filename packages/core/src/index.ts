@@ -1,11 +1,11 @@
 /**
- * @weft/core — the Weft engine: scheduler, replayer, journal model, budget,
+ * @techery/weft-core — the Weft engine: scheduler, replayer, journal model, budget,
  * HITL broker, projections. Hosts (CLI, MCP, daemon) are thin shells over Engine.
  */
 
-// Types that appear in @weft/core's own public surface (AgentProvider, events),
+// Types that appear in @techery/weft-core's own public surface (AgentProvider, events),
 // re-exported so adapter packages need no second workspace dependency.
-export type { Effort, Risk, SchemaIssue, Usage, WriteScope } from "@weft/sdk";
+export type { Effort, Risk, SchemaIssue, Usage, WriteScope } from "@techery/weft-sdk";
 export type { BudgetLimits } from "./budget.ts";
 export { Budget } from "./budget.ts";
 export { canonicalJson, hashStep, sha256Hex } from "./canonical.ts";

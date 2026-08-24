@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createGit, type Git } from "@weft/git";
+import { createGit, type Git } from "@techery/weft-git";
 import {
   addWorktree,
   applyPatchToTree,
@@ -14,7 +14,7 @@ import {
   checkScope,
   removeWorktree,
   restoreFiles,
-} from "@weft/isolation";
+} from "@techery/weft-isolation";
 import { execa } from "execa";
 import { afterEach, describe, expect, test } from "vitest";
 

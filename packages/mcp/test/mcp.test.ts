@@ -12,7 +12,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { createWeftMcpServer, type WeftMcpServer } from "../src/index.ts";
 
 /** No agent, no fs, no clock: `ctx.now` and `ctx.log` are the only side effects. */
-const HELLO = `import { defineWorkflow, z } from "@weft/sdk";
+const HELLO = `import { defineWorkflow, z } from "@techery/weft-sdk";
 
 export default defineWorkflow(
   {
@@ -29,7 +29,7 @@ export default defineWorkflow(
 `;
 
 /** Suspends on a person the moment it starts — the shape the MCP bridge exists to carry. */
-const GATED = `import { defineWorkflow, z } from "@weft/sdk";
+const GATED = `import { defineWorkflow, z } from "@techery/weft-sdk";
 
 export default defineWorkflow(
   {
@@ -46,7 +46,7 @@ export default defineWorkflow(
 `;
 
 /** Alive but unanswerable for a moment: the case a long poll has to hold open. */
-const SLEEPY = `import { defineWorkflow, z } from "@weft/sdk";
+const SLEEPY = `import { defineWorkflow, z } from "@techery/weft-sdk";
 
 export default defineWorkflow(
   {
@@ -64,7 +64,7 @@ export default defineWorkflow(
 
 /** A parent whose CHILD suspends on a person: the case where the awaiting
  * request's OWNING run differs from the run the session waited on. */
-const NESTED = `import { defineWorkflow, z } from "@weft/sdk";
+const NESTED = `import { defineWorkflow, z } from "@techery/weft-sdk";
 const child = defineWorkflow(
   { name: "gatechild", description: "asks", input: z.object({}), output: z.object({ approved: z.boolean() }) },
   async (ctx) => {
@@ -230,7 +230,7 @@ describe("the weft MCP server", () => {
   });
 
   it("accepts any JSON input — an explicit null reaches the workflow as itself", async () => {
-    const NULLIN = `import { defineWorkflow, z } from "@weft/sdk";
+    const NULLIN = `import { defineWorkflow, z } from "@techery/weft-sdk";
 export default defineWorkflow(
   { description: "null input", input: z.null(), output: z.object({ isNull: z.boolean() }) },
   async (_ctx, input) => ({ isNull: input === null }),
@@ -527,7 +527,7 @@ export default defineWorkflow(
   }, 20_000);
 
   it("surfaces and answers a CHILD's question for an untracked parent (host restart)", async () => {
-    const NESTED = `import { defineWorkflow, z } from "@weft/sdk";
+    const NESTED = `import { defineWorkflow, z } from "@techery/weft-sdk";
 const child = defineWorkflow(
   { name: "gatechild", description: "asks", input: z.object({}), output: z.object({ approved: z.boolean() }) },
   async (ctx) => {
@@ -565,6 +565,6 @@ export default defineWorkflow(
     expect(types).toContain("defineWorkflow");
     expect(types).toContain("export interface Ctx");
     expect(types).toContain("StandardSchemaV1");
-    expect(types).toContain("@weft/sdk/types.ts");
+    expect(types).toContain("@techery/weft-sdk/types.ts");
   });
 });

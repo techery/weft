@@ -63,6 +63,28 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
 
+  package:
+    name: Build & packaging
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The generated per-package README/LICENSE must match what the manifests say.
+      - run: pnpm sync:meta --check
+      - run: pnpm build
+      # What `pnpm -r publish` would upload, checked without a registry: dist-pointing
+      # exports, no leftover `workspace:*`, bins present, README and LICENSE included.
+      - run: pnpm verify:packing
+      # Installs those tarballs for real and drives the CLI and MCP server out of the
+      # install, as compiled ESM under plain node with no loader present.
+      - run: pnpm verify:install
+
   smoke:
     name: Examples & CLI smoke
     runs-on: ubuntu-latest

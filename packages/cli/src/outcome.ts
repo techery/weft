@@ -4,8 +4,8 @@
  * run parks on a human — the CLI process is meant to exit there, and the answer can
  * arrive hours later from another process (C5).
  */
-import type { RunHandle, RunOutcome, RunState, Weft } from "@weft/host";
-import { renderTree } from "@weft/host";
+import type { RunHandle, RunOutcome, RunState, Weft } from "@techery/weft-host";
+import { renderTree } from "@techery/weft-host";
 import pc from "picocolors";
 import { costLine, jsonBlock, pendingLines, treeLines } from "./format.ts";
 import { type CliIo, paintStatus, say, warn } from "./io.ts";

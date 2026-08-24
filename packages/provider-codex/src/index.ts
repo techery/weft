@@ -1,5 +1,5 @@
 /**
- * @weft/provider-codex — the AgentProvider over the OpenAI Codex SDK.
+ * @techery/weft-provider-codex — the AgentProvider over the OpenAI Codex SDK.
  *
  * Structured output is native here (C7/§04): the step's JSON Schema goes in as the
  * turn's `outputSchema` and the agent's final message is the JSON value. It is still
@@ -26,13 +26,19 @@ import {
   type ThreadOptions,
   type TurnOptions,
 } from "@openai/codex-sdk";
-import type { AgentProvider, AgentRequest, AgentResult, ProviderCapabilities, RunControl } from "@weft/core";
+import type {
+  AgentProvider,
+  AgentRequest,
+  AgentResult,
+  ProviderCapabilities,
+  RunControl,
+} from "@techery/weft-core";
 import { renderTranscript } from "./transcript.ts";
 
 export { renderTranscript } from "./transcript.ts";
 
 /**
- * `Usage` and `SchemaIssue` live in @weft/sdk, which is not a dependency of this
+ * `Usage` and `SchemaIssue` live in @techery/weft-sdk, which is not a dependency of this
  * package; both are reachable through the frozen provider contract instead.
  */
 type Usage = AgentResult["usage"];
@@ -144,6 +150,37 @@ function turnSignal(req: AgentRequest, ctl: RunControl): { signal: AbortSignal; 
   return { signal: AbortSignal.any([ctl.signal, timeout.signal]), done };
 }
 
+/**
+ * OpenAI's structured outputs accept a strict subset of JSON Schema, and the engine's
+ * wire schema is not written in it: `z.toJSONSchema` leaves `additionalProperties`
+ * unset, and it omits any property carrying a default from `required`. Both are hard
+ * errors on this path — the API answers `invalid_json_schema` and the step never runs.
+ *
+ * So the schema is adapted to the vendor on the way out: every object gets
+ * `additionalProperties: false`, and every object's `required` lists all of its
+ * properties, which is what OpenAI documents. Tightening the WIRE schema cannot make a
+ * bad value pass — the engine still validates the response against the real schema, and
+ * a field the model was forced to emit is one the real schema either accepts or repairs.
+ */
+function toStrictSchema(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(toStrictSchema);
+  if (typeof node !== "object" || node === null) return node;
+
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    out[key] = toStrictSchema(value);
+  }
+
+  const properties = out.properties;
+  if (out.type === "object" && typeof properties === "object" && properties !== null) {
+    out.additionalProperties = false;
+    // A property with a default is optional to Zod but must still be listed here: the
+    // model has to produce every key, and the real schema decides what the value means.
+    out.required = Object.keys(properties as Record<string, unknown>);
+  }
+  return out;
+}
+
 async function runTurn(
   thread: CodexThreadLike,
   prompt: string,
@@ -158,7 +195,7 @@ async function runTurn(
   try {
     const result = await thread.run(prompt, {
       signal: deadline.signal,
-      ...(req.schema !== undefined ? { outputSchema: req.schema } : {}),
+      ...(req.schema !== undefined ? { outputSchema: toStrictSchema(req.schema) } : {}),
     });
     if (ctl.signal.aborted) throw new Error(ABORTED);
     return toResult(thread, result);

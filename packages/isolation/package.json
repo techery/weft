@@ -1,9 +1,28 @@
 {
-  "name": "@weft/isolation",
+  "name": "@techery/weft-isolation",
   "version": "0.1.0",
   "description": "Worktrees, patch capture, write-scope checks, 3-way merge.",
-  "type": "module",
+  "keywords": [
+    "weft",
+    "workflow",
+    "agents",
+    "ai",
+    "durable",
+    "typescript"
+  ],
   "license": "MIT",
+  "author": "Techery",
+  "homepage": "https://github.com/techery/weft/tree/main/packages/isolation#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/techery/weft.git",
+    "directory": "packages/isolation"
+  },
+  "bugs": {
+    "url": "https://github.com/techery/weft/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
   "engines": {
     "node": ">=22.12"
   },
@@ -13,11 +32,32 @@
       "default": "./src/index.ts"
     }
   },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist"
+  },
   "dependencies": {
-    "@weft/git": "workspace:*",
+    "@techery/weft-git": "workspace:*",
     "execa": "^10.0.1",
     "picomatch": "^4.0.5",
-    "@weft/sdk": "workspace:*"
+    "@techery/weft-sdk": "workspace:*"
   },
   "devDependencies": {
     "@types/picomatch": "^4.0.2"

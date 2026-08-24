@@ -4,7 +4,7 @@
  * the file, and after the file changed: `content` (default) re-runs a step whose prompt or
  * options moved, `key` keeps it by identity for fast iteration.
  */
-import { persistedDefOf } from "@weft/host";
+import { persistedDefOf } from "@techery/weft-host";
 import { Command } from "commander";
 import pc from "picocolors";
 import { openWeft, parseReuse } from "../context.ts";

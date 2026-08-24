@@ -4,7 +4,7 @@
  * that added nothing, and stop on the dry streak or the round ceiling, never on
  * "the last round felt quiet".
  */
-import type { Ctx } from "@weft/sdk";
+import type { Ctx } from "@techery/weft-sdk";
 import { positiveInt } from "./internal.ts";
 
 /** Consecutive empty rounds that end the loop. */

@@ -1,8 +1,8 @@
 /**
- * @weft/sdk — the authoring surface for Weft workflows.
+ * @techery/weft-sdk — the authoring surface for Weft workflows.
  *
  * ```ts
- * import { defineWorkflow, z } from "@weft/sdk";
+ * import { defineWorkflow, z } from "@techery/weft-sdk";
  * export default defineWorkflow({ description, input, output }, async (ctx, input) => { … });
  * ```
  */

@@ -3,8 +3,8 @@
  * question: what is missing? It is aimed at the gaps a run cannot see in its own
  * output — a modality never run, a claim never verified, a source never read.
  */
-import type { Ctx } from "@weft/sdk";
-import { z } from "@weft/sdk";
+import type { Ctx } from "@techery/weft-sdk";
+import { z } from "@techery/weft-sdk";
 import { type Routing, routing } from "./internal.ts";
 
 /** One gap: what is absent, and why its absence matters. */

@@ -1,5 +1,5 @@
 /**
- * @weft/isolation — worktrees, patch capture, write-scope checks, 3-way merge.
+ * @techery/weft-isolation — worktrees, patch capture, write-scope checks, 3-way merge.
  *
  * Write steps run in their own git worktree; their edits come back as patches that
  * the engine journals and merges explicitly (`ctx.integrate`). This package owns the

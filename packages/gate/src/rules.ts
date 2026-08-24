@@ -25,10 +25,10 @@ export interface GateDiagnostic {
 }
 
 /** Bare imports every workflow may use: the authoring surface and its schema library. */
-export const DEFAULT_ALLOW_BARE: readonly string[] = ["@weft/sdk", "zod"];
+export const DEFAULT_ALLOW_BARE: readonly string[] = ["@techery/weft-sdk", "zod"];
 
-/** `@weft/sdk` is the authoring surface; a custom allow-list extends it, never removes it. */
-const REQUIRED_ALLOW_BARE: readonly string[] = ["@weft/sdk"];
+/** `@techery/weft-sdk` is the authoring surface; a custom allow-list extends it, never removes it. */
+const REQUIRED_ALLOW_BARE: readonly string[] = ["@techery/weft-sdk"];
 
 const TIMERS = new Set(["setTimeout", "setInterval", "setImmediate"]);
 
@@ -79,7 +79,7 @@ export function formatDiagnostics(diagnostics: readonly GateDiagnostic[]): strin
     .join("\n");
 }
 
-/** Normalize an allow-list: caller entries plus the always-allowed `@weft/sdk`. */
+/** Normalize an allow-list: caller entries plus the always-allowed `@techery/weft-sdk`. */
 export function resolveAllowBare(allowBare?: readonly string[]): string[] {
   const list = allowBare ?? DEFAULT_ALLOW_BARE;
   return [...new Set([...REQUIRED_ALLOW_BARE, ...list])];

@@ -8,8 +8,8 @@ import {
   MemoryJournalStore,
   ProviderRegistry,
   type WorkflowRegistry,
-} from "@weft/core";
-import { type MockAgentBuilder, mock } from "@weft/provider-mock";
+} from "@techery/weft-core";
+import { type MockAgentBuilder, mock } from "@techery/weft-provider-mock";
 import { execa } from "execa";
 
 export interface TestEngine {

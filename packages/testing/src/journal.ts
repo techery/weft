@@ -3,8 +3,8 @@
  * journal records themselves, so a view over a resumed run reads exactly like a
  * view over a live one — and `toJSON()` is stable enough to snapshot.
  */
-import type { JournalRecord, StepKind } from "@weft/core";
-import type { Usage } from "@weft/sdk";
+import type { JournalRecord, StepKind } from "@techery/weft-core";
+import type { Usage } from "@techery/weft-sdk";
 
 export type StepStatus = "running" | "ok" | "failed";
 

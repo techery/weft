@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    // Relative imports inside a package carry an explicit `.ts` extension; tsc rewrites
+    // them to `.js` on the way out so the emitted ESM resolves under plain node.
+    "rewriteRelativeImportExtensions": true
+  }
+}

@@ -26,7 +26,7 @@ import {
   resolveWorkflow,
   type Weft,
   type WorkflowDefinition,
-} from "@weft/host";
+} from "@techery/weft-host";
 import { z } from "zod";
 import { DEFAULT_TIMEOUT, parseTimeout, RunStore, type TrackedRun, waitForChange } from "./runs.ts";
 import { sdkTypings } from "./typings.ts";
@@ -291,7 +291,7 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
     {
       title: "Read the weft authoring surface",
       description:
-        "The @weft/sdk TypeScript source a workflow is written against: the full `ctx` surface, " +
+        "The @techery/weft-sdk TypeScript source a workflow is written against: the full `ctx` surface, " +
         "`defineWorkflow`, and the schema types. Read this before passing `source` to weft_run.",
       inputSchema: {},
       annotations: { readOnlyHint: true },

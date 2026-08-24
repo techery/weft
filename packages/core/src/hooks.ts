@@ -1,8 +1,8 @@
-import type { ExecResult, FetchResult } from "@weft/sdk";
+import type { ExecResult, FetchResult } from "@techery/weft-sdk";
 
 /**
  * Test seams. When a hook returns a value (not undefined), the engine journals
- * and serves it exactly as if the real side effect had run — @weft/testing uses
+ * and serves it exactly as if the real side effect had run — @techery/weft-testing uses
  * this for `git:`/`exec:`/`fetch:` fixtures. Never set in production hosts.
  */
 export interface TestHooks {

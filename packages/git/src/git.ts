@@ -17,7 +17,7 @@ import type {
   GitFileStatus,
   GitRange,
   GitStatusResult,
-} from "@weft/sdk";
+} from "@techery/weft-sdk";
 import { execa } from "execa";
 import type { Git, RawResult } from "./index.ts";
 import { GitError } from "./index.ts";

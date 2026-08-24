@@ -19,13 +19,13 @@ import {
   type RunSummary,
   resolveWorkflow,
   type Weft,
-} from "@weft/host";
+} from "@techery/weft-host";
 import type { Hono } from "hono";
 import { afterAll, describe, expect, it } from "vitest";
 import { createApp, DEFAULT_PORT, startDaemon } from "../src/index.ts";
 
 /** No agent, no shell: one journaled clock read, then a question only a person can answer. */
-const GATED = `import { defineWorkflow, z } from "@weft/sdk";
+const GATED = `import { defineWorkflow, z } from "@techery/weft-sdk";
 
 export default defineWorkflow(
   {
@@ -44,7 +44,7 @@ export default defineWorkflow(
 `;
 
 /** A parent whose only work is a child that asks — the tree suspends on the CHILD's journal. */
-const NESTED = `import { defineWorkflow, z } from "@weft/sdk";
+const NESTED = `import { defineWorkflow, z } from "@techery/weft-sdk";
 const child = defineWorkflow(
   { name: "gatechild", description: "asks", input: z.object({}), output: z.object({ approved: z.boolean() }) },
   async (ctx) => {
@@ -296,7 +296,7 @@ describe("steering a run", () => {
   it("resumes an INLINE run through its persisted script — the registry has no entry for it", async () => {
     const cwd = await repo();
     const first = await open(cwd);
-    const source = `import { defineWorkflow, z } from "@weft/sdk";
+    const source = `import { defineWorkflow, z } from "@techery/weft-sdk";
 export default defineWorkflow(
   { description: "inline gate", input: z.object({}), output: z.object({ ok: z.boolean() }) },
   async (ctx) => {

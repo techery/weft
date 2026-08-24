@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  '@techery/weft-sdk': link:../../../Library/pnpm/global/5/node_modules/@techery/weft-sdk
+
 importers:
 
   .:
@@ -11,24 +14,24 @@ importers:
       '@biomejs/biome':
         specifier: 2.5.10
         version: 2.5.10
+      '@techery/weft-core':
+        specifier: workspace:*
+        version: link:packages/core
+      '@techery/weft-provider-mock':
+        specifier: workspace:*
+        version: link:packages/provider-mock
+      '@techery/weft-sdk':
+        specifier: workspace:*
+        version: link:packages/sdk
+      '@techery/weft-stdlib':
+        specifier: workspace:*
+        version: link:packages/stdlib
+      '@techery/weft-testing':
+        specifier: workspace:*
+        version: link:packages/testing
       '@types/node':
         specifier: ^26.2.0
         version: 26.2.0
-      '@weft/core':
-        specifier: workspace:*
-        version: link:packages/core
-      '@weft/provider-mock':
-        specifier: workspace:*
-        version: link:packages/provider-mock
-      '@weft/sdk':
-        specifier: workspace:*
-        version: link:packages/sdk
-      '@weft/stdlib':
-        specifier: workspace:*
-        version: link:packages/stdlib
-      '@weft/testing':
-        specifier: workspace:*
-        version: link:packages/testing
       tsx:
         specifier: ^4.23.12
         version: 4.23.12
@@ -44,19 +47,19 @@ importers:
       '@clack/prompts':
         specifier: ^1.7.0
         version: 1.7.0
-      '@weft/core':
+      '@techery/weft-core':
         specifier: workspace:*
         version: link:../core
-      '@weft/daemon':
+      '@techery/weft-daemon':
         specifier: workspace:*
         version: link:../daemon
-      '@weft/gate':
+      '@techery/weft-gate':
         specifier: workspace:*
         version: link:../gate
-      '@weft/host':
+      '@techery/weft-host':
         specifier: workspace:*
         version: link:../host
-      '@weft/sdk':
+      '@techery/weft-sdk':
         specifier: workspace:*
         version: link:../sdk
       commander:
@@ -68,6 +71,7 @@ importers:
       picocolors:
         specifier: ^1.1.1
         version: 1.1.1
+    devDependencies:
       tsx:
         specifier: ^4.23.12
         version: 4.23.12
@@ -77,13 +81,13 @@ importers:
       '@opentelemetry/api':
         specifier: ^1.9.1
         version: 1.9.1
-      '@weft/git':
+      '@techery/weft-git':
         specifier: workspace:*
         version: link:../git
-      '@weft/isolation':
+      '@techery/weft-isolation':
         specifier: workspace:*
         version: link:../isolation
-      '@weft/sdk':
+      '@techery/weft-sdk':
         specifier: workspace:*
         version: link:../sdk
       execa:
@@ -99,22 +103,22 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
+      '@techery/weft-provider-mock':
+        specifier: workspace:*
+        version: link:../provider-mock
       '@types/picomatch':
         specifier: ^4.0.2
         version: 4.0.3
-      '@weft/provider-mock':
-        specifier: workspace:*
-        version: link:../provider-mock
 
   packages/daemon:
     dependencies:
       '@hono/node-server':
         specifier: ^2.1.1
         version: 2.1.1(hono@4.13.3)
-      '@weft/core':
+      '@techery/weft-core':
         specifier: workspace:*
         version: link:../core
-      '@weft/host':
+      '@techery/weft-host':
         specifier: workspace:*
         version: link:../host
       hono:
@@ -123,7 +127,7 @@ importers:
 
   packages/gate:
     dependencies:
-      '@weft/sdk':
+      '@techery/weft-sdk':
         specifier: workspace:*
         version: link:../sdk
       esbuild:
@@ -138,7 +142,7 @@ importers:
 
   packages/git:
     dependencies:
-      '@weft/sdk':
+      '@techery/weft-sdk':
         specifier: workspace:*
         version: link:../sdk
       execa:
@@ -147,34 +151,34 @@ importers:
 
   packages/host:
     dependencies:
-      '@weft/core':
+      '@techery/weft-core':
         specifier: workspace:*
         version: link:../core
-      '@weft/gate':
+      '@techery/weft-gate':
         specifier: workspace:*
         version: link:../gate
-      '@weft/git':
+      '@techery/weft-git':
         specifier: workspace:*
         version: link:../git
-      '@weft/index-sqlite':
+      '@techery/weft-index-sqlite':
         specifier: workspace:*
         version: link:../index-sqlite
-      '@weft/isolation':
+      '@techery/weft-isolation':
         specifier: workspace:*
         version: link:../isolation
-      '@weft/provider-claude':
+      '@techery/weft-provider-claude':
         specifier: workspace:*
         version: link:../provider-claude
-      '@weft/provider-codex':
+      '@techery/weft-provider-codex':
         specifier: workspace:*
         version: link:../provider-codex
-      '@weft/provider-mock':
+      '@techery/weft-provider-mock':
         specifier: workspace:*
         version: link:../provider-mock
-      '@weft/sdk':
+      '@techery/weft-sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@weft/store-fs':
+      '@techery/weft-store-fs':
         specifier: workspace:*
         version: link:../store-fs
       zod:
@@ -183,20 +187,20 @@ importers:
 
   packages/index-sqlite:
     dependencies:
-      '@weft/core':
+      '@techery/weft-core':
         specifier: workspace:*
         version: link:../core
     devDependencies:
-      '@weft/store-fs':
+      '@techery/weft-store-fs':
         specifier: workspace:*
         version: link:../store-fs
 
   packages/isolation:
     dependencies:
-      '@weft/git':
+      '@techery/weft-git':
         specifier: workspace:*
         version: link:../git
-      '@weft/sdk':
+      '@techery/weft-sdk':
         specifier: workspace:*
         version: link:../sdk
       execa:
@@ -215,25 +219,29 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.30.0
         version: 1.30.0(zod@4.4.3)
-      '@weft/core':
+      '@techery/weft-core':
         specifier: workspace:*
         version: link:../core
-      '@weft/host':
+      '@techery/weft-host':
         specifier: workspace:*
         version: link:../host
       zod:
         specifier: ^4.4.3
         version: 4.4.3
+    devDependencies:
+      tsx:
+        specifier: ^4.23.12
+        version: 4.23.12
 
   packages/provider-claude:
     dependencies:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.3.241
         version: 0.3.241(@anthropic-ai/sdk@0.120.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(zod@4.4.3)
-      '@weft/core':
+      '@techery/weft-core':
         specifier: workspace:*
         version: link:../core
-      '@weft/sdk':
+      '@techery/weft-sdk':
         specifier: workspace:*
         version: link:../sdk
       picomatch:
@@ -252,10 +260,10 @@ importers:
       '@openai/codex-sdk':
         specifier: ^0.149.0
         version: 0.149.0
-      '@weft/core':
+      '@techery/weft-core':
         specifier: workspace:*
         version: link:../core
-      '@weft/sdk':
+      '@techery/weft-sdk':
         specifier: workspace:*
         version: link:../sdk
       picomatch:
@@ -268,10 +276,10 @@ importers:
 
   packages/provider-mock:
     dependencies:
-      '@weft/core':
+      '@techery/weft-core':
         specifier: workspace:*
         version: link:../core
-      '@weft/sdk':
+      '@techery/weft-sdk':
         specifier: workspace:*
         version: link:../sdk
       picomatch:
@@ -290,35 +298,35 @@ importers:
 
   packages/stdlib:
     dependencies:
-      '@weft/sdk':
+      '@techery/weft-sdk':
         specifier: workspace:*
         version: link:../sdk
     devDependencies:
-      '@weft/core':
+      '@techery/weft-core':
         specifier: workspace:*
         version: link:../core
-      '@weft/provider-mock':
+      '@techery/weft-provider-mock':
         specifier: workspace:*
         version: link:../provider-mock
 
   packages/store-fs:
     dependencies:
-      '@weft/core':
+      '@techery/weft-core':
         specifier: workspace:*
         version: link:../core
 
   packages/testing:
     dependencies:
-      '@weft/core':
+      '@techery/weft-core':
         specifier: workspace:*
         version: link:../core
-      '@weft/provider-mock':
+      '@techery/weft-provider-mock':
         specifier: workspace:*
         version: link:../provider-mock
-      '@weft/sdk':
+      '@techery/weft-sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@weft/store-fs':
+      '@techery/weft-store-fs':
         specifier: workspace:*
         version: link:../store-fs
       picomatch:
@@ -328,6 +336,8 @@ importers:
       '@types/picomatch':
         specifier: ^4.0.2
         version: 4.0.3
+
+  todo-app: {}
 
 packages:
 

@@ -1,9 +1,28 @@
 {
-  "name": "@weft/cli",
+  "name": "@techery/weft",
   "version": "0.1.0",
   "description": "weft CLI: run, resume, answer, check, explain, report, diff, ui, doctor.",
-  "type": "module",
+  "keywords": [
+    "weft",
+    "workflow",
+    "agents",
+    "ai",
+    "durable",
+    "typescript"
+  ],
   "license": "MIT",
+  "author": "Techery",
+  "homepage": "https://github.com/techery/weft/tree/main/packages/cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/techery/weft.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/techery/weft/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
   "engines": {
     "node": ">=22.12"
   },
@@ -16,16 +35,40 @@
   "bin": {
     "weft": "./bin/weft.js"
   },
+  "files": [
+    "bin",
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist"
+  },
   "dependencies": {
-    "@weft/host": "workspace:*",
-    "@weft/core": "workspace:*",
-    "@weft/sdk": "workspace:*",
-    "@weft/daemon": "workspace:*",
+    "@techery/weft-host": "workspace:*",
+    "@techery/weft-core": "workspace:*",
+    "@techery/weft-sdk": "workspace:*",
+    "@techery/weft-daemon": "workspace:*",
     "commander": "^15.0.0",
     "@clack/prompts": "^1.7.0",
     "log-update": "^8.0.0",
     "picocolors": "^1.1.1",
-    "tsx": "^4.23.12",
-    "@weft/gate": "workspace:*"
+    "@techery/weft-gate": "workspace:*"
+  },
+  "devDependencies": {
+    "tsx": "^4.23.12"
   }
 }

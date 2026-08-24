@@ -47,7 +47,7 @@ async function mockWeft(): Promise<{ weft: Weft; root: string }> {
 describe("createWeft", () => {
   it("persists an inline script with its run and reconstructs it for a later resume", async () => {
     const { weft } = await mockWeft();
-    const source = `import { defineWorkflow, z } from "@weft/sdk";
+    const source = `import { defineWorkflow, z } from "@techery/weft-sdk";
 export default defineWorkflow(
   { description: "inline gate", input: z.object({}), output: z.object({ ok: z.boolean() }) },
   async (ctx) => {
@@ -85,7 +85,7 @@ export default defineWorkflow(
     await write(
       root,
       "flows/gate.ts",
-      `import { defineWorkflow, z } from "@weft/sdk";
+      `import { defineWorkflow, z } from "@techery/weft-sdk";
 export default defineWorkflow(
   { description: "path gate", input: z.object({}), output: z.object({ ok: z.boolean() }) },
   async (ctx) => {
@@ -181,7 +181,7 @@ export default defineWorkflow(
     await write(
       root,
       ".weft/workflows/verdict.ts",
-      `import { defineWorkflow, z } from "@weft/sdk";
+      `import { defineWorkflow, z } from "@techery/weft-sdk";
 
       export default defineWorkflow(
         {
@@ -209,7 +209,7 @@ export default defineWorkflow(
     await write(
       root,
       ".weft/workflows/caller.ts",
-      `import { defineWorkflow, z } from "@weft/sdk";
+      `import { defineWorkflow, z } from "@techery/weft-sdk";
 
       export default defineWorkflow(
         {

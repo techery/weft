@@ -26,7 +26,7 @@ export async function cleanupRoots(): Promise<void> {
 }
 
 /** A workflow that touches nothing but `ctx.now` and `ctx.log` — no provider, no fs. */
-export const HELLO_WORKFLOW = `import { defineWorkflow, z } from "@weft/sdk";
+export const HELLO_WORKFLOW = `import { defineWorkflow, z } from "@techery/weft-sdk";
 
 export default defineWorkflow(
   {

@@ -1,5 +1,5 @@
 /**
- * @weft/mcp — the MCP server that puts Weft inside a Claude Code or Codex session:
+ * @techery/weft-mcp — the MCP server that puts Weft inside a Claude Code or Codex session:
  * `weft_run` · `weft_wait` · `weft_answer` · `weft_resume` · `weft_list` · `weft_report` ·
  * `weft_types`.
  *

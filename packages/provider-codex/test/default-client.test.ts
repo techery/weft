@@ -6,7 +6,7 @@
  * point: it proves construction is deferred to the first turn and then memoized.
  */
 import type { Codex as CodexClass, RunResult, ThreadOptions } from "@openai/codex-sdk";
-import type { AgentRequest } from "@weft/core";
+import type { AgentRequest } from "@techery/weft-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sdk = vi.hoisted(() => {

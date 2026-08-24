@@ -3,7 +3,7 @@
  * Everything has a sensible default; hosts load overrides from weft.config.
  */
 import { cpus } from "node:os";
-import type { Effort, Risk } from "@weft/sdk";
+import type { Effort, Risk } from "@techery/weft-sdk";
 
 export type ApprovalMode = "auto" | "ask";
 

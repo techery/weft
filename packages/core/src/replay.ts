@@ -12,7 +12,7 @@
  * and seq numbers reproduce; the first live dispatch breaks strict ordering (the
  * code has changed — determinism of the remainder is best-effort by design).
  */
-import type { Usage } from "@weft/sdk";
+import type { Usage } from "@techery/weft-sdk";
 import type { BlobRefJson, HumanRequestEvent, JournalRecord, StepKind } from "./events.ts";
 
 export interface CompletedEntry {

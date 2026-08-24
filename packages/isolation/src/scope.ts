@@ -3,7 +3,7 @@
  * the files it actually touched so the engine can warn or quarantine.
  */
 
-import type { WriteScope } from "@weft/sdk";
+import type { WriteScope } from "@techery/weft-sdk";
 import picomatch from "picomatch";
 
 /** Partition files into in-scope / out-of-scope for a declared write scope (picomatch, dot: true). */

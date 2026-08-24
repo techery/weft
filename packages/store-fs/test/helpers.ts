@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { JournalEvent } from "@weft/core";
+import type { JournalEvent } from "@techery/weft-core";
 
 const temps: string[] = [];
 

@@ -1,5 +1,5 @@
 /**
- * @weft/gate — the gate every workflow passes through before it runs: AST rules over the
+ * @techery/weft-gate — the gate every workflow passes through before it runs: AST rules over the
  * source, an esbuild bundle that inlines the relative imports and content-hashes the
  * result, and a sandboxed loader that turns that bundle into a `WorkflowDefinition`.
  *

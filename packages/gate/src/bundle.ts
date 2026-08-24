@@ -22,7 +22,7 @@ export interface BundleOptions {
   source?: string;
   /** Resolution root. Defaults to the entry's directory, or `process.cwd()` for inline source. */
   cwd?: string;
-  /** Replaces {@link DEFAULT_ALLOW_BARE}; `@weft/sdk` stays allowed regardless. */
+  /** Replaces {@link DEFAULT_ALLOW_BARE}; `@techery/weft-sdk` stays allowed regardless. */
   allowBare?: string[];
 }
 

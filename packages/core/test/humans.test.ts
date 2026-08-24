@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
-import type { JournalRecord } from "@weft/core";
-import { defineWorkflow, z } from "@weft/sdk";
+import type { JournalRecord } from "@techery/weft-core";
+import { defineWorkflow, z } from "@techery/weft-sdk";
 import { afterAll, describe, expect, test } from "vitest";
 import { cleanupRepos, tempDir, tempRepo, testEngine } from "./helpers.ts";
 

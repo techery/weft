@@ -5,7 +5,7 @@ import type {
   ThreadOptions,
   TurnOptions,
 } from "@openai/codex-sdk";
-import type { AgentRequest } from "@weft/core";
+import type { AgentRequest } from "@techery/weft-core";
 import { describe, expect, it, vi } from "vitest";
 import { type CodexLike, type CodexThreadLike, createCodexProvider, renderTranscript } from "../src/index.ts";
 
@@ -82,6 +82,9 @@ function usage(over: Partial<CodexUsage> = {}): CodexUsage {
 
 const SCHEMA = { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] };
 
+/** {@link SCHEMA} as the adapter sends it: OpenAI's strict structured-output dialect. */
+const STRICT_SCHEMA = { ...SCHEMA, additionalProperties: false };
+
 function request(over: Partial<AgentRequest> = {}): AgentRequest {
   return {
     prompt: "Find correctness bugs in src/auth.ts",
@@ -129,6 +132,59 @@ describe("createCodexProvider", () => {
     expect(result.filesTouched).toEqual([]);
   });
 
+  it("adapts the wire schema to OpenAI's strict dialect before sending it", async () => {
+    // Without this the API answers 400 invalid_json_schema and the step never runs:
+    // `additionalProperties` is required to be present and false on every object, and
+    // every property must be listed in `required` — including ones the engine's wire
+    // schema leaves out because they carry a Zod default.
+    const codex = new FakeCodex([{ id: "t1", reply: turn('{"ok":true}') }]);
+    const provider = createCodexProvider({ codex });
+
+    await provider.run(
+      request({
+        schema: {
+          type: "object",
+          properties: {
+            summary: { type: "string" },
+            modules: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  dependsOn: { type: "array", items: { type: "string" }, default: [] },
+                },
+                required: ["id"],
+              },
+            },
+          },
+          required: ["summary", "modules"],
+        },
+      }),
+      control(),
+    );
+
+    const sent = codex.threads[0]?.turnOptions[0]?.outputSchema as Record<string, any>;
+    expect(sent.additionalProperties).toBe(false);
+    expect(sent.required).toEqual(["summary", "modules"]);
+
+    const item = sent.properties.modules.items;
+    expect(item.additionalProperties).toBe(false);
+    // `dependsOn` had a default and was therefore absent from `required`.
+    expect(item.required).toEqual(["id", "dependsOn"]);
+    // Adapting must not mutate the engine's schema in place.
+    expect(item.properties.dependsOn.default).toEqual([]);
+  });
+
+  it("leaves a non-object schema alone", async () => {
+    const codex = new FakeCodex([{ id: "t1", reply: turn('"hi"') }]);
+    const provider = createCodexProvider({ codex });
+
+    await provider.run(request({ schema: { type: "string" } }), control());
+
+    expect(codex.threads[0]?.turnOptions[0]?.outputSchema).toEqual({ type: "string" });
+  });
+
   it("maps Codex usage onto the engine's shape and leaves pricing to the engine", async () => {
     const codex = new FakeCodex([
       {
@@ -171,7 +227,7 @@ describe("createCodexProvider", () => {
       modelReasoningEffort: "high",
     });
     const opts = codex.threads[0]?.turnOptions[0];
-    expect(opts?.outputSchema).toBe(SCHEMA);
+    expect(opts?.outputSchema).toEqual(STRICT_SCHEMA);
     expect(opts?.signal).toBeInstanceOf(AbortSignal);
   });
 
@@ -284,7 +340,7 @@ describe("createCodexProvider", () => {
     expect(prompt).toContain("did not validate against the required schema");
     expect(prompt).toContain("- ok: Invalid input: expected boolean");
     expect(prompt).toContain("Produce the corrected JSON object only");
-    expect(codex.threads[1]?.turnOptions[0]?.outputSchema).toBe(SCHEMA);
+    expect(codex.threads[1]?.turnOptions[0]?.outputSchema).toEqual(STRICT_SCHEMA);
     expect(repaired.output).toEqual({ ok: true });
   });
 

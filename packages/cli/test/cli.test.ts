@@ -76,7 +76,7 @@ async function runIds(root: string): Promise<string[]> {
 // ---------------------------------------------------------------------------
 
 /** ctx.bash + ctx.now only: a real end-to-end run with nothing to mock. */
-const GREET = `import { defineWorkflow, z } from "@weft/sdk";
+const GREET = `import { defineWorkflow, z } from "@techery/weft-sdk";
 
 export default defineWorkflow(
   {
@@ -91,7 +91,7 @@ export default defineWorkflow(
 );
 `;
 
-const AUDIT = `import { defineWorkflow, z } from "@weft/sdk";
+const AUDIT = `import { defineWorkflow, z } from "@techery/weft-sdk";
 
 export default defineWorkflow(
   {
@@ -103,7 +103,7 @@ export default defineWorkflow(
 );
 `;
 
-const SHIP = `import { defineWorkflow, z } from "@weft/sdk";
+const SHIP = `import { defineWorkflow, z } from "@techery/weft-sdk";
 
 export default defineWorkflow(
   {
@@ -118,7 +118,7 @@ export default defineWorkflow(
 );
 `;
 
-const BANNED = `import { defineWorkflow, z } from "@weft/sdk";
+const BANNED = `import { defineWorkflow, z } from "@techery/weft-sdk";
 
 const stamp = Date.now();
 
@@ -248,7 +248,7 @@ describe("--watch", () => {
     await write(
       root,
       ".weft/workflows/slow.ts",
-      `import { defineWorkflow, z } from "@weft/sdk";
+      `import { defineWorkflow, z } from "@techery/weft-sdk";
 
       export default defineWorkflow(
         { description: "two phases of shell work", input: z.object({}), output: z.object({ done: z.boolean() }) },
@@ -310,7 +310,7 @@ describe("--mock", () => {
     await write(
       root,
       ".weft/workflows/asks.ts",
-      `import { defineWorkflow, z } from "@weft/sdk";
+      `import { defineWorkflow, z } from "@techery/weft-sdk";
 
       export default defineWorkflow(
         { description: "needs an agent", input: z.object({}), output: z.object({ verdict: z.string() }) },
@@ -384,7 +384,7 @@ describe("weft check", () => {
     await write(
       root,
       ".weft/workflows/schemas.ts",
-      'import { z } from "@weft/sdk";\nexport const N = z.number();\n',
+      'import { z } from "@techery/weft-sdk";\nexport const N = z.number();\n',
     );
 
     const checked = await cli("--cwd", root, "--mock", "check", "--no-tsc");
@@ -504,7 +504,7 @@ describe("errors", () => {
     await write(
       root,
       ".weft/workflows/boom.ts",
-      `import { defineWorkflow, z } from "@weft/sdk";
+      `import { defineWorkflow, z } from "@techery/weft-sdk";
 
       export default defineWorkflow(
         { description: "always fails", input: z.object({}), output: z.object({}) },

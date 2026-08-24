@@ -1,5 +1,5 @@
 /**
- * @weft/provider-claude — the AgentProvider over the Claude Agent SDK.
+ * @techery/weft-provider-claude — the AgentProvider over the Claude Agent SDK.
  *
  * Structured output is a terminating tool (the universal baseline, C7): one
  * sdk-mcp tool named `structured_output` carries the step's JSON Schema in its
@@ -21,7 +21,13 @@ import {
   type SDKMessage,
   tool,
 } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentProvider, AgentRequest, AgentResult, ProviderCapabilities, RunControl } from "@weft/core";
+import type {
+  AgentProvider,
+  AgentRequest,
+  AgentResult,
+  ProviderCapabilities,
+  RunControl,
+} from "@techery/weft-core";
 import * as z from "zod";
 import { createToolGate } from "./gate.ts";
 import { MCP_SERVER_NAME, STRUCTURED_OUTPUT_TOOL } from "./tools.ts";
@@ -31,7 +37,7 @@ export { createToolGate, READ_ONLY_MESSAGE, workspacePath } from "./gate.ts";
 export { EDIT_TOOLS, MCP_SERVER_NAME, STRUCTURED_OUTPUT_TOOL } from "./tools.ts";
 
 /**
- * `Usage` and `SchemaIssue` live in @weft/sdk, which is not a dependency of this
+ * `Usage` and `SchemaIssue` live in @techery/weft-sdk, which is not a dependency of this
  * package; both are reachable through the frozen provider contract instead.
  */
 type Usage = AgentResult["usage"];
@@ -86,6 +92,22 @@ function withOutputSection(req: AgentRequest): string {
     `\`\`\`json\n${JSON.stringify(req.schema)}\n\`\`\`\n\n` +
     "Prose is not an answer — that tool call is the only accepted way to end this task."
   );
+}
+
+/**
+ * What the agent passed, still unvalidated — the engine checks it against the real
+ * schema. A model that stringifies its object regardless is met halfway: a string that
+ * parses as JSON is the value it meant, and one that does not is handed on untouched so
+ * the engine's error names the real problem instead of a parse failure.
+ */
+function capturedValue(args: unknown): unknown {
+  const result = (args as { result?: unknown }).result;
+  if (typeof result !== "string") return result;
+  try {
+    return JSON.parse(result) as unknown;
+  } catch {
+    return result;
+  }
 }
 
 function toolDescription(schema: unknown): string {
@@ -153,11 +175,16 @@ class ClaudeProvider implements AgentProvider {
         tool(
           STRUCTURED_OUTPUT_TOOL,
           toolDescription(req.schema),
-          // Permissive on purpose: the engine validates against the real schema and
-          // a rejection here would cost a turn without telling the agent anything.
-          { result: z.unknown() },
+          // Declared as an object, not left unknown, and that is load-bearing: given an
+          // untyped parameter the model serializes its answer to a JSON *string*, and
+          // every step then dies as "expected object, received string". The engine's
+          // wire schema is always object-rooted (toWireSchema wraps anything that is
+          // not), so this is the honest shape rather than a constraint. It stays
+          // permissive about the CONTENTS — validation is the engine's job, and
+          // rejecting here would cost a turn without telling the agent anything.
+          { result: z.record(z.string(), z.unknown()) },
           async (args) => {
-            turn.captured = { value: (args as { result?: unknown }).result };
+            turn.captured = { value: capturedValue(args) };
             return { content: [{ type: "text" as const, text: "final result recorded" }] };
           },
         ),

@@ -10,8 +10,8 @@ import type {
   RunListFilter,
   RunStatus,
   RunSummary,
-} from "@weft/core";
-import { type RunState, reduceState } from "@weft/core";
+} from "@techery/weft-core";
+import { type RunState, reduceState } from "@techery/weft-core";
 
 interface RunCache {
   count: number;

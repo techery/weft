@@ -15,7 +15,7 @@ import {
   type StepRef,
   type Usage,
   validateSchema,
-} from "@weft/sdk";
+} from "@techery/weft-sdk";
 import picomatch from "picomatch";
 import type { Budget } from "./budget.ts";
 import { canonicalJson, hashStep, sha256Hex } from "./canonical.ts";

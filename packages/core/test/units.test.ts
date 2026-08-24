@@ -10,8 +10,8 @@ import {
   Semaphore,
   structuralCheck,
   toWireSchema,
-} from "@weft/core";
-import { StepError, z } from "@weft/sdk";
+} from "@techery/weft-core";
+import { StepError, z } from "@techery/weft-sdk";
 import { describe, expect, test } from "vitest";
 
 describe("canonical json & hashing", () => {

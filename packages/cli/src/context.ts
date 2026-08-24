@@ -5,7 +5,7 @@
  * started.
  */
 import { join, resolve } from "node:path";
-import { createWeft, mergedAllowBare, type Weft } from "@weft/host";
+import { createWeft, mergedAllowBare, type Weft } from "@techery/weft-host";
 import type { Command } from "commander";
 
 export interface GlobalOptions {

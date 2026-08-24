@@ -7,7 +7,7 @@
 import { promises as fs } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { CanUseTool, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentRequest } from "@weft/core";
+import type { AgentRequest } from "@techery/weft-core";
 import picomatch from "picomatch";
 import {
   baseToolName,
@@ -124,7 +124,7 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
   const denied = new Set(req.tools?.deny ?? []);
   const scope = req.writeScope;
   const patterns = scope ? [...scope.paths, ...(scope.also ?? [])] : [];
-  // An empty scope matches nothing — same rule as the post-hoc check in @weft/isolation.
+  // An empty scope matches nothing — same rule as the post-hoc check in @techery/weft-isolation.
   const inScope = patterns.length > 0 ? picomatch(patterns, { dot: true }) : () => false;
   const scopeMessage = `outside this step's write scope (allowed: ${patterns.join(", ") || "nothing"})`;
 

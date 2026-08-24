@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `npx @weft/mcp` — what a session's MCP config spawns. It speaks JSON-RPC over stdio, so
+ * `npx @techery/weft-mcp` — what a session's MCP config spawns. It speaks JSON-RPC over stdio, so
  * a startup failure has to leave stdout alone and report on stderr.
  */
 import { main } from "./index.ts";
