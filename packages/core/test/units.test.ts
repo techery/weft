@@ -76,6 +76,44 @@ describe("Semaphore", () => {
     expect(order).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
+  test("a task that ignores its abort does not keep the permit", async () => {
+    // The engine's step timeout aborts an unresponsive attempt and gives up on it, but
+    // the zombie keeps running. Holding the permit until it settles wedges every later
+    // step behind work nothing can stop — with the default cap that is the whole run.
+    const sem = new Semaphore(1);
+    const ac = new AbortController();
+    const hung = sem.with(() => new Promise<never>(() => undefined), ac.signal);
+    hung.catch(() => undefined);
+
+    let ran = false;
+    const queued = sem.with(async () => {
+      ran = true;
+    });
+
+    ac.abort();
+    await Promise.race([
+      queued,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("permit never freed")), 2_000)),
+    ]);
+    expect(ran).toBe(true);
+  });
+
+  test("a settled task releases exactly once, even with an abort afterwards", async () => {
+    const sem = new Semaphore(1);
+    const ac = new AbortController();
+    expect(await sem.with(async () => "done", ac.signal)).toBe("done");
+    ac.abort();
+    // A double release would let two holders in at once.
+    const held = await sem.acquire();
+    let second = false;
+    void sem.acquire().then(() => {
+      second = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(second).toBe(false);
+    held();
+  });
+
   test("aborted waiters leave the queue", async () => {
     const sem = new Semaphore(1);
     const release = await sem.acquire();

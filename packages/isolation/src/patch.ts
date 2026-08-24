@@ -40,6 +40,7 @@ export async function capturePatch(opts: { worktreePath: string; alsoInclude?: s
   const names = await git.raw(["diff", "--cached", "--name-only", "--no-renames", "--no-ext-diff", "-z"]);
   const files = splitNul(names.stdout);
   if (files.length === 0) return { patch: "", files: [] };
+  await refuseAccidentalGitlinks(git, opts.worktreePath);
   // --binary embeds full content for binary files (images, archives); without it
   // the patch says only "Binary files differ" and can never be applied.
   // --no-renames again: a rename record would re-couple the two paths the file
@@ -160,3 +161,61 @@ function filesFromPatch(patch: string): string[] {
 function headerPath(field: string): string {
   return field.replace(/\t.*$/, "");
 }
+
+/**
+ * A directory containing its own `.git` is staged as a GITLINK — one line naming a commit
+ * sha — not as the files inside it. Agents produce these all the time without meaning to:
+ * `create-next-app`, `cargo new`, `npm init`, a cloned fixture. The patch then looks
+ * healthy (the path is listed, it is in scope, `git apply` accepts it) and lands a
+ * `Subproject commit <sha>` pointing at an object the integration tree has never heard
+ * of. Every file the agent wrote is gone, and the run reports success.
+ *
+ * A registered submodule is a different thing and stays: the base repo declares it, and
+ * the gitlink is exactly the right representation. An unregistered one is refused, which
+ * turns silent loss into a message naming the path.
+ */
+async function refuseAccidentalGitlinks(git: ReturnType<typeof createGit>, worktreePath: string) {
+  // :<oldmode> <newmode> <oldsha> <newsha> <status>\0<path>\0 — 160000 is a gitlink.
+  const raw = await git.raw(["diff", "--cached", "--raw", "--no-renames", "--no-ext-diff", "-z"]);
+  const fields = raw.stdout.split("\0");
+  const gitlinks: string[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const meta = fields[i];
+    if (meta === undefined || !meta.startsWith(":")) continue;
+    const path = fields[i + 1];
+    i++;
+    if (path === undefined || path === "") continue;
+    const [oldMode, newMode] = meta.slice(1).split(" ");
+    if (oldMode === GITLINK_MODE || newMode === GITLINK_MODE) gitlinks.push(path);
+  }
+  if (gitlinks.length === 0) return;
+
+  const registered = new Set(
+    splitNul(
+      (
+        await git.raw(["ls-files", "--stage", "-z", "--", ".gitmodules"], { allowFailure: true })
+      ).stdout.trim() === ""
+        ? ""
+        : (
+            await git.raw(["config", "-f", ".gitmodules", "--get-regexp", "path"], { allowFailure: true })
+          ).stdout
+            .split("\n")
+            .map((line) => line.split(" ").slice(1).join(" ").trim())
+            .filter((value) => value !== "")
+            .join("\0"),
+    ),
+  );
+  const accidental = gitlinks.filter((path) => !registered.has(path));
+  if (accidental.length === 0) return;
+
+  throw new Error(
+    `capturePatch: ${accidental.map((p) => JSON.stringify(p)).join(", ")} ` +
+      `${accidental.length === 1 ? "is a nested git repository" : "are nested git repositories"} ` +
+      `in ${worktreePath}, so git staged ${accidental.length === 1 ? "it" : "them"} as a commit ` +
+      `pointer rather than as files. The patch would apply cleanly and land none of the contents. ` +
+      `Remove the inner .git (or register it as a submodule) and re-run the step.`,
+  );
+}
+
+/** git's mode for a gitlink (a commit entry inside a tree). */
+const GITLINK_MODE = "160000";

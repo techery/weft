@@ -5,7 +5,8 @@ import { MemoryBlobStore, MemoryJournalStore } from "@techery/weft-core";
 import { defineWorkflow, StepError, z } from "@techery/weft-sdk";
 import { FsBlobStore, FsJournalStore } from "@techery/weft-store-fs";
 import { afterAll, describe, expect, test } from "vitest";
-import { blobStoreConformance, journalStoreConformance, mock, runWorkflow } from "../src/index.ts";
+import { blobStoreConformance, journalStoreConformance } from "../src/conformance.ts";
+import { mock, runWorkflow } from "../src/index.ts";
 
 const tempDirs: string[] = [];
 
