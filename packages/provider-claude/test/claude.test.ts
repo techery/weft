@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentRequest, PermissionDecision, PermissionRequest } from "@weft/core";
+import type { AgentRequest, PermissionDecision, PermissionRequest } from "@techery/weft-core";
 import { describe, expect, test } from "vitest";
 import {
   createClaudeProvider,
@@ -46,6 +46,7 @@ interface TurnScript {
 /** The sdk-mcp server keeps its tools on a live McpServer instance; dig ours back out. */
 function registeredTool(options: Options): {
   description: string;
+  inputSchema: { safeParse(value: unknown): { success: boolean } };
   handler: (args: unknown, extra: unknown) => Promise<unknown>;
 } {
   const entry = options.mcpServers?.[MCP_SERVER_NAME] as
@@ -53,7 +54,11 @@ function registeredTool(options: Options): {
         instance?: {
           _registeredTools?: Record<
             string,
-            { description: string; handler: (a: unknown, e: unknown) => Promise<unknown> }
+            {
+              description: string;
+              inputSchema: { safeParse(value: unknown): { success: boolean } };
+              handler: (a: unknown, e: unknown) => Promise<unknown>;
+            }
           >;
         };
       }
@@ -742,6 +747,50 @@ describe("finalize, repair and abort", () => {
     expect(result.usage.output).toBe(120);
     expect(result.usage.usd).toBeCloseTo(0.002, 6);
     expect(result.transcript).toContain("result: error_max_turns");
+  });
+
+  test("declares result as an object, so the model does not stringify its answer", async () => {
+    // With `result` left untyped the model serializes its answer to a JSON *string*
+    // and every step dies as "expected object, received string". The engine's wire
+    // schema is always object-rooted, so an object is the honest declaration.
+    const { fn, calls } = fakeQuery([{ emit: { payload: { ok: true } }, messages: [resultMessage()] }]);
+    const provider = createClaudeProvider({ queryFn: fn });
+    await provider.run(request(), control());
+
+    const options = calls[0]?.options as Options;
+    const { inputSchema } = registeredTool(options);
+    expect(inputSchema.safeParse({ result: { ok: true } }).success).toBe(true);
+    expect(inputSchema.safeParse({ result: '{"ok":true}' }).success).toBe(false);
+  });
+
+  test("parses a result the model handed over as a JSON string", async () => {
+    const { fn } = fakeQuery([
+      {
+        emit: { payload: '{"ok":true,"n":3}' as unknown as Record<string, unknown> },
+        messages: [resultMessage()],
+      },
+    ]);
+    const provider = createClaudeProvider({ queryFn: fn });
+
+    const result = await provider.run(request(), control());
+
+    expect(result.output).toEqual({ ok: true, n: 3 });
+  });
+
+  test("hands a string that is not JSON through untouched", async () => {
+    // The engine owns validation: its error should name the real problem rather than
+    // a parse failure this adapter invented.
+    const { fn } = fakeQuery([
+      {
+        emit: { payload: "not json at all" as unknown as Record<string, unknown> },
+        messages: [resultMessage()],
+      },
+    ]);
+    const provider = createClaudeProvider({ queryFn: fn });
+
+    const result = await provider.run(request(), control());
+
+    expect(result.output).toBe("not json at all");
   });
 
   test("onMaxTurns fail does not spend a second turn", async () => {

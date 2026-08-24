@@ -1,6 +1,6 @@
 # 06 · stdlib patterns
 
-`@weft/stdlib` packages the quality patterns — adversarial verification, judge panels,
+`@techery/weft-stdlib` packages the quality patterns — adversarial verification, judge panels,
 loop-until-dry discovery, multi-modal sweeps — as plain typed helpers over `ctx`.
 Nothing is engine-privileged: a pattern expands into ordinary keyed steps, so it
 replays, salvages, and budgets exactly like hand-written workflow code.

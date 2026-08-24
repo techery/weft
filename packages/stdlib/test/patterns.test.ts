@@ -1,4 +1,4 @@
-import { defineWorkflow, z } from "@weft/sdk";
+import { defineWorkflow, z } from "@techery/weft-sdk";
 import { afterAll, describe, expect, test } from "vitest";
 import {
   adversarialVerify,

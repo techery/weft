@@ -3,7 +3,7 @@
  * sqlite index is derived and deletable, so the listing everyone always needs must not
  * depend on it.
  */
-import type { RunListFilter, RunStatus, RunSummary, Weft } from "@weft/host";
+import type { RunListFilter, RunStatus, RunSummary, Weft } from "@techery/weft-host";
 import { Command } from "commander";
 import pc from "picocolors";
 import { openWeft } from "../context.ts";

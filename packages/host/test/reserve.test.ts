@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { persistInlineScript, reserveRunId, type Weft } from "@weft/host";
+import { persistInlineScript, reserveRunId, type Weft } from "@techery/weft-host";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 const mocked = vi.hoisted(() => ({ queue: [] as string[] }));

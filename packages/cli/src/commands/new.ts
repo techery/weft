@@ -49,7 +49,7 @@ export function newCommand(io: CliIo): Command {
 
 /** The name comes from the filename, so the template never hard-codes `meta.name`. */
 function workflowTemplate(name: string): string {
-  return `import { defineWorkflow, z } from "@weft/sdk";
+  return `import { defineWorkflow, z } from "@techery/weft-sdk";
 import { Finding } from "./schemas.ts";
 
 /**
@@ -108,7 +108,7 @@ export default defineWorkflow(
 `;
 }
 
-const SCHEMAS_TEMPLATE = `import { z } from "@weft/sdk";
+const SCHEMAS_TEMPLATE = `import { z } from "@techery/weft-sdk";
 
 /** One reviewable claim: what, where, and how much it matters. */
 export const Finding = z.object({

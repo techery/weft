@@ -4,7 +4,7 @@
  */
 import { mkdir, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { createGit } from "@weft/git";
+import { createGit } from "@techery/weft-git";
 import type { WorktreeHandle } from "./index.ts";
 
 /** `git worktree add --detach <dir> <baseRef|HEAD>`; dir is created (parents too). */

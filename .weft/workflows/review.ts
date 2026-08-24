@@ -4,7 +4,7 @@
  *
  *   weft run review --base main --watch
  */
-import { defineWorkflow, z } from "@weft/sdk";
+import { defineWorkflow, z } from "@techery/weft-sdk";
 import { Finding, Verdict } from "./schemas.ts";
 
 export default defineWorkflow(

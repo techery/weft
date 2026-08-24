@@ -10,12 +10,18 @@
   },
   "packageManager": "pnpm@10.33.0",
   "scripts": {
+    "build": "pnpm -r build",
+    "clean": "pnpm -r clean",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "sync:meta": "node scripts/sync-package-meta.mjs",
+    "verify:packing": "node scripts/verify-packing.mjs",
+    "version:set": "node scripts/set-version.mjs",
+    "verify:install": "node scripts/verify-install.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.10",
@@ -23,10 +29,19 @@
     "typescript": "~5.9.3",
     "vitest": "^4.1.11",
     "tsx": "^4.23.12",
-    "@weft/core": "workspace:*",
-    "@weft/provider-mock": "workspace:*",
-    "@weft/sdk": "workspace:*",
-    "@weft/stdlib": "workspace:*",
-    "@weft/testing": "workspace:*"
-  }
+    "@techery/weft-core": "workspace:*",
+    "@techery/weft-provider-mock": "workspace:*",
+    "@techery/weft-sdk": "workspace:*",
+    "@techery/weft-stdlib": "workspace:*",
+    "@techery/weft-testing": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/techery/weft.git"
+  },
+  "homepage": "https://github.com/techery/weft#readme",
+  "bugs": {
+    "url": "https://github.com/techery/weft/issues"
+  },
+  "author": "Techery"
 }

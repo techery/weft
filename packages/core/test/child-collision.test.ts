@@ -4,7 +4,7 @@
  * input under the new child's definition and append terminal records into the
  * stranger's history. The engine must detect the collision and take a free id.
  */
-import { defineWorkflow, z } from "@weft/sdk";
+import { defineWorkflow, z } from "@techery/weft-sdk";
 import { afterAll, describe, expect, test, vi } from "vitest";
 import { cleanupRepos, tempDir, testEngine } from "./helpers.ts";
 

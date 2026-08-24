@@ -14,9 +14,9 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { Engine, MemoryBlobStore, MemoryJournalStore, ProviderRegistry } from "@weft/core";
-import { mock } from "@weft/provider-mock";
-import { defineWorkflow, z } from "@weft/sdk";
+import { Engine, MemoryBlobStore, MemoryJournalStore, ProviderRegistry } from "@techery/weft-core";
+import { mock } from "@techery/weft-provider-mock";
+import { defineWorkflow, z } from "@techery/weft-sdk";
 
 const execFile = promisify(execFileCb);
 

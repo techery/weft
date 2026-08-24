@@ -3,7 +3,7 @@
  * else (state.json, report.md, the live tree) is a projection. Replay re-executes
  * workflow code and serves completed steps from here.
  */
-import type { Risk, SerializedStepError, Usage } from "@weft/sdk";
+import type { Risk, SerializedStepError, Usage } from "@techery/weft-sdk";
 
 export type RunStatus =
   | "planning"

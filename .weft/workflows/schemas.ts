@@ -5,7 +5,7 @@
  * so editing a schema changes the workflow's definition hash — and replay knows the
  * steps that depended on it have to run again.
  */
-import { z } from "@weft/sdk";
+import { z } from "@techery/weft-sdk";
 
 /**
  * A claimed defect. Evidence travels with the claim: the report renders it and

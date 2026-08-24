@@ -17,7 +17,7 @@
  */
 import path from "node:path";
 import vm from "node:vm";
-import { isWorkflowDefinition, type WorkflowDefinition } from "@weft/sdk";
+import { isWorkflowDefinition, type WorkflowDefinition } from "@techery/weft-sdk";
 import { type BundleOptions, bundleWorkflow, INLINE_FILE } from "./bundle.ts";
 import { GateError, isAllowedBare, resolveAllowBare } from "./rules.ts";
 

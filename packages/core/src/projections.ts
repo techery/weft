@@ -2,7 +2,7 @@
  * Projections (C9): state.json, tree.json, and report.md are all folds over the
  * journal — re-derivable at any time, never a source of truth.
  */
-import type { Risk, SerializedStepError, Usage } from "@weft/sdk";
+import type { Risk, SerializedStepError, Usage } from "@techery/weft-sdk";
 import type { BlobRefJson, JournalRecord, RunStatus, StepKind } from "./events.ts";
 
 export interface StepState {

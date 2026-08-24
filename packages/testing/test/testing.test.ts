@@ -1,9 +1,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MemoryBlobStore, MemoryJournalStore } from "@weft/core";
-import { defineWorkflow, StepError, z } from "@weft/sdk";
-import { FsBlobStore, FsJournalStore } from "@weft/store-fs";
+import { MemoryBlobStore, MemoryJournalStore } from "@techery/weft-core";
+import { defineWorkflow, StepError, z } from "@techery/weft-sdk";
+import { FsBlobStore, FsJournalStore } from "@techery/weft-store-fs";
 import { afterAll, describe, expect, test } from "vitest";
 import { blobStoreConformance, journalStoreConformance, mock, runWorkflow } from "../src/index.ts";
 

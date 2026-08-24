@@ -15,12 +15,12 @@
  */
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import type { WorkflowDefinition } from "@weft/sdk";
+import type { WorkflowDefinition } from "@techery/weft-sdk";
 import { bundleWorkflow } from "./bundle.ts";
 import { instantiateBundle } from "./load.ts";
 import { GateError } from "./rules.ts";
 
-/** Structurally the `WorkflowRegistry` @weft/core's Engine takes (gate does not import core). */
+/** Structurally the `WorkflowRegistry` @techery/weft-core's Engine takes (gate does not import core). */
 export interface WorkflowRegistry {
   get(name: string): Promise<WorkflowDefinition | undefined>;
 }

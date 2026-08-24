@@ -6,7 +6,7 @@
  * `out` is the only required member: `buildProgram({ out })` is a complete host.
  */
 
-import type { RunStatus } from "@weft/host";
+import type { RunStatus } from "@techery/weft-host";
 import pc from "picocolors";
 
 export interface CliIo {

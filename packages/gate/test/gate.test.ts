@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { type Ctx, isZodSchema, validateSchema } from "@weft/sdk";
+import { type Ctx, isZodSchema, validateSchema } from "@techery/weft-sdk";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   bundleWorkflow,
@@ -50,7 +50,7 @@ function positionOf(diagnostic: { line: number; column: number }): { line: numbe
 }
 
 const SCHEMAS = [
-  `import { z } from "@weft/sdk";`,
+  `import { z } from "@techery/weft-sdk";`,
   ``,
   `export const Finding = z.object({ file: z.string(), note: z.string() });`,
   ``,
@@ -65,7 +65,7 @@ function reviewSource(opts: { name?: string; description?: string; note?: string
     .filter(Boolean)
     .join("\n");
   return [
-    `import { defineWorkflow, z } from "@weft/sdk";`,
+    `import { defineWorkflow, z } from "@techery/weft-sdk";`,
     `import { Finding } from "./schemas.ts";`,
     ``,
     `export default defineWorkflow(`,
@@ -95,7 +95,7 @@ async function writeReview(
 /** A minimal workflow body that runs `body` at module top level or inside run(). */
 function sandboxProbe(opts: { top?: string; body?: string }): string {
   return [
-    `import { defineWorkflow, z } from "@weft/sdk";`,
+    `import { defineWorkflow, z } from "@techery/weft-sdk";`,
     ``,
     opts.top ?? ``,
     ``,
@@ -127,9 +127,9 @@ describe("checkSource", () => {
 
   it("passes the ctx replacements and non-global lookalikes", () => {
     const source = [
-      `import { defineWorkflow } from "@weft/sdk";`,
+      `import { defineWorkflow } from "@techery/weft-sdk";`,
       `import { Finding } from "./schemas";`,
-      `import type { Ctx } from "@weft/sdk";`,
+      `import type { Ctx } from "@techery/weft-sdk";`,
       `export async function helper(ctx: Ctx) {`,
       `  const at = await ctx.now();`,
       `  const r = await ctx.random();`,
@@ -228,7 +228,7 @@ describe("checkSource", () => {
 
   it("flags bare and node imports, allowing the allow-list and relatives", () => {
     const lines = [
-      `import { defineWorkflow, z } from "@weft/sdk";`,
+      `import { defineWorkflow, z } from "@techery/weft-sdk";`,
       `import { z as z2 } from "zod";`,
       `import { thing } from "zod/v4";`,
       `import { Finding } from "./schemas.ts";`,
@@ -271,9 +271,9 @@ describe("checkSource", () => {
     expect(checkSource(source, "types.ts")).toEqual([]);
   });
 
-  it("honours a custom allow-list, and keeps @weft/sdk allowed regardless", () => {
+  it("honours a custom allow-list, and keeps @techery/weft-sdk allowed regardless", () => {
     const source = [
-      `import { defineWorkflow } from "@weft/sdk";`,
+      `import { defineWorkflow } from "@techery/weft-sdk";`,
       `import ky from "ky";`,
       `import { z } from "zod";`,
     ].join("\n");
@@ -323,14 +323,14 @@ describe("checkSource", () => {
 // ---------------------------------------------------------------------------
 
 describe("bundleWorkflow", () => {
-  it("inlines relative imports and keeps @weft/sdk external", async () => {
+  it("inlines relative imports and keeps @techery/weft-sdk external", async () => {
     const dir = await tempDir();
     const entry = await writeReview(dir);
 
     const { code, hash, diagnostics } = await bundleWorkflow({ entry });
 
     expect(diagnostics).toEqual([]);
-    expect(code).toContain('require("@weft/sdk")'); // the SDK stays external
+    expect(code).toContain('require("@techery/weft-sdk")'); // the SDK stays external
     expect(code).toContain("var Finding = "); // …while schemas.ts is inlined
     expect(code).not.toContain('require("./schemas.ts")');
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
@@ -348,7 +348,7 @@ describe("bundleWorkflow", () => {
     const dir = await tempDir();
     await write(dir, "schemas.ts", SCHEMAS);
     const { code, hash } = await bundleWorkflow({ source: reviewSource(), cwd: dir });
-    expect(code).toContain('require("@weft/sdk")');
+    expect(code).toContain('require("@techery/weft-sdk")');
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
   });
 
@@ -371,7 +371,7 @@ describe("bundleWorkflow", () => {
       dir,
       "schemas.ts",
       [
-        `import { z } from "@weft/sdk";`,
+        `import { z } from "@techery/weft-sdk";`,
         `const seed = Math.random();`,
         `export const Finding = z.object({ file: z.string(), note: z.string(), seed: z.literal(seed) });`,
       ].join("\n"),
@@ -446,7 +446,7 @@ describe("loadWorkflow", () => {
 
     expect(name).toBe("review");
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
-    expect(code).toContain('require("@weft/sdk")');
+    expect(code).toContain('require("@techery/weft-sdk")');
     expect(def.kind).toBe("weft.workflow");
     expect(def.meta.description).toBe("Review a target and report findings");
 
@@ -508,7 +508,7 @@ describe("loadWorkflow", () => {
 
   it("accepts a definition on module.exports without a default", async () => {
     const code = [
-      `const { defineWorkflow, z } = require("@weft/sdk");`,
+      `const { defineWorkflow, z } = require("@techery/weft-sdk");`,
       `module.exports = defineWorkflow(`,
       `  { description: "cjs", input: z.object({}), output: z.object({ ok: z.boolean() }) },`,
       `  async () => ({ ok: true }),`,
@@ -678,7 +678,7 @@ describe("sandbox", () => {
 
   it("hands the host's own modules to allow-listed requires", async () => {
     const code = [
-      `const sdk = require("@weft/sdk");`,
+      `const sdk = require("@techery/weft-sdk");`,
       `const zod = require("zod");`,
       `module.exports = sdk.defineWorkflow(`,
       `  { description: "hosted", input: zod.z.object({}), output: zod.z.object({ ok: zod.z.boolean() }) },`,
@@ -686,7 +686,7 @@ describe("sandbox", () => {
       `);`,
     ].join("\n");
     const def = await instantiateBundle(code);
-    const sdk = await import("@weft/sdk");
+    const sdk = await import("@techery/weft-sdk");
     expect(def.meta.input.constructor).toBe(sdk.z.object({}).constructor);
   });
 
@@ -821,7 +821,7 @@ describe("createWorkflowRegistry", () => {
       dir,
       "wf.ts",
       [
-        `import { defineWorkflow } from "@weft/sdk";`,
+        `import { defineWorkflow } from "@techery/weft-sdk";`,
         `import { z } from "zod";`,
         `export default defineWorkflow(`,
         `  {`,

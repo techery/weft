@@ -1,5 +1,5 @@
 /**
- * @weft/testing outside a test runner: runWorkflow drives a real engine over
+ * @techery/weft-testing outside a test runner: runWorkflow drives a real engine over
  * memory stores, mock fixtures are validated against each step's schema, and the
  * journal is a first-class assertion target. The same API backs vitest suites —
  * here plain node:assert proves the point with zero infrastructure.
@@ -7,8 +7,8 @@
  *   npx tsx examples/07-testing-workflows/main.ts
  */
 import assert from "node:assert/strict";
-import { defineWorkflow, z } from "@weft/sdk";
-import { mock, runWorkflow } from "@weft/testing";
+import { defineWorkflow, z } from "@techery/weft-sdk";
+import { mock, runWorkflow } from "@techery/weft-testing";
 
 const Finding = z.object({ file: z.string(), line: z.number(), claim: z.string() });
 

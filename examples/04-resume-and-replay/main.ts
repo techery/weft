@@ -5,9 +5,9 @@
  *
  *   npx tsx examples/04-resume-and-replay/main.ts
  */
-import { Engine, MemoryBlobStore, MemoryJournalStore, ProviderRegistry } from "@weft/core";
-import { type MockAgentBuilder, mock } from "@weft/provider-mock";
-import { defineWorkflow, z } from "@weft/sdk";
+import { Engine, MemoryBlobStore, MemoryJournalStore, ProviderRegistry } from "@techery/weft-core";
+import { type MockAgentBuilder, mock } from "@techery/weft-provider-mock";
+import { defineWorkflow, z } from "@techery/weft-sdk";
 
 const journal = new MemoryJournalStore();
 const blobs = new MemoryBlobStore();

@@ -10,9 +10,9 @@
  * lands in that child, surfaces as a per-branch error, and the parent returns
  * what it completed.
  */
-import { Engine, MemoryBlobStore, MemoryJournalStore, ProviderRegistry } from "@weft/core";
-import { mock } from "@weft/provider-mock";
-import { defineWorkflow, z } from "@weft/sdk";
+import { Engine, MemoryBlobStore, MemoryJournalStore, ProviderRegistry } from "@techery/weft-core";
+import { mock } from "@techery/weft-provider-mock";
+import { defineWorkflow, z } from "@techery/weft-sdk";
 
 const verifyOne = defineWorkflow(
   {

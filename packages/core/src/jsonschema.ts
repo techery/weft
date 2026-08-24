@@ -6,7 +6,7 @@
  * validation against journaled JSON Schemas (the authoritative validation always
  * happens against the real schema when the workflow replays).
  */
-import { type AnySchema, isZodSchema, type SchemaIssue } from "@weft/sdk";
+import { type AnySchema, isZodSchema, type SchemaIssue } from "@techery/weft-sdk";
 import * as z from "zod";
 
 export interface WireSchema {

@@ -8,7 +8,7 @@
  * Anything deeper than that is asked for as raw JSON: guessing at a nested shape with a
  * wizard is worse than showing the schema and taking the value.
  */
-import type { PendingRequest, Weft } from "@weft/host";
+import type { PendingRequest, Weft } from "@techery/weft-host";
 import { Command } from "commander";
 import pc from "picocolors";
 import { openWeft } from "../context.ts";

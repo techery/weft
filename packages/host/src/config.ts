@@ -9,7 +9,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { EngineConfigInput } from "@weft/core";
+import type { EngineConfigInput } from "@techery/weft-core";
 import * as z from "zod";
 
 /** The per-repo directory every host reads and writes: stores, workflows, derived index. */
@@ -22,7 +22,7 @@ export interface WeftConfig extends EngineConfigInput {
   workflows?: {
     /** Registry directory; relative paths resolve against the repo root. Default `.weft/workflows`. */
     dir?: string;
-    /** Extra bare imports workflow code may use (`@weft/sdk` is always allowed). */
+    /** Extra bare imports workflow code may use (`@techery/weft-sdk` is always allowed). */
     allowBare?: string[];
   };
 }

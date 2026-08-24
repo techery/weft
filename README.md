@@ -35,16 +35,47 @@ Status: design preview. See [Status and honest deviations](#status-and-honest-de
   (checks, ledger, remaining risk) are projections over the same events, and the CLI, MCP server, and daemon
   are thin shells over one `Engine` class.
 
-## Quickstart
+## Install
 
-Eventually, from npm:
+> Not on npm yet — the packages below are what the release workflow publishes, and the names
+> are final. Until the first tag lands, use the [Quickstart](#quickstart) from a checkout.
+> Delete this note when `v0.1.0` ships.
+
+The CLI is `@techery/weft`; the binary it installs is `weft`.
 
 ```bash
-npm i -g weft          # not published yet
-weft doctor            # checks node, git, provider credentials, .weft/ layout
+npm i -g @techery/weft        # or: pnpm add -g @techery/weft · bun add -g @techery/weft
+weft doctor                   # checks node, git, provider credentials, .weft/ layout
+weft new review               # scaffold .weft/workflows/review.ts
 ```
 
-Today, in this repository:
+Without installing anything:
+
+```bash
+npx @techery/weft doctor
+```
+
+To drive Weft from inside a Claude Code or Codex session, point its MCP config at the server
+package — no global install needed:
+
+```json
+{ "mcpServers": { "weft": { "command": "npx", "args": ["-y", "@techery/weft-mcp"] } } }
+```
+
+To write workflows, or to embed the engine in your own program, install the libraries you need:
+
+```bash
+npm i @techery/weft-sdk                        # defineWorkflow, ctx types, z
+npm i -D @techery/weft-testing                 # runWorkflow harness + mock fixtures
+npm i @techery/weft-core @techery/weft-host    # the Engine itself
+```
+
+Node 22.12 or newer. Every package is ESM-only and ships compiled JavaScript with type
+declarations, so no loader or bundler is required.
+
+## Quickstart
+
+In a checkout of this repository:
 
 ```bash
 pnpm install
@@ -59,6 +90,10 @@ node packages/cli/bin/weft.js ui                              # localhost: runs,
 node packages/cli/bin/weft.js new triage
 pnpm -C packages/cli link --global
 ```
+
+`bin/weft.js` runs the TypeScript sources through tsx when there is no build output beside
+them, so the CLI works straight after `pnpm install`; run `pnpm build` and the same entry
+point uses the compiled `dist/` instead — which is what a published install runs.
 
 The engine is also usable directly as a library — no CLI, no filesystem, no models:
 
@@ -78,7 +113,7 @@ testing harness. Start at [`examples/README.md`](./examples/README.md).
 try to refute each one, return only what survived:
 
 ```ts
-import { defineWorkflow, z } from "@weft/sdk";
+import { defineWorkflow, z } from "@techery/weft-sdk";
 import { Finding, Verdict } from "./schemas.ts";   // relative imports are bundled and hashed with the script
 
 export default defineWorkflow(
@@ -164,17 +199,17 @@ Only `journal.jsonl` has to survive; every other file in that directory is rebui
 
 | Package | Owns |
 | --- | --- |
-| `@weft/sdk` | `defineWorkflow`, the `ctx` types, the Zod re-export. Zero runtime deps beyond Zod. |
-| `@weft/core` | Scheduler, replayer, journal model, budget, HITL broker, projections. No SDK imports. |
-| `@weft/gate` | TS parse, AST rules, esbuild bundling, sandboxed loader, unawaited-promise check. |
-| `@weft/store-fs`, `@weft/index-sqlite` | JournalStore and BlobStore on the filesystem; an optional derived `node:sqlite` run index. |
-| `@weft/provider-claude`, `@weft/provider-codex`, `@weft/provider-mock` | `AgentProvider` adapters behind a shared conformance suite (structured output, repair, scope, abort, usage). |
-| `@weft/git` | `ctx.git.*`: typed read/write git operations with fixed risk tiers. |
-| `@weft/isolation` | Worktrees, patch capture, scope checks, 3-way merge, conflict handling. |
-| `@weft/stdlib` | Typed patterns: `adversarialVerify`, `judgePanel`, `loopUntilDry`, `integrationLedger`, `finalReport`, … |
-| `@weft/testing` | `runWorkflow` harness, mock fixtures, journal assertions, store conformance suites. |
-| `@weft/host` | Engine assembly shared by the hosts: config loading, stores, providers, workflow registry. |
-| `@weft/cli`, `@weft/mcp`, `@weft/daemon` | Hosts. CLI: run, resume, ls, status, answer, cancel, report, replay, check, explain, diff, ui, doctor. MCP: `weft.run/wait/answer/resume/list/report/types`. Daemon: serves the web UI and wakes suspended runs. |
+| `@techery/weft-sdk` | `defineWorkflow`, the `ctx` types, the Zod re-export. Zero runtime deps beyond Zod. |
+| `@techery/weft-core` | Scheduler, replayer, journal model, budget, HITL broker, projections. No SDK imports. |
+| `@techery/weft-gate` | TS parse, AST rules, esbuild bundling, sandboxed loader, unawaited-promise check. |
+| `@techery/weft-store-fs`, `@techery/weft-index-sqlite` | JournalStore and BlobStore on the filesystem; an optional derived `node:sqlite` run index. |
+| `@techery/weft-provider-claude`, `@techery/weft-provider-codex`, `@techery/weft-provider-mock` | `AgentProvider` adapters behind a shared conformance suite (structured output, repair, scope, abort, usage). |
+| `@techery/weft-git` | `ctx.git.*`: typed read/write git operations with fixed risk tiers. |
+| `@techery/weft-isolation` | Worktrees, patch capture, scope checks, 3-way merge, conflict handling. |
+| `@techery/weft-stdlib` | Typed patterns: `adversarialVerify`, `judgePanel`, `loopUntilDry`, `integrationLedger`, `finalReport`, … |
+| `@techery/weft-testing` | `runWorkflow` harness, mock fixtures, journal assertions, store conformance suites. |
+| `@techery/weft-host` | Engine assembly shared by the hosts: config loading, stores, providers, workflow registry. |
+| `@techery/weft`, `@techery/weft-mcp`, `@techery/weft-daemon` | Hosts. CLI: run, resume, ls, status, answer, cancel, report, replay, check, explain, diff, ui, doctor. MCP: `weft.run/wait/answer/resume/list/report/types`. Daemon: serves the web UI and wakes suspended runs. |
 
 ## Development
 
@@ -186,12 +221,21 @@ pnpm test:watch
 pnpm lint             # biome check .
 pnpm lint:fix         # biome check --write .
 pnpm format           # biome format --write .
+pnpm build            # tsc per package, src/ -> dist/, in dependency order
+pnpm clean            # drop every dist/
+pnpm verify:packing   # pack every package and check the tarballs are installable
+pnpm verify:install   # install those tarballs for real and run the CLI out of them
 ```
 
 Node 22.12 or newer, pnpm 10, ESM everywhere, TypeScript strict. Relative imports inside a package carry an
-explicit `.ts` extension (`allowImportingTsExtensions`), including in `.weft/workflows/`.
+explicit `.ts` extension (`allowImportingTsExtensions`), including in `.weft/workflows/`. `pnpm build`
+rewrites those to `.js` on the way out (`rewriteRelativeImportExtensions`), so what ships is plain ESM that
+resolves under node with no loader.
 
-`.weft/workflows/` and `examples/` import workspace packages by name (`@weft/sdk`, `@weft/core`, …). The
+Day to day you never need `pnpm build` — tests, examples, and `bin/weft.js` all run off `src/`. It matters
+when you are checking what a release will look like; see [RELEASING.md](./RELEASING.md).
+
+`.weft/workflows/` and `examples/` import workspace packages by name (`@techery/weft-sdk`, `@techery/weft-core`, …). The
 workspace root lists those packages as `workspace:*` devDependencies, so both directories resolve them
 through the root `node_modules` — `pnpm install` once and `npx tsx examples/…` works from a fresh clone.
 
@@ -201,7 +245,7 @@ Workflow tests run with zero model calls. Fixtures match on the step key, receiv
 through the engine's normal schema validation — a fixture that would not pass in production fails the test.
 
 ```ts
-import { mock, runWorkflow } from "@weft/testing";
+import { mock, runWorkflow } from "@techery/weft-testing";
 import review from "../.weft/workflows/review.ts";
 
 test("keeps only findings that survive refutation", async () => {

@@ -1,4 +1,4 @@
-import type { JournalEvent, JournalRecord, JournalStore, RunStatus, StepKind } from "@weft/core";
+import type { JournalEvent, JournalRecord, JournalStore, RunStatus, StepKind } from "@techery/weft-core";
 
 export interface StepSpec {
   key: string;

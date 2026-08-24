@@ -1,6 +1,6 @@
 /**
- * Store contracts. The fs implementations live in @weft/store-fs; the in-memory
- * implementations here back tests and @weft/testing. Only the journal must
+ * Store contracts. The fs implementations live in @techery/weft-store-fs; the in-memory
+ * implementations here back tests and @techery/weft-testing. Only the journal must
  * survive — projections are re-derivable.
  */
 import { sha256Hex } from "./canonical.ts";
@@ -93,7 +93,7 @@ export interface BlobStore {
 }
 
 // ---------------------------------------------------------------------------
-// In-memory implementations (tests, @weft/testing)
+// In-memory implementations (tests, @techery/weft-testing)
 // ---------------------------------------------------------------------------
 
 interface MemoryRun {

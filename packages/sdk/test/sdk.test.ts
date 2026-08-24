@@ -1,4 +1,4 @@
-import type { Settled } from "@weft/sdk";
+import type { Settled } from "@techery/weft-sdk";
 import {
   BudgetExceededError,
   CancelledError,
@@ -12,7 +12,7 @@ import {
   StepError,
   validateSchema,
   z,
-} from "@weft/sdk";
+} from "@techery/weft-sdk";
 import { describe, expect, test } from "vitest";
 
 describe("duration", () => {

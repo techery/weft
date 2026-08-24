@@ -13,7 +13,7 @@ import {
   type Usage,
   validateSchema,
   type WorkflowDefinition,
-} from "@weft/sdk";
+} from "@techery/weft-sdk";
 import { Budget } from "./budget.ts";
 import { type EngineConfig, type EngineConfigInput, resolveConfig } from "./config.ts";
 import { buildCtx } from "./ctx.ts";
@@ -45,7 +45,7 @@ export interface EngineOptions {
   config?: EngineConfigInput;
   registry?: WorkflowRegistry;
   clock?: () => number;
-  /** Test seams for @weft/testing fixtures; never set in production hosts. */
+  /** Test seams for @techery/weft-testing fixtures; never set in production hosts. */
   testHooks?: import("./hooks.ts").TestHooks;
 }
 
@@ -918,7 +918,7 @@ export class Engine implements EngineHost {
 
   async executeChildRun(
     spec: ChildRunSpec,
-  ): Promise<{ output: unknown; usage: import("@weft/sdk").Usage; childRunId: string }> {
+  ): Promise<{ output: unknown; usage: import("@techery/weft-sdk").Usage; childRunId: string }> {
     const parent = spec.parent;
     let def: WorkflowDefinition | undefined;
     if (spec.def !== undefined) {
@@ -972,7 +972,7 @@ export class Engine implements EngineHost {
     // failed-then-resumed child would count twice.
     const parentActive = this.active.get(parent.runId);
     const priorRolled = { input: 0, output: 0, usd: 0, samples: 0 };
-    const foldPrior = (u: import("@weft/sdk").Usage | undefined) => {
+    const foldPrior = (u: import("@techery/weft-sdk").Usage | undefined) => {
       if (!u) return;
       priorRolled.input += u.input ?? 0;
       priorRolled.output += u.output ?? 0;
@@ -982,7 +982,7 @@ export class Engine implements EngineHost {
     for (const rec of parentActive?.records ?? []) {
       if (rec.ev.type === "step.failed") {
         const detail = rec.ev.error.detail as
-          | { usage?: import("@weft/sdk").Usage; childRunId?: string }
+          | { usage?: import("@techery/weft-sdk").Usage; childRunId?: string }
           | undefined;
         if (detail?.childRunId === childId) foldPrior(detail.usage);
       } else if (rec.ev.type === "step.completed") {
@@ -1105,7 +1105,7 @@ export class Engine implements EngineHost {
     // too: their spend lives on retry/failure records.
     const rollUp = () => {
       const usage = { input: 0, output: 0, usd: 0, samples: 0 };
-      const fold = (u: import("@weft/sdk").Usage | undefined) => {
+      const fold = (u: import("@techery/weft-sdk").Usage | undefined) => {
         if (!u) return;
         usage.input += u.input ?? 0;
         usage.output += u.output ?? 0;
@@ -1118,7 +1118,7 @@ export class Engine implements EngineHost {
         if (rec.ev.type === "step.completed") fold(rec.ev.usage);
         else if (rec.ev.type === "step.attempt") fold(rec.ev.usage);
         else if (rec.ev.type === "step.failed")
-          fold((rec.ev.error.detail as { usage?: import("@weft/sdk").Usage } | undefined)?.usage);
+          fold((rec.ev.error.detail as { usage?: import("@techery/weft-sdk").Usage } | undefined)?.usage);
       }
       usage.input = Math.max(0, usage.input - priorRolled.input);
       usage.output = Math.max(0, usage.output - priorRolled.output);

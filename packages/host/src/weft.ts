@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
-import { Engine, ProviderRegistry } from "@weft/core";
+import { Engine, ProviderRegistry } from "@techery/weft-core";
 import {
   createWorkflowRegistry,
   DEFAULT_ALLOW_BARE,
@@ -22,11 +22,11 @@ import {
   GateError,
   instantiateBundle,
   loadWorkflow,
-} from "@weft/gate";
-import type { RunIndex } from "@weft/index-sqlite";
-import { type MockAgentBuilder, mock } from "@weft/provider-mock";
-import type { WorkflowDefinition } from "@weft/sdk";
-import { createFsStores } from "@weft/store-fs";
+} from "@techery/weft-gate";
+import type { RunIndex } from "@techery/weft-index-sqlite";
+import { type MockAgentBuilder, mock } from "@techery/weft-provider-mock";
+import type { WorkflowDefinition } from "@techery/weft-sdk";
+import { createFsStores } from "@techery/weft-store-fs";
 import { loadConfig, WEFT_DIR, type WeftConfig } from "./config.ts";
 
 /** Derived, rebuildable, and safe to delete — never a source of truth. */
@@ -68,7 +68,7 @@ export interface CreateWeftOptions {
 }
 
 /**
- * Config allowBare entries EXTEND the default bare imports (@weft/sdk, zod) —
+ * Config allowBare entries EXTEND the default bare imports (@techery/weft-sdk, zod) —
  * they never replace them: enabling lodash must not make every Zod-based
  * workflow fail to load. EVERY loader entry point (registry, inline source,
  * path refs — host, CLI, and MCP alike) must resolve the list through here.
@@ -101,8 +101,8 @@ export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
     // socket — so a checkout without credentials still builds a working engine and fails
     // (if at all) at the first agent step, with that step's error.
     const [claude, codex] = await Promise.all([
-      import("@weft/provider-claude"),
-      import("@weft/provider-codex"),
+      import("@techery/weft-provider-claude"),
+      import("@techery/weft-provider-codex"),
     ]);
     providers.register(claude.createClaudeProvider());
     providers.register(codex.createCodexProvider());
@@ -121,7 +121,7 @@ export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
 
   let index: Promise<RunIndex> | undefined;
   const openIndex = (): Promise<RunIndex> => {
-    index ??= import("@weft/index-sqlite").then(
+    index ??= import("@techery/weft-index-sqlite").then(
       ({ RunIndex }) => new RunIndex({ dbPath: join(weftDir, INDEX_FILE) }),
     );
     return index;

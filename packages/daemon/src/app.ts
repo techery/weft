@@ -20,8 +20,8 @@ import type {
   RunStatus,
   RunSummary,
   Weft,
-} from "@weft/host";
-import { persistedDefOf, reduceState, renderReport, renderTree } from "@weft/host";
+} from "@techery/weft-host";
+import { persistedDefOf, reduceState, renderReport, renderTree } from "@techery/weft-host";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { INDEX_HTML } from "./ui.ts";

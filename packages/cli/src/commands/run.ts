@@ -15,7 +15,7 @@ import {
   resolveWorkflow,
   type Weft,
   type WorkflowDefinition,
-} from "@weft/host";
+} from "@techery/weft-host";
 import { Command } from "commander";
 import pc from "picocolors";
 import { allowBareOf, openWeft, parseReuse } from "../context.ts";

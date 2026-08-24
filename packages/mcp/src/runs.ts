@@ -9,7 +9,7 @@
  * daemon) has no handle here, so its journal is polled instead; the projection carries
  * the same pending requests the handle would have reported.
  */
-import type { PendingRequest, RunHandle, RunState, Weft, WorkflowDefinition } from "@weft/host";
+import type { PendingRequest, RunHandle, RunState, Weft, WorkflowDefinition } from "@techery/weft-host";
 
 /** How often the journal is re-read for a run this process did not start. */
 const POLL_MS = 500;
@@ -246,7 +246,7 @@ const UNIT_MS: Record<string, number> = { ms: 1, s: 1_000, m: 60_000, h: 3_600_0
 
 /**
  * `"10m"`, `"90s"`, `"250ms"`, or a bare number of milliseconds — the same Duration
- * spelling the SDK accepts. (@weft/sdk is not a dependency of this package; see the
+ * spelling the SDK accepts. (@techery/weft-sdk is not a dependency of this package; see the
  * package README note on why the parser is repeated rather than imported.)
  */
 export function parseTimeout(text: string): number {

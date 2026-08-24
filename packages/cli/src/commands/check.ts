@@ -13,7 +13,7 @@ import { readdir, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { promisify } from "node:util";
-import { type GateDiagnostic, GateError, loadWorkflow } from "@weft/host";
+import { type GateDiagnostic, GateError, loadWorkflow } from "@techery/weft-host";
 import { Command } from "commander";
 import pc from "picocolors";
 import { allowBareOf, openWeft, workflowsDir } from "../context.ts";
@@ -168,10 +168,10 @@ async function typecheck(files: readonly string[], cwd: string): Promise<string[
   } catch (err) {
     const output = `${(err as { stdout?: string }).stdout ?? ""}${(err as { stderr?: string }).stderr ?? ""}`;
     const lines = output.split("\n").filter((line) => line.trim() !== "");
-    // Without `@weft/sdk` on disk every `ctx` parameter is implicitly `any`, so the whole
+    // Without `@techery/weft-sdk` on disk every `ctx` parameter is implicitly `any`, so the whole
     // report is one missing install echoed a hundred times. Say that instead.
-    if (lines.some((line) => line.includes("TS2307") && line.includes("@weft/sdk"))) {
-      return [pc.dim("tsc: @weft/sdk is not installed here — skipping the type-check pass")];
+    if (lines.some((line) => line.includes("TS2307") && line.includes("@techery/weft-sdk"))) {
+      return [pc.dim("tsc: @techery/weft-sdk is not installed here — skipping the type-check pass")];
     }
     return [pc.yellow("tsc (advisory):"), ...lines.map((line) => pc.dim(`  ${line}`))];
   }

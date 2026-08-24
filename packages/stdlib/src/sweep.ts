@@ -3,8 +3,8 @@
  * agent with its own key, so a lens that fails costs only that lens: the failure is
  * dropped through ctx.ok (which records it) and named in the run log.
  */
-import type { AnySchema, Ctx, InferOut } from "@weft/sdk";
-import { z } from "@weft/sdk";
+import type { AnySchema, Ctx, InferOut } from "@techery/weft-sdk";
+import { z } from "@techery/weft-sdk";
 import { prefixed, type Routing, routing } from "./internal.ts";
 
 /** One lens: a name for the key and the report, and the brief the agent gets. */

@@ -1,5 +1,5 @@
 /**
- * @weft/store-fs — the default stores: one portable run directory per run
+ * @techery/weft-store-fs — the default stores: one portable run directory per run
  * (journal.jsonl + projections) and a content-addressed blob directory shared
  * across runs (patches and transcripts dedupe naturally).
  *
@@ -14,7 +14,7 @@ export { FsBlobStore } from "./blobs.ts";
 export { FsJournalStore } from "./journal.ts";
 
 import { join } from "node:path";
-import type { BlobStore, JournalStore } from "@weft/core";
+import type { BlobStore, JournalStore } from "@techery/weft-core";
 import { FsBlobStore } from "./blobs.ts";
 import { FsJournalStore } from "./journal.ts";
 

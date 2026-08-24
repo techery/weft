@@ -3,7 +3,7 @@
  * behind this interface. The engine owns validation, repair policy, budget, and
  * journaling; a provider owns one session with one vendor's agent.
  */
-import type { Effort, Risk, SchemaIssue, Usage, WriteScope } from "@weft/sdk";
+import type { Effort, Risk, SchemaIssue, Usage, WriteScope } from "@techery/weft-sdk";
 
 export interface ToolPolicy {
   /** When false every edit tool is denied (read-only step). */

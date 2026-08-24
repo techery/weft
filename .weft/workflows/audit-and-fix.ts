@@ -8,7 +8,7 @@
  * returns a schema-validated value (C2), the human sits in the graph as a step (C5),
  * and edits reach the tree only as journaled patches (C6).
  */
-import { defineWorkflow, z } from "@weft/sdk";
+import { defineWorkflow, z } from "@techery/weft-sdk";
 import { Finding, FixResult, Verdict } from "./schemas.ts";
 
 /** Cross-vendor refutation panel: two vendors, three votes, majority wins. */

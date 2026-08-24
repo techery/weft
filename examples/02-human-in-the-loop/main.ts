@@ -13,9 +13,9 @@
  * A second workflow shows the other side of the coin: a question with a timeout
  * and a default is answered by policy when nobody shows up.
  */
-import { Engine, MemoryBlobStore, MemoryJournalStore, ProviderRegistry } from "@weft/core";
-import { mock } from "@weft/provider-mock";
-import { defineWorkflow, z } from "@weft/sdk";
+import { Engine, MemoryBlobStore, MemoryJournalStore, ProviderRegistry } from "@techery/weft-core";
+import { mock } from "@techery/weft-provider-mock";
+import { defineWorkflow, z } from "@techery/weft-sdk";
 
 const journal = new MemoryJournalStore();
 const blobs = new MemoryBlobStore();

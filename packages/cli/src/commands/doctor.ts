@@ -6,9 +6,10 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { configPath, GateError, loadWorkflow } from "@weft/host";
+import { configPath, GateError, loadWorkflow } from "@techery/weft-host";
 import { Command } from "commander";
 import pc from "picocolors";
 import { allowBareOf, globalOptions, openWeft, workflowsDir } from "../context.ts";
@@ -149,20 +150,33 @@ function layoutChecks(weftDir: string, flows: string, cwd: string): Check[] {
  * already has, so an absent variable is a hint, not a failure.
  */
 function credentialChecks(): Check[] {
-  const claude = process.env.ANTHROPIC_API_KEY;
-  const codex = process.env.OPENAI_API_KEY;
+  // Neither adapter is handed a key: each vendor SDK resolves its own credentials, and
+  // both fall back to the CLI's stored login. So an absent variable is only half the
+  // question — a `codex login` leaves an auth file that works just as well, and saying
+  // otherwise sends people looking for a key they do not need.
+  const claudeKey = process.env.ANTHROPIC_API_KEY;
+  const codexKey = process.env.OPENAI_API_KEY;
+  const codexAuth = path.join(process.env.CODEX_HOME || path.join(homedir(), ".codex"), "auth.json");
+  const codexLoggedIn = existsSync(codexAuth);
+
   return [
     {
-      verdict: claude ? "ok" : "warn",
+      // Claude Code keeps its login in the OS keychain on macOS, so there is no file to
+      // look for: report the variable, and say plainly that a CLI login also counts.
+      verdict: claudeKey ? "ok" : "warn",
       label: "claude",
-      detail: claude
+      detail: claudeKey
         ? "ANTHROPIC_API_KEY set"
-        : "no ANTHROPIC_API_KEY — run `claude login` or export the key",
+        : "no ANTHROPIC_API_KEY — a `claude login` session also works",
     },
     {
-      verdict: codex ? "ok" : "warn",
+      verdict: codexKey || codexLoggedIn ? "ok" : "warn",
       label: "codex",
-      detail: codex ? "OPENAI_API_KEY set" : "no OPENAI_API_KEY — run `codex login` or export the key",
+      detail: codexKey
+        ? "OPENAI_API_KEY set"
+        : codexLoggedIn
+          ? "signed in via `codex login`"
+          : "no OPENAI_API_KEY and no `codex login` — do either",
     },
   ];
 }

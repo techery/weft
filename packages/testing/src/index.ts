@@ -1,8 +1,8 @@
 /**
- * @weft/testing — the workflow test harness.
+ * @techery/weft-testing — the workflow test harness.
  *
  * ```ts
- * import { runWorkflow, mock } from "@weft/testing";
+ * import { runWorkflow, mock } from "@techery/weft-testing";
  *
  * const { output, journal } = await runWorkflow(review, {
  *   input: { base: "main" },
@@ -15,8 +15,13 @@
  * that would not pass in production fails the test.
  */
 
-export type { MockAgentBuilder, MockRequest, MockResponder, MockRuleOptions } from "@weft/provider-mock";
-export { mock } from "@weft/provider-mock";
+export type {
+  MockAgentBuilder,
+  MockRequest,
+  MockResponder,
+  MockRuleOptions,
+} from "@techery/weft-provider-mock";
+export { mock } from "@techery/weft-provider-mock";
 export type { StoreFixture } from "./conformance.ts";
 export { blobStoreConformance, journalStoreConformance } from "./conformance.ts";
 export type {
