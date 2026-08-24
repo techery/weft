@@ -4,7 +4,7 @@
  * the file, and after the file changed: `content` (default) re-runs a step whose prompt or
  * options moved, `key` keeps it by identity for fast iteration.
  */
-import { persistedDefOf } from "@techery/weft-host";
+import { persistedDefOf, resumeOptions } from "@techery/weft-host";
 import { Command } from "commander";
 import pc from "picocolors";
 import { openWeft, parseReuse } from "../context.ts";
@@ -31,7 +31,7 @@ export function resumeCommand(io: CliIo): Command {
         // bundled script); registry runs fall through to the name the run journaled.
         const persisted = await persistedDefOf(weft, runId);
         const handle = await weft.engine.resume(runId, {
-          ...(persisted !== undefined ? { def: persisted } : {}),
+          ...resumeOptions(persisted),
           ...(reuse !== undefined ? { reuse } : {}),
         });
         io.out(`${pc.dim("resuming")} ${pc.bold(before.workflow)} ${handle.runId}`);

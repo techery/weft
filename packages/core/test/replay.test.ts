@@ -368,6 +368,171 @@ describe("replay identity: a cache hit must not lie", () => {
     ).toBe(true);
   });
 
+  /**
+   * The body hash sees `def.run`'s own source and nothing else, so a body that delegates
+   * — `async (ctx) => steps(ctx)` — reads identical no matter how the module behind
+   * `steps` is edited. The bundle hash is what covers that module, and `positionsTrusted`
+   * folds both in.
+   */
+  test("an edit inside a delegated module is caught by the bundle hash", async () => {
+    let world = "RED";
+    let steps: (ctx: never) => Promise<{ before: string; after: string }>;
+    const bothSteps = async (ctx: never) => {
+      const c = ctx as unknown as {
+        agent(p: string, o: unknown): Promise<{ answer: string }>;
+        human: { approve(o: unknown): Promise<unknown> };
+      };
+      const before = await c.agent("what colour is the build?", { schema: Answer });
+      world = "GREEN";
+      const after = await c.agent("what colour is the build?", { schema: Answer });
+      await c.human.approve({ action: "ship?" });
+      return { before: before.answer, after: after.answer };
+    };
+    const laterStepsOnly = async (ctx: never) => {
+      const c = ctx as unknown as {
+        agent(p: string, o: unknown): Promise<{ answer: string }>;
+        human: { approve(o: unknown): Promise<unknown> };
+      };
+      world = "GREEN";
+      const after = await c.agent("what colour is the build?", { schema: Answer });
+      await c.human.approve({ action: "ship?" });
+      return { before: "n/a", after: after.answer };
+    };
+    // ONE definition across both runs: `def.run.toString()` is byte-identical, so the
+    // body hash cannot tell the two versions apart. Only the bundle hash can.
+    const def = defineWorkflow(
+      { name: "delegated", description: "delegated", input: z.object({}), output: Colours },
+      async (ctx) => steps(ctx as never),
+    );
+
+    const answerWorld = () => mock().on({}, () => ({ answer: world }));
+    steps = bothSteps;
+    const t1 = testEngine({ builder: answerWorld() });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(def, { input: {}, cwd, defHash: "bundle-v1" });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    expect(await h1.result).toEqual({ before: "RED", after: "GREEN" });
+
+    // The helper module changed — one probe deleted — and the host's bundle hash moved
+    // with it, which is the only signal available.
+    steps = laterStepsOnly;
+    world = "GREEN";
+    const t2 = reopen(t1, { builder: answerWorld() });
+    const h2 = await t2.engine.resume(h1.runId, { def, defHash: "bundle-v2" });
+    const o2 = await h2.outcome();
+    if (o2.status === "waiting_for_human") {
+      await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    }
+    expect((await h2.result) as { after: string }).toMatchObject({ after: "GREEN" });
+    const recs = await records(t2.journal, h1.runId);
+    expect(
+      recs.some((r) => r.ev.type === "replay.diverged" && /ambiguous keyless identity/.test(r.ev.reason)),
+    ).toBe(true);
+  });
+
+  test("an unchanged bundle hash still serves both identical steps for free", async () => {
+    // The other half: the stamp must not make every resume re-run. Same script, same
+    // bundle hash, two identical keyless steps — nothing re-dispatches.
+    let calls = 0;
+    const def = defineWorkflow(
+      { name: "twice-hashed", description: "twice", input: z.object({}), output: Colours },
+      async (ctx) => {
+        const a = await ctx.agent("same question", { schema: Answer });
+        const b = await ctx.agent("same question", { schema: Answer });
+        await ctx.human.approve({ action: "ship?" });
+        return { before: a.answer, after: b.answer };
+      },
+    );
+    const builder = () =>
+      mock().on({}, () => {
+        calls++;
+        return { answer: "same" };
+      });
+    const t1 = testEngine({ builder: builder() });
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir(), defHash: "bundle-v1" });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    await h1.result;
+    expect(calls).toBe(2);
+
+    const t2 = reopen(t1, { builder: builder() });
+    const h2 = await t2.engine.resume(h1.runId, { def, defHash: "bundle-v1" });
+    const o2 = await h2.outcome();
+    if (o2.status === "waiting_for_human") {
+      await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    }
+    await h2.result;
+    expect(calls).toBe(2); // nothing re-dispatched
+  });
+
+  /**
+   * A child run has its own journal, its own replay and its own call sites to move, so it
+   * needs the same version stamp the root gets. It used to journal only its name and
+   * default to trusting positions, which handed the second of two identical keyless
+   * probes the deleted first one's answer — inside any `ctx.workflow` whose definition
+   * changed between the runs.
+   */
+  test("a child workflow's own edit re-runs its ambiguous keyless step", async () => {
+    let world = "RED";
+    const childBoth = defineWorkflow(
+      { name: "probe", description: "probe", input: z.object({}), output: Colours },
+      async (ctx) => {
+        const before = await ctx.agent("what colour is the build?", { schema: Answer });
+        world = "GREEN";
+        const after = await ctx.agent("what colour is the build?", { schema: Answer });
+        await ctx.human.approve({ action: "child gate" });
+        return { before: before.answer, after: after.answer };
+      },
+    );
+    const childLater = defineWorkflow(
+      { name: "probe", description: "probe", input: z.object({}), output: Colours },
+      async (ctx) => {
+        world = "GREEN";
+        const after = await ctx.agent("what colour is the build?", { schema: Answer });
+        await ctx.human.approve({ action: "child gate" });
+        return { before: "n/a", after: after.answer };
+      },
+    );
+    const parentOf = (child: typeof childBoth) =>
+      defineWorkflow(
+        { name: "outer", description: "outer", input: z.object({}), output: Colours },
+        async (ctx) => (await ctx.workflow(child, {})) as { before: string; after: string },
+      );
+
+    const answerWorld = () => mock().on({}, () => ({ answer: world }));
+    const t1 = testEngine({ builder: answerWorld() });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(parentOf(childBoth), { input: {}, cwd });
+    // The child suspends on its own gate; the parent surfaces it.
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    const runs = await t1.journal.list();
+    const childRun = runs.find((r) => r.parentRunId === h1.runId);
+    expect(childRun).toBeDefined();
+    await t1.engine.answer(childRun!.runId, o1.pending[0]!.id, { approved: true });
+    expect(await h1.result).toEqual({ before: "RED", after: "GREEN" });
+
+    // The CHILD's definition changed; the parent's did not.
+    world = "GREEN";
+    const t2 = reopen(t1, { builder: answerWorld() });
+    const h2 = await t2.engine.resume(h1.runId, { def: parentOf(childLater) });
+    const o2 = await h2.outcome();
+    if (o2.status === "waiting_for_human") {
+      await t2.engine.answer(childRun!.runId, o2.pending[0]!.id, { approved: true });
+    }
+    // The pre-change "RED" must not survive the child's edit either.
+    expect((await h2.result) as { after: string }).toMatchObject({ after: "GREEN" });
+    const childRecs = await records(t2.journal, childRun!.runId);
+    expect(
+      childRecs.some(
+        (r) => r.ev.type === "replay.diverged" && /ambiguous keyless identity/.test(r.ev.reason),
+      ),
+    ).toBe(true);
+  });
+
   test("an unchanged resume of the same two identical steps still costs zero calls", async () => {
     let calls = 0;
     const def = defineWorkflow(

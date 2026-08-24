@@ -392,6 +392,27 @@ describe("projections", () => {
     expect(report).toMatch(/^# rev \d$/);
   });
 
+  test("a run the volume cannot READ is not quietly dropped from list()", async () => {
+    // The other side of the line above, and it is not symmetric. A listing is not a
+    // read-only convenience: RunIndex.rebuild() clears the table and repopulates it from
+    // exactly this call, so a healthy run swallowed here for a transient EACCES or EIO is
+    // also deleted from the index — a storage hiccup quietly unmaking durable rows.
+    // Damage is permanent and skippable; a fault means the run is fine and the volume is
+    // not, and it belongs to the caller.
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    await store.append("run-good", [runCreated("run-good", "audit")]);
+    await store.append("run-unreadable", [runCreated("run-unreadable", "audit")]);
+
+    // A directory where the journal file belongs stands in for every read that fails
+    // without the data being gone: the path exists and readFile refuses it (EISDIR).
+    await rm(join(dir, "run-unreadable", "state.json"), { force: true });
+    await rm(join(dir, "run-unreadable", "journal.jsonl"));
+    await mkdir(join(dir, "run-unreadable", "journal.jsonl"));
+
+    await expect(store.list()).rejects.toThrow(/EISDIR/);
+  });
+
   test("one damaged run does not hide every healthy one from list()", async () => {
     // `weft ls` is how a person finds the run that needs repairing, so a corrupt line in
     // ONE journal throwing out of the whole listing takes away the tool they would use.
@@ -578,6 +599,43 @@ describe("acquireRun", () => {
 });
 
 describe("appendIf", () => {
+  test("re-tests the count after the second reconcile, not just the first", async () => {
+    // The append lock can be STOLEN from a holder frozen past the stale threshold — a GC
+    // pause, a suspended VM — and the peer that takes it commits real records before this
+    // holder wakes. That is why the truncate re-reconciles. But the expectedCount test ran
+    // against the PRE-steal fold, so without a second test the "conditional" append writes
+    // on top of state the caller never saw: here, a stale cancellation landing after a
+    // peer's run.completed — precisely what appendIf exists to refuse.
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    await store.append("run-a", [runCreated("run-a", "audit")]);
+
+    // The peer commits between the two reconciles. Written directly to the file because a
+    // lock-RESPECTING peer would simply block on this holder; a thief does not.
+    const inner = store as unknown as {
+      reconcile(runId: string, cached: unknown): Promise<void>;
+    };
+    const real = inner.reconcile.bind(inner);
+    let folds = 0;
+    inner.reconcile = async (runId: string, cached: unknown) => {
+      await real(runId, cached);
+      if (++folds === 1) {
+        await appendFile(
+          join(dir, "run-a", "journal.jsonl"),
+          `${JSON.stringify({ i: 1, at: Date.now(), ev: { type: "run.completed", output: { ok: true } } })}\n`,
+        );
+      }
+    };
+
+    // The caller read 1 record and asks to cancel on that basis. By the time this writes,
+    // the run has completed — decline.
+    expect(await store.appendIf("run-a", 1, [{ type: "run.cancelled" }])).toBeUndefined();
+
+    inner.reconcile = real;
+    const after = await drain(store, "run-a");
+    expect(after.map((r) => r.ev.type)).toEqual(["run.created", "run.completed"]);
+  });
+
   test("declines when records landed after the caller's read; appends when none did", async () => {
     const dir = await tempDir();
     const store = new FsJournalStore(dir);

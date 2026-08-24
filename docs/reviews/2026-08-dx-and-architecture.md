@@ -152,9 +152,28 @@ fix rather than the original code:
   twice — removed, and replaced with a value nothing accepts — and only a key that changes
   nothing under both is called unknown.
 
-The pattern is the finding. Across three review rounds, the large majority of later
-defects lived in the fixes for earlier ones, not in the code originally audited. A fix is
-new code and needs the same adversarial pass as anything else.
+A third pass found five more, four of them again inside earlier fixes:
+
+- **The replay version stamp covered only the root run, and only the body it could see.**
+  Child runs created by `ctx.workflow` journaled no version and defaulted to trusting
+  positions, so a child's own edit re-opened the exact hole the stamp was added to close.
+  And `def.run.toString()` is blind to an edit inside a module the body delegates to —
+  identical text, moved call sites — so `positionsTrusted` now folds in the host's bundle
+  hash too, plumbed through every resume path.
+- **`appendIf` stopped being conditional under a stolen lock.** The count was tested
+  against the pre-steal fold; a peer that committed in the window between the two
+  reconciles was written straight over. Re-tested after the second fold.
+- **A failed cancellation append was reported as success.** With `run.cancelled` lost to
+  ENOSPC the journal still said `executing`, the retained claim expired, and the next
+  process re-executed a run the caller was told was cancelled.
+- **`list()` hid healthy runs on transient I/O** — and `RunIndex.rebuild()` repopulates
+  from that list, so a storage hiccup also deleted the row. Now only damaged or deleted
+  runs are skipped. (This one was flagged in the previous round's write-up as a design
+  question; the index-rebuild consequence settles it.)
+
+The pattern is the finding. Across four review rounds, the large majority of later defects
+lived in the fixes for earlier ones, not in the code originally audited. A fix is new code
+and needs the same adversarial pass as anything else.
 
 ## Measured baseline
 
@@ -162,7 +181,7 @@ new code and needs the same adversarial pass as anything else.
 pnpm install                 ✓
 pnpm typecheck               ✓  tsc --strict, 175 files
 pnpm lint                    ✓  biome, 1 info
-pnpm test                    ✓  684 passed (684), 41 files, 36.0s
+pnpm test                    ✓  690 passed (690), 41 files, 38.1s
 weft doctor                  ✓  ready
 weft check                   ✓  all workflows gate clean
 npx tsx examples/*/main.ts   ✓  all seven run offline

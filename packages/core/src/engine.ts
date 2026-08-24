@@ -80,12 +80,16 @@ function drainWithin(result: Promise<unknown>, ms: number): Promise<boolean> {
  * The engine's own version stamp for a workflow body, journaled with the run and
  * compared on resume to decide whether step POSITIONS still name the same call sites.
  *
- * Deliberately not the host's `defHash`: that is a bundle hash, absent for library
- * callers and computed over material (imports, the gate's wrapper) a body-level
- * comparison should not react to. Comparing the body's own source instead means the
- * protection works for every caller, with no plumbing to forget. It is not a content
- * address — two genuinely different workflows sharing a body text would collide — and
- * that is fine, because a false "unchanged" only restores the previous behaviour.
+ * Not a replacement for the host's `defHash` but a floor beneath it: this one needs no
+ * plumbing and so exists for every caller, including library ones that never bundle. It
+ * is also strictly weaker, and in one way that matters — a body which delegates to an
+ * imported helper (`return buildSteps(ctx)`) keeps the same `toString()` no matter how
+ * the helper's call sites are edited. `positionsTrusted` folds in the bundle hash for
+ * exactly that reason; see `versionUnchanged`.
+ *
+ * It is not a content address either — two genuinely different workflows sharing a body
+ * text would collide — and that is fine, because a false "unchanged" only restores the
+ * previous behaviour.
  */
 function definitionHash(def: WorkflowDefinition): string {
   return sha256Hex(`${def.meta.name ?? ""}\n${def.run.toString()}`);
@@ -93,12 +97,34 @@ function definitionHash(def: WorkflowDefinition): string {
 
 /**
  * Whether the script being resumed is the one the journal was written by. A run created
- * before `defHash` was journaled carries none; treat that as unchanged, because the only
+ * before this was journaled carries none; treat that as unchanged, because the only
  * thing the answer gates is an extra re-run, and an old journal should not start paying
  * for one.
  */
 function scriptUnchanged(current: string, journaled: string | undefined): boolean {
   return journaled === undefined || journaled === current;
+}
+
+/**
+ * Whether step positions can still be trusted to name the same call sites: both stamps
+ * must agree, and each abstains when either side lacks it.
+ *
+ * Two stamps because neither covers the other. The body hash reaches every caller but
+ * sees only `def.run`'s own source, so an edit inside an imported helper is invisible to
+ * it — the body reads identical while the call sites underneath it moved. The bundle
+ * hash covers the whole module graph and catches that, but only a host that bundles
+ * produces one, and it also moves for edits that touch no call site at all. Requiring
+ * agreement takes the union of what they detect; the cost of a spurious disagreement is
+ * an extra re-run of an ambiguous keyless step, which is the side that cannot be wrong.
+ */
+function versionUnchanged(
+  current: { body: string; bundle?: string },
+  journaled: { bodyHash?: string; defHash?: string },
+): boolean {
+  return (
+    scriptUnchanged(current.body, journaled.bodyHash) &&
+    (current.bundle === undefined || scriptUnchanged(current.bundle, journaled.defHash))
+  );
 }
 
 export interface WorkflowRegistry {
@@ -129,7 +155,12 @@ export interface StartOptions {
 export interface ResumeOptions {
   def?: WorkflowDefinition;
   reuse?: ReuseMode;
-  /** Bundle content hash of the script being resumed; recorded, not compared. */
+  /**
+   * Bundle content hash of the script being resumed. Compared against the one the run
+   * journaled to decide whether step positions still name the same call sites: it is the
+   * only stamp that sees an edit inside a module `def.run` merely delegates to. Omit it
+   * and the check falls back to the body hash alone.
+   */
   defHash?: string;
 }
 
@@ -374,7 +405,13 @@ export class Engine implements EngineHost {
       // works — that is the point of edit-tolerant replay — but a KEYLESS step whose
       // content matches several journaled entries can no longer be resolved by position,
       // and replay re-runs it instead of serving whichever entry landed at its seq.
-      positionsTrusted: scriptUnchanged(definitionHash(def), created.workflow.bodyHash),
+      positionsTrusted: versionUnchanged(
+        {
+          body: definitionHash(def),
+          ...(opts.defHash !== undefined ? { bundle: opts.defHash } : {}),
+        },
+        created.workflow,
+      ),
     };
     // A crash AFTER a durable budget.sampled but BEFORE the paid step's terminal
     // record leaves that call's spend visible ONLY in the sample: the cumulative
@@ -1081,7 +1118,14 @@ export class Engine implements EngineHost {
     if (resuming) {
       for await (const rec of this.journal.read(childId)) records.push(rec);
       const created = records.find((r) => r.ev.type === "run.created")?.ev;
-      if (created?.type === "run.created") rawInput = created.input === undefined ? {} : created.input;
+      if (created?.type === "run.created") {
+        rawInput = created.input === undefined ? {} : created.input;
+        // Re-entering a child is a resume, and it needs the same guard the root got. A
+        // child that defaulted to trusting positions served the deleted call site's
+        // answer to the one that slid into its seq — the exact failure the version stamp
+        // exists to stop, reachable through any `ctx.workflow` whose definition changed.
+        shared.positionsTrusted = versionUnchanged({ body: definitionHash(def) }, created.workflow);
+      }
       replay = ReplayIndex.fromRecords(records);
       // The child's journaled agent dispatches are NOT re-counted here: the
       // root's resume walked every durable descendant journal already, and a
@@ -1150,7 +1194,11 @@ export class Engine implements EngineHost {
         {
           type: "run.created",
           runId: childId,
-          workflow: { name: def.meta.name ?? spec.name },
+          // The child stamps its own version for the same reason the root does: it has
+          // its own journal, its own replay, and its own call sites to move. No bundle
+          // hash exists here — a child definition is a value in the parent's module, not
+          // something a host resolved and hashed — so the body hash is the whole check.
+          workflow: { name: def.meta.name ?? spec.name, bodyHash: definitionHash(def) },
           input: rawInput,
           cwd: parent.cwd,
           depth: parent.depth + 1,
@@ -1508,7 +1556,21 @@ export class Engine implements EngineHost {
         // Journal BEFORE fencing: a fenced runtime refuses every append, so the order
         // decides whether the projection ends up saying "cancelled" or stays stuck on
         // "executing" forever.
-        await this.appendTerminal(active, [{ type: "run.cancelled" }]).catch(() => undefined);
+        //
+        // Its failure is the caller's answer, not something to swallow. The durable
+        // journal is what "cancelled" MEANS here — the in-process run is gone either way,
+        // but if ENOSPC or EIO ate this record the journal still says `executing`, the
+        // retained claim expires on its TTL, and the next process resumes and re-executes
+        // a run this call reported as cancelled. Reported as success that is silent and
+        // unrecoverable; reported as failure the caller can retry, and a later cancel()
+        // finds no active entry and takes the journal path below, whose appendIf records
+        // the cancellation once the volume comes back.
+        let journalFailure: unknown;
+        try {
+          await this.appendTerminal(active, [{ type: "run.cancelled" }]);
+        } catch (err) {
+          journalFailure = err;
+        }
         active.runtime.status = "cancelled";
         active.runtime.fence(
           new CancelledError(`run ${runId} was cancelled; a step is still draining`, {
@@ -1530,6 +1592,11 @@ export class Engine implements EngineHost {
         // The lease is NOT released: the zombie may still be writing, and handing the
         // run to another process while it does is worse than waiting out the claim's
         // TTL. shutdown() takes the same position for the same reason.
+        //
+        // Retire first, then raise. The abort was requested and the execution is
+        // unobservable whatever the journal says, so leaving a wedged entry behind would
+        // add a second failure to the one being reported.
+        if (journalFailure !== undefined) throw journalFailure;
       }
       return;
     }

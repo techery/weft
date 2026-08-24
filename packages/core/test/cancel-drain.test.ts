@@ -46,6 +46,38 @@ describe("cancel() against a non-cooperative step", () => {
     expect(t.engine.isActive(h.runId)).toBe(false);
   }, 30_000);
 
+  test("a journal that cannot record the cancellation reports failure, not success", async () => {
+    // Past the bound the run is retired in-process whatever happens — the abort was
+    // requested and the execution is unobservable. But "cancelled" MEANS the durable
+    // record: if ENOSPC or EIO ate it, the journal still says `executing`, the retained
+    // claim expires on its TTL, and the next process resumes and re-executes a run this
+    // call reported as cancelled. Silent and unrecoverable; raised, the caller can retry.
+    const def = defineWorkflow(
+      { name: "wedged3", description: "wedged", input: z.object({}), output: z.object({ v: z.number() }) },
+      async (ctx) => ctx.agent("never settles", { schema: z.object({ v: z.number() }), key: "hang" }),
+    );
+    const t = testEngine({
+      builder: mock().on({ key: "hang" }, () => new Promise<never>(() => undefined)),
+    });
+    const cwd = await tempDir();
+    const h = await t.engine.start(def, { input: {}, cwd });
+    h.result.catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 50));
+
+    // The volume goes away exactly when the terminal record is written.
+    const journal = t.journal as unknown as { append: (...args: never[]) => Promise<unknown> };
+    const realAppend = journal.append.bind(journal);
+    journal.append = async () => {
+      throw Object.assign(new Error("ENOSPC: no space left on device, write"), { code: "ENOSPC" });
+    };
+
+    await expect(t.engine.cancel(h.runId)).rejects.toThrow(/ENOSPC/);
+    journal.append = realAppend;
+
+    // Still retired: reporting the failure must not also leave a wedged entry behind.
+    expect(t.engine.isActive(h.runId)).toBe(false);
+  }, 30_000);
+
   test("a later resume is refused promptly, not handed the hung promise", async () => {
     const def = defineWorkflow(
       { name: "wedged2", description: "wedged", input: z.object({}), output: z.object({ v: z.number() }) },

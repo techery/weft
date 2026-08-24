@@ -17,6 +17,7 @@ import {
   isWorkflowPathRef,
   loadWorkflow,
   mergedAllowBare,
+  type PersistedDef,
   parseBudget,
   persistedDefOf,
   persistInlineScript,
@@ -24,6 +25,7 @@ import {
   type RunListFilter,
   reserveRunId,
   resolveWorkflow,
+  resumeOptions,
   type Weft,
   type WorkflowDefinition,
 } from "@techery/weft-host";
@@ -174,8 +176,12 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
           if (!weft.engine.isActive(rootId)) {
             const woken = rootId;
             const tracked = runs.get(woken);
-            void Promise.resolve(tracked?.def ?? persistedDefOf(weft, woken))
-              .then((def) => weft.engine.resume(woken, def !== undefined ? { def } : {}))
+            // An in-process definition has no bundle hash to pass on; a persisted one
+            // does, and resumeOptions keeps it paired with the definition.
+            void Promise.resolve(
+              tracked?.def !== undefined ? { def: tracked.def } : persistedDefOf(weft, woken),
+            )
+              .then((persisted) => weft.engine.resume(woken, resumeOptions(persisted)))
               .then((handle) => {
                 runs.clearWakeFailure(woken);
                 runs.track({
@@ -227,17 +233,22 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
         // has no file, so the definition it loaded is what resume gets. Everything else
         // falls through to the engine's registry lookup by the name the run journaled.
         const ref = tracked?.ref;
-        const def =
-          ref !== undefined
-            ? (await resolveWorkflow(weft, ref)).def
-            : (tracked?.def ?? (await persistedDefOf(weft, args.runId)));
+        let persisted: PersistedDef | undefined;
+        if (ref !== undefined) {
+          const resolved = await resolveWorkflow(weft, ref);
+          persisted = { def: resolved.def, ...(resolved.hash !== undefined ? { hash: resolved.hash } : {}) };
+        } else if (tracked?.def !== undefined) {
+          persisted = { def: tracked.def };
+        } else {
+          persisted = await persistedDefOf(weft, args.runId);
+        }
         const handle = await weft.engine.resume(args.runId, {
-          ...(def !== undefined ? { def } : {}),
+          ...resumeOptions(persisted),
           ...(args.reuse !== undefined ? { reuse: args.reuse } : {}),
         });
         runs.track({
           handle,
-          ...(ref !== undefined ? { ref } : def !== undefined ? { def } : {}),
+          ...(ref !== undefined ? { ref } : persisted !== undefined ? { def: persisted.def } : {}),
         });
         return { runId: handle.runId, status: "resumed" };
       }),

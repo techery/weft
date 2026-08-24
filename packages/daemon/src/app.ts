@@ -21,7 +21,7 @@ import type {
   RunSummary,
   Weft,
 } from "@techery/weft-host";
-import { persistedDefOf, reduceState, renderReport, renderTree } from "@techery/weft-host";
+import { persistedDefOf, reduceState, renderReport, renderTree, resumeOptions } from "@techery/weft-host";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { INDEX_HTML } from "./ui.ts";
@@ -202,8 +202,8 @@ export function createApp(weft: Weft): Hono {
     try {
       // Same fallback the wake paths use: an inline or path-ref run persisted its
       // definition at start precisely so a registry-less resume can find it here.
-      const def = await persistedDefOf(weft, runId);
-      const handle = await engine.resume(runId, def !== undefined ? { def } : {});
+      const persisted = await persistedDefOf(weft, runId);
+      const handle = await engine.resume(runId, resumeOptions(persisted));
       // The run continues in the background; the caller watches /events or polls the state.
       void handle.outcome().catch(() => undefined);
       return c.json({ ok: true, runId: handle.runId });
@@ -350,8 +350,8 @@ function wakeIfSuspended(weft: Weft, runId: string): boolean {
       rootId = parentId;
     }
     if (weft.engine.isActive(rootId)) return;
-    const def = await persistedDefOf(weft, rootId);
-    const handle = await weft.engine.resume(rootId, def !== undefined ? { def } : {});
+    const persisted = await persistedDefOf(weft, rootId);
+    const handle = await weft.engine.resume(rootId, resumeOptions(persisted));
     await handle.outcome();
   })().catch((err: unknown) => {
     console.error(`weft daemon: waking run ${runId} failed: ${messageOf(err)}`);

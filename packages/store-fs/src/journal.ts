@@ -25,6 +25,18 @@ function absent(err: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
+/**
+ * True when a run cannot be summarized because its own records are DAMAGED, or because
+ * it stopped existing while the listing was walking the directory. Both are permanent
+ * for this pass and neither is the listing's problem: an unparseable record will never
+ * parse, and a deleted run has nothing left to report. Everything else — EACCES, EIO,
+ * EMFILE — says the run is fine and the storage is not, and hiding it there both lies to
+ * `weft ls` and deletes the row on the next index rebuild.
+ */
+function damagedOrGone(err: unknown): boolean {
+  return err instanceof SyntaxError || absent(err);
+}
+
 /** Live view of a held file lock: `held()` turns false when renewal fails past the stale threshold. */
 interface LockMutex {
   held(): boolean;
@@ -122,6 +134,14 @@ export class FsJournalStore implements JournalStore {
       try {
         await this.reconcile(runId, cached);
         if (!mutex.held()) throw new Error(`run ${runId}: append lock lost mid-operation`);
+        // And re-test the CAS. The check above ran against the PRE-steal fold; if the
+        // second reconcile just took in records a peer committed while this holder was
+        // frozen, `cached.count` has moved and the caller's read is stale after all.
+        // Writing anyway makes a conditional append unconditional in the one window
+        // where the condition matters — a stale cancel landing on top of a peer's
+        // run.completed, which is exactly what appendIf exists to refuse. Declining here
+        // leaves any torn tail for the next append (which re-reconciles) to cut.
+        if (expectedCount !== undefined && cached.count !== expectedCount) return undefined;
         const { size } = await fs.stat(this.journalPath(runId));
         if (size > cached.byteOffset) await fs.truncate(this.journalPath(runId), cached.byteOffset);
       } catch (err) {
@@ -421,9 +441,20 @@ export class FsJournalStore implements JournalStore {
       // One damaged run must not hide every healthy one. `weft ls` is how a person
       // finds the run that needs repairing, so a corrupt line in ONE journal throwing
       // out of the whole listing takes away the tool they would use to fix it.
-      // The run is skipped here and still fails loudly on read/resume/status, where
-      // the error names it.
-      const summary = await this.summarize(runId).catch(() => undefined);
+      //
+      // DAMAGE only, though. This used to swallow every failure, and a listing is not a
+      // read-only convenience: `RunIndex.rebuild()` clears the table and repopulates it
+      // from exactly this list, so a healthy run dropped here for a transient EACCES or
+      // EIO is also deleted from the index — a storage hiccup quietly unmaking durable
+      // rows. An unparseable record will never parse, so skipping it is the repair path;
+      // a fault means the run is fine and the volume is not, and it belongs to the
+      // caller. Same line the blob store draws.
+      let summary: RunSummary | undefined;
+      try {
+        summary = await this.summarize(runId);
+      } catch (err) {
+        if (!damagedOrGone(err)) throw err;
+      }
       if (!summary) continue;
       if (filter.status && summary.status !== filter.status) continue;
       if (filter.workflow && summary.workflow !== filter.workflow) continue;

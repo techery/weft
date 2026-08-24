@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
-import { Engine, ProviderRegistry } from "@techery/weft-core";
+import { Engine, ProviderRegistry, type ResumeOptions } from "@techery/weft-core";
 import {
   createWorkflowRegistry,
   DEFAULT_ALLOW_BARE,
@@ -203,11 +203,16 @@ export async function persistWorkflowRef(weft: Weft, runId: string, ref: string)
 }
 
 /**
- * The definition persisted with a run: a recorded path ref re-resolved from disk, or
- * an inline run's bundled script. Undefined for registry runs — the engine's registry
- * lookup by the journaled name covers those.
+ * The definition persisted with a run, and the bundle hash of the version just loaded:
+ * a recorded path ref re-resolved from disk, or an inline run's bundled script.
+ * Undefined for registry runs — the engine's registry lookup by the journaled name
+ * covers those.
+ *
+ * The hash is what lets `engine.resume` notice an edit inside a module the workflow body
+ * merely delegates to: `def.run.toString()` is identical across such an edit, and step
+ * positions would go on being trusted after the call sites underneath them moved.
  */
-export async function persistedDefOf(weft: Weft, runId: string): Promise<WorkflowDefinition | undefined> {
+export async function persistedDefOf(weft: Weft, runId: string): Promise<PersistedDef | undefined> {
   let raw: string;
   try {
     raw = await readFile(join(weft.runsDir, runId, "workflow.json"), "utf8");
@@ -218,7 +223,10 @@ export async function persistedDefOf(weft: Weft, runId: string): Promise<Workflo
     // silently run in this run's place.
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
-    return inlineDefOf(weft, runId);
+    const def = await inlineDefOf(weft, runId);
+    // An inline run's script is journaled with it, so it cannot have changed and there
+    // is nothing for a hash to catch.
+    return def === undefined ? undefined : { def };
   }
   const parsed = JSON.parse(raw) as { ref?: unknown };
   if (typeof parsed.ref !== "string") {
@@ -226,7 +234,31 @@ export async function persistedDefOf(weft: Weft, runId: string): Promise<Workflo
   }
   // A moved file or a failed gate throws here — the caller must see WHY the
   // recorded definition is unavailable, never a quiet fallback.
-  return (await resolveWorkflow(weft, parsed.ref)).def;
+  const resolved = await resolveWorkflow(weft, parsed.ref);
+  return { def: resolved.def, ...(resolved.hash !== undefined ? { hash: resolved.hash } : {}) };
+}
+
+/** A run's recorded definition, with the bundle hash where the ref could produce one. */
+export interface PersistedDef {
+  def: WorkflowDefinition;
+  hash?: string;
+}
+
+/**
+ * `persistedDefOf`'s answer as `engine.resume` options.
+ *
+ * The hash travels with the definition or the version check quietly weakens: without it
+ * the engine compares only `def.run.toString()`, which is blind to an edit inside a
+ * module the body delegates to, and a resume then goes on trusting step positions after
+ * the call sites underneath them moved. Every host resumes through here so that pairing
+ * is not something three call sites have to remember.
+ */
+export function resumeOptions(persisted: PersistedDef | undefined): ResumeOptions {
+  if (persisted === undefined) return {};
+  return {
+    def: persisted.def,
+    ...(persisted.hash !== undefined ? { defHash: persisted.hash } : {}),
+  };
 }
 
 /**
