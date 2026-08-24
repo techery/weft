@@ -145,22 +145,26 @@ export class GitCli implements Git {
   async changedSince(ref: string): Promise<{ files: Array<{ path: string; status: GitFileStatus }> }> {
     const { sha } = await this.mergeBase(ref, "HEAD");
     // No second revision: git diffs the merge base against the working tree, so
-    // uncommitted edits count as changes too.
-    const { stdout } = await this.plumb(["diff", "--name-status", sha]);
+    // uncommitted edits count as changes too. -z: NUL-delimited records with no
+    // C-quoting — a filename holding a newline, tab, quote, or backslash
+    // round-trips exactly instead of arriving mangled (or as two entries).
+    const { stdout } = await this.plumb(["diff", "--name-status", "-z", sha]);
     const files: Array<{ path: string; status: GitFileStatus }> = [];
     const seen = new Set<string>();
-    for (const line of splitLines(stdout)) {
-      const parts = line.split("\t");
-      const code = parts[0] ?? "";
+    const tokens = stdout.split("\0");
+    for (let i = 0; i < tokens.length; ) {
+      const code = tokens[i++] ?? "";
+      if (code === "") continue;
       // Renames and copies carry old and new paths; the new one is what changed.
-      const path = code.startsWith("R") || code.startsWith("C") ? parts[2] : parts[1];
+      const first = tokens[i++];
+      const path = code.startsWith("R") || code.startsWith("C") ? tokens[i++] : first;
       if (path === undefined || path === "" || seen.has(path)) continue;
       seen.add(path);
       files.push({ path, status: fileStatus(code) });
     }
-    const others = await this.plumb(["ls-files", "--others", "--exclude-standard"]);
-    for (const path of splitLines(others.stdout)) {
-      if (seen.has(path)) continue;
+    const others = await this.plumb(["ls-files", "--others", "--exclude-standard", "-z"]);
+    for (const path of others.stdout.split("\0")) {
+      if (path === "" || seen.has(path)) continue;
       seen.add(path);
       files.push({ path, status: "A" });
     }

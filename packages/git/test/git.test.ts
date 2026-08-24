@@ -186,6 +186,20 @@ describe("head, branches and mergeBase", () => {
 });
 
 describe("changedSince", () => {
+  test("filenames with newlines, tabs, and quotes round-trip exactly", async () => {
+    const git = await initRepo();
+    await seed(git, { "base.txt": "base\n" }, "init");
+    // Legal-but-hostile POSIX names: without -z parsing, git C-quotes or splits
+    // these and changedSince reports mangled or missing paths.
+    const weird = 'we"ird\ttab';
+    const newliney = "line\nbreak.txt";
+    await seed(git, { [weird]: "one\n", [newliney]: "two\n" }, "hostile names");
+    await write(git, "untracked\nname.txt", "three\n");
+    const { files } = await git.changedSince("HEAD~1");
+    const paths = files.map((f) => f.path).sort();
+    expect(paths).toEqual(["line\nbreak.txt", "untracked\nname.txt", 'we"ird\ttab'].sort());
+  });
+
   test("covers committed, working-tree and untracked changes", async () => {
     const git = await initRepo();
     await seed(git, { "keep.txt": "keep\n", "edit.txt": "edit\n", "gone.txt": "gone\n" }, "init");

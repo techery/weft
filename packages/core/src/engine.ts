@@ -1230,8 +1230,19 @@ export class Engine implements EngineHost {
   }
 
   async pending(runId: string): Promise<PendingRequest[]> {
+    return this.pendingAcrossTree(runId, new Set([runId]));
+  }
+
+  /**
+   * Pending requests of the run AND its descendants: a child suspended on a
+   * person suspends the whole tree, and its request lives in the CHILD's
+   * journal — `weft answer <parent> <id>` (and every other pending() consumer)
+   * must still find it after the owning process exits. Each entry carries the
+   * OWNING run's id; answer() routes a parent-addressed answer there anyway.
+   */
+  private async pendingAcrossTree(runId: string, seen: Set<string>): Promise<PendingRequest[]> {
     const state = await this.state(runId);
-    return state.humans
+    const out: PendingRequest[] = state.humans
       .filter((h) => h.status === "pending")
       .map((h) => ({
         runId,
@@ -1245,6 +1256,16 @@ export class Engine implements EngineHost {
         ...(h.deadline !== undefined ? { deadline: h.deadline } : {}),
         ...(h.confirmToken !== undefined ? { confirmToken: h.confirmToken } : {}),
       }));
+    for (const { childRunId } of state.children) {
+      if (seen.has(childRunId)) continue;
+      seen.add(childRunId);
+      try {
+        out.push(...(await this.pendingAcrossTree(childRunId, seen)));
+      } catch {
+        // scheduled but never journaled
+      }
+    }
+    return out;
   }
 
   async list(filter?: RunListFilter): Promise<RunSummary[]> {

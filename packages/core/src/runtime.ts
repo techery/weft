@@ -642,9 +642,20 @@ export class RunRuntime {
       winner = await Promise.race([
         promise,
         new Promise<typeof TIMED_OUT>((resolve) => {
-          timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
+          // Armed in CHUNKS like sleep(): Node clamps a timer past 2^31-1ms to
+          // ~1ms, which would fail a 30-day step timeout almost immediately.
           // ref'd on purpose: bounded, cleared in finally, and it must be able to
           // fail the step even when a hung provider holds no handles of its own
+          const deadline = Date.now() + timeoutMs;
+          const arm = () => {
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) {
+              resolve(TIMED_OUT);
+              return;
+            }
+            timer = setTimeout(arm, Math.min(remaining, MAX_TIMER_MS));
+          };
+          arm();
         }),
       ]);
     } finally {

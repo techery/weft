@@ -2466,3 +2466,52 @@ describe("codex review findings, round 27 (PR #1)", () => {
     expect(existsSync(join(cwd, "secrets.env"))).toBe(true);
   });
 });
+
+describe("codex review findings, round 28 (PR #1)", () => {
+  test("engine.pending on a parent reports the CHILD's request — the CLI answer flow depends on it", async () => {
+    const t = testEngine();
+    const child = defineWorkflow(
+      { name: "askkid", description: "a", input: z.object({}), output: z.object({ go: z.boolean() }) },
+      async (ctx) => {
+        const a = await ctx.human.ask({ question: "kid asks?", schema: z.object({ go: z.boolean() }) });
+        return { go: a.go };
+      },
+    );
+    const parent = defineWorkflow(
+      { name: "askdad", description: "a", input: z.object({}), output: z.object({ go: z.boolean() }) },
+      async (ctx) => (await ctx.workflow(child, {})) as { go: boolean },
+    );
+    const h = await t.engine.start(parent, { input: {}, cwd: await tempDir() });
+    const o = await h.outcome();
+    if (o.status !== "waiting_for_human") throw new Error("expected the child's ask");
+    // `weft answer <parent> <id>` resolves the request through pending(parent):
+    // folding only the parent's own humans returns [] and rejects the exact
+    // command reportOutcome printed.
+    const pending = await t.engine.pending(h.runId);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.question).toBe("kid asks?");
+    expect(pending[0]?.runId).not.toBe(h.runId); // owned by the child
+    await t.engine.answer(h.runId, pending[0]?.id ?? "", { go: true });
+    expect(await h.result).toEqual({ go: true });
+  });
+
+  test("a step timeout beyond Node's timer ceiling does not fire almost immediately", async () => {
+    const t = testEngine();
+    // 50ms of real work under a 30-DAY timeout: the old single setTimeout
+    // clamps 30d to ~1ms and fails the step before the mock can answer.
+    t.builder.on({ prompt: /slowish/ }, { ok: true }, { delayMs: 50 });
+    const def = defineWorkflow(
+      { name: "longpatience", description: "l", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const r = await ctx.agent("slowish work", {
+          schema: z.object({ ok: z.boolean() }),
+          key: "s1",
+          timeout: "30d",
+        });
+        return { ok: r.ok };
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    expect(await h.result).toEqual({ ok: true });
+  });
+});
