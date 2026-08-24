@@ -235,6 +235,11 @@ export function isReadOnlyCommand(command: string): boolean {
     if (name === "git") {
       const sub = words[i + 1];
       if (sub === undefined || !READ_GIT_SUBCOMMANDS.has(sub)) return false;
+      // reflog READS — except its expire/delete forms, which destroy the
+      // recovery history a read-only step must leave alone.
+      if (sub === "reflog" && words.slice(i + 2).some((w) => w === "expire" || w === "delete")) {
+        return false;
+      }
       // The diff family's --output=<file> sends the result to a FILE: a "read"
       // subcommand alone is not proof of read-only behavior. Prefix form: git
       // accepts unambiguous long-option abbreviations, so --out(=x) works too.
@@ -329,11 +334,12 @@ const RISKY_PATTERNS: readonly RegExp[] = [
 ];
 
 export function isRiskyCommand(command: string): boolean {
-  // The shell resolves quoting BEFORE the program sees its words — `git p'u'sh`
-  // runs `git push` — so classification must match against the unquoted text.
-  // Stripping is for MATCHING only and errs toward the stricter reading: a
-  // "push" inside a quoted string routes to approval rather than sailing past.
-  const resolved = command.replace(/['"]/g, "");
+  // The shell resolves quoting and backslash escapes BEFORE the program sees
+  // its words — `git p'u'sh` and `git p\ush` both run `git push` — so
+  // classification must match against the resolved text. Stripping is for
+  // MATCHING only and errs toward the stricter reading: a "push" inside a
+  // quoted string routes to approval rather than sailing past.
+  const resolved = command.replace(/[\\'"]/g, "");
   if (RISKY_PATTERNS.some((re) => re.test(resolved))) return true;
   // `git -C . push` is still a push: resolve the effective subcommand per segment
   // instead of trusting adjacency in the raw string.

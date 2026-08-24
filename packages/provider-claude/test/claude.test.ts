@@ -328,6 +328,8 @@ describe("the tool gate", () => {
       "./cat f.txt", // a path-qualified reader is whatever the REPO put there
       "/repo/bin/grep todo src/a.ts",
       "scripts/sort input.txt",
+      "git reflog expire --expire=now --all", // reflog's mutating forms destroy recovery history
+      "git reflog delete HEAD@{1}",
       "sort --o clobbered input.txt", // GNU sort abbreviates --output too
       "find . -e'x'ec touch changed \\;", // bash concatenates the quoted split back to -exec
       'find . -e"x"ec touch changed \\;',
@@ -356,6 +358,9 @@ describe("the tool gate", () => {
       behavior: "allow",
     });
     expect(await ask(options, "Bash", { command: "git log --first-parent --oneline" })).toEqual({
+      behavior: "allow",
+    });
+    expect(await ask(options, "Bash", { command: "git reflog show HEAD" })).toEqual({
       behavior: "allow",
     });
     expect(await ask(options, "Bash", { command: "diff -u a.txt b.txt" })).toEqual({ behavior: "allow" });
@@ -710,6 +715,9 @@ describe("risky classification of dynamic commands", () => {
     expect(isRiskyCommand("$PUBLISH --now")).toBe(true);
     expect(isRiskyCommand("`printf git` push origin main")).toBe(true);
     expect(isRiskyCommand("eval git push origin main")).toBe(true);
+    // Backslash escapes resolve the same way quotes do: `git p\ush` IS a push.
+    expect(isRiskyCommand("git p\\ush origin main")).toBe(true);
+    expect(isRiskyCommand("git -C . pu\\sh origin main")).toBe(true);
     // Provably static commands stay un-gated: expansions in ARGUMENTS are fine.
     expect(isRiskyCommand("echo $HOME")).toBe(false);
     expect(isRiskyCommand("git status")).toBe(false);

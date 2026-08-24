@@ -468,6 +468,10 @@ describe("weft doctor with unlisted files", () => {
     expect(doctored.text).toContain("problem");
     expect(doctored.text).not.toContain("ready");
     expect(doctored.exitCode).toBe(1);
+
+    // `weft check` swallowed the same failure into "nothing to check" and
+    // exited 0 — CI would pass having validated no workflow at all.
+    await expect(cli("--cwd", root, "--mock", "check", "--no-tsc")).rejects.toThrow(/cannot read/);
   });
 });
 

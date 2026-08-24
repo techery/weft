@@ -103,8 +103,12 @@ async function filesToCheck(registry: NamedRegistry, dir: string, name?: string)
     let entries: string[];
     try {
       entries = await readdir(dir);
-    } catch {
-      return [];
+    } catch (err) {
+      // Only genuine ABSENCE means "nothing to check". Any other failure —
+      // EACCES, EIO, a stray FILE at the directory's path — would silently
+      // skip every workflow and let CI pass having validated nothing.
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw new Error(`cannot read ${dir}: ${(err as Error).message}`);
     }
     return entries
       .filter((entry) => entry.endsWith(".ts") && !entry.endsWith(".d.ts"))
