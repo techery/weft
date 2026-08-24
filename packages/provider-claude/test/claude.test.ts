@@ -350,24 +350,23 @@ describe("the tool gate", () => {
       });
     }
 
+    // Read-only git commands come back allowed WRAPPED: repository config can
+    // attach executable diff/textconv drivers to plain diff/log/show.
+    const allowedGitRead = async (command: string) => {
+      const decision = await ask(options, "Bash", { command });
+      expect(decision.behavior, command).toBe("allow");
+      const updated = (decision as { updatedInput?: { command?: string } }).updatedInput;
+      expect(updated?.command?.endsWith(command), command).toBe(true);
+      expect(updated?.command, command).toContain("--no-ext-diff --no-textconv");
+    };
     expect(await ask(options, "Read", { file_path: `${CWD}/src/a.ts` })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Bash", { command: "rg -n 'todo' src 2>&1" })).toEqual({ behavior: "allow" });
-    expect(await ask(options, "Bash", { command: "git log --oneline | head -5 && git diff" })).toEqual({
-      behavior: "allow",
-    });
+    await allowedGitRead("git log --oneline | head -5 && git diff");
     expect(await ask(options, "Bash", { command: "find src -name '*.ts'" })).toEqual({ behavior: "allow" });
-    expect(await ask(options, "Bash", { command: "git cat-file -p HEAD:README.md" })).toEqual({
-      behavior: "allow",
-    });
-    expect(await ask(options, "Bash", { command: "git grep --extended-regexp 'todo.+fix' src" })).toEqual({
-      behavior: "allow",
-    });
-    expect(await ask(options, "Bash", { command: "git log --first-parent --oneline" })).toEqual({
-      behavior: "allow",
-    });
-    expect(await ask(options, "Bash", { command: "git reflog show HEAD" })).toEqual({
-      behavior: "allow",
-    });
+    await allowedGitRead("git cat-file -p HEAD:README.md");
+    await allowedGitRead("git grep --extended-regexp 'todo.+fix' src");
+    await allowedGitRead("git log --first-parent --oneline");
+    await allowedGitRead("git reflog show HEAD");
     expect(await ask(options, "Bash", { command: "xxd input.bin" })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Bash", { command: "tree -L 2 -a src" })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Bash", { command: "file src/a.ts" })).toEqual({ behavior: "allow" });
@@ -501,6 +500,23 @@ describe("the tool gate", () => {
     expect(await ask(options, "Bash", { command: "pnpm test > /dev/null 2>&1" })).toEqual({
       behavior: "allow",
     });
+  });
+
+  test("a strict write scope denies COMPUTED destinations outright", async () => {
+    const options = await gateContext(
+      request({ tools: { allowEdits: true }, writeScope: { paths: ["src/**"], mode: "strict" } }),
+    );
+    // A token the shell computes at run time can become a destination no
+    // lexical screen sees — here the integration repository's own config.
+    for (const command of [
+      'd=$(git rev-parse --git-common-dir); printf x > "$d/config"',
+      'printf x > "`git rev-parse --git-common-dir`/config"',
+      "cat notes.txt > $DEST",
+      "tee >(sh) < notes.txt",
+    ]) {
+      const denial = await ask(options, "Bash", { command });
+      expect(denial.behavior, command).toBe("deny");
+    }
   });
 
   test("a strict write scope denies writes through a symlink that escapes the worktree", async () => {

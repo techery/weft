@@ -13,6 +13,7 @@ import {
   baseToolName,
   EDIT_TOOLS,
   editTargetPath,
+  GIT_READ_WRAPPER,
   isReadOnlyCommand,
   isRiskyCommand,
   STRUCTURED_OUTPUT_TOOL,
@@ -33,6 +34,14 @@ const OUT_OF_TREE_PATH = /(?:^|[\s='"`])(?:\/(?!dev\/null\b)|~\/|\$HOME\b)/;
  * (`..` must border a separator on both sides).
  */
 const PARENT_TRAVERSAL = /(?:^|[\s='"`/])\.\.(?:[/\s'"`]|$)/;
+
+/**
+ * Any expansion or substitution: a COMPUTED token can become a destination no
+ * lexical screen sees — `d=$(git rev-parse --git-common-dir); printf x >
+ * "$d/config"` overwrites the integration repository's config, invisible to
+ * patch capture. Strict scope prefers a false deny over an unquarantined write.
+ */
+const COMPUTED_TOKEN = /[$`]|<\(|>\(/;
 
 /**
  * True when the cwd-relative target's deepest EXISTING ancestor resolves outside
@@ -145,17 +154,31 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
       const command = typeof input.command === "string" ? input.command : "";
       // Read-only steps run in the integration cwd, not a worktree, so the shell is
       // deny-by-default there: only commands known not to write may run.
-      if (!allowEdits && !isReadOnlyCommand(command)) return deny(READ_ONLY_MESSAGE);
+      if (!allowEdits) {
+        if (!isReadOnlyCommand(command)) return deny(READ_ONLY_MESSAGE);
+        // Repository config can attach EXECUTABLE diff/textconv drivers to a
+        // plain `git diff`/`log`/`show` through .gitattributes: the command
+        // runs wrapped so the read gate's allow cannot execute them.
+        if (/\bgit\b/.test(command)) {
+          return {
+            behavior: "allow",
+            updatedInput: { ...input, command: GIT_READ_WRAPPER + command },
+          };
+        }
+        return allow;
+      }
       // A STRICT write scope relies on worktree patch capture, which only sees the
       // worktree — and EVERY command can write, not just a recognized writer
       // (`python -c 'open("/tmp/out","w")'`, an unknown binary). So the boundary
       // applies to the whole shell surface: an absolute or home-anchored path, a
-      // `..` traversal, or a path resolving out through a symlink is denied up
-      // front, whatever the command. Traversal-free relative work stays allowed.
+      // `..` traversal, a COMPUTED token, or a path resolving out through a
+      // symlink is denied up front, whatever the command. Traversal-free,
+      // expansion-free relative work stays allowed.
       if (
         scope?.mode === "strict" &&
         (OUT_OF_TREE_PATH.test(command) ||
           PARENT_TRAVERSAL.test(command) ||
+          COMPUTED_TOKEN.test(command) ||
           (await commandEscapesWorktree(req.cwd, command)))
       ) {
         return deny(`shell access outside the worktree is ${scopeMessage}`);

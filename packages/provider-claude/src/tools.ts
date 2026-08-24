@@ -214,6 +214,17 @@ function shellWords(command: string): string[][] | null {
   return segments;
 }
 
+/**
+ * Prefix for read-only Bash commands that reach git: a repository can attach
+ * EXECUTABLE helpers to plain `git diff`/`log`/`show` through .gitattributes
+ * (`diff.<driver>.command` runs on every hunk; `diff.<driver>.textconv` runs
+ * by DEFAULT on porcelain diffs). The wrapper forces --no-ext-diff
+ * --no-textconv onto exactly those subcommands — the read gate only admits
+ * git commands whose subcommand comes first, so `$1` is always it.
+ */
+export const GIT_READ_WRAPPER =
+  'git() { case "$1" in diff|log|show) _s=$1; shift; command git "$_s" --no-ext-diff --no-textconv "$@";; *) command git "$@";; esac; }; ';
+
 export function isReadOnlyCommand(command: string): boolean {
   const segments = shellWords(command);
   if (segments === null) return false;
