@@ -257,7 +257,7 @@ export class Engine implements EngineHost {
     // still executing would run it twice.
     const lease = await this.claimRun(runId);
     try {
-      return this.resumeSetup(runId, records, created, def, opts, inputCheck.value, lease);
+      return await this.resumeSetup(runId, records, created, def, opts, inputCheck.value, lease);
     } catch (err) {
       // Setup failed before drive() (whose finally owns the release from launch
       // on): the claim must not outlive an execution that never started.
@@ -267,7 +267,7 @@ export class Engine implements EngineHost {
   }
 
   /** The claimed half of resume(); everything here throws to a lease-releasing catch. */
-  private resumeSetup(
+  private async resumeSetup(
     runId: string,
     records: JournalRecord[],
     created: Extract<JournalEvent, { type: "run.created" }>,
@@ -275,16 +275,20 @@ export class Engine implements EngineHost {
     opts: ResumeOptions,
     input: unknown,
     lease: RunLease | undefined,
-  ): RunHandle {
+  ): Promise<RunHandle> {
     const replay = ReplayIndex.fromRecords(records);
     // The agent hard cap counts DISPATCHES across the whole run tree, and
     // served steps never re-bump: a counter reset to zero would grant every
     // resume a fresh full batch, defeating the runaway-workflow safety cap.
-    // Every dispatch appended one agent step.scheduled — restore from those.
+    // Every dispatch appended one agent step.scheduled — restore from those,
+    // across the DURABLE descendant journals too: a replay-served workflow
+    // step never re-enters executeChildRun, so its child's dispatches are
+    // visible only in the child journal.
     let agentDispatches = 0;
     for (const r of records) {
       if (r.ev.type === "step.scheduled" && r.ev.kind === "agent") agentDispatches++;
     }
+    agentDispatches += await this.descendantAgentDispatches(runId, records, new Set([runId]));
     const shared: SharedRunResources = {
       // The journaled ceiling survives resume; spend restores from journaled usage.
       budget: new Budget(created.budget ?? {}),
@@ -321,6 +325,48 @@ export class Engine implements EngineHost {
       ...(def.meta.defaults !== undefined ? { workflowDefaults: def.meta.defaults } : {}),
     });
     return this.launch(runtime, def, input, records, lease);
+  }
+
+  /**
+   * Agent dispatches recorded across the DURABLE descendant journals of these
+   * records. A replay-served workflow step never re-enters executeChildRun, so
+   * a child's spend against the tree-wide agent cap is visible only in ITS
+   * journal — without this walk, a resume would replenish the cap by that
+   * whole amount. Only journals whose run.created names this parent count: an
+   * eight-hex collision with an unrelated run must not import its dispatches.
+   */
+  private async descendantAgentDispatches(
+    parentId: string,
+    records: JournalRecord[],
+    seen: Set<string>,
+  ): Promise<number> {
+    const childIds = new Set<string>();
+    for (const rec of records) {
+      if (rec.ev.type === "step.scheduled" && rec.ev.childRunId !== undefined) {
+        childIds.add(rec.ev.childRunId);
+      } else if (rec.ev.type === "step.completed") {
+        // A COLLISION-regenerated child id appears only in the completed output.
+        const out = rec.ev.output as { childRunId?: unknown } | null | undefined;
+        if (out && typeof out === "object" && typeof out.childRunId === "string") {
+          childIds.add(out.childRunId);
+        }
+      }
+    }
+    let count = 0;
+    for (const childId of childIds) {
+      if (seen.has(childId)) continue;
+      seen.add(childId);
+      if (!(await this.journal.exists(childId))) continue;
+      const childRecords: JournalRecord[] = [];
+      for await (const r of this.journal.read(childId)) childRecords.push(r);
+      const created = childRecords.find((r) => r.ev.type === "run.created")?.ev;
+      if (created?.type !== "run.created" || created.parentRunId !== parentId) continue;
+      for (const r of childRecords) {
+        if (r.ev.type === "step.scheduled" && r.ev.kind === "agent") count++;
+      }
+      count += await this.descendantAgentDispatches(childId, childRecords, seen);
+    }
+    return count;
   }
 
   /** Claim a run before executing it; throws when another live process owns it. */
@@ -864,11 +910,10 @@ export class Engine implements EngineHost {
       const created = records.find((r) => r.ev.type === "run.created")?.ev;
       if (created?.type === "run.created") rawInput = created.input === undefined ? {} : created.input;
       replay = ReplayIndex.fromRecords(records);
-      // The child's journaled agent dispatches count against the SHARED
-      // tree-wide cap, exactly as the root resume restores its own journal's.
-      for (const rec of records) {
-        if (rec.ev.type === "step.scheduled" && rec.ev.kind === "agent") shared.agentCounter.count++;
-      }
+      // The child's journaled agent dispatches are NOT re-counted here: the
+      // root's resume walked every durable descendant journal already, and a
+      // live parent whose child re-enters this path counted the dispatches as
+      // they happened.
       // A crash AFTER a durable budget.sampled but BEFORE the paid step's
       // terminal record leaves that call's spend visible ONLY in the sample
       // (the root resume above guards the same way; samples in a child journal

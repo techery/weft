@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { stat as fsStat, readFile, symlink, utimes, writeFile } from "node:fs/promises";
+import { stat as fsStat, mkdir, readFile, symlink, utimes, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import {
@@ -3542,4 +3542,82 @@ describe("codex review findings, round 48 (PR #1)", () => {
     await t2.engine.answer(h1.runId, o2.pending[0]?.id ?? "", { go: true });
     expect(await h2.result).toEqual({ got: "null" });
   });
+});
+
+describe("codex review findings, round 49 (PR #1)", () => {
+  test("a COMPLETED child's dispatches still count against the cap after resume", async () => {
+    const Ok = z.object({ ok: z.boolean() });
+    const child = defineWorkflow(
+      { name: "spender", description: "s", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("one", { schema: Ok, key: "c1" });
+        await ctx.agent("two", { schema: Ok, key: "c2" });
+        return {};
+      },
+    );
+    const parent = defineWorkflow(
+      { name: "spendhold", description: "s", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.workflow(child, {}, { key: "kid" });
+        await ctx.human.ask({ question: "go on?", schema: z.object({ go: z.boolean() }) });
+        await ctx.agent("three", { schema: Ok, key: "p3" });
+        await ctx.agent("four", { schema: Ok, key: "p4" });
+        return {};
+      },
+    );
+    const t1 = testEngine({ config: { limits: { agentHard: 3 } } });
+    t1.builder.on({ key: "*" }, { ok: true });
+    const h1 = await t1.engine.start(parent, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the ask");
+    await t1.engine.shutdown();
+
+    // The child COMPLETED, so its workflow step is served on resume and
+    // executeChildRun never re-runs: the two child dispatches live only in the
+    // child journal. Without the descendant walk, the cap refills by two and
+    // p3+p4 both dispatch (4 total through a cap of 3).
+    const t2 = reopen(t1, { config: { limits: { agentHard: 3 } } });
+    t2.builder.on({ key: "*" }, { ok: true });
+    const h2 = await t2.engine.resume(h1.runId, { def: parent });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the ask again");
+    await t2.engine.answer(h1.runId, o2.pending[0]?.id ?? "", { go: true });
+    await expect(h2.result).rejects.toThrow(/agent step cap exceeded/);
+  });
+
+  test("a strict in-place scope refuses an UNVERIFIABLE ignored tree", async () => {
+    const FixResult = z.object({ summary: z.string() });
+    const t = testEngine();
+    t.builder.on({ key: "fix:t" }, { summary: "edit" }, { writes: { "a.txt": "AGENT\n" } });
+    t.builder.on(
+      { key: "merge:fix:t" },
+      { resolved: true, notes: "fixed" },
+      { writes: { "a.txt": "RESOLVED\n" } },
+    );
+    const cwd = await tempRepo({ ".gitignore": "big/\n", "a.txt": "base\n" });
+    // 10_500 pre-existing ignored files: the content-hash walk caps out, and a
+    // PARTIAL manifest used to read as "verified" — an edit beyond the cutoff
+    // would survive a strict scope unseen.
+    await mkdir(join(cwd, "big"), { recursive: true });
+    for (let batch = 0; batch < 21; batch++) {
+      await Promise.all(
+        Array.from({ length: 500 }, (_, i) => writeFile(join(cwd, "big", `f${batch * 500 + i}.txt`), "x")),
+      );
+    }
+    const def = defineWorkflow(
+      { description: "tt", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        const fix = await ctx.agent.detailed("fix", {
+          schema: FixResult,
+          key: "fix:t",
+          write: { paths: ["a.txt"] },
+        });
+        await ctx.bash("printf 'MAIN\\n' > a.txt");
+        await ctx.integrate([fix], { onConflict: "agent" });
+        return {};
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd });
+    await expect(h.result).rejects.toMatchObject({ code: "invalid_input" });
+  }, 60_000);
 });

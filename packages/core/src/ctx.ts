@@ -392,7 +392,18 @@ export function buildCtx(rt: RunRuntime): Ctx {
               // The listing diff only sees NEW top-level entries; edits (or new
               // files) INSIDE a pre-existing ignored file or directory need a
               // stat manifest to become visible at all.
-              ignoredManifestBefore = await ignoredStatManifest(ignoredListingBefore);
+              const walked = await ignoredStatManifest(ignoredListingBefore);
+              if (scope.mode === "strict" && walked.truncated) {
+                // A partial manifest cannot back a STRICT scope: edits beyond
+                // the cutoff would survive unverified. Refuse before spending.
+                throw new StepError(
+                  "invalid_input",
+                  `${label}: the pre-existing ignored tree holds more than ${IGNORED_MANIFEST_CAP} files, ` +
+                    `so a strict in-place scope cannot be verified here`,
+                  { step: stepRef },
+                );
+              }
+              ignoredManifestBefore = walked.manifest;
             }
             let finalPrompt = prompt;
             if (scope) {
@@ -601,13 +612,20 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 // Pre-existing ignored content re-walked with the SAME entry list:
                 // an edit, deletion, or new file inside an already-ignored path is
                 // invisible to both the tree diff and the listing diff.
-                const changedIgnored =
-                  ignoredManifestBefore !== undefined && ignoredListingBefore !== undefined
-                    ? diffIgnoredManifest(
-                        ignoredManifestBefore,
-                        await ignoredStatManifest(ignoredListingBefore),
-                      )
-                    : [];
+                let changedIgnored: string[] = [];
+                if (ignoredManifestBefore !== undefined && ignoredListingBefore !== undefined) {
+                  const after = await ignoredStatManifest(ignoredListingBefore);
+                  if (scope.mode === "strict" && after.truncated) {
+                    // The re-walk blew past the cap (files ADDED during the
+                    // step): a partial diff would hide out-of-scope edits.
+                    throw new StepError(
+                      "scope_violation",
+                      `in-place step cannot verify the ignored tree (over ${IGNORED_MANIFEST_CAP} files after the step)`,
+                      { step: stepRef },
+                    );
+                  }
+                  changedIgnored = diffIgnoredManifest(ignoredManifestBefore, after.manifest);
+                }
                 if (changedIgnored.length > 0) {
                   await rt.append([
                     {
@@ -1847,10 +1865,19 @@ export function buildCtx(rt: RunRuntime): Ctx {
    * or listing diff can see.
    */
   const IGNORED_MANIFEST_CAP = 10_000;
-  async function ignoredStatManifest(entries: string[]): Promise<Map<string, string>> {
+  async function ignoredStatManifest(
+    entries: string[],
+  ): Promise<{ manifest: Map<string, string>; truncated: boolean }> {
     const manifest = new Map<string, string>();
+    let truncated = false;
     const walk = async (rel: string): Promise<void> => {
-      if (manifest.size > IGNORED_MANIFEST_CAP) return;
+      if (manifest.size > IGNORED_MANIFEST_CAP) {
+        // A PARTIAL manifest must never read as "verified": the strict path
+        // fails on this flag instead of trusting a diff that cannot see the
+        // files beyond the cutoff.
+        truncated = true;
+        return;
+      }
       const clean = rel.replace(/\/$/, "");
       let stat: import("node:fs").Stats;
       try {
@@ -1883,7 +1910,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
       }
     };
     for (const entry of entries) await walk(entry);
-    return manifest;
+    return { manifest, truncated };
   }
 
   /** Paths whose stat changed, vanished, or appeared inside the walked entries. */
