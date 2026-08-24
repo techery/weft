@@ -2891,3 +2891,106 @@ describe("codex review findings, round 33 (PR #1)", () => {
     }
   });
 });
+
+describe("codex review findings, round 34 (PR #1)", () => {
+  test("a fetch deadline beyond Node's timer ceiling waits, not aborts on the spot", async () => {
+    const server = createServer((_req, res) => {
+      setTimeout(() => res.end("slow but fine"), 50);
+    });
+    await new Promise<void>((r) => server.listen(0, () => r()));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const t = testEngine();
+      const def = defineWorkflow(
+        {
+          name: "longfetch",
+          description: "l",
+          input: z.object({}),
+          output: z.object({ status: z.number() }),
+        },
+        async (ctx) => {
+          const res = (await ctx.fetch(`http://127.0.0.1:${port}/slow`, { timeout: "30d" })) as {
+            status: number;
+          };
+          return { status: res.status };
+        },
+      );
+      const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+      // 30 days overflows the signed-32-bit timer: AbortSignal.timeout clamps
+      // to ~1ms and used to kill the request before the server's 50ms answer.
+      expect(await h.result).toEqual({ status: 200 });
+    } finally {
+      server.close();
+    }
+  });
+
+  test("a child resume trusts its budget.sampled floor when a paid completion never persisted", async () => {
+    // The completion record is "lost in the crash": the LIVE run sees a normal
+    // append, durable storage never does — exactly a crash after the charge's
+    // budget.sampled landed but before the step's terminal record did.
+    class DropsOneCompletion extends MemoryJournalStore {
+      private dropped = false;
+      override async append(runId: string, events: JournalEvent[]): Promise<JournalRecord[]> {
+        const idx = this.dropped
+          ? -1
+          : events.findIndex(
+              (e) => e.type === "step.completed" && (e as { usage?: unknown }).usage !== undefined,
+            );
+        if (idx === -1) return super.append(runId, events);
+        this.dropped = true;
+        const out: JournalRecord[] = [];
+        for (const [k, ev] of events.entries()) {
+          if (k === idx) {
+            let count = 0;
+            for await (const _ of this.read(runId)) count++;
+            out.push({ i: count, at: Date.now(), ev });
+          } else {
+            out.push((await super.append(runId, [ev]))[0]!);
+          }
+        }
+        return out;
+      }
+    }
+    const child = defineWorkflow(
+      { name: "sampledkid", description: "s", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("pay first", { schema: z.object({ ok: z.boolean() }), key: "c1" });
+        await ctx.human.ask({ question: "go on?", schema: z.object({ go: z.boolean() }) });
+        return {};
+      },
+    );
+    const parent = defineWorkflow(
+      { name: "sampledholder", description: "s", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.workflow(child, {}, { key: "kid", budget: { tokens: 200 } });
+        return {};
+      },
+    );
+    const journal = new DropsOneCompletion();
+    const blobs = new MemoryBlobStore();
+    const b1 = mock();
+    b1.on({ prompt: /pay/ }, { ok: true });
+    const p1 = new ProviderRegistry();
+    p1.register(b1.provider("claude"));
+    p1.register(b1.provider("codex"));
+    const e1 = new Engine({ journal, blobs, providers: p1 });
+    const h1 = await e1.start(parent, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the child to suspend");
+    await e1.shutdown();
+
+    // The child journal holds budget.sampled(150) but NO completed usage: the
+    // record-derived total restores 0, so a resume that ignores the sample lets
+    // the re-dispatched 150-token call spend through the 200-token cap a second
+    // time. The sample is the lower bound — 150 restored leaves 50, and at the
+    // observed 150-per-call average the retry must be refused.
+    const b2 = mock();
+    b2.on({ prompt: /pay/ }, { ok: true });
+    const p2 = new ProviderRegistry();
+    p2.register(b2.provider("claude"));
+    p2.register(b2.provider("codex"));
+    const e2 = new Engine({ journal, blobs, providers: p2 });
+    const h2 = await e2.resume(h1.runId, { def: parent });
+    await expect(h2.result).rejects.toMatchObject({ code: "budget_exceeded" });
+  });
+});

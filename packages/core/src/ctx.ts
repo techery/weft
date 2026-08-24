@@ -69,6 +69,28 @@ function tail(s: string, n: number): string {
   return s.length > n ? `…${s.slice(-n)}` : s;
 }
 
+/**
+ * AbortSignal.timeout past Node's ~24.8-day timer ceiling fires IMMEDIATELY
+ * (the overflowed delay clamps to 1ms), aborting a long-deadline fetch on the
+ * spot. Chunk the countdown the same way sleep() does; unref'd so a pending
+ * deadline never holds the process open.
+ */
+function timeoutSignalOf(ms: number): AbortSignal {
+  if (ms <= MAX_TIMER_MS) return AbortSignal.timeout(ms);
+  const controller = new AbortController();
+  const deadline = Date.now() + ms;
+  const arm = (): void => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      controller.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+      return;
+    }
+    setTimeout(arm, Math.min(remaining, MAX_TIMER_MS)).unref?.();
+  };
+  arm();
+  return controller.signal;
+}
+
 // ---------------------------------------------------------------------------
 // Secrets
 // ---------------------------------------------------------------------------
@@ -1127,7 +1149,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
           method,
           headers: resolved,
           ...(init?.body !== undefined ? { body: init.body } : {}),
-          signal: AbortSignal.any([AbortSignal.timeout(timeoutMs), io.signal]),
+          signal: AbortSignal.any([timeoutSignalOf(timeoutMs), io.signal]),
         };
         let response: Response;
         try {

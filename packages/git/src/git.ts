@@ -33,10 +33,6 @@ const GIT_ENV: Record<string, string> = {
 /** Prefix for commands whose output we parse: keeps non-ASCII paths unquoted. */
 const RAW_PATHS = ["-c", "core.quotePath=false"];
 
-/** Field/record separators for `--format`; neither can occur in git metadata. */
-const FIELD = "\x1f";
-const RECORD = "\x1e";
-
 /** Longest stderr excerpt carried in a GitError message; the full text stays on `.stderr`. */
 const STDERR_EXCERPT = 400;
 
@@ -192,7 +188,12 @@ export class GitCli implements Git {
   }
 
   async log(opts: GitRange & { max?: number } = {}): Promise<{ commits: GitCommitInfo[] }> {
-    const args = ["log", `--format=%H${FIELD}%an${FIELD}%aI${FIELD}%s${FIELD}%b${RECORD}`];
+    // NUL-separated records (`-z`): a commit message can carry any byte except
+    // NUL, so in-band separators like \x1e/\x1f would split a hostile message
+    // into phantom commits. Within a record, %H/%an/%aI/%s can't contain
+    // newlines (git rejects NL in idents and %s collapses the subject to one
+    // line), so the first four lines are fixed and everything after is %b.
+    const args = ["log", "-z", "--format=%H%n%an%n%aI%n%s%n%b"];
     if (opts.max !== undefined) args.push("-n", String(opts.max));
     args.push(
       opts.from !== undefined
@@ -202,17 +203,15 @@ export class GitCli implements Git {
     if (opts.paths && opts.paths.length > 0) args.push("--", ...opts.paths);
     const { stdout } = await this.raw(args);
     const commits: GitCommitInfo[] = [];
-    for (const record of stdout.split(RECORD)) {
-      // git separates records with a newline of its own; drop it before parsing.
-      const body = record.replace(/^\r?\n/, "");
-      if (body.trim() === "") continue;
-      const fields = body.split(FIELD);
+    for (const record of stdout.split("\0")) {
+      if (record.trim() === "") continue;
+      const lines = record.split("\n");
       commits.push({
-        sha: fields[0] ?? "",
-        author: fields[1] ?? "",
-        date: fields[2] ?? "",
-        subject: fields[3] ?? "",
-        body: (fields[4] ?? "").trimEnd(),
+        sha: lines[0] ?? "",
+        author: lines[1] ?? "",
+        date: lines[2] ?? "",
+        subject: lines[3] ?? "",
+        body: lines.slice(4).join("\n").trimEnd(),
       });
     }
     return { commits };

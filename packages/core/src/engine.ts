@@ -800,7 +800,11 @@ export class Engine implements EngineHost {
     }
 
     const shared: SharedRunResources = {
-      budget: spec.budget ? parent.shared.budget.child(spec.budget) : parent.shared.budget,
+      // Every child gets its OWN scope, capped or not: the budget.sampled
+      // records a child journals must be child-scoped, or the resume below —
+      // which reads them as a lower bound on the child's spend — would import
+      // the whole pool's cumulative spend into one child.
+      budget: parent.shared.budget.child(spec.budget ?? {}),
       abort: parent.shared.abort,
       agentCounter: parent.shared.agentCounter,
       reuse: parent.shared.reuse,
@@ -852,24 +856,31 @@ export class Engine implements EngineHost {
       const created = records.find((r) => r.ev.type === "run.created")?.ev;
       if (created?.type === "run.created") rawInput = created.input === undefined ? {} : created.input;
       replay = ReplayIndex.fromRecords(records);
+      // A crash AFTER a durable budget.sampled but BEFORE the paid step's
+      // terminal record leaves that call's spend visible ONLY in the sample
+      // (the root resume above guards the same way; samples in a child journal
+      // are child-scoped because every child runs in its own Budget scope).
+      let sampled = { tokens: 0, usd: 0 };
+      for (const r of records) {
+        if (r.ev.type === "budget.sampled") sampled = { tokens: r.ev.tokens, usd: r.ev.usd };
+      }
+      const fullTokens = Math.max(replay.totalUsage.tokens, sampled.tokens);
+      const fullUsd = Math.max(replay.totalUsage.usd, sampled.usd);
+      const extraSample = fullTokens > replay.totalUsage.tokens || fullUsd > replay.totalUsage.usd ? 1 : 0;
       // The child's own journaled spend charges up the shared chain — minus what
       // the parent's failed-step roll-ups already restored through ITS journal.
-      const deltaTokens = Math.max(0, replay.totalUsage.tokens - priorRolled.input - priorRolled.output);
-      const deltaUsd = Math.max(0, replay.totalUsage.usd - priorRolled.usd);
+      const deltaTokens = Math.max(0, fullTokens - priorRolled.input - priorRolled.output);
+      const deltaUsd = Math.max(0, fullUsd - priorRolled.usd);
       shared.budget.restore(
         deltaTokens,
         deltaUsd,
-        Math.max(0, replay.totalUsage.samples - priorRolled.samples),
+        Math.max(0, replay.totalUsage.samples + extraSample - priorRolled.samples),
       );
-      // A child with its OWN cap must see its FULL journaled spend locally: the
-      // delta keeps the ancestors honest, but this fresh Budget's ledger starts
-      // at zero — a 500-token cap that already burned 300 has 200 left, not 500.
-      if (spec.budget) {
-        shared.budget.restoreLocal(
-          Math.max(0, replay.totalUsage.tokens - deltaTokens),
-          Math.max(0, replay.totalUsage.usd - deltaUsd),
-        );
-      }
+      // The child must see its FULL journaled spend locally: the delta keeps the
+      // ancestors honest, but this fresh Budget's ledger starts at zero — a
+      // 500-token cap that already burned 300 has 200 left, not 500, and even an
+      // uncapped child's ledger feeds the samples the NEXT resume relies on.
+      shared.budget.restoreLocal(Math.max(0, fullTokens - deltaTokens), Math.max(0, fullUsd - deltaUsd));
     } else {
       const rawBad = jsonUnsafeAt(rawInput);
       if (rawBad !== undefined) {

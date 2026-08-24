@@ -324,6 +324,23 @@ describe("log", () => {
     const { commits } = await git.log({ max: 2 });
     expect(commits.map((c) => c.subject)).toEqual(["third", "second"]);
   });
+
+  test("a message carrying \\x1e/\\x1f bytes stays one commit, verbatim", async () => {
+    const git = await initRepo();
+    await seed(git, { "a.txt": "1\n" }, "plain");
+    // \x1f and \x1e are legal message bytes; used as in-band separators they
+    // split one hostile commit into phantom entries with scrambled fields.
+    await write(git, "a.txt", "2\n");
+    await git.add({ paths: ["a.txt"] });
+    await git.commit({ message: "evil \x1f subject\n\nbody carrying \x1e a record separator\nline two" });
+
+    const { commits } = await git.log({});
+    expect(commits).toHaveLength(2);
+    expect(commits[0]!.subject).toBe("evil \x1f subject");
+    expect(commits[0]!.body).toBe("body carrying \x1e a record separator\nline two");
+    expect(commits[0]!.sha).toMatch(/^[0-9a-f]{40}$/);
+    expect(commits[1]!.subject).toBe("plain");
+  });
 });
 
 describe("show, fileAt and blame", () => {
