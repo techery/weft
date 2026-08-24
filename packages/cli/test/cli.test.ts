@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import { shallowDiff } from "../src/commands/diff.ts";
+import { parseDynamicFlags } from "../src/flags.ts";
 import { answerLine } from "../src/format.ts";
 import type { CliIo } from "../src/io.ts";
 import { buildProgram } from "../src/main.ts";
@@ -543,5 +544,38 @@ describe("answerLine", () => {
     expect(answerLine("parent01", { id: "h1", kind: "ask", question: "?", schema })).toBe(
       `weft answer parent01 h1 '{"go":true}'`,
     );
+  });
+});
+
+describe("parseDynamicFlags", () => {
+  it("keeps values a number cannot represent exactly as strings", () => {
+    // Each of these used to start the run against something else.
+    expect(parseDynamicFlags(["--sha", "1e5"])).toEqual({ sha: "1e5" });
+    expect(parseDynamicFlags(["--version", "1.20"])).toEqual({ version: "1.20" });
+    expect(parseDynamicFlags(["--code", "007"])).toEqual({ code: "007" });
+    expect(parseDynamicFlags(["--hex", "0x10"])).toEqual({ hex: "0x10" });
+    expect(parseDynamicFlags(["--blank", " "])).toEqual({ blank: " " });
+  });
+
+  it("still coerces plain numbers and booleans", () => {
+    expect(parseDynamicFlags(["--depth", "2"])).toEqual({ depth: 2 });
+    expect(parseDynamicFlags(["--ratio", "-3.5"])).toEqual({ ratio: -3.5 });
+    expect(parseDynamicFlags(["--force", "true"])).toEqual({ force: true });
+    expect(parseDynamicFlags(["--watch"])).toEqual({ watch: true });
+    expect(parseDynamicFlags(["--no-cache"])).toEqual({ cache: false });
+  });
+
+  it("refuses a repeated flag rather than silently keeping the last", () => {
+    expect(() => parseDynamicFlags(["--base", "a", "--base", "b"])).toThrow(/more than once/);
+  });
+
+  it("treats __proto__ as an ordinary field, not a prototype write", () => {
+    const out = parseDynamicFlags(["--__proto__", "x"]);
+    expect(Object.hasOwn(out, "__proto__")).toBe(true);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it("camel-cases kebab flags", () => {
+    expect(parseDynamicFlags(["--base-ref", "main"])).toEqual({ baseRef: "main" });
   });
 });

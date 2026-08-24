@@ -4,7 +4,8 @@
  * processes; watch() serves the backlog before anything live; projections are
  * rebuildable from the JSONL alone.
  */
-import { appendFile, mkdir, readFile, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { appendFile, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { JournalRecord, RunState, TreePhase } from "@techery/weft-core";
 import { reduceState, renderReport, renderTree } from "@techery/weft-core";
@@ -389,6 +390,30 @@ describe("projections", () => {
     await Promise.all(Array.from({ length: 8 }, (_, i) => store.snapshot("run-a", { report: `# rev ${i}` })));
     const report = await readFile(join(dir, "run-a", "report.md"), "utf8");
     expect(report).toMatch(/^# rev \d$/);
+  });
+
+  test("rebuildProjections restores every projection, not just state.json", async () => {
+    // "Only journal.jsonl has to survive" is the claim; tree.json and report.md were not
+    // rebuilt, so a deleted one stayed deleted and a stale one kept reporting the status
+    // the run had when it was last written.
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    await store.append("run-r", [
+      runCreated("run-r", "audit"),
+      { type: "run.status", status: "complete" },
+      { type: "run.completed", output: { ok: true } },
+    ]);
+
+    const runDir = join(dir, "run-r");
+    for (const file of ["state.json", "tree.json", "report.md"]) {
+      await rm(join(runDir, file), { force: true });
+    }
+    await store.rebuildProjections("run-r");
+
+    for (const file of ["state.json", "tree.json", "report.md"]) {
+      expect(existsSync(join(runDir, file))).toBe(true);
+    }
+    expect(await readFile(join(runDir, "report.md"), "utf8")).toContain("complete");
   });
 
   test("rebuildProjections re-derives state.json from the journal", async () => {

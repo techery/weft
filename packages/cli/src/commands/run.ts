@@ -45,6 +45,7 @@ export function runCommand(io: CliIo): Command {
       try {
         const input = { ...parseArgsJson(opts.args), ...parseDynamicFlags(cmd.args.slice(1)) };
         const { def, name, hash, code } = await resolveRef(weft, ref, io);
+        rejectUnknownInput(input, def, name);
         const reuse = parseReuse(opts.reuse);
         const budget = opts.budget === undefined ? undefined : parseBudget(opts.budget);
 
@@ -107,4 +108,34 @@ async function resolveRef(weft: Weft, ref: string, io: CliIo): Promise<ResolvedR
       ? loaded.def
       : { kind: loaded.def.kind, meta: { ...loaded.def.meta, name: loaded.name }, run: loaded.def.run };
   return { def, name: loaded.name, hash: loaded.hash, code: loaded.code };
+}
+
+/**
+ * Refuse an input field the workflow does not declare.
+ *
+ * Dynamic flags accept any `--name value`, and a Zod object strips what it does not know,
+ * so `weft run review --basse release-2.0` used to review `main` and say nothing. Every
+ * flag a person types is a decision about what this run costs; a typo has to be a
+ * refusal, not a default.
+ */
+function rejectUnknownInput(input: Record<string, unknown>, def: WorkflowDefinition, name: string): void {
+  const shape = (def.meta.input as { shape?: Record<string, unknown> } | undefined)?.shape;
+  // Only object schemas declare a field list. Anything else (a union, a passthrough, a
+  // non-zod Standard Schema) validates on its own terms and is left alone.
+  if (shape === undefined || typeof shape !== "object") return;
+  const declared = new Set(Object.keys(shape));
+  const unknown = Object.keys(input).filter((key) => !declared.has(key));
+  if (unknown.length === 0) return;
+  const known = [...declared].sort();
+  throw new Error(
+    `${name} has no input field ${unknown.map((k) => `"${k}"`).join(", ")}` +
+      (known.length > 0
+        ? ` — it takes ${known.map((k) => `--${kebabCase(k)}`).join(", ")}`
+        : " — it takes no input"),
+  );
+}
+
+/** Input schemas are written in TypeScript, so `baseRef` is offered as `--base-ref`. */
+function kebabCase(name: string): string {
+  return name.replace(/[A-Z]/g, (ch) => `-${ch.toLowerCase()}`);
 }

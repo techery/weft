@@ -36,12 +36,27 @@ export class FsBlobStore implements BlobStore {
     return { hash, size: data.byteLength };
   }
 
+  /**
+   * Reads verify their own name. `put` only ever lands complete bytes, but the file it
+   * lands is on someone's disk afterwards: a torn restore, a truncated copy, a half-synced
+   * volume. A blob holds a step's output, a captured patch, a transcript — served short,
+   * a patch integrates the wrong change and a journaled output replays as a different
+   * answer, both silently. The store is content-addressed, so the check is the name.
+   */
   async get(ref: string): Promise<Uint8Array> {
+    let data: Buffer;
     try {
-      return await fs.readFile(this.pathFor(ref));
+      data = await fs.readFile(this.pathFor(ref));
     } catch {
       throw new Error(`blob not found: ${ref}`);
     }
+    const actual = createHash("sha256").update(data).digest("hex");
+    if (actual !== ref) {
+      throw new Error(
+        `blob ${ref} is corrupt: content hashes to ${actual} (${data.byteLength} bytes on disk)`,
+      );
+    }
+    return data;
   }
 
   async getText(ref: string): Promise<string> {

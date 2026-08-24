@@ -13,6 +13,22 @@ import { removeTemps, runCreated, tempDir } from "./helpers.ts";
 afterEach(removeTemps);
 
 describe("FsBlobStore", () => {
+  test("a truncated blob is refused, not served as if intact", async () => {
+    // put() only ever lands complete bytes, but the file it lands is on someone's disk
+    // afterwards: a torn restore or a half-synced volume can shorten it. A blob holds a
+    // step's output or a captured patch, so a short read integrates the wrong change or
+    // replays a different answer -- silently, unless the store checks its own name.
+    const dir = await tempDir();
+    const store = new FsBlobStore(dir);
+    const body = "x".repeat(4096);
+    const { hash } = await store.put(body);
+    expect(await store.getText(hash)).toBe(body);
+
+    await writeFile(join(dir, hash.slice(0, 2), hash), body.slice(0, 100));
+    await expect(store.get(hash)).rejects.toThrow(/corrupt/);
+    await expect(store.getText(hash)).rejects.toThrow(/corrupt/);
+  });
+
   test("put/get/getText/has round-trip strings and bytes", async () => {
     const store = new FsBlobStore(await tempDir());
 

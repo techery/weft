@@ -11,7 +11,7 @@ import type {
   RunStatus,
   RunSummary,
 } from "@techery/weft-core";
-import { type RunState, reduceState } from "@techery/weft-core";
+import { type RunState, reduceState, renderReport, renderTree } from "@techery/weft-core";
 
 interface RunCache {
   count: number;
@@ -618,12 +618,24 @@ export class FsJournalStore implements JournalStore {
     };
   }
 
-  /** Rebuild a run's projections from its journal (used by `weft doctor`/repair). */
+  /**
+   * Rebuild a run's projections from its journal (used by `weft doctor`/repair).
+   *
+   * All three, not just `state.json`: they are projections of the same events, and a
+   * repair that refreshed one left the other two as they were — a deleted `report.md`
+   * stayed deleted and a stale one kept reporting the status the run had when it was
+   * last written. "Only journal.jsonl has to survive" is only true if this rebuilds
+   * everything that claim covers.
+   */
   async rebuildProjections(runId: string): Promise<void> {
     const records: JournalRecord[] = [];
     for await (const rec of this.read(runId)) records.push(rec);
     if (records.length === 0) return;
     const state = reduceState(records);
-    await this.snapshot(runId, { state });
+    await this.snapshot(runId, {
+      state,
+      tree: renderTree(state),
+      report: renderReport(state),
+    });
   }
 }

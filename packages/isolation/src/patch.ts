@@ -37,7 +37,7 @@ export async function capturePatch(opts: { worktreePath: string; alsoInclude?: s
   // detection (on by default since git 2.9) would list only the DESTINATION of
   // `git mv old new`, letting a rename out of an allowed path delete its
   // out-of-scope source unchecked; decomposed to delete+add, both paths list.
-  const names = await git.raw(["diff", "--cached", "--name-only", "--no-renames", "-z"]);
+  const names = await git.raw(["diff", "--cached", "--name-only", "--no-renames", "--no-ext-diff", "-z"]);
   const files = splitNul(names.stdout);
   if (files.length === 0) return { patch: "", files: [] };
   // --binary embeds full content for binary files (images, archives); without it
@@ -45,7 +45,18 @@ export async function capturePatch(opts: { worktreePath: string; alsoInclude?: s
   // --no-renames again: a rename record would re-couple the two paths the file
   // list just decomposed (and a 100%-similarity rename carries no ---/+++ lines
   // for the stderr fallback to name); delete+add hunks are self-contained.
-  const { stdout } = await git.raw(["diff", "--cached", "--binary", "--no-renames"]);
+  // --no-ext-diff / --no-textconv: a `.gitattributes` diff driver or textconv filter
+  // would replace the real hunks with a human-readable rendering, and the patch that
+  // gets journaled could never be applied — the agent's work would vanish silently.
+  // Neither is a hypothetical: both are configured per-repository, in tree.
+  const { stdout } = await git.raw([
+    "diff",
+    "--cached",
+    "--binary",
+    "--no-renames",
+    "--no-ext-diff",
+    "--no-textconv",
+  ]);
   return { patch: stdout, files };
 }
 

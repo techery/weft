@@ -22,12 +22,21 @@ import { execa } from "execa";
 import type { Git, RawResult } from "./index.ts";
 import { GitError } from "./index.ts";
 
-/** Environment overrides that keep git non-interactive and its output parseable. */
+/**
+ * Environment overrides that keep git non-interactive and its output parseable.
+ *
+ * `GIT_EXTERNAL_DIFF` names a program git runs INSTEAD of producing a diff, and it comes
+ * from the operator's shell, not the repository. Left alone, every captured patch is
+ * whatever that program printed — `capturePatch` would journal it, `git apply` would
+ * refuse it, and the agent's work would be silently lost. Emptied here (git treats an
+ * empty value as unset) so no weft invocation can be hijacked by it.
+ */
 const GIT_ENV: Record<string, string> = {
   GIT_TERMINAL_PROMPT: "0",
   GIT_PAGER: "cat",
   GIT_OPTIONAL_LOCKS: "0",
   LC_ALL: "C",
+  GIT_EXTERNAL_DIFF: "",
 };
 
 /** Prefix for commands whose output we parse: keeps non-ASCII paths unquoted. */
@@ -66,7 +75,12 @@ export class GitCli implements Git {
     // scan (status, diff, ls-files) — repository-configured code that a typed,
     // approval-free read must never run. Disabled on EVERY invocation: for
     // writes the fsmonitor is only a scan optimization, so nothing is lost.
-    const result = await execa("git", ["-c", "core.fsmonitor=false", ...args], {
+    //
+    // `diff.external` is the same hazard one step further on: a repository-configured
+    // program that REPLACES git's diff output, so a captured patch becomes that
+    // program's stdout and the agent's work never lands. Emptied for the same reason,
+    // alongside GIT_EXTERNAL_DIFF in GIT_ENV.
+    const result = await execa("git", ["-c", "core.fsmonitor=false", "-c", "diff.external=", ...args], {
       cwd: this.cwd,
       reject: false,
       stripFinalNewline: false,
