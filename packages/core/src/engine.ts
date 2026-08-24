@@ -115,7 +115,7 @@ export class Engine implements EngineHost {
   private readonly providerLimiters = new Map<string, Semaphore>();
   private readonly registry: WorkflowRegistry | undefined;
   private readonly active = new Map<string, ActiveRun>();
-  /** Per-request answer serialization: `${runId}\0${requestId}` → in-flight delivery. */
+  /** Per-request answer serialization: `runId::requestId` → in-flight delivery. */
   private readonly answerChains = new Map<string, Promise<void>>();
   private readonly clockFn: () => number;
 
@@ -284,7 +284,23 @@ export class Engine implements EngineHost {
       agentCounter: { count: 0, warned: false },
       reuse: opts.reuse ?? "content",
     };
-    shared.budget.restore(replay.totalUsage.tokens, replay.totalUsage.usd, replay.totalUsage.samples);
+    // A crash AFTER a durable budget.sampled but BEFORE the paid step's terminal
+    // record leaves that call's spend visible ONLY in the sample: the cumulative
+    // sample is a lower bound on real spend, so restoring less would let the
+    // re-dispatched step sail past a durable hard ceiling. A sample above the
+    // record-derived total means at least one charged call went unrecorded.
+    let sampled = { tokens: 0, usd: 0 };
+    for (const r of records) {
+      if (r.ev.type === "budget.sampled") sampled = { tokens: r.ev.tokens, usd: r.ev.usd };
+    }
+    const restoreTokens = Math.max(replay.totalUsage.tokens, sampled.tokens);
+    const restoreUsd = Math.max(replay.totalUsage.usd, sampled.usd);
+    shared.budget.restore(
+      restoreTokens,
+      restoreUsd,
+      replay.totalUsage.samples +
+        (restoreTokens > replay.totalUsage.tokens || restoreUsd > replay.totalUsage.usd ? 1 : 0),
+    );
     const runtime = new RunRuntime({
       host: this,
       runId,
@@ -1022,7 +1038,7 @@ export class Engine implements EngineHost {
     // check before either append lands — both human.answered records journal and
     // both callers hear "accepted", while replay honors only the first. The
     // second caller must run after the first and be refused.
-    const key = `${runId} ${requestId}`;
+    const key = `${runId}::${requestId}`;
     const prev = this.answerChains.get(key) ?? Promise.resolve();
     const chained = prev
       .catch(() => undefined)

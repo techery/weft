@@ -637,6 +637,26 @@ describe("usage on failure (codex review round 16, PR #1)", () => {
   });
 });
 
+describe("long step timeouts", () => {
+  test("a 30-day timeout does not abort the agent almost immediately", async () => {
+    // Node clamps a single timer past 2^31-1ms to ~1ms; the old direct
+    // setTimeout aborted this 50ms turn long before it could answer.
+    const fn = ((params: { prompt: string; options?: Options }) => {
+      return (async function* stream(): AsyncGenerator<unknown, void> {
+        await new Promise((r) => setTimeout(r, 50));
+        if (params.options?.abortController?.signal.aborted) {
+          throw new Error("aborted by the clamped timer");
+        }
+        await registeredTool(params.options ?? {}).handler({ result: { verdict: "patient" } }, {});
+        yield resultMessage();
+      })();
+    }) as unknown as QueryFn;
+    const provider = createClaudeProvider({ queryFn: fn });
+    const result = await provider.run(request({ timeoutMs: 2_147_483_647 + 86_400_000 }), control());
+    expect(result.output).toEqual({ verdict: "patient" });
+  });
+});
+
 describe("risky classification of dynamic commands", () => {
   test("a publishing action assembled by expansion routes to the broker", () => {
     // The shell resolves these into `git push …` AFTER the textual screen ran.

@@ -103,12 +103,38 @@ function threadOptions(req: AgentRequest): ThreadOptions {
   };
 }
 
+/** Node clamps a single timer past this to ~1ms, so long deadlines arm in chunks. */
+const MAX_TIMER_MS = 2_147_483_647;
+
 /** ctl.signal, widened with the step's own deadline when the engine set one. */
 function turnSignal(req: AgentRequest, ctl: RunControl): AbortSignal {
   // The engine's own step timeout allows 10s of grace on top of this one, so the agent
-  // is aborted cleanly before the step is torn down around it.
+  // is aborted cleanly before the step is torn down around it. AbortSignal.timeout()
+  // inherits Node's timer ceiling, so long deadlines are chunked by hand.
   if (req.timeoutMs === undefined || req.timeoutMs <= 0) return ctl.signal;
-  return AbortSignal.any([ctl.signal, AbortSignal.timeout(req.timeoutMs)]);
+  if (req.timeoutMs <= MAX_TIMER_MS) return AbortSignal.any([ctl.signal, AbortSignal.timeout(req.timeoutMs)]);
+  const timeout = new AbortController();
+  const deadline = Date.now() + req.timeoutMs;
+  let timer: NodeJS.Timeout | undefined;
+  const arm = (): void => {
+    if (ctl.signal.aborted) return;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      timeout.abort(new Error(`codex: agent step timed out after ${req.timeoutMs}ms`));
+      return;
+    }
+    timer = setTimeout(arm, Math.min(remaining, MAX_TIMER_MS));
+    timer.unref?.();
+  };
+  arm();
+  ctl.signal.addEventListener(
+    "abort",
+    () => {
+      if (timer) clearTimeout(timer);
+    },
+    { once: true },
+  );
+  return AbortSignal.any([ctl.signal, timeout.signal]);
 }
 
 async function runTurn(

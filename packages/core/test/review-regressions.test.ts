@@ -2588,3 +2588,50 @@ describe("codex review findings, round 29 (PR #1)", () => {
     await h.result.catch(() => undefined);
   });
 });
+
+describe("codex review findings, round 30 (PR #1)", () => {
+  test("a durable budget sample from an interrupted step still counts on resume", async () => {
+    // The process died AFTER budget.sampled landed but BEFORE the paid step's
+    // terminal record: the 500 spent tokens exist only in the sample.
+    const journal = new MemoryJournalStore();
+    await journal.append("gap00001", [
+      {
+        type: "run.created",
+        runId: "gap00001",
+        workflow: { name: "gap" },
+        input: {},
+        cwd: "/r",
+        depth: 0,
+        budget: { tokens: 600 },
+      },
+      { type: "step.scheduled", seq: 1, hash: "h1", kind: "agent", key: "a1" },
+      { type: "budget.sampled", tokens: 500, usd: 0 },
+    ]);
+    const builder = mock();
+    builder.on({ prompt: /go/ }, { ok: true });
+    const providers = new ProviderRegistry();
+    providers.register(builder.provider("claude"));
+    const engine = new Engine({ journal, blobs: new MemoryBlobStore(), providers });
+    const def = defineWorkflow(
+      { name: "gap", description: "g", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("go again", { schema: z.object({ ok: z.boolean() }), key: "a1" });
+        return {};
+      },
+    );
+    // Restored from records alone the budget reads 0/600 and re-dispatches the
+    // call; with the sample as a lower bound only 100 remain against an observed
+    // 500-token average, so the ceiling holds.
+    const h = await engine.resume("gap00001", { def });
+    await expect(h.result).rejects.toMatchObject({ code: "budget_exceeded" });
+  });
+
+  test("negative or non-finite provider usage never credits the budget", () => {
+    const b = new Budget({ tokens: 100 });
+    b.charge({ input: 90, output: 0 });
+    b.charge({ input: -1_000, output: Number.NaN, usd: -5 });
+    expect(b.spentTokens()).toBe(90);
+    expect(b.spentUsd()).toBe(0);
+    expect(b.remainingTokens()).toBe(10);
+  });
+});

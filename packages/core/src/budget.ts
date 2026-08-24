@@ -57,8 +57,10 @@ export class Budget {
   }
 
   charge(usage: Usage): void {
-    this.tokens += (usage.input ?? 0) + (usage.output ?? 0);
-    this.usd += usage.usd ?? 0;
+    // A malformed provider report (negative or non-finite tokens/usd) must never
+    // CREDIT the pool: subtracting would reopen an exhausted hard ceiling.
+    this.tokens += nonNegative(usage.input) + nonNegative(usage.output);
+    this.usd += nonNegative(usage.usd);
     if (this.parent) this.parent.charge(usage);
     else this.chargedCalls++; // one cost sample per charged call, counted once at the root
   }
@@ -178,4 +180,9 @@ export class Budget {
       remaining: { tokens: this.remainingTokens(), usd: this.remainingUsd() },
     };
   }
+}
+
+/** Usage components come from PROVIDERS: only finite positive numbers count. */
+function nonNegative(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
 }

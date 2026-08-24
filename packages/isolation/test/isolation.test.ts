@@ -146,6 +146,18 @@ describe("capturePatch", () => {
     expect((await repo.status()).clean).toBe(true);
   });
 
+  test("a filename containing a newline is captured as ONE path", async () => {
+    const repo = await initRepo();
+    await seed(repo, { "a.txt": "one\n" }, "init");
+    const handle = await addWorktree({ repoRoot: repo.cwd, dir: await worktreePath() });
+    // Line-oriented parsing split this into two nonexistent paths BEFORE
+    // checkScope() decided whether a strict patch was quarantined.
+    await writeIn(handle.path, "we\nird.txt", "hostile\n");
+
+    const { files } = await capturePatch({ worktreePath: handle.path });
+    expect(files).toEqual(["we\nird.txt"]);
+  });
+
   test("carries binary files from capture through apply", async () => {
     const repo = await initRepo();
     const original = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);

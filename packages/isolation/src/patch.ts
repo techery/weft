@@ -24,8 +24,10 @@ export async function capturePatch(opts: { worktreePath: string }): Promise<{
   const git = createGit(opts.worktreePath);
   // Staging first is what folds untracked files into the diff.
   await git.raw(["add", "-A"]);
-  const names = await git.raw([...RAW_PATHS, "diff", "--cached", "--name-only"]);
-  const files = splitLines(names.stdout);
+  // -z: NUL-delimited, unquoted paths — a filename holding a newline must reach
+  // checkScope() as ONE path, not two nonexistent ones.
+  const names = await git.raw(["diff", "--cached", "--name-only", "-z"]);
+  const files = splitNul(names.stdout);
   if (files.length === 0) return { patch: "", files: [] };
   // --binary embeds full content for binary files (images, archives); without it
   // the patch says only "Binary files differ" and can never be applied.
@@ -65,8 +67,8 @@ export async function applyPatchToTree(opts: { repoRoot: string; patch: string }
     if (threeWay.exitCode === 0) return { ok: true };
 
     // Conflict markers come with unmerged entries — in the throwaway index.
-    const unmerged = await git.raw([...RAW_PATHS, "diff", "--name-only", "--diff-filter=U"], { env });
-    const conflicted = splitLines(unmerged.stdout);
+    const unmerged = await git.raw(["diff", "--name-only", "--diff-filter=U", "-z"], { env });
+    const conflicted = splitNul(unmerged.stdout);
     if (conflicted.length > 0) return { ok: false, conflicts: conflicted };
     const reported = filesFromStderr(`${threeWay.stderr}\n${check.stderr}`);
     return { ok: false, conflicts: reported.length > 0 ? reported : filesFromPatch(opts.patch) };
@@ -85,8 +87,8 @@ export async function restoreFiles(opts: { repoRoot: string; ref: string; paths?
 // Helpers
 // ---------------------------------------------------------------------------
 
-function splitLines(stdout: string): string[] {
-  return stdout.split("\n").filter((line) => line !== "");
+function splitNul(stdout: string): string[] {
+  return stdout.split("\0").filter((path) => path !== "");
 }
 
 /** Files named by `git apply`'s own error lines, in the order it reported them. */

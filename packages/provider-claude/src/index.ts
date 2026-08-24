@@ -52,6 +52,9 @@ const FINALIZE_PROMPT = `Call ${STRUCTURED_OUTPUT_TOOL} now with your best final
 
 const NO_OUTPUT = `agent finished without calling ${STRUCTURED_OUTPUT_TOOL}`;
 
+/** Node clamps a single timer past this to ~1ms, so long deadlines arm in chunks. */
+const MAX_TIMER_MS = 2_147_483_647;
+
 /** Everything one query() stream contributes; a step may span two (run + finalize). */
 interface Turn {
   /** Boxed so a legitimate `null` or `undefined` result is still "captured". */
@@ -166,14 +169,23 @@ class ClaudeProvider implements AgentProvider {
     if (ctl.signal.aborted) controller.abort(ctl.signal.reason);
     else ctl.signal.addEventListener("abort", onAbort, { once: true });
     // The engine's own step timeout allows 10s of grace on top of this one, so the
-    // agent gets aborted cleanly before the step is torn down around it.
-    const timer =
-      req.timeoutMs !== undefined && req.timeoutMs > 0
-        ? setTimeout(
-            () => controller.abort(new Error(`claude: agent step timed out after ${req.timeoutMs}ms`)),
-            req.timeoutMs,
-          )
-        : undefined;
+    // agent gets aborted cleanly before the step is torn down around it. Armed in
+    // CHUNKS: Node clamps a single timer past 2^31-1ms to ~1ms, which would abort
+    // a 30-day agent almost immediately.
+    let timer: NodeJS.Timeout | undefined;
+    if (req.timeoutMs !== undefined && req.timeoutMs > 0) {
+      const deadline = Date.now() + req.timeoutMs;
+      const arm = (): void => {
+        if (controller.signal.aborted) return;
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          controller.abort(new Error(`claude: agent step timed out after ${req.timeoutMs}ms`));
+          return;
+        }
+        timer = setTimeout(arm, Math.min(remaining, MAX_TIMER_MS));
+      };
+      arm();
+    }
 
     const options: Options = {
       cwd: req.cwd,
