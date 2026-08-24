@@ -150,7 +150,9 @@ export class ReplayIndex {
           if (ev.usage) {
             index.totalUsage.tokens += (ev.usage.input ?? 0) + (ev.usage.output ?? 0);
             index.totalUsage.usd += ev.usage.usd ?? 0;
-            index.totalUsage.samples++;
+            // A child-workflow roll-up aggregates the child's WHOLE spend: count
+            // its real calls, or the restored per-call average balloons.
+            index.totalUsage.samples += ev.usage.samples ?? 1;
           }
           index.entryCount++;
           break;
@@ -161,7 +163,7 @@ export class ReplayIndex {
           if (ev.usage) {
             index.totalUsage.tokens += (ev.usage.input ?? 0) + (ev.usage.output ?? 0);
             index.totalUsage.usd += ev.usage.usd ?? 0;
-            index.totalUsage.samples++;
+            index.totalUsage.samples += ev.usage.samples ?? 1;
           }
           break;
         }
@@ -172,7 +174,7 @@ export class ReplayIndex {
           if (usage) {
             index.totalUsage.tokens += (usage.input ?? 0) + (usage.output ?? 0);
             index.totalUsage.usd += usage.usd ?? 0;
-            index.totalUsage.samples++;
+            index.totalUsage.samples += usage.samples ?? 1;
           }
           break;
         }

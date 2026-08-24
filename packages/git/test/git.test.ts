@@ -567,3 +567,31 @@ describe("remotes", () => {
     expect(await read(local, "b.txt")).toBe("two\n");
   });
 });
+
+describe("option-like refs", () => {
+  test("a ref that begins with a dash is rejected before git ever sees it", async () => {
+    const git = await initRepo();
+    await seed(git, { "a.txt": "one\n" }, "init");
+
+    // `git show --output=<file>` WRITES that file — from a method the engine
+    // classifies as a journaled read. The guard must fire, and nothing may land.
+    const smuggled = path.join(git.cwd, "smuggled.txt");
+    await expect(git.show(`--output=${smuggled}`)).rejects.toThrow(/invalid ref/);
+    expect(existsSync(smuggled)).toBe(false);
+
+    await expect(git.diff({ from: `--output=${smuggled}` })).rejects.toThrow(/invalid ref/);
+    await expect(git.log({ to: "--all" })).rejects.toThrow(/invalid ref/);
+    await expect(git.fileAt(`--output=${smuggled}`, "a.txt")).rejects.toThrow(/invalid ref/);
+    await expect(git.checkout("--force")).rejects.toThrow(/invalid ref/);
+    await expect(git.reset({ to: "--soft" })).rejects.toThrow(/invalid ref/);
+    await expect(git.mergeBase("--all", "HEAD")).rejects.toThrow(/invalid ref/);
+    await expect(git.branchCreate("--track")).rejects.toThrow(/invalid branch/);
+    await expect(git.tag("--force")).rejects.toThrow(/invalid tag name/);
+    await expect(git.push({ remote: "--mirror" })).rejects.toThrow(/invalid remote/);
+    expect(existsSync(smuggled)).toBe(false);
+
+    // Legitimate refs still flow: revision expressions, ranges, ref:path.
+    expect((await git.show("HEAD")).content).toContain("a.txt");
+    expect((await git.fileAt("HEAD", "a.txt")).content).toBe("one\n");
+  });
+});

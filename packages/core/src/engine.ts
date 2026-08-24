@@ -720,12 +720,15 @@ export class Engine implements EngineHost {
       // The child's total journaled spend rides on the parent's workflow step so a
       // later parent resume restores it without reading the child journal. Failed
       // attempts count too — their spend lives on retry/failure records.
-      const usage = { input: 0, output: 0, usd: 0 };
+      const usage = { input: 0, output: 0, usd: 0, samples: 0 };
       const fold = (u: import("@weft/sdk").Usage | undefined) => {
         if (!u) return;
         usage.input += u.input ?? 0;
         usage.output += u.output ?? 0;
         usage.usd += u.usd ?? 0;
+        // A grandchild roll-up already aggregates several calls — carry its
+        // count, not 1, or the parent's per-call average inflates on resume.
+        usage.samples += u.samples ?? 1;
       };
       for (const rec of childActive?.records ?? []) {
         if (rec.ev.type === "step.completed") fold(rec.ev.usage);

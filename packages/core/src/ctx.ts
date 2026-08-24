@@ -692,6 +692,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
     opts?: ParallelOptions,
   ): Promise<Settled<T>[]> {
     if (tasks.length > config.limits.fanoutMax) {
+      // Promise-form tasks are ALREADY running — their steps spend and append.
+      // Failing while they're in flight would let them journal after run.failed
+      // lands (and leak unhandled rejections); settle them before surfacing.
+      await Promise.allSettled(tasks.filter((t) => typeof t !== "function"));
       throw new StepError(
         "invalid_input",
         `parallel: ${tasks.length} items exceeds the cap of ${config.limits.fanoutMax}`,

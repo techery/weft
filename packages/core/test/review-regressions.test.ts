@@ -1876,3 +1876,101 @@ describe("codex review findings, round 18 (PR #1)", () => {
     expect(await h.result).toEqual({ seen: 3 });
   });
 });
+
+describe("codex review findings, round 19 (PR #1)", () => {
+  test("an over-cap parallel settles its already-running tasks before failing", async () => {
+    const t = testEngine({ config: { limits: { fanoutMax: 2 } } });
+    t.builder.on({ prompt: /task/ }, { ok: true }, { delayMs: 150 });
+    const def = defineWorkflow(
+      { name: "overfan", description: "o", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        // The ADVERTISED promise form: every step is already running when
+        // parallel() counts them against the cap.
+        const tasks = [1, 2, 3].map((n) =>
+          ctx.agent(`task ${n}`, { schema: z.object({ ok: z.boolean() }), key: `t${n}` }),
+        );
+        await ctx.parallel(tasks);
+        return {};
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(h.result).rejects.toMatchObject({ code: "invalid_input" });
+    // Un-drained, run.failed would land while the steps were mid-flight and
+    // their completions would append AFTER the terminal (or into a freed lease).
+    const recs = await records(t.journal, h.runId);
+    expect(recs.filter((r) => r.ev.type === "step.completed")).toHaveLength(3);
+    expect(recs.at(-1)?.ev.type).toBe("run.failed");
+  });
+
+  test("a child's roll-up carries its real call count, not one giant sample", async () => {
+    const t = testEngine();
+    t.builder.on({ prompt: /probe/ }, { ok: true });
+    const child = defineWorkflow(
+      { name: "twocalls", description: "t", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("probe one", { schema: z.object({ ok: z.boolean() }), key: "c1" });
+        await ctx.agent("probe two", { schema: z.object({ ok: z.boolean() }), key: "c2" });
+        return {};
+      },
+    );
+    const parent = defineWorkflow(
+      { name: "rollup", description: "r", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.workflow(child, {});
+        return {};
+      },
+    );
+    const h = await t.engine.start(parent, { input: {}, cwd: await tempDir() });
+    await h.result;
+    const recs = await records(t.journal, h.runId);
+    const rolled = recs.find((r) => r.ev.type === "step.completed" && r.ev.usage !== undefined);
+    expect(rolled?.ev.type === "step.completed" ? rolled.ev.usage : undefined).toEqual({
+      input: 200,
+      output: 100,
+      usd: expect.closeTo(0.0035, 6),
+      samples: 2,
+    });
+    // A parent resume restores TWO charged calls from this one record: the
+    // observed per-call average stays 150 tokens, not a ballooned 300.
+    expect(ReplayIndex.fromRecords(recs).totalUsage).toEqual({
+      tokens: 300,
+      usd: expect.closeTo(0.0035, 6),
+      samples: 2,
+    });
+  });
+
+  test("editing an unanswered question's timeout surfaces a fresh request on resume", async () => {
+    const mk = (timeout: "2h" | "30m") =>
+      defineWorkflow(
+        { name: "slowask", description: "s", input: z.object({}), output: z.object({ go: z.boolean() }) },
+        async (ctx) => {
+          const a = await ctx.human.ask({
+            question: "proceed?",
+            schema: z.object({ go: z.boolean() }),
+            timeout,
+            onTimeout: { default: { go: false } },
+          });
+          return { go: a.go };
+        },
+      );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(mk("2h"), { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected ask");
+    await t1.engine.shutdown();
+
+    // The author decides two hours was wrong and shortens it: the request's
+    // behavior changed, so its identity must change — silently keeping the old
+    // absolute deadline and fallback is the bug.
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def: mk("30m") });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected a re-surfaced ask");
+    const asked = (await records(t2.journal, h1.runId)).filter((r) => r.ev.type === "human.requested");
+    expect(asked).toHaveLength(2);
+    const [first, second] = asked.map((r) => r.ev as { hash: string; id: string });
+    expect(second?.hash).not.toBe(first?.hash);
+    await t2.engine.answer(h1.runId, second?.id ?? "", { go: true });
+    expect(await h2.result).toEqual({ go: true });
+  });
+});

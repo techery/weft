@@ -70,6 +70,10 @@ export interface Usage {
   output: number;
   cacheRead?: number;
   usd?: number;
+  /** Provider calls this record aggregates. Absent means 1; a child-workflow
+   * roll-up carries the child's real call count so a resumed budget's
+   * per-call average stays honest. */
+  samples?: number;
 }
 
 /** A captured patch from a write step, referenced by blob hash. */

@@ -40,6 +40,21 @@ const RECORD = "\x1e";
 /** Longest stderr excerpt carried in a GitError message; the full text stays on `.stderr`. */
 const STDERR_EXCERPT = 400;
 
+/** Refuse option-like values in revision/name argv positions. Git itself forbids
+ * refs that start with "-" (check-ref-format), so nothing legitimate is lost —
+ * but passed through, `show("--output=/x")` would WRITE a file from an operation
+ * classified as a journaled read, outside every write gate. */
+function refArg(value: string, what = "ref"): string {
+  if (value === "" || value.startsWith("-")) {
+    throw new GitError(`invalid ${what}: ${JSON.stringify(value)} (empty or option-like)`, {
+      args: [],
+      exitCode: -1,
+      stderr: "",
+    });
+  }
+  return value;
+}
+
 export class GitCli implements Git {
   readonly cwd: string;
 
@@ -123,7 +138,7 @@ export class GitCli implements Git {
   }
 
   async mergeBase(a: string, b: string): Promise<{ sha: string }> {
-    const { stdout } = await this.raw(["merge-base", a, b]);
+    const { stdout } = await this.raw(["merge-base", refArg(a), refArg(b)]);
     return { sha: stdout.trim() };
   }
 
@@ -162,7 +177,11 @@ export class GitCli implements Git {
   async log(opts: GitRange & { max?: number } = {}): Promise<{ commits: GitCommitInfo[] }> {
     const args = ["log", `--format=%H${FIELD}%an${FIELD}%aI${FIELD}%s${FIELD}%b${RECORD}`];
     if (opts.max !== undefined) args.push("-n", String(opts.max));
-    args.push(opts.from !== undefined ? `${opts.from}..${opts.to ?? "HEAD"}` : (opts.to ?? "HEAD"));
+    args.push(
+      opts.from !== undefined
+        ? `${refArg(opts.from)}..${refArg(opts.to ?? "HEAD")}`
+        : refArg(opts.to ?? "HEAD"),
+    );
     if (opts.paths && opts.paths.length > 0) args.push("--", ...opts.paths);
     const { stdout } = await this.raw(args);
     const commits: GitCommitInfo[] = [];
@@ -183,7 +202,7 @@ export class GitCli implements Git {
   }
 
   async show(ref: string): Promise<{ content: string }> {
-    const { stdout } = await this.raw(["show", ref]);
+    const { stdout } = await this.raw(["show", refArg(ref)]);
     return { content: stdout };
   }
 
@@ -215,7 +234,7 @@ export class GitCli implements Git {
   }
 
   async fileAt(ref: string, path: string): Promise<{ content: string }> {
-    const { stdout } = await this.raw(["show", `${ref}:${path}`]);
+    const { stdout } = await this.raw(["show", `${refArg(ref)}:${path}`]);
     return { content: stdout };
   }
 
@@ -248,7 +267,7 @@ export class GitCli implements Git {
   }
 
   async revParse(ref: string): Promise<string | null> {
-    const result = await this.raw(["rev-parse", "--verify", "--quiet", ref], { allowFailure: true });
+    const result = await this.raw(["rev-parse", "--verify", "--quiet", refArg(ref)], { allowFailure: true });
     const sha = result.stdout.trim();
     return result.exitCode === 0 && sha !== "" ? sha : null;
   }
@@ -270,19 +289,19 @@ export class GitCli implements Git {
 
   async checkout(ref: string, opts: { discard?: boolean } = {}): Promise<void> {
     // Discarding is a path-scoped checkout ("restore this path from the index").
-    await this.raw(opts.discard ? ["checkout", "--", ref] : ["checkout", ref]);
+    await this.raw(opts.discard ? ["checkout", "--", ref] : ["checkout", refArg(ref)]);
   }
 
   async fetchRemote(opts: { remote?: string } = {}): Promise<void> {
-    await this.raw(["fetch", opts.remote ?? "origin"]);
+    await this.raw(["fetch", refArg(opts.remote ?? "origin", "remote")]);
   }
 
   async pull(opts: { rebase?: boolean; remote?: string; branch?: string } = {}): Promise<void> {
     const args = ["pull"];
     if (opts.rebase) args.push("--rebase");
     const remote = opts.remote ?? (opts.branch !== undefined ? "origin" : undefined);
-    if (remote !== undefined) args.push(remote);
-    if (opts.branch !== undefined) args.push(opts.branch);
+    if (remote !== undefined) args.push(refArg(remote, "remote"));
+    if (opts.branch !== undefined) args.push(refArg(opts.branch, "branch"));
     await this.raw(args);
   }
 
@@ -292,13 +311,13 @@ export class GitCli implements Git {
     const args = ["push"];
     if (opts.setUpstream) args.push("-u");
     if (opts.force) args.push("--force");
-    args.push(opts.remote ?? "origin");
-    if (opts.branch !== undefined) args.push(opts.branch);
+    args.push(refArg(opts.remote ?? "origin", "remote"));
+    if (opts.branch !== undefined) args.push(refArg(opts.branch, "branch"));
     await this.raw(args);
   }
 
   async reset(opts: { to: string; mode?: "soft" | "mixed" | "hard" }): Promise<void> {
-    await this.raw(["reset", `--${opts.mode ?? "mixed"}`, opts.to]);
+    await this.raw(["reset", `--${opts.mode ?? "mixed"}`, refArg(opts.to)]);
   }
 
   async applyPatch(opts: { patch: string; threeWay?: boolean; index?: boolean }): Promise<void> {
@@ -309,19 +328,21 @@ export class GitCli implements Git {
   }
 
   async tag(name: string, opts: { ref?: string } = {}): Promise<void> {
-    const args = ["tag", name];
-    if (opts.ref !== undefined) args.push(opts.ref);
+    const args = ["tag", refArg(name, "tag name")];
+    if (opts.ref !== undefined) args.push(refArg(opts.ref));
     await this.raw(args);
   }
 
   async branchCreate(name: string, opts: { from?: string; checkout?: boolean } = {}): Promise<void> {
-    const args = opts.checkout ? ["checkout", "-b", name] : ["branch", name];
-    if (opts.from !== undefined) args.push(opts.from);
+    const args = opts.checkout
+      ? ["checkout", "-b", refArg(name, "branch")]
+      : ["branch", refArg(name, "branch")];
+    if (opts.from !== undefined) args.push(refArg(opts.from));
     await this.raw(args);
   }
 
   async branchDelete(name: string, opts: { force?: boolean } = {}): Promise<void> {
-    await this.raw(["branch", opts.force ? "-D" : "-d", name]);
+    await this.raw(["branch", opts.force ? "-D" : "-d", refArg(name, "branch")]);
   }
 
   async stashPush(opts: { message?: string } = {}): Promise<void> {
@@ -380,8 +401,8 @@ function fileStatus(code: string): GitFileStatus {
  * working tree.
  */
 function diffArgs(range: GitRange): string[] {
-  const args = [range.from ?? "HEAD"];
-  if (range.to !== undefined) args.push(range.to);
+  const args = [refArg(range.from ?? "HEAD")];
+  if (range.to !== undefined) args.push(refArg(range.to));
   else if (range.from !== undefined) args.push("HEAD");
   if (range.paths && range.paths.length > 0) args.push("--", ...range.paths);
   return args;

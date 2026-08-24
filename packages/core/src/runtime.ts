@@ -693,6 +693,14 @@ export class RunRuntime {
       schema: spec.schemaJson ?? null,
       risk: spec.risk ?? null,
       artifact: spec.artifactRef?.$blob ?? null,
+      // Timeout settings change what an UNANSWERED request does, so they are
+      // part of its identity: editing "2h" to "2d" (or the policy/default) must
+      // surface a fresh request on resume, not silently keep the old absolute
+      // deadline and fallback. Spread conditionally so requests without
+      // timeouts keep their prior hashes.
+      ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {}),
+      ...(spec.onTimeout !== undefined ? { onTimeout: spec.onTimeout } : {}),
+      ...(spec.timeoutDefault !== undefined ? { timeoutDefault: spec.timeoutDefault } : {}),
     };
     const hash = hashStep("human", payload);
     const seq = ++this.seqCounter;
