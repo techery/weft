@@ -213,6 +213,32 @@ describe("stats", () => {
   test("an empty index sums to zero rather than null", () => {
     expect(openIndex().stats()).toEqual({ runs: 0, tokens: 0, usd: 0 });
   });
+
+  test("a sequence number reused across resumes is classified per pass, not forever", async () => {
+    const store = new MemoryJournalStore({ now: steppingClock() });
+    const index = openIndex();
+    // Pass 1: seq 1 was a child-workflow roll-up. After a resume (sequence
+    // numbers restart) the edited workflow's seq 1 is a plain AGENT step — its
+    // spend is the run's OWN and must count.
+    await store.append("run-reseq", [
+      {
+        type: "run.created",
+        runId: "run-reseq",
+        workflow: { name: "audit" },
+        input: {},
+        cwd: "/repo",
+        depth: 0,
+      },
+      { type: "step.scheduled", seq: 1, hash: "h1", kind: "workflow", key: "child" },
+      { type: "step.completed", seq: 1, output: {}, usage: { input: 300, output: 700, samples: 2 } },
+      { type: "step.scheduled", seq: 1, hash: "h2", kind: "agent", key: "direct" },
+      { type: "step.completed", seq: 1, output: {}, usage: { input: 100, output: 50 } },
+      { type: "run.completed", output: {} },
+    ]);
+    index.indexRun("run-reseq", await readRecords(store, "run-reseq"));
+    // A global seq set would have excluded BOTH seq-1 completions.
+    expect(index.stats()).toEqual({ runs: 1, tokens: 150, usd: 0 });
+  });
 });
 
 describe("rebuild", () => {

@@ -1974,3 +1974,83 @@ describe("codex review findings, round 19 (PR #1)", () => {
     expect(await h2.result).toEqual({ go: true });
   });
 });
+
+describe("codex review findings, round 20 (PR #1)", () => {
+  test("a sub-workflow's question surfaces through the PARENT handle and is answerable there", async () => {
+    const t = testEngine();
+    const child = defineWorkflow(
+      { name: "askchild", description: "a", input: z.object({}), output: z.object({ go: z.boolean() }) },
+      async (ctx) => {
+        const a = await ctx.human.ask({
+          question: "child asks: proceed?",
+          schema: z.object({ go: z.boolean() }),
+        });
+        return { go: a.go };
+      },
+    );
+    const parent = defineWorkflow(
+      { name: "askparent", description: "a", input: z.object({}), output: z.object({ go: z.boolean() }) },
+      async (ctx) => (await ctx.workflow(child, {})) as { go: boolean },
+    );
+    const h = await t.engine.start(parent, { input: {}, cwd: await tempDir() });
+    // Without the wait bridge this outcome() HANGS: the parent's workflow step
+    // counts as live work while the child sits suspended on its question.
+    const o = await h.outcome();
+    if (o.status !== "waiting_for_human") throw new Error("expected the child's ask to surface");
+    expect(o.pending[0]?.question).toBe("child asks: proceed?");
+    // Answered through the PARENT's run id — the engine routes to the owner.
+    await t.engine.answer(h.runId, o.pending[0]?.id ?? "", { go: true });
+    expect(await h.result).toEqual({ go: true });
+  });
+
+  test("a FAILED child's paid steps still roll into the parent journal", async () => {
+    const t = testEngine();
+    t.builder.on({ prompt: /paid/ }, { ok: true });
+    const child = defineWorkflow(
+      { name: "spender", description: "s", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("paid probe", { schema: z.object({ ok: z.boolean() }), key: "paid" });
+        throw new Error("child exploded after spending");
+      },
+    );
+    const parent = defineWorkflow(
+      { name: "holder", description: "h", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.workflow(child, {});
+        return {};
+      },
+    );
+    const h = await t.engine.start(parent, { input: {}, cwd: await tempDir() });
+    await expect(h.result).rejects.toThrow(/exploded/);
+    const recs = await records(t.journal, h.runId);
+    const failed = recs.find((r) => r.ev.type === "step.failed");
+    const detail =
+      failed?.ev.type === "step.failed"
+        ? (failed.ev.error.detail as { usage?: Record<string, number>; childRunId?: string } | undefined)
+        : undefined;
+    // Without the roll-up, a parent resumed with edited code that skips the
+    // child restores a budget that never saw these 150 tokens.
+    expect(detail?.usage).toMatchObject({ input: 100, output: 50, samples: 1 });
+    expect(typeof detail?.childRunId).toBe("string");
+    expect(ReplayIndex.fromRecords(recs).totalUsage.tokens).toBe(150);
+  });
+
+  test("cancelling a run kills its RUNNING command instead of waiting it out", async () => {
+    const t = testEngine();
+    const def = defineWorkflow(
+      { name: "sleepy", description: "s", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.bash("sleep 30");
+        return {};
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    // Let the process actually spawn before cancelling.
+    await new Promise((r) => setTimeout(r, 300));
+    const started = Date.now();
+    await t.engine.cancel(h.runId);
+    await expect(h.result).rejects.toThrow(/cancel/i);
+    // Un-wired, the cancel waits out the sleep (30s) — or the exec timeout.
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+});

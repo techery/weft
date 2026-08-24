@@ -99,6 +99,10 @@ interface ActiveRun {
   seedCount: number;
   /** Serializes projection publication so an older reduction never overwrites a newer one. */
   snapshotChain: Promise<unknown>;
+  /** Live child runs launched by this run's workflow steps. */
+  children: Set<string>;
+  /** Wait toggles of the parent workflow step awaiting THIS run (set on children). */
+  parentBridge?: { markWaiting(): void; unmarkWaiting(): void };
 }
 
 export class Engine implements EngineHost {
@@ -318,6 +322,7 @@ export class Engine implements EngineHost {
       sinceSnapshot: 0,
       result: undefined as never,
       snapshotChain: Promise.resolve(),
+      children: new Set(),
       ...(lease ? { lease } : {}),
     };
     this.active.set(runtime.runId, active);
@@ -434,10 +439,10 @@ export class Engine implements EngineHost {
   private outcomeOf(active: ActiveRun): Promise<RunOutcome> {
     return new Promise<RunOutcome>((resolve) => {
       const onIdle = () => {
-        const status = active.runtime.status;
-        if (status === "waiting_for_human" || status === "waiting_for_signal") {
+        const suspended = this.suspensionOf(active);
+        if (suspended) {
           active.runtime.offIdle(onIdle);
-          resolve({ status, pending: [...active.pending.values()] });
+          resolve(suspended);
         }
       };
       active.runtime.onIdle(onIdle);
@@ -449,6 +454,32 @@ export class Engine implements EngineHost {
         })
         .finally(() => active.runtime.offIdle(onIdle));
     });
+  }
+
+  /**
+   * The run's suspension, aggregated across its live descendants: a parent whose
+   * only live work is a child that is itself waiting on a person IS waiting on
+   * that person, and its handle must surface the child's question — without this,
+   * outcome() and weft_wait hang on sub-workflow asks until the child's terminal
+   * state. Undefined while any step anywhere in the tree does real work.
+   */
+  private suspensionOf(
+    active: ActiveRun,
+  ): { status: "waiting_for_human" | "waiting_for_signal"; pending: PendingRequest[] } | undefined {
+    if (active.runtime.liveStepCount() > 0) return undefined;
+    const status = active.runtime.status;
+    const pending = [...active.pending.values()];
+    let waiting = status === "waiting_for_human" || status === "waiting_for_signal";
+    for (const childId of active.children) {
+      const child = this.active.get(childId);
+      if (!child) continue;
+      const sub = this.suspensionOf(child);
+      if (!sub) return undefined; // a busy child: the tree is still working
+      waiting = true;
+      pending.push(...sub.pending);
+    }
+    if (!waiting) return undefined;
+    return { status: pending.length > 0 ? "waiting_for_human" : "waiting_for_signal", pending };
   }
 
   private async drive(active: ActiveRun, def: WorkflowDefinition, input: unknown): Promise<unknown> {
@@ -617,8 +648,24 @@ export class Engine implements EngineHost {
     this.active.get(runtime.runId)?.pending.set(request.id, request);
   }
 
+  /** The live descendant of `active` holding `requestId` as a pending wait, if any. */
+  private requestOwner(active: ActiveRun, requestId: string): string | undefined {
+    for (const childId of active.children) {
+      const child = this.active.get(childId);
+      if (!child) continue;
+      if (child.runtime.pendingWait(requestId)) return childId;
+      const deeper = this.requestOwner(child, requestId);
+      if (deeper !== undefined) return deeper;
+    }
+    return undefined;
+  }
+
   resolvePending(runtime: RunRuntime, id: string): void {
-    this.active.get(runtime.runId)?.pending.delete(id);
+    const active = this.active.get(runtime.runId);
+    active?.pending.delete(id);
+    // A child that stopped waiting is live work again for its parent: flip the
+    // awaiting workflow step back until the next suspension.
+    if (active?.parentBridge && !runtime.hasPendingWaits()) active.parentBridge.unmarkWaiting();
   }
 
   async executeChildRun(spec: ChildRunSpec): Promise<{ output: unknown; usage: import("@weft/sdk").Usage }> {
@@ -649,6 +696,23 @@ export class Engine implements EngineHost {
 
     const childId = spec.childRunId;
     const resuming = await this.journal.exists(childId);
+    // Spend THIS parent already journaled for THIS child (failed passes roll a
+    // delta onto their step.failed): the child journal contains it too, so both
+    // the restore below and every roll-up report the DIFFERENCE — otherwise a
+    // failed-then-resumed child would count twice.
+    const parentActive = this.active.get(parent.runId);
+    const priorRolled = { input: 0, output: 0, usd: 0, samples: 0 };
+    for (const rec of parentActive?.records ?? []) {
+      if (rec.ev.type !== "step.failed") continue;
+      const detail = rec.ev.error.detail as
+        | { usage?: import("@weft/sdk").Usage; childRunId?: string }
+        | undefined;
+      if (detail?.childRunId !== childId || !detail.usage) continue;
+      priorRolled.input += detail.usage.input ?? 0;
+      priorRolled.output += detail.usage.output ?? 0;
+      priorRolled.usd += detail.usage.usd ?? 0;
+      priorRolled.samples += detail.usage.samples ?? 1;
+    }
     // Journaled raw, validated on EVERY execution (mirrors start/resume): the
     // journal's JSON can't hold a transform's output faithfully, so a resumed
     // child must see the schema reapplied, not the serialized residue.
@@ -660,10 +724,13 @@ export class Engine implements EngineHost {
       const created = records.find((r) => r.ev.type === "run.created")?.ev;
       if (created?.type === "run.created") rawInput = created.input === undefined ? {} : created.input;
       replay = ReplayIndex.fromRecords(records);
-      // The child's own journaled spend charges up the shared chain. The parent's
-      // restore never saw it (a workflow step journals its usage only at
-      // completion, and a completed child is served, not resumed) — no double count.
-      shared.budget.restore(replay.totalUsage.tokens, replay.totalUsage.usd, replay.totalUsage.samples);
+      // The child's own journaled spend charges up the shared chain — minus what
+      // the parent's failed-step roll-ups already restored through ITS journal.
+      shared.budget.restore(
+        Math.max(0, replay.totalUsage.tokens - priorRolled.input - priorRolled.output),
+        Math.max(0, replay.totalUsage.usd - priorRolled.usd),
+        Math.max(0, replay.totalUsage.samples - priorRolled.samples),
+      );
     } else {
       const rawBad = jsonUnsafeAt(rawInput);
       if (rawBad !== undefined) {
@@ -715,11 +782,26 @@ export class Engine implements EngineHost {
     const lease = await this.claimRun(childId);
     const handle = this.launch(runtime, def, input, records, lease);
     const childActive = this.active.get(childId);
-    try {
-      const output = await handle.result;
-      // The child's total journaled spend rides on the parent's workflow step so a
-      // later parent resume restores it without reading the child journal. Failed
-      // attempts count too — their spend lives on retry/failure records.
+    parentActive?.children.add(childId);
+    // While the child is suspended on a person or a signal, the parent's awaiting
+    // workflow step is a WAIT, not live work: flip it so the parent runtime goes
+    // idle and its handle surfaces the child's question (grandchildren chain the
+    // same way, one bridge per level).
+    const bridge = () => {
+      const status = childActive?.runtime.status;
+      if (status === "waiting_for_human" || status === "waiting_for_signal") {
+        spec.waitBridge?.markWaiting();
+      }
+    };
+    if (childActive && spec.waitBridge) {
+      childActive.parentBridge = spec.waitBridge;
+      childActive.runtime.onIdle(bridge);
+    }
+    // The child's journaled spend rides on the parent's workflow step so a later
+    // parent resume restores it without reading the child journal — as the DELTA
+    // beyond what earlier failed passes already rolled up. Failed attempts count
+    // too: their spend lives on retry/failure records.
+    const rollUp = () => {
       const usage = { input: 0, output: 0, usd: 0, samples: 0 };
       const fold = (u: import("@weft/sdk").Usage | undefined) => {
         if (!u) return;
@@ -736,10 +818,43 @@ export class Engine implements EngineHost {
         else if (rec.ev.type === "step.failed")
           fold((rec.ev.error.detail as { usage?: import("@weft/sdk").Usage } | undefined)?.usage);
       }
-      return { output, usage };
+      usage.input = Math.max(0, usage.input - priorRolled.input);
+      usage.output = Math.max(0, usage.output - priorRolled.output);
+      usage.usd = Math.max(0, usage.usd - priorRolled.usd);
+      usage.samples = Math.max(0, usage.samples - priorRolled.samples);
+      return usage;
+    };
+    try {
+      const output = await handle.result;
+      return { output, usage: rollUp() };
     } catch (err) {
-      throw StepError.from(err, { kind: "workflow", key: spec.key ?? spec.name, runId: parent.runId });
+      const stepError = StepError.from(err, {
+        kind: "workflow",
+        key: spec.key ?? spec.name,
+        runId: parent.runId,
+      });
+      // A FAILED child's paid steps must still reach the parent journal: without
+      // this, a parent resumed with edited code that skips the child would
+      // restore a budget that never saw the spend and could sail past its
+      // ceiling. Cancellations pass through untouched — rewrapping would
+      // un-cancel the run.
+      if (!isCancellation(stepError)) {
+        const usage = rollUp();
+        if (usage.input > 0 || usage.output > 0 || usage.usd > 0 || usage.samples > 0) {
+          const detail =
+            typeof stepError.detail === "object" && stepError.detail !== null ? stepError.detail : {};
+          throw new StepError(stepError.code, stepError.message, {
+            step: stepError.step,
+            ...(stepError.attempts !== undefined ? { attempts: stepError.attempts } : {}),
+            detail: { ...detail, usage, childRunId: childId },
+            ...(stepError.cause !== undefined ? { cause: stepError.cause } : {}),
+          });
+        }
+      }
+      throw stepError;
     } finally {
+      if (childActive) childActive.runtime.offIdle(bridge);
+      parentActive?.children.delete(childId);
       this.active.delete(childId);
     }
   }
@@ -766,7 +881,14 @@ export class Engine implements EngineHost {
     const active = this.active.get(runId);
     if (active) {
       const wait = active.runtime.pendingWait(requestId);
-      if (!wait) throw new Error(`run ${runId}: no pending request ${requestId}`);
+      if (!wait) {
+        // The request may live in a DESCENDANT whose question this handle
+        // surfaced (suspensionOf aggregates children): route to the run that
+        // actually owns it, so callers can answer through the id they polled.
+        const owner = this.requestOwner(active, requestId);
+        if (owner !== undefined) return this.answer(owner, requestId, answer, opts);
+        throw new Error(`run ${runId}: no pending request ${requestId}`);
+      }
       const issues = structuralCheck(wait.request.schema, answer);
       if (issues.length > 0) {
         throw new StepError(

@@ -818,6 +818,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
           childRunId,
           ...(opts.key !== undefined ? { key: opts.key } : {}),
           ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
+          waitBridge: { markWaiting: io.markWaiting, unmarkWaiting: io.unmarkWaiting },
         });
         return { value: output, journalOutput: { childRunId, output }, usage };
       },
@@ -892,7 +893,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     kind: "exec" | "bash" | "check",
     payload: Record<string, unknown>,
     label: string,
-    spawn: (env: Record<string, string>) => ReturnType<typeof execa>,
+    spawn: (env: Record<string, string>, signal: AbortSignal) => ReturnType<typeof execa>,
     opts: (ExecOptions & { schema?: AnySchema }) | undefined,
     envMap?: Record<string, string | SecretHandle>,
   ): Promise<unknown> {
@@ -950,7 +951,13 @@ export function buildCtx(rt: RunRuntime): Ctx {
         // Secrets resolve only on the live path; the global limiter caps every
         // effectful step, so un-capped ctx.parallel cannot fork-bomb the host.
         const resolvedEnv = resolveSecretValues(envMap, ref);
-        const result = await rt.host.globalLimiter.with(() => spawn(resolvedEnv), io.signal);
+        const result = await rt.host.globalLimiter.with(() => spawn(resolvedEnv, io.signal), io.signal);
+        // Cancellation must kill the RUNNING process, not just queued ones — the
+        // signal rides into execa as cancelSignal; a killed command is not a
+        // step failure, it is the run's cancellation.
+        if (io.signal.aborted) {
+          throw new CancelledError(`${label}: cancelled while running`, ref);
+        }
         if (result.timedOut) {
           throw new StepError("timeout", `${label} timed out`, { step: ref });
         }
@@ -980,7 +987,14 @@ export function buildCtx(rt: RunRuntime): Ctx {
       "exec",
       { op: "exec", file, args, cwd: opts?.cwd ?? null, env: journalSecretMap(opts?.env), timeoutMs },
       `${file} ${args.join(" ")}`.trim(),
-      (env) => execa(file, args, { cwd, env: { ...process.env, ...env }, timeout: timeoutMs, reject: false }),
+      (env, signal) =>
+        execa(file, args, {
+          cwd,
+          env: { ...process.env, ...env },
+          timeout: timeoutMs,
+          reject: false,
+          cancelSignal: signal,
+        }),
       opts,
       opts?.env,
     );
@@ -993,13 +1007,14 @@ export function buildCtx(rt: RunRuntime): Ctx {
       "bash",
       { op: "bash", command, cwd: opts?.cwd ?? null, env: journalSecretMap(opts?.env), timeoutMs },
       command,
-      (env) =>
+      (env, signal) =>
         execa(command, {
           cwd,
           env: { ...process.env, ...env },
           timeout: timeoutMs,
           reject: false,
           shell: "/bin/bash",
+          cancelSignal: signal,
         }),
       opts,
       opts?.env,
@@ -1431,7 +1446,13 @@ export function buildCtx(rt: RunRuntime): Ctx {
           const result =
             stubbed ??
             (await rt.host.globalLimiter.with(
-              () => execa(file, args, { cwd: rt.cwd, timeout: timeoutMs, reject: false }),
+              () =>
+                execa(file, args, {
+                  cwd: rt.cwd,
+                  timeout: timeoutMs,
+                  reject: false,
+                  cancelSignal: io.signal,
+                }),
               io.signal,
             ));
           const pass = result.exitCode === 0 && !("timedOut" in result && result.timedOut);

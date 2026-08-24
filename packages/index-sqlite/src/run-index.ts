@@ -265,17 +265,20 @@ function spendOf(records: JournalRecord[], steps: StepState[]): { tokens: number
  * budget restores); the child row already carries that spend itself.
  */
 function ownSpendOf(records: JournalRecord[]): { tokens: number; usd: number } {
-  const workflowSeqs = new Set<number>();
+  // Sequence numbers RESTART on every resume, so a seq that carried a workflow
+  // step in one pass may carry an agent step in the next: classification tracks
+  // the LATEST schedule seen in the chronological walk, never a global set.
+  const kindBySeq = new Map<number, string>();
   let tokens = 0;
   let usd = 0;
   const fold = (u: { input?: number; output?: number; usd?: number } | undefined, seq: number) => {
-    if (!u || workflowSeqs.has(seq)) return;
+    if (!u || kindBySeq.get(seq) === "workflow") return;
     tokens += (u.input ?? 0) + (u.output ?? 0);
     usd += u.usd ?? 0;
   };
   for (const { ev } of records) {
     if (ev.type === "step.scheduled") {
-      if (ev.kind === "workflow") workflowSeqs.add(ev.seq);
+      kindBySeq.set(ev.seq, ev.kind);
     } else if (ev.type === "step.completed" || ev.type === "step.attempt") {
       fold(ev.usage, ev.seq);
     } else if (ev.type === "step.failed") {

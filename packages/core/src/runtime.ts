@@ -60,6 +60,13 @@ export interface ChildRunSpec {
   childRunId: string;
   key?: string;
   budget?: { fraction?: number; tokens?: number; usd?: number };
+  /**
+   * The parent workflow step's wait toggles. While the child is suspended on a
+   * person or a signal, the awaiting step is a WAIT, not live work — flipping it
+   * lets the parent runtime go idle and surface the child's pending requests
+   * through the parent handle.
+   */
+  waitBridge?: { markWaiting(): void; unmarkWaiting(): void };
 }
 
 export interface EngineHost {
@@ -109,6 +116,8 @@ export interface StepIO {
   appendAttempt(detail?: string): Promise<void>;
   /** Mark the step as a durable wait (sleep/signal): it stops counting as live work. */
   markWaiting(): void;
+  /** Undo markWaiting when the wait ends but the step keeps working (a resumed child). */
+  unmarkWaiting(): void;
 }
 
 export interface StepOutcome<T> {
@@ -358,6 +367,11 @@ export class RunRuntime {
     return this.pendingWaits.size > 0 || this.waitingSteps > 0;
   }
 
+  /** Steps currently counted as live work (waiting steps excluded). */
+  liveStepCount(): number {
+    return this.inflightLive;
+  }
+
   onIdle(listener: () => void): void {
     this.idleListeners.push(listener);
     // Level-triggered: a listener registered after the run already suspended
@@ -544,6 +558,7 @@ export class RunRuntime {
               ]);
             },
             markWaiting,
+            unmarkWaiting,
           };
           const outcome = await this.stepContext.run({ seq }, () =>
             this.withTimeout(spec.execute(io), spec.timeoutMs, ref, stepAbort),
