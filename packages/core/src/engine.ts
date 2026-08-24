@@ -35,6 +35,9 @@ import type { BlobStore, JournalStore, RunLease, RunListFilter, RunSummary } fro
 
 const tracer = trace.getTracer("weft");
 
+/** How long cancel() waits for an aborted run to unwind before fencing it anyway. */
+const CANCEL_DRAIN_MS = 5_000;
+
 /**
  * The engine's own version stamp for a workflow body, journaled with the run and
  * compared on resume to decide whether step POSITIONS still name the same call sites.
@@ -1456,7 +1459,35 @@ export class Engine implements EngineHost {
       // Reject (never answer) pending human waits: the run must end cancelled,
       // not proceed as if someone had denied the request.
       this.cancelHumanWaitsAcross(active);
-      await active.result.catch(() => undefined);
+      // BOUNDED, the way shutdown() drains: an abort is a request, and a step that
+      // ignores it — a provider SDK with no cancellation, a wedged subprocess — used to
+      // hang cancel() for as long as it kept running, with no way for a caller (or a
+      // person at the CLI) to get an answer. Past the bound the run is fenced and
+      // journaled cancelled anyway, so the projection tells the truth and the lease is
+      // released; the zombie's work was already declared unobservable.
+      const drained = await Promise.race([
+        active.result.then(
+          () => true,
+          () => true,
+        ),
+        new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => resolve(false), CANCEL_DRAIN_MS);
+          timer.unref?.();
+        }),
+      ]);
+      if (!drained) {
+        // Journal BEFORE fencing: a fenced runtime refuses every append, so the order
+        // decides whether the projection ends up saying "cancelled" or stays stuck on
+        // "executing" forever.
+        await this.appendTerminal(active, [{ type: "run.cancelled" }]).catch(() => undefined);
+        active.runtime.status = "cancelled";
+        active.runtime.fence(
+          new CancelledError(`run ${runId} was cancelled; a step is still draining`, {
+            kind: "workflow",
+            runId,
+          }),
+        );
+      }
       return;
     }
     if (!(await this.journal.exists(runId))) throw new Error(`run ${runId} not found`);

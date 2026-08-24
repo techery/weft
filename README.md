@@ -96,9 +96,12 @@ node packages/cli/bin/weft.js new triage
 pnpm -C packages/cli link --global
 ```
 
-`bin/weft.js` runs the TypeScript sources through tsx when there is no build output beside
-them, so the CLI works straight after `pnpm install`; run `pnpm build` and the same entry
-point uses the compiled `dist/` instead — which is what a published install runs.
+`bin/weft.js` asks the manifest which shape this package is in: a published install's
+`exports` point at `dist/`, so it loads the compiled ESM; a checkout's point at `src/*.ts`,
+so it registers tsx and loads the sources. The CLI therefore works straight after
+`pnpm install`, and `pnpm build` does *not* change what it runs — a checkout keeps loading
+`src/` even with `dist/` present, because its dependencies are still TypeScript and the
+sources are the only coherent thing to load.
 
 The engine is also usable directly as a library — no CLI, no filesystem, no models:
 

@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { JournalRecord, JournalStore, RunStatus, RunSummary, StepState } from "@techery/weft-core";
@@ -88,8 +88,23 @@ export class RunIndex {
 
   constructor(opts: RunIndexOptions) {
     if (opts.dbPath !== ":memory:") mkdirSync(dirname(opts.dbPath), { recursive: true });
-    this.db = new DatabaseSync(opts.dbPath);
-    this.migrate();
+    try {
+      this.db = new DatabaseSync(opts.dbPath);
+      this.migrate();
+    } catch (err) {
+      // Nothing here is a source of truth: every row is a fold over a journal, so
+      // discarding the file is always safe — and refusing to open is not, because a
+      // corrupt index would take `weft ls` down with it and there is no other repair
+      // path. A truncated or garbage file is deleted and rebuilt from scratch. An
+      // in-memory database has nothing to delete, so its failure is genuine.
+      if (opts.dbPath === ":memory:") throw err;
+      rmSync(opts.dbPath, { force: true });
+      // SQLite's sidecars belong to the file we just discarded.
+      rmSync(`${opts.dbPath}-wal`, { force: true });
+      rmSync(`${opts.dbPath}-shm`, { force: true });
+      this.db = new DatabaseSync(opts.dbPath);
+      this.migrate();
+    }
   }
 
   /** Drop-and-recreate on any version drift; derived data is never migrated. */

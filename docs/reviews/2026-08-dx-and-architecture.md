@@ -1,6 +1,10 @@
 # Weft — DX and Architecture Review
 
-**Reviewed:** 2026-08-24, at commit `ad5ecae`.
+**Reviewed:** 2026-08-24, at commit `ad5ecae`; re-checked against `c0e5e50` after main
+landed the `@techery/weft-*` rename and the structured-output fixes.
+**Status:** every finding below has been fixed on
+`claude/weft-dx-architecture-review-yzmxo6`, each with a regression test — see
+[What was fixed](#what-was-fixed).
 **Baseline:** Claude Code's built-in dynamic workflows, plus durable-execution engines (Temporal,
 Restate, DBOS, Inngest, Trigger.dev), agent frameworks (LangGraph, Mastra, CrewAI, OpenAI Agents SDK),
 and the coding-agent field (Codex cloud, Copilot coding agent, OpenHands, Dagger container-use).
@@ -58,6 +62,56 @@ reviewable — every step schema-validated, every diff a scoped patch that lands
 could, every run replayable from a journal after the session is gone.*
 
 ---
+
+## What was fixed
+
+The findings are kept below as written, because the reasoning is the point. All of them
+are now closed, along with a further set found by a follow-up audit of the subsystems this
+review had not reached.
+
+| Finding | Fix |
+| --- | --- |
+| 1 — a budget ceiling destroys fan-out | `Budget.reserveCall` parks for a slot instead of refusing one; refuses only when waiting cannot help. The ceiling stays hard. |
+| 2 — a salvage cache hit can lie | Each run stamps a hash of the workflow body; positions are trusted only when the script is unchanged, and an ambiguous keyless step re-runs and records `replay.diverged`. |
+| 3 — wall clock in the replayer | The stall test counts drained event-loop turns, and the runtime counts replay-path I/O so a turn cannot read as quiet while a continuation is in flight. |
+| 4 — determinism fence gaps | `WeakRef`, `FinalizationRegistry`, `Intl` and the locale-sensitive string methods are rejected at parse time and replaced in the sandbox. |
+| 5 — four README claims | Corrected, with two new entries in "honest deviations". |
+
+Found and fixed by the follow-up audit, in rough order of severity:
+
+- **A diff driver could destroy every captured patch.** `GIT_EXTERNAL_DIFF` or a
+  repository's `diff.external` replaces git's output with a program's stdout;
+  `capturePatch` journaled that, `git apply` refused it, and the work was lost.
+- **A nested git repository silently discarded a whole step's output.** Anything that runs
+  `git init` in a subdirectory is staged as a commit pointer, so the patch applied cleanly
+  and landed none of the files.
+- **Write scopes failed open on exclusions.** `["src/**", "!src/secret.ts"]` still
+  permitted `src/secret.ts`, and an exclusion-only scope permitted the whole tree — in the
+  post-hoc check *and* in the live `canUseTool` gate, which had its own copy of the
+  matcher.
+- **A hung provider held its concurrency permit forever**, so a couple of unresponsive
+  calls wedged a run past any timeout.
+- **A fan-out built every worktree before taking a permit** — 50 checkouts to run two.
+- **An unreadable blob killed a resumable run** instead of re-running the step, and one
+  corrupt journal line hid every healthy run from `weft ls`.
+- **A mistyped CLI flag ran the wrong thing.** `--basse release-2.0` reviewed `main`
+  silently; values like `1e5`, `1.20` and `007` were coerced to numbers.
+- **`toStrictSchema` rewrote the author's own data**, descending into `default`, `const`
+  and `enum` values.
+- **`@techery/weft-testing` was unimportable from a published install** (`vitest`
+  undeclared), and `ctx.pipeline` builders shared one mutable stage array.
+- **Under a strict write scope, git ran unwrapped**, so repository-configured
+  `textconv`/`diff` drivers executed — a weaker boundary than the read-only gate beside
+  it; and an edit tool whose path field wasn't recognised was allowed outright.
+- **An out-of-tree write left no record.** `filesTouched` was overwritten by what patch
+  capture saw, and capture only ever sees inside the worktree — so `warn` mode, whose
+  whole promise is to flag rather than block, flagged nothing.
+- **`cancel()` hung forever** on a step that ignored its abort; a corrupt `index.sqlite`
+  refused to open with no repair path; and `list()` trusted a projection whose mtime
+  merely *equalled* the journal's.
+- Two suite defects: a test asserting a capability the product does not have (the harness
+  bypassed the validation production performs), and a flaky assertion on git's *optional*
+  index refresh.
 
 ## Measured baseline
 

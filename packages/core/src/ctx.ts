@@ -603,10 +603,23 @@ export function buildCtx(rt: RunRuntime): Ctx {
                     worktreePath: worktree.path,
                     alsoInclude: [...(scope.paths ?? []), ...(scope.also ?? [])],
                   });
-                  files = captured.files;
+                  // capturePatch only ever sees INSIDE the worktree, so an edit that
+                  // escaped it — an absolute path, a `../` target, a write through a
+                  // symlink pointing out of the tree — is absent from `captured.files`.
+                  // Overwriting `files` with them dropped the provider's own report of
+                  // those paths, which is the only witness there is: nothing reached
+                  // checkScope, so no scope.violation was journaled and `warn` mode, whose
+                  // whole promise is to flag rather than block, flagged nothing at all.
+                  const escaped = (result.result.filesTouched ?? []).filter(
+                    (path) => isAbsolute(path) || path.startsWith("../"),
+                  );
+                  files = [...new Set([...captured.files, ...escaped])];
                   if (captured.patch.length > 0) {
                     const blob = await rt.host.blobs.put(captured.patch, { kind: "patch" });
-                    const { outOfScope } = checkScope(captured.files, scope);
+                    // The UNION, not just what capture saw: an escaped path can never
+                    // match a repo-relative glob, so it lands out of scope by
+                    // construction — which is the correct verdict.
+                    const { outOfScope } = checkScope(files, scope);
                     const quarantined = scope.mode === "strict" && outOfScope.length > 0;
                     const patchKey = opts.key ?? label;
                     patch = {
@@ -636,6 +649,19 @@ export function buildCtx(rt: RunRuntime): Ctx {
                             } as const,
                           ]
                         : []),
+                    ]);
+                  } else if (escaped.length > 0) {
+                    // Every edit escaped the worktree, so there is no patch to attach the
+                    // violation to — and without this the run would carry no record of
+                    // them at all.
+                    await rt.append([
+                      {
+                        type: "scope.violation",
+                        seq: io.seq,
+                        key: opts.key ?? label,
+                        files: escaped,
+                        mode: scope.mode,
+                      },
                     ]);
                   }
                 } else if (inPlaceSnap !== undefined && scope) {

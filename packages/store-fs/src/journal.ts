@@ -442,7 +442,13 @@ export class FsJournalStore implements JournalStore {
     try {
       const statePath = join(this.runDir(runId), "state.json");
       const [projStat, jStat] = await Promise.all([fs.stat(statePath), fs.stat(this.journalPath(runId))]);
-      if (jStat.mtimeMs <= projStat.mtimeMs) {
+      // Strict `<`: filesystem timestamps are coarse enough that an append and the
+      // snapshot it triggered routinely share an mtime, and `<=` then trusted a
+      // projection written BEFORE the record that superseded it — reporting a terminal
+      // run as executing forever, which is the exact failure this check exists to catch.
+      // An equal stamp is not evidence of freshness, so it distrusts the projection and
+      // pays for one journal fold.
+      if (jStat.mtimeMs < projStat.mtimeMs) {
         const raw = await fs.readFile(statePath, "utf8");
         const state = JSON.parse(raw) as RunState;
         return {
