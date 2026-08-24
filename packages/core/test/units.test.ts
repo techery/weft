@@ -399,3 +399,33 @@ describe("StepError ergonomics", () => {
     });
   });
 });
+
+describe("ctx.pipeline builders", () => {
+  test("branching a pipeline does not merge the branches' stages", async () => {
+    const { runWorkflow } = await import("@techery/weft-testing");
+    const { defineWorkflow } = await import("@techery/weft-sdk");
+
+    const wf = defineWorkflow(
+      {
+        name: "branch",
+        description: "two branches off one prefix",
+        input: z.object({}),
+        output: z.object({ a: z.array(z.number()), b: z.array(z.number()) }),
+      },
+      async (ctx) => {
+        const base = ctx.pipeline([1, 2, 3]).map((n) => (n as number) * 10);
+        // Sharing one mutable stage array made these two see each other's stages.
+        const a = await base.map((n) => (n as number) + 1).run();
+        const b = await base.map((n) => (n as number) + 2).run();
+        return {
+          a: ctx.ok(a) as number[],
+          b: ctx.ok(b) as number[],
+        };
+      },
+    );
+
+    const { output } = await runWorkflow(wf, { input: {} });
+    expect(output.a).toEqual([11, 21, 31]);
+    expect(output.b).toEqual([12, 22, 32]);
+  });
+});

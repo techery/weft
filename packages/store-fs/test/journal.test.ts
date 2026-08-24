@@ -392,6 +392,30 @@ describe("projections", () => {
     expect(report).toMatch(/^# rev \d$/);
   });
 
+  test("one damaged run does not hide every healthy one from list()", async () => {
+    // `weft ls` is how a person finds the run that needs repairing, so a corrupt line in
+    // ONE journal throwing out of the whole listing takes away the tool they would use.
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    await store.append("run-good", [runCreated("run-good", "audit")]);
+    await store.append("run-bad", [runCreated("run-bad", "audit")]);
+
+    // A committed, newline-terminated line that is not JSON.
+    await appendFile(join(dir, "run-bad", "journal.jsonl"), "}}}not json{{{\n");
+    await rm(join(dir, "run-bad", "state.json"), { force: true });
+
+    const listed = (await store.list()).map((r) => r.runId);
+    expect(listed).toContain("run-good");
+    // Reading the damaged run itself still fails loudly, where the error names it.
+    await expect(
+      (async () => {
+        for await (const _ of store.read("run-bad")) {
+          // drain
+        }
+      })(),
+    ).rejects.toThrow();
+  });
+
   test("a peer's committed records are never truncated as a torn tail", async () => {
     // The lock can be stolen from a holder frozen past the stale threshold, so a peer's
     // complete, fsynced records can land between one writer's reconcile and its

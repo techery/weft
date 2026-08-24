@@ -372,394 +372,401 @@ export function buildCtx(rt: RunRuntime): Ctx {
             });
           }
         },
-        execute: async (io) => {
-          rt.bumpAgentCount(stepRef);
+        // The concurrency permit is taken for the WHOLE lane, worktree included. Held
+        // only around the provider call, every lane of a fan-out materialised its own
+        // git worktree first and then queued — so a 50-way fan-out cut 50 full
+        // checkouts to run 2 at a time, and contended on `.git/config` doing it. The
+        // permit now bounds the disk and the git work as well as the model calls.
+        execute: async (io) =>
+          rt.host.globalLimiter.with(async () => {
+            rt.bumpAgentCount(stepRef);
 
-          let workCwd = rt.cwd;
-          let worktree: { path: string; base: string } | undefined;
-          // Reserved, not just checked: parallel dispatches against one pool must not
-          // all sail past a nearly-dry ceiling before the first charge lands. This
-          // WAITS for a slot — a ceiling schedules the fan-out, it does not shrink it.
-          const releaseCall = await rt.budget.reserveCall(stepRef, io.signal);
-          try {
-            if (useWorktree) {
-              // Per-ATTEMPT path: a retry after a timeout must never remove and
-              // recreate the directory a hung previous attempt may still write to.
-              const dir = join(tmpdir(), "weft-worktrees", rt.runId, `${io.seq}.${io.attempt}`);
-              // A process killed mid-step leaves this seq's directory registered as a
-              // worktree; without clearing it, every resume of the step would fail at
-              // `git worktree add`. removeWorktree prunes and tolerates absence.
-              await removeWorktree({ repoRoot: rt.cwd, path: dir });
-              // Seed from the CURRENT integration state, not HEAD: patches merged by
-              // an earlier ctx.integrate() are uncommitted in the tree, and a later
-              // write agent must build on them.
-              worktree = await addWorktree({
-                repoRoot: rt.cwd,
-                dir,
-                baseRef: await integrationBaseCommit(rt.cwd),
-              });
-              workCwd = worktree.path;
-            }
-            // An in-place writer edits the integration tree directly — no worktree,
-            // no patch capture — so its declared scope needs its own record:
-            // snapshot the tree now and diff after the dispatch to see what was
-            // REALLY touched (a sandbox like Codex's permits the whole repo).
-            // Ignored paths are invisible to the snapshots (standard excludes), so
-            // list them separately: a resolver dropping a NEW ignored file out of
-            // scope must still be caught.
-            let inPlaceSnap: string | undefined;
-            let ignoredListingBefore: string[] | undefined;
-            let ignoredBefore: Set<string> | undefined;
-            let ignoredManifestBefore: Map<string, string> | undefined;
-            if (mode.writeInPlace && scope) {
-              inPlaceSnap = await integrationBaseCommit(workCwd);
-              ignoredListingBefore = await listIgnoredFiles();
-              ignoredBefore = new Set(ignoredListingBefore);
-              // The listing diff only sees NEW top-level entries; edits (or new
-              // files) INSIDE a pre-existing ignored file or directory need a
-              // stat manifest to become visible at all.
-              const walked = await ignoredStatManifest(ignoredListingBefore);
-              if (scope.mode === "strict" && walked.truncated) {
-                // A partial manifest cannot back a STRICT scope: edits beyond
-                // the cutoff would survive unverified. Refuse before spending.
+            let workCwd = rt.cwd;
+            let worktree: { path: string; base: string } | undefined;
+            // Reserved, not just checked: parallel dispatches against one pool must not
+            // all sail past a nearly-dry ceiling before the first charge lands. This
+            // WAITS for a slot — a ceiling schedules the fan-out, it does not shrink it.
+            const releaseCall = await rt.budget.reserveCall(stepRef, io.signal);
+            try {
+              if (useWorktree) {
+                // Per-ATTEMPT path: a retry after a timeout must never remove and
+                // recreate the directory a hung previous attempt may still write to.
+                const dir = join(tmpdir(), "weft-worktrees", rt.runId, `${io.seq}.${io.attempt}`);
+                // A process killed mid-step leaves this seq's directory registered as a
+                // worktree; without clearing it, every resume of the step would fail at
+                // `git worktree add`. removeWorktree prunes and tolerates absence.
+                await removeWorktree({ repoRoot: rt.cwd, path: dir });
+                // Seed from the CURRENT integration state, not HEAD: patches merged by
+                // an earlier ctx.integrate() are uncommitted in the tree, and a later
+                // write agent must build on them.
+                worktree = await addWorktree({
+                  repoRoot: rt.cwd,
+                  dir,
+                  baseRef: await integrationBaseCommit(rt.cwd),
+                });
+                workCwd = worktree.path;
+              }
+              // An in-place writer edits the integration tree directly — no worktree,
+              // no patch capture — so its declared scope needs its own record:
+              // snapshot the tree now and diff after the dispatch to see what was
+              // REALLY touched (a sandbox like Codex's permits the whole repo).
+              // Ignored paths are invisible to the snapshots (standard excludes), so
+              // list them separately: a resolver dropping a NEW ignored file out of
+              // scope must still be caught.
+              let inPlaceSnap: string | undefined;
+              let ignoredListingBefore: string[] | undefined;
+              let ignoredBefore: Set<string> | undefined;
+              let ignoredManifestBefore: Map<string, string> | undefined;
+              if (mode.writeInPlace && scope) {
+                inPlaceSnap = await integrationBaseCommit(workCwd);
+                ignoredListingBefore = await listIgnoredFiles();
+                ignoredBefore = new Set(ignoredListingBefore);
+                // The listing diff only sees NEW top-level entries; edits (or new
+                // files) INSIDE a pre-existing ignored file or directory need a
+                // stat manifest to become visible at all.
+                const walked = await ignoredStatManifest(ignoredListingBefore);
+                if (scope.mode === "strict" && walked.truncated) {
+                  // A partial manifest cannot back a STRICT scope: edits beyond
+                  // the cutoff would survive unverified. Refuse before spending.
+                  throw new StepError(
+                    "invalid_input",
+                    `${label}: the pre-existing ignored tree holds more than ${IGNORED_MANIFEST_CAP} files, ` +
+                      `so a strict in-place scope cannot be verified here`,
+                    { step: stepRef },
+                  );
+                }
+                ignoredManifestBefore = walked.manifest;
+              }
+              let finalPrompt = prompt;
+              if (scope) {
+                const also = scope.also?.length
+                  ? `\nAlso allowed (incidental files): ${scope.also.join(", ")}`
+                  : "";
+                finalPrompt +=
+                  `\n\n## Write scope\nYou may modify only files matching: ${scope.paths.join(", ")}.${also}` +
+                  `\nYou are not alone in the codebase: other agents work in parallel scopes — confine every edit to yours.`;
+              } else if (!mode.writeInPlace) {
+                finalPrompt += `\n\nThis is a read-only step: do not modify any files.`;
+              }
+
+              const provider = rt.host.providers.get(providerId);
+              // A USD-only ceiling with no way to price this call would charge $0 per
+              // call forever — refuse the dispatch instead of silently unbounding it.
+              if (
+                rt.budget.remainingUsd() !== null &&
+                rt.budget.remainingTokens() === null &&
+                !provider.capabilities().reportsUsd &&
+                priceFor(config, providerId, model) === undefined
+              ) {
                 throw new StepError(
                   "invalid_input",
-                  `${label}: the pre-existing ignored tree holds more than ${IGNORED_MANIFEST_CAP} files, ` +
-                    `so a strict in-place scope cannot be verified here`,
+                  `${label}: the run has a USD budget, but provider "${providerId}" reports no cost and ` +
+                    `no price is configured for ${model ?? "its default model"} — configure pricing or add a token ceiling`,
                   { step: stepRef },
                 );
               }
-              ignoredManifestBefore = walked.manifest;
-            }
-            let finalPrompt = prompt;
-            if (scope) {
-              const also = scope.also?.length
-                ? `\nAlso allowed (incidental files): ${scope.also.join(", ")}`
-                : "";
-              finalPrompt +=
-                `\n\n## Write scope\nYou may modify only files matching: ${scope.paths.join(", ")}.${also}` +
-                `\nYou are not alone in the codebase: other agents work in parallel scopes — confine every edit to yours.`;
-            } else if (!mode.writeInPlace) {
-              finalPrompt += `\n\nThis is a read-only step: do not modify any files.`;
-            }
-
-            const provider = rt.host.providers.get(providerId);
-            // A USD-only ceiling with no way to price this call would charge $0 per
-            // call forever — refuse the dispatch instead of silently unbounding it.
-            if (
-              rt.budget.remainingUsd() !== null &&
-              rt.budget.remainingTokens() === null &&
-              !provider.capabilities().reportsUsd &&
-              priceFor(config, providerId, model) === undefined
-            ) {
-              throw new StepError(
-                "invalid_input",
-                `${label}: the run has a USD budget, but provider "${providerId}" reports no cost and ` +
-                  `no price is configured for ${model ?? "its default model"} — configure pricing or add a token ceiling`,
-                { step: stepRef },
-              );
-            }
-            const req: AgentRequest = {
-              prompt: finalPrompt,
-              cwd: workCwd,
-              schema: wire.json,
-              label,
-              ...(opts.key !== undefined ? { key: opts.key } : {}),
-              ...(model !== undefined ? { model } : {}),
-              ...(effort !== undefined ? { effort: effort as never } : {}),
-              maxTurns,
-              timeoutMs,
-              onMaxTurns: opts.onMaxTurns ?? "finalize",
-              tools: { allowEdits: scope !== undefined || mode.writeInPlace === true },
-              ...(scope
-                ? {
-                    writeScope: {
-                      paths: scope.paths,
-                      mode: scope.mode,
-                      ...(scope.also ? { also: scope.also } : {}),
-                    },
-                  }
-                : {}),
-              hitl: {
-                onPermission: async (permReq) => {
-                  // A zombie attempt (abandoned after its timeout) must not open
-                  // gates: the step already failed and the run may have moved on.
-                  if (io.signal.aborted) return { behavior: "deny", message: "attempt aborted" };
-                  const risk = permReq.risk;
-                  if (risk === "high" || risk === "irreversible") {
-                    const gate = await rt.gateStep({
-                      action: `agent tool ${permReq.tool} (${label})`,
-                      risk,
-                      detail: JSON.stringify(permReq.input).slice(0, 500),
-                    });
-                    return gate.approved
-                      ? { behavior: "allow" }
-                      : { behavior: "deny", message: gate.note ?? "denied" };
-                  }
-                  return { behavior: "allow" };
-                },
-                onAsk: async (question, schemaJson) => {
-                  // Same fence as onPermission: an abandoned attempt must not
-                  // journal a human request the run will never answer.
-                  if (io.signal.aborted) {
-                    throw new CancelledError(`${label}: attempt aborted`, stepRef);
-                  }
-                  const outcome = await rt.runHuman({
-                    kind: "ask",
-                    question,
-                    schemaJson: schemaJson ?? { type: "object", additionalProperties: true },
-                  });
-                  return outcome.answer;
-                },
-              },
-            };
-
-            const chargeUsage = (u: Usage, opts: { journal?: boolean } = {}): Usage => {
-              const usage: Usage = { ...u };
-              if (usage.usd === undefined) {
-                const price = priceFor(config, providerId, model);
-                if (price) {
-                  usage.usd =
-                    (usage.input / 1e6) * price.inputPer1M + (usage.output / 1e6) * price.outputPer1M;
-                }
-              }
-              rt.budget.charge(usage);
-              if (opts.journal !== false) {
-                void rt.append([
-                  { type: "budget.sampled", tokens: rt.budget.spentTokens(), usd: rt.budget.spentUsd() },
-                ]);
-              }
-              return usage;
-            };
-
-            let result: Awaited<ReturnType<typeof runProviderWithRepair>>;
-            try {
-              result = await rt.host.globalLimiter.with(
-                () =>
-                  rt.host
-                    .providerLimiter(providerId)
-                    .with(() => runProviderWithRepair(provider, req, io), io.signal),
-                io.signal,
-              );
-            } catch (err) {
-              // Turns preceding a failure still cost money: charge the accumulated
-              // usage the repair loop attached before rethrowing — and write the
-              // priced value back onto the error, so the step.attempt / step.failed
-              // record carries exactly what was charged for the resume-time restore.
-              const failed = err as { detail?: { usage?: Usage } };
-              const carried = failed.detail?.usage;
-              // Request-priced providers can report a paid failure as USD alone
-              // (input/output both 0): that spend is just as real.
-              if (carried && (carried.input > 0 || carried.output > 0 || (carried.usd ?? 0) > 0)) {
-                // An aborted attempt may already be abandoned: charge, don't journal.
-                const priced = chargeUsage(carried, { journal: !io.signal.aborted });
-                failed.detail = { ...failed.detail, usage: priced };
-              }
-              throw err;
-            }
-
-            // The attempt may have been ABANDONED: its timeout already failed the
-            // step (past the bounded drain) and the run has moved on — possibly to
-            // a retry or a terminal state whose lease is released. Nothing this
-            // zombie does may be observable: charge the spend in memory (the money
-            // is gone either way) but journal nothing, capture nothing, and stop.
-            // The priced usage rides the cancellation so a settle INSIDE the drain
-            // window reaches the timeout record (withTimeout harvests it) — the
-            // billed result would otherwise vanish from every later resume's
-            // budget restore.
-            if (io.signal.aborted) {
-              const priced = chargeUsage(result.usage, { journal: false });
-              const abandoned = new CancelledError(`${label}: attempt abandoned after its timeout`, stepRef);
-              (abandoned as { detail?: { usage?: Usage } }).detail = { usage: priced };
-              throw abandoned;
-            }
-            const usage = chargeUsage(result.usage);
-
-            // Everything past the charge is bookkeeping on a PAID call: if any of
-            // it fails, the error must still carry the spend so step.attempt /
-            // step.failed journal it — otherwise a resume restores a budget that
-            // never saw this call and reruns it against an artificially low total.
-            try {
-              let transcriptRef: BlobRefJson | undefined;
-              if (result.result.transcript) {
-                const blob = await rt.host.blobs.put(result.result.transcript, { kind: "transcript" });
-                transcriptRef = { $blob: blob.hash, size: blob.size };
-              }
-
-              let patch: PatchRef | null = null;
-              let files: string[] = result.result.filesTouched ?? [];
-              if (worktree && scope) {
-                // The declared scope rides along so an allowed-but-gitignored
-                // output (a dist/** build artifact) is captured rather than
-                // deleted with the worktree.
-                const captured = await capturePatch({
-                  worktreePath: worktree.path,
-                  alsoInclude: [...(scope.paths ?? []), ...(scope.also ?? [])],
-                });
-                files = captured.files;
-                if (captured.patch.length > 0) {
-                  const blob = await rt.host.blobs.put(captured.patch, { kind: "patch" });
-                  const { outOfScope } = checkScope(captured.files, scope);
-                  const quarantined = scope.mode === "strict" && outOfScope.length > 0;
-                  const patchKey = opts.key ?? label;
-                  patch = {
-                    ref: blob.hash,
-                    key: patchKey,
-                    files: captured.files,
-                    ...(quarantined ? { quarantined } : {}),
-                    ...(outOfScope.length > 0 ? { outOfScope } : {}),
-                  };
-                  await rt.append([
-                    {
-                      type: "patch.captured",
-                      seq: io.seq,
-                      key: patchKey,
-                      ref: blob.hash,
-                      files: captured.files,
-                      ...(outOfScope.length > 0 ? { outOfScope } : {}),
-                    },
-                    ...(outOfScope.length > 0
-                      ? [
-                          {
-                            type: "scope.violation",
-                            seq: io.seq,
-                            key: patchKey,
-                            files: outOfScope,
-                            mode: scope.mode,
-                          } as const,
-                        ]
-                      : []),
-                  ]);
-                }
-              } else if (inPlaceSnap !== undefined && scope) {
-                // The tree diff is the authoritative record of an in-place writer's
-                // edits (the provider's self-report is advisory). Under a strict
-                // scope, stray edits are ROLLED BACK, not just reported — the
-                // declared scope is enforced, whatever the sandbox permitted.
-                // NEW ignored files come from the separate listing — the snapshots
-                // can't see them. (Edits INSIDE a pre-existing ignored file or
-                // directory stay out of reach of a tree diff.)
-                const afterSnap = await integrationBaseCommit(workCwd);
-                const newIgnored = (await listIgnoredFiles()).filter((f) => !ignoredBefore?.has(f));
-                // Pre-existing ignored content re-walked with the SAME entry list:
-                // an edit, deletion, or new file inside an already-ignored path is
-                // invisible to both the tree diff and the listing diff.
-                let changedIgnored: string[] = [];
-                if (ignoredManifestBefore !== undefined && ignoredListingBefore !== undefined) {
-                  const after = await ignoredStatManifest(ignoredListingBefore);
-                  if (scope.mode === "strict" && after.truncated) {
-                    // The re-walk blew past the cap (files ADDED during the
-                    // step): a partial diff would hide out-of-scope edits.
-                    throw new StepError(
-                      "scope_violation",
-                      `in-place step cannot verify the ignored tree (over ${IGNORED_MANIFEST_CAP} files after the step)`,
-                      { step: stepRef },
-                    );
-                  }
-                  changedIgnored = diffIgnoredManifest(ignoredManifestBefore, after.manifest);
-                }
-                if (changedIgnored.length > 0) {
-                  await rt.append([
-                    {
-                      type: "scope.violation",
-                      seq: io.seq,
-                      key: opts.key ?? label,
-                      files: changedIgnored,
-                      mode: scope.mode,
-                    },
-                  ]);
-                  if (scope.mode === "strict") {
-                    // No snapshot holds ignored content, so there is nothing to
-                    // restore FROM: failing loudly beats laundering the edit into
-                    // a completed result — or deleting a user's pre-existing file.
-                    throw new StepError(
-                      "scope_violation",
-                      `in-place step modified pre-existing ignored path(s) with no restorable snapshot: ${changedIgnored.join(", ")}`,
-                      { step: stepRef },
-                    );
-                  }
-                  files = [...files, ...changedIgnored];
-                }
-                if (afterSnap !== inPlaceSnap || newIgnored.length > 0) {
-                  // -z: raw NUL-delimited paths. Line splitting hands back the
-                  // C-QUOTED spelling of a hostile name (quote, backslash,
-                  // newline), which checkScope flags but restorePatchFiles then
-                  // rolls back at the wrong (nonexistent) path — the real
-                  // out-of-scope edit would survive a "strict" scope.
-                  const changed =
-                    afterSnap !== inPlaceSnap
-                      ? (
-                          await gitHandle.raw([
-                            "diff",
-                            "--name-only",
-                            "--no-renames",
-                            "-z",
-                            inPlaceSnap,
-                            afterSnap,
-                          ])
-                        ).stdout
-                          .split("\0")
-                          .filter((f) => f !== "")
-                      : [];
-                  files = [...changed, ...newIgnored];
-                  const { outOfScope } = checkScope(files, scope);
-                  if (outOfScope.length > 0) {
-                    if (scope.mode === "strict") {
-                      await restorePatchFiles(inPlaceSnap, outOfScope);
-                      files = files.filter((f) => !outOfScope.includes(f));
+              const req: AgentRequest = {
+                prompt: finalPrompt,
+                cwd: workCwd,
+                schema: wire.json,
+                label,
+                ...(opts.key !== undefined ? { key: opts.key } : {}),
+                ...(model !== undefined ? { model } : {}),
+                ...(effort !== undefined ? { effort: effort as never } : {}),
+                maxTurns,
+                timeoutMs,
+                onMaxTurns: opts.onMaxTurns ?? "finalize",
+                tools: { allowEdits: scope !== undefined || mode.writeInPlace === true },
+                ...(scope
+                  ? {
+                      writeScope: {
+                        paths: scope.paths,
+                        mode: scope.mode,
+                        ...(scope.also ? { also: scope.also } : {}),
+                      },
                     }
+                  : {}),
+                hitl: {
+                  onPermission: async (permReq) => {
+                    // A zombie attempt (abandoned after its timeout) must not open
+                    // gates: the step already failed and the run may have moved on.
+                    if (io.signal.aborted) return { behavior: "deny", message: "attempt aborted" };
+                    const risk = permReq.risk;
+                    if (risk === "high" || risk === "irreversible") {
+                      const gate = await rt.gateStep({
+                        action: `agent tool ${permReq.tool} (${label})`,
+                        risk,
+                        detail: JSON.stringify(permReq.input).slice(0, 500),
+                      });
+                      return gate.approved
+                        ? { behavior: "allow" }
+                        : { behavior: "deny", message: gate.note ?? "denied" };
+                    }
+                    return { behavior: "allow" };
+                  },
+                  onAsk: async (question, schemaJson) => {
+                    // Same fence as onPermission: an abandoned attempt must not
+                    // journal a human request the run will never answer.
+                    if (io.signal.aborted) {
+                      throw new CancelledError(`${label}: attempt aborted`, stepRef);
+                    }
+                    const outcome = await rt.runHuman({
+                      kind: "ask",
+                      question,
+                      schemaJson: schemaJson ?? { type: "object", additionalProperties: true },
+                    });
+                    return outcome.answer;
+                  },
+                },
+              };
+
+              const chargeUsage = (u: Usage, opts: { journal?: boolean } = {}): Usage => {
+                const usage: Usage = { ...u };
+                if (usage.usd === undefined) {
+                  const price = priceFor(config, providerId, model);
+                  if (price) {
+                    usage.usd =
+                      (usage.input / 1e6) * price.inputPer1M + (usage.output / 1e6) * price.outputPer1M;
+                  }
+                }
+                rt.budget.charge(usage);
+                if (opts.journal !== false) {
+                  void rt.append([
+                    { type: "budget.sampled", tokens: rt.budget.spentTokens(), usd: rt.budget.spentUsd() },
+                  ]);
+                }
+                return usage;
+              };
+
+              let result: Awaited<ReturnType<typeof runProviderWithRepair>>;
+              try {
+                // The global permit is already held for this whole lane (see execute
+                // above); only the per-provider limiter stacks here.
+                result = await rt.host
+                  .providerLimiter(providerId)
+                  .with(() => runProviderWithRepair(provider, req, io), io.signal);
+              } catch (err) {
+                // Turns preceding a failure still cost money: charge the accumulated
+                // usage the repair loop attached before rethrowing — and write the
+                // priced value back onto the error, so the step.attempt / step.failed
+                // record carries exactly what was charged for the resume-time restore.
+                const failed = err as { detail?: { usage?: Usage } };
+                const carried = failed.detail?.usage;
+                // Request-priced providers can report a paid failure as USD alone
+                // (input/output both 0): that spend is just as real.
+                if (carried && (carried.input > 0 || carried.output > 0 || (carried.usd ?? 0) > 0)) {
+                  // An aborted attempt may already be abandoned: charge, don't journal.
+                  const priced = chargeUsage(carried, { journal: !io.signal.aborted });
+                  failed.detail = { ...failed.detail, usage: priced };
+                }
+                throw err;
+              }
+
+              // The attempt may have been ABANDONED: its timeout already failed the
+              // step (past the bounded drain) and the run has moved on — possibly to
+              // a retry or a terminal state whose lease is released. Nothing this
+              // zombie does may be observable: charge the spend in memory (the money
+              // is gone either way) but journal nothing, capture nothing, and stop.
+              // The priced usage rides the cancellation so a settle INSIDE the drain
+              // window reaches the timeout record (withTimeout harvests it) — the
+              // billed result would otherwise vanish from every later resume's
+              // budget restore.
+              if (io.signal.aborted) {
+                const priced = chargeUsage(result.usage, { journal: false });
+                const abandoned = new CancelledError(
+                  `${label}: attempt abandoned after its timeout`,
+                  stepRef,
+                );
+                (abandoned as { detail?: { usage?: Usage } }).detail = { usage: priced };
+                throw abandoned;
+              }
+              const usage = chargeUsage(result.usage);
+
+              // Everything past the charge is bookkeeping on a PAID call: if any of
+              // it fails, the error must still carry the spend so step.attempt /
+              // step.failed journal it — otherwise a resume restores a budget that
+              // never saw this call and reruns it against an artificially low total.
+              try {
+                let transcriptRef: BlobRefJson | undefined;
+                if (result.result.transcript) {
+                  const blob = await rt.host.blobs.put(result.result.transcript, { kind: "transcript" });
+                  transcriptRef = { $blob: blob.hash, size: blob.size };
+                }
+
+                let patch: PatchRef | null = null;
+                let files: string[] = result.result.filesTouched ?? [];
+                if (worktree && scope) {
+                  // The declared scope rides along so an allowed-but-gitignored
+                  // output (a dist/** build artifact) is captured rather than
+                  // deleted with the worktree.
+                  const captured = await capturePatch({
+                    worktreePath: worktree.path,
+                    alsoInclude: [...(scope.paths ?? []), ...(scope.also ?? [])],
+                  });
+                  files = captured.files;
+                  if (captured.patch.length > 0) {
+                    const blob = await rt.host.blobs.put(captured.patch, { kind: "patch" });
+                    const { outOfScope } = checkScope(captured.files, scope);
+                    const quarantined = scope.mode === "strict" && outOfScope.length > 0;
+                    const patchKey = opts.key ?? label;
+                    patch = {
+                      ref: blob.hash,
+                      key: patchKey,
+                      files: captured.files,
+                      ...(quarantined ? { quarantined } : {}),
+                      ...(outOfScope.length > 0 ? { outOfScope } : {}),
+                    };
+                    await rt.append([
+                      {
+                        type: "patch.captured",
+                        seq: io.seq,
+                        key: patchKey,
+                        ref: blob.hash,
+                        files: captured.files,
+                        ...(outOfScope.length > 0 ? { outOfScope } : {}),
+                      },
+                      ...(outOfScope.length > 0
+                        ? [
+                            {
+                              type: "scope.violation",
+                              seq: io.seq,
+                              key: patchKey,
+                              files: outOfScope,
+                              mode: scope.mode,
+                            } as const,
+                          ]
+                        : []),
+                    ]);
+                  }
+                } else if (inPlaceSnap !== undefined && scope) {
+                  // The tree diff is the authoritative record of an in-place writer's
+                  // edits (the provider's self-report is advisory). Under a strict
+                  // scope, stray edits are ROLLED BACK, not just reported — the
+                  // declared scope is enforced, whatever the sandbox permitted.
+                  // NEW ignored files come from the separate listing — the snapshots
+                  // can't see them. (Edits INSIDE a pre-existing ignored file or
+                  // directory stay out of reach of a tree diff.)
+                  const afterSnap = await integrationBaseCommit(workCwd);
+                  const newIgnored = (await listIgnoredFiles()).filter((f) => !ignoredBefore?.has(f));
+                  // Pre-existing ignored content re-walked with the SAME entry list:
+                  // an edit, deletion, or new file inside an already-ignored path is
+                  // invisible to both the tree diff and the listing diff.
+                  let changedIgnored: string[] = [];
+                  if (ignoredManifestBefore !== undefined && ignoredListingBefore !== undefined) {
+                    const after = await ignoredStatManifest(ignoredListingBefore);
+                    if (scope.mode === "strict" && after.truncated) {
+                      // The re-walk blew past the cap (files ADDED during the
+                      // step): a partial diff would hide out-of-scope edits.
+                      throw new StepError(
+                        "scope_violation",
+                        `in-place step cannot verify the ignored tree (over ${IGNORED_MANIFEST_CAP} files after the step)`,
+                        { step: stepRef },
+                      );
+                    }
+                    changedIgnored = diffIgnoredManifest(ignoredManifestBefore, after.manifest);
+                  }
+                  if (changedIgnored.length > 0) {
                     await rt.append([
                       {
                         type: "scope.violation",
                         seq: io.seq,
                         key: opts.key ?? label,
-                        files: outOfScope,
+                        files: changedIgnored,
                         mode: scope.mode,
                       },
                     ]);
+                    if (scope.mode === "strict") {
+                      // No snapshot holds ignored content, so there is nothing to
+                      // restore FROM: failing loudly beats laundering the edit into
+                      // a completed result — or deleting a user's pre-existing file.
+                      throw new StepError(
+                        "scope_violation",
+                        `in-place step modified pre-existing ignored path(s) with no restorable snapshot: ${changedIgnored.join(", ")}`,
+                        { step: stepRef },
+                      );
+                    }
+                    files = [...files, ...changedIgnored];
+                  }
+                  if (afterSnap !== inPlaceSnap || newIgnored.length > 0) {
+                    // -z: raw NUL-delimited paths. Line splitting hands back the
+                    // C-QUOTED spelling of a hostile name (quote, backslash,
+                    // newline), which checkScope flags but restorePatchFiles then
+                    // rolls back at the wrong (nonexistent) path — the real
+                    // out-of-scope edit would survive a "strict" scope.
+                    const changed =
+                      afterSnap !== inPlaceSnap
+                        ? (
+                            await gitHandle.raw([
+                              "diff",
+                              "--name-only",
+                              "--no-renames",
+                              "-z",
+                              inPlaceSnap,
+                              afterSnap,
+                            ])
+                          ).stdout
+                            .split("\0")
+                            .filter((f) => f !== "")
+                        : [];
+                    files = [...changed, ...newIgnored];
+                    const { outOfScope } = checkScope(files, scope);
+                    if (outOfScope.length > 0) {
+                      if (scope.mode === "strict") {
+                        await restorePatchFiles(inPlaceSnap, outOfScope);
+                        files = files.filter((f) => !outOfScope.includes(f));
+                      }
+                      await rt.append([
+                        {
+                          type: "scope.violation",
+                          seq: io.seq,
+                          key: opts.key ?? label,
+                          files: outOfScope,
+                          mode: scope.mode,
+                        },
+                      ]);
+                    }
                   }
                 }
-              }
 
-              // Journal the RAW wire value; both live and replay paths validate from raw,
-              // so schema transforms apply exactly once.
-              const journalOutput = { value: result.raw, files, patch };
-              const detailed: DetailedAgentResult<InferOut<S>> = {
-                value: result.validated as InferOut<S>,
-                usage,
-                files,
-                ...(patch ? { patch } : {}),
-                attempts: result.attempts,
-                ...(result.result.sessionId !== undefined ? { sessionId: result.result.sessionId } : {}),
-              };
-              return {
-                value: detailed,
-                journalOutput,
-                usage,
-                ...(result.result.sessionId !== undefined ? { sessionId: result.result.sessionId } : {}),
-                ...(transcriptRef !== undefined ? { transcriptRef } : {}),
-                ...(patch ? { patchRef: patch.ref } : {}),
-                attempts: result.attempts,
-              };
-            } catch (err) {
-              const failed = StepError.from(err, stepRef);
-              const carried = (failed.detail as { usage?: Usage } | undefined)?.usage;
-              if (carried === undefined) {
-                (failed as { detail?: unknown }).detail = {
-                  ...(typeof failed.detail === "object" && failed.detail !== null ? failed.detail : {}),
+                // Journal the RAW wire value; both live and replay paths validate from raw,
+                // so schema transforms apply exactly once.
+                const journalOutput = { value: result.raw, files, patch };
+                const detailed: DetailedAgentResult<InferOut<S>> = {
+                  value: result.validated as InferOut<S>,
                   usage,
+                  files,
+                  ...(patch ? { patch } : {}),
+                  attempts: result.attempts,
+                  ...(result.result.sessionId !== undefined ? { sessionId: result.result.sessionId } : {}),
                 };
+                return {
+                  value: detailed,
+                  journalOutput,
+                  usage,
+                  ...(result.result.sessionId !== undefined ? { sessionId: result.result.sessionId } : {}),
+                  ...(transcriptRef !== undefined ? { transcriptRef } : {}),
+                  ...(patch ? { patchRef: patch.ref } : {}),
+                  attempts: result.attempts,
+                };
+              } catch (err) {
+                const failed = StepError.from(err, stepRef);
+                const carried = (failed.detail as { usage?: Usage } | undefined)?.usage;
+                if (carried === undefined) {
+                  (failed as { detail?: unknown }).detail = {
+                    ...(typeof failed.detail === "object" && failed.detail !== null ? failed.detail : {}),
+                    usage,
+                  };
+                }
+                throw failed;
               }
-              throw failed;
+            } finally {
+              releaseCall();
+              // Cleanup must never veto a paid, journaled result: a stale worktree
+              // is pruned by the next resume's pre-clean above.
+              if (worktree)
+                await removeWorktree({ repoRoot: rt.cwd, path: worktree.path }).catch(() => undefined);
             }
-          } finally {
-            releaseCall();
-            // Cleanup must never veto a paid, journaled result: a stale worktree
-            // is pruned by the next resume's pre-clean above.
-            if (worktree)
-              await removeWorktree({ repoRoot: rt.cwd, path: worktree.path }).catch(() => undefined);
-          }
-        },
+          }, io.signal),
       });
 
     async function runProviderWithRepair(
@@ -917,19 +924,19 @@ export function buildCtx(rt: RunRuntime): Ctx {
       type: "step" | "filter" | "map";
       fn: (prev: unknown, item: unknown, i: number) => unknown;
     };
-    const stages: Stage[] = [];
-    const makeBuilder = (): Pipeline<I, unknown> => ({
+    // Each builder owns its OWN stage list. Sharing one mutable array made the chain
+    // only look immutable: two branches off the same prefix pushed into it, and both
+    // then ran every stage either had added — silently, in whatever order the calls
+    // happened to be made.
+    const makeBuilder = (stages: readonly Stage[]): Pipeline<I, unknown> => ({
       step(fn) {
-        stages.push({ type: "step", fn: fn as Stage["fn"] });
-        return makeBuilder() as never;
+        return makeBuilder([...stages, { type: "step", fn: fn as Stage["fn"] }]) as never;
       },
       filter(fn) {
-        stages.push({ type: "filter", fn: fn as Stage["fn"] });
-        return makeBuilder() as never;
+        return makeBuilder([...stages, { type: "filter", fn: fn as Stage["fn"] }]) as never;
       },
       map(fn) {
-        stages.push({ type: "map", fn: fn as Stage["fn"] });
-        return makeBuilder() as never;
+        return makeBuilder([...stages, { type: "map", fn: fn as Stage["fn"] }]) as never;
       },
       async run(opts?: { concurrency?: number }) {
         const lanes = await mapWithConcurrency(
@@ -958,7 +965,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         ) as Settled<unknown>[];
       },
     });
-    return makeBuilder() as Pipeline<I, I>;
+    return makeBuilder([]) as Pipeline<I, I>;
   }
 
   function ok<T>(settled: ReadonlyArray<Settled<T>>): T[] {

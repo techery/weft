@@ -377,13 +377,26 @@ export class RunRuntime {
     return { $outputBlob: ref.hash, size: ref.size, preview: json.slice(0, 200) };
   }
 
-  async loadOutput(journaled: unknown): Promise<unknown> {
+  /**
+   * `undefined` when the journaled output lives in a blob that is gone or corrupt.
+   *
+   * Every other unreadable reuse is a cache MISS — the step re-runs and the run
+   * continues. A missing blob was the exception: it threw, so a run whose only problem
+   * was one absent file became permanently unresumable, even though re-running the step
+   * would simply produce the answer again. Callers treat absence as a miss.
+   */
+  async loadOutput(journaled: unknown): Promise<unknown | undefined> {
     if (
       typeof journaled === "object" &&
       journaled !== null &&
       typeof (journaled as { $outputBlob?: unknown }).$outputBlob === "string"
     ) {
-      return JSON.parse(await this.host.blobs.getText((journaled as { $outputBlob: string }).$outputBlob));
+      const ref = (journaled as { $outputBlob: string }).$outputBlob;
+      try {
+        return JSON.parse(await this.host.blobs.getText(ref)) as unknown;
+      } catch {
+        return undefined;
+      }
     }
     return journaled;
   }
@@ -501,7 +514,7 @@ export class RunRuntime {
       }
       if (match && spec.verifyServe) {
         const loaded = await this.loadOutput(match.entry.output);
-        if (!(await spec.verifyServe(loaded))) {
+        if (loaded === undefined || !(await spec.verifyServe(loaded))) {
           refused = match.entry;
           match.entry.consumed = true;
           this.consumedEntries++;
@@ -517,19 +530,34 @@ export class RunRuntime {
       }
       if (match) {
         const { entry, via } = match;
-        entry.consumed = true;
-        this.consumedEntries++;
-        this.hitCount++;
-        if (via !== "seq") {
-          this.salvageCount++;
-          await this.append([{ type: "replay.salvaged", seq, fromSeq: entry.seq }]);
+        const stored = await this.loadOutput(entry.output);
+        if (stored === undefined) {
+          // The blob this answer lived in is gone or corrupt. Every other unreadable
+          // reuse is a cache MISS; this one used to throw, so a run whose only problem
+          // was one absent file became permanently unresumable — even though re-running
+          // the step would simply produce the answer again.
+          this.log(
+            `journaled output for ${spec.key ?? spec.kind}#${seq} is unreadable ` +
+              `(its blob is missing or corrupt) — re-running the step`,
+          );
+          await this.append([
+            { type: "replay.diverged", seq, reason: `journaled output blob unreadable (${spec.kind})` },
+          ]);
+        } else {
+          entry.consumed = true;
+          this.consumedEntries++;
+          this.hitCount++;
+          if (via !== "seq") {
+            this.salvageCount++;
+            await this.append([{ type: "replay.salvaged", seq, fromSeq: entry.seq }]);
+          }
+          doneServing();
+          await this.delivery.deliver(entry.order);
+          const loaded = structuredClone(stored);
+          const value = spec.revive ? await spec.revive(loaded, entry) : (loaded as T);
+          await spec.onSettle?.(value, { served: true, entry });
+          return value;
         }
-        doneServing();
-        await this.delivery.deliver(entry.order);
-        const loaded = structuredClone(await this.loadOutput(entry.output));
-        const value = spec.revive ? await spec.revive(loaded, entry) : (loaded as T);
-        await spec.onSettle?.(value, { served: true, entry });
-        return value;
       }
     } finally {
       doneServing();

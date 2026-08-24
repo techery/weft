@@ -418,7 +418,12 @@ export class FsJournalStore implements JournalStore {
     }
     const out: RunSummary[] = [];
     for (const runId of entries) {
-      const summary = await this.summarize(runId);
+      // One damaged run must not hide every healthy one. `weft ls` is how a person
+      // finds the run that needs repairing, so a corrupt line in ONE journal throwing
+      // out of the whole listing takes away the tool they would use to fix it.
+      // The run is skipped here and still fails loudly on read/resume/status, where
+      // the error names it.
+      const summary = await this.summarize(runId).catch(() => undefined);
       if (!summary) continue;
       if (filter.status && summary.status !== filter.status) continue;
       if (filter.workflow && summary.workflow !== filter.workflow) continue;
