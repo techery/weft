@@ -103,19 +103,22 @@ export class RunIndex {
       // it; deleting it there would destroy a healthy index, and its WAL and SHM out
       // from under a live connection. Those propagate. An in-memory database has nothing
       // to delete either way.
-      if (opts.dbPath === ":memory:" || !isCorruption(err)) throw err;
-      // Close before unlinking. Corruption surfaces from the first PRAGMA as often as
-      // from open() itself, so the handle is usually LIVE here — and a live handle owns
-      // the file: on Windows the unlink fails outright (EBUSY/EPERM) and the recovery
-      // path turns into the hard failure it exists to avoid, while on POSIX the deleted
-      // inode lingers behind this connection with its WAL and SHM recreated against a
-      // file no longer at that path. A close that itself fails changes nothing about
-      // what has to happen next.
+      // Whatever happens next, this constructor is not returning an object that owns
+      // `opened`, so the handle is closed either way. Corruption surfaces from the first
+      // PRAGMA as often as from open() itself, so it is usually LIVE here — and a live
+      // handle owns the file: unlinking underneath it fails outright on Windows
+      // (EBUSY/EPERM), turning the recovery path into the hard failure it exists to
+      // avoid, and on POSIX leaves the deleted inode behind this connection with its WAL
+      // and SHM recreated against a file no longer at that path. On the propagating side
+      // a caller may retry — a leaked descriptor per attempt is a slow leak in the one
+      // situation (a contended or briefly unreadable index) that expects retries. A close
+      // that itself fails changes nothing about what has to happen next.
       try {
         opened?.close();
       } catch {
         // already closed, or never opened
       }
+      if (opts.dbPath === ":memory:" || !isCorruption(err)) throw err;
       rmSync(opts.dbPath, { force: true });
       // SQLite's sidecars belong to the file just discarded.
       rmSync(`${opts.dbPath}-wal`, { force: true });

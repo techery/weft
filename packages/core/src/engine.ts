@@ -45,15 +45,21 @@ const SHUTDOWN_DRAIN_MS = 5_000;
  * Races a run's completion against a deadline: `true` if it unwound, `false` if the
  * bound expired.
  *
- * The timer is deliberately REFERENCED. Every other timer the engine arms — lease
- * renewal, the tailer's retry backoff — is unref'd because it merely watches work that
- * keeps the process alive on its own. This one IS the remaining work. The case it exists
- * for is a step that ignores its abort: a provider SDK with no cancellation, a promise
- * that will never settle. If that step holds no handles of its own, an unref'd timer
- * leaves nothing referencing the loop, and a one-shot process exits mid-drain — before
- * the timeout branch journals `run.cancelled` and retires the run. The bounded guarantee
- * would then be lost in precisely the situation it was written for. Cleared as soon as
- * the race settles, so a run that drains early never delays the exit.
+ * The timer is deliberately REFERENCED, and the difference is not stylistic. Every other
+ * timer the engine arms — lease renewal, the tailer's retry backoff — is unref'd because
+ * it merely watches work that keeps the process alive on its own. This one IS the
+ * remaining work: unref'd, a one-shot process (`weft cancel`, a CLI shutdown) exits
+ * mid-drain, before the timeout branch journals `run.cancelled` and retires the run —
+ * losing the bounded guarantee in exactly the case it was written for.
+ *
+ * A wedged STEP does not reach that state on its own: `withTimeout` holds a referenced
+ * timer of its own for the same reason, and it outlives a provider that ignores its
+ * abort. The reachable case is a workflow BODY that wedges outside any step — a bare
+ * never-settling promise, a wedged library call, a listener that never fires — where no
+ * step timer exists and this is the only thing left holding the loop. Do not unref it on
+ * the reasoning that steps cover themselves; they do, and the body does not.
+ *
+ * Cleared as soon as the race settles, so a run that drains early never delays the exit.
  */
 function drainWithin(result: Promise<unknown>, ms: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1495,8 +1501,8 @@ export class Engine implements EngineHost {
       // ignores it — a provider SDK with no cancellation, a wedged subprocess — used to
       // hang cancel() for as long as it kept running, with no way for a caller (or a
       // person at the CLI) to get an answer. Past the bound the run is fenced and
-      // journaled cancelled anyway, so the projection tells the truth and the lease is
-      // released; the zombie's work was already declared unobservable.
+      // journaled cancelled anyway, so the projection tells the truth; the zombie's work
+      // was already declared unobservable. (The lease is deliberately kept — see below.)
       const drained = await drainWithin(active.result, CANCEL_DRAIN_MS);
       if (!drained) {
         // Journal BEFORE fencing: a fenced runtime refuses every append, so the order
