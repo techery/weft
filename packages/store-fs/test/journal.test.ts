@@ -131,6 +131,22 @@ describe("append", () => {
     expect(appended.map((r) => r.i)).toEqual([1]);
   });
 
+  test("a lock whose creation fails for a real reason surfaces at once instead of spinning", async () => {
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    const locked = store as unknown as {
+      withFileLock<T>(lockPath: string, what: string, fn: () => Promise<T>): Promise<T>;
+    };
+    // A missing parent directory is not contention: ENOENT used to be swallowed
+    // like EEXIST and retried until the 30s give-up, hanging every append behind
+    // a filesystem that is broken, not busy.
+    const started = Date.now();
+    await expect(
+      locked.withFileLock(join(dir, "no-such-dir", "x.lock"), "run run-a", async () => undefined),
+    ).rejects.toThrow(/ENOENT/);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
   test("a torn trailing record from a crashed writer is ignored and cut", async () => {
     const dir = await tempDir();
     const store = new FsJournalStore(dir);

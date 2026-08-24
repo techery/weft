@@ -176,6 +176,9 @@ interface PendingWait {
 
 const TIMEOUT_DENY_MARKER = { $timeout: "deny" } as const;
 
+/** Node's timer ceiling (2^31-1 ms): anything past it clamps to ~1ms unless chunked. */
+const MAX_TIMER_MS = 2_147_483_647;
+
 // ---------------------------------------------------------------------------
 // RunRuntime
 // ---------------------------------------------------------------------------
@@ -842,7 +845,12 @@ export class RunRuntime {
         } else {
           // ref'd on purpose: a one-shot process whose only pending work is this
           // deadline must stay alive to apply the timeout policy (cleared on answer)
-          wait.timer = setTimeout(() => void this.applyHumanTimeout(request.id), remaining);
+          // Chunked past Node's timer ceiling; applyHumanTimeout re-arms if it
+          // fires with time still left on the real deadline.
+          wait.timer = setTimeout(
+            () => void this.applyHumanTimeout(request.id),
+            Math.min(remaining, MAX_TIMER_MS),
+          );
         }
       }
       queueMicrotask(() => this.checkIdle());
@@ -984,6 +992,12 @@ export class RunRuntime {
     const wait = this.pendingWaits.get(id);
     if (!wait) return;
     const { request } = wait;
+    // A chunked long deadline fires early by design: re-arm for the remainder.
+    const remaining = (request.deadline ?? 0) - this.host.clock();
+    if (remaining > 0) {
+      wait.timer = setTimeout(() => void this.applyHumanTimeout(id), Math.min(remaining, MAX_TIMER_MS));
+      return;
+    }
     const policy = request.onTimeout ?? "deny";
     if (policy === "escalate") {
       this.log(`request ${id} passed its deadline; escalated (still waiting)`);
@@ -1150,16 +1164,25 @@ export class RunRuntime {
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new CancelledError());
+    const deadline = Date.now() + ms;
     // ref'd on purpose: a durable ctx.sleep must keep a one-shot process alive
-    // until its deadline (aborting clears it)
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
+    // until its deadline (aborting clears it). Armed in CHUNKS: Node clamps a
+    // timer past 2^31-1ms to ~1ms, which would fire a 30-day sleep immediately.
+    let timer: NodeJS.Timeout | undefined;
     const onAbort = () => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       reject(new CancelledError());
     };
+    const arm = () => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+        return;
+      }
+      timer = setTimeout(arm, Math.min(remaining, MAX_TIMER_MS));
+    };
     signal?.addEventListener("abort", onAbort, { once: true });
+    arm();
   });
 }

@@ -10,6 +10,7 @@ import {
   type JournalRecord,
   MemoryBlobStore,
   MemoryJournalStore,
+  mapWithConcurrency,
   ProviderRegistry,
   ReplayIndex,
   reduceState,
@@ -1831,5 +1832,47 @@ describe("codex review findings, round 17 (PR #1)", () => {
     // retry of the SAME id would refuse with "active in another process" forever.
     const h = await engine.start(def, { runId: "blocked", input: {}, cwd });
     expect(await h.result).toEqual({ ok: true });
+  });
+});
+
+describe("codex review findings, round 18 (PR #1)", () => {
+  test("sleeps beyond Node's timer ceiling do not collapse to a millisecond", async () => {
+    vi.useFakeTimers();
+    try {
+      const { sleep: rawSleep } = await import("../src/runtime.ts");
+      const thirtyFiveDays = 35 * 24 * 60 * 60 * 1_000; // past 2^31-1ms, which Node clamps to ~1ms
+      let done = false;
+      const wait = rawSleep(thirtyFiveDays).then(() => {
+        done = true;
+      });
+      // A clamped timer would have fired ~1ms in; ten minutes later we must still be waiting.
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1_000);
+      expect(done).toBe(false);
+      await vi.advanceTimersByTimeAsync(thirtyFiveDays);
+      await wait;
+      expect(done).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a non-finite concurrency runs every lane instead of returning an empty result", async () => {
+    // NaN workers used to mean ZERO workers: an instantly-"successful" array of holes.
+    const direct = await mapWithConcurrency([1, 2, 3], Number.NaN, async (n) => n * 2);
+    expect(direct).toEqual([2, 4, 6]);
+    // And through the user-facing path: pipeline({ concurrency: NaN }) forwards verbatim.
+    const t = testEngine();
+    const def = defineWorkflow(
+      { name: "nanlanes", description: "n", input: z.object({}), output: z.object({ seen: z.number() }) },
+      async (ctx) => {
+        const lanes = await ctx
+          .pipeline([1, 2, 3])
+          .map((_prev, item) => item)
+          .run({ concurrency: Number.NaN });
+        return { seen: lanes.filter((l) => l.ok).length };
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    expect(await h.result).toEqual({ seen: 3 });
   });
 });

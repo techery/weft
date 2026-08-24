@@ -60,7 +60,10 @@ export async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
   const results = new Array<R>(items.length);
   let cursor = 0;
-  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+  // NaN would coerce to ZERO workers and return an empty-but-successful result;
+  // a non-finite limit runs serially instead — slow beats silently incomplete.
+  const width = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 1;
+  const workers = Array.from({ length: Math.min(width, items.length) }, async () => {
     while (cursor < items.length) {
       const index = cursor++;
       results[index] = await fn(items[index]!, index);

@@ -142,6 +142,11 @@ export class FsJournalStore implements JournalStore {
     const token = randomUUID();
     const started = Date.now();
     for (;;) {
+      // Checked at the TOP so every retry path — the stat-failure `continue`
+      // included — passes the deadline instead of spinning past it.
+      if (Date.now() - started > 30_000) {
+        throw new Error(`${what}: lock held too long (${lockPath})`);
+      }
       try {
         const fd = openSync(lockPath, "wx");
         try {
@@ -150,7 +155,10 @@ export class FsJournalStore implements JournalStore {
           closeSync(fd);
         }
         break;
-      } catch {
+      } catch (err) {
+        // Only CONTENTION retries. EACCES, EROFS, ENOSPC and friends would loop
+        // here forever — the filesystem is broken, not busy; surface it.
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
         try {
           const age = Date.now() - (await fs.stat(lockPath)).mtimeMs;
           if (age > 10_000) {
