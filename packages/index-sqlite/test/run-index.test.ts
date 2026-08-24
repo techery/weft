@@ -3,7 +3,8 @@
  * different shape: whatever the journals say, the rows agree — and if the rows are
  * ever lost, dropped, or stale, a rebuild restores exactly the same answers.
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { readlinkSync } from "node:fs";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -344,6 +345,38 @@ describe("opening a damaged index", () => {
     expect(index.search({})).toEqual([]);
     index.close();
   });
+
+  test.skipIf(process.platform !== "linux")(
+    "the corrupt connection is closed before its file is deleted",
+    async () => {
+      // The file opens fine and only the first PRAGMA reports it corrupt, so by the time
+      // recovery runs, this process HOLDS the file open. Unlinking underneath a live
+      // connection fails outright on Windows (EBUSY/EPERM) — turning the repair path into
+      // the hard failure it exists to prevent — and on POSIX leaves the old connection
+      // attached to a deleted inode, recreating its WAL and SHM against a file no longer
+      // at that path.
+      const dbPath = await tempDb();
+      new RunIndex({ dbPath }).close();
+      await writeFile(dbPath, "this is not a database at all");
+
+      const index = new RunIndex({ dbPath });
+      // /proc names what this process still holds; a handle over an unlinked file is
+      // marked "(deleted)". The recovered index's OWN fd is live at the same path, so
+      // that marker is exactly what separates the two.
+      const held = (await readdir("/proc/self/fd")).map((fd) => {
+        try {
+          return readlinkSync(join("/proc/self/fd", fd));
+        } catch {
+          return ""; // the entry closed while we were listing
+        }
+      });
+      const orphans = held.filter((link) => link.startsWith(dbPath) && link.includes("(deleted)"));
+      expect(orphans).toEqual([]);
+
+      expect(index.search({})).toEqual([]);
+      index.close();
+    },
+  );
 
   test("a busy database is NOT deleted — the file is healthy, someone else is using it", async () => {
     const dbPath = await tempDb();

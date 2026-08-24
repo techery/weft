@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { dirname, join } from "node:path";
 import type { BlobMeta, BlobRef, BlobStore } from "@techery/weft-core";
+import { BlobCorruptError, BlobMissingError } from "@techery/weft-core";
 
 /**
  * Content-addressed blob directory: blobs/<aa>/<sha256>. Writes are idempotent
@@ -47,15 +48,16 @@ export class FsBlobStore implements BlobStore {
     let data: Buffer;
     try {
       data = await fs.readFile(this.pathFor(ref));
-    } catch {
-      throw new Error(`blob not found: ${ref}`);
+    } catch (err) {
+      // ABSENCE only. Reporting EACCES or EIO as "not found" tells the caller the data is
+      // gone when the volume is merely unreachable — and a journaled output that reads as
+      // gone is re-run, duplicating the step's side effects and its provider charge.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
+      throw new BlobMissingError(ref);
     }
     const actual = createHash("sha256").update(data).digest("hex");
-    if (actual !== ref) {
-      throw new Error(
-        `blob ${ref} is corrupt: content hashes to ${actual} (${data.byteLength} bytes on disk)`,
-      );
-    }
+    if (actual !== ref) throw new BlobCorruptError(ref, actual, data.byteLength);
     return data;
   }
 

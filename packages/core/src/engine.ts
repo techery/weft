@@ -38,6 +38,38 @@ const tracer = trace.getTracer("weft");
 /** How long cancel() waits for an aborted run to unwind before fencing it anyway. */
 const CANCEL_DRAIN_MS = 5_000;
 
+/** How long shutdown() waits for each run to unwind before leaving it claimed. */
+const SHUTDOWN_DRAIN_MS = 5_000;
+
+/**
+ * Races a run's completion against a deadline: `true` if it unwound, `false` if the
+ * bound expired.
+ *
+ * The timer is deliberately REFERENCED. Every other timer the engine arms — lease
+ * renewal, the tailer's retry backoff — is unref'd because it merely watches work that
+ * keeps the process alive on its own. This one IS the remaining work. The case it exists
+ * for is a step that ignores its abort: a provider SDK with no cancellation, a promise
+ * that will never settle. If that step holds no handles of its own, an unref'd timer
+ * leaves nothing referencing the loop, and a one-shot process exits mid-drain — before
+ * the timeout branch journals `run.cancelled` and retires the run. The bounded guarantee
+ * would then be lost in precisely the situation it was written for. Cleared as soon as
+ * the race settles, so a run that drains early never delays the exit.
+ */
+function drainWithin(result: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    result.then(
+      () => true,
+      () => true,
+    ),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), ms);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 /**
  * The engine's own version stamp for a workflow body, journaled with the run and
  * compared on resume to decide whether step POSITIONS still name the same call sites.
@@ -1465,16 +1497,7 @@ export class Engine implements EngineHost {
       // person at the CLI) to get an answer. Past the bound the run is fenced and
       // journaled cancelled anyway, so the projection tells the truth and the lease is
       // released; the zombie's work was already declared unobservable.
-      const drained = await Promise.race([
-        active.result.then(
-          () => true,
-          () => true,
-        ),
-        new Promise<boolean>((resolve) => {
-          const timer = setTimeout(() => resolve(false), CANCEL_DRAIN_MS);
-          timer.unref?.();
-        }),
-      ]);
+      const drained = await drainWithin(active.result, CANCEL_DRAIN_MS);
       if (!drained) {
         // Journal BEFORE fencing: a fenced runtime refuses every append, so the order
         // decides whether the projection ends up saying "cancelled" or stays stuck on
@@ -1564,16 +1587,9 @@ export class Engine implements EngineHost {
       );
     }
     for (const active of actives) {
-      const drained = await Promise.race([
-        active.result.then(
-          () => true,
-          () => true,
-        ),
-        new Promise<boolean>((resolve) => {
-          const timer = setTimeout(() => resolve(false), 5_000);
-          timer.unref?.();
-        }),
-      ]);
+      // Same referenced bound as cancel(): shutdown() drains the actives in sequence, so
+      // an early exit here would also skip every run after this one in the list.
+      const drained = await drainWithin(active.result, SHUTDOWN_DRAIN_MS);
       if (!drained) continue; // never release ownership over still-live work
       await active.runtime.flushAppends();
       // Releases are owner-checked, so drive()'s own release (already run by the

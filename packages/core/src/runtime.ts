@@ -34,6 +34,7 @@ import type { Semaphore } from "./limiter.ts";
 import type { ProviderRegistry } from "./provider.ts";
 import { type CompletedEntry, OrderedDelivery, type ReplayIndex, type ReuseMode } from "./replay.ts";
 import type { BlobStore, JournalStore } from "./stores.ts";
+import { isBlobBeyondRepair } from "./stores.ts";
 
 // ---------------------------------------------------------------------------
 // Host seam (implemented by Engine)
@@ -378,12 +379,16 @@ export class RunRuntime {
   }
 
   /**
-   * `undefined` when the journaled output lives in a blob that is gone or corrupt.
+   * `undefined` when the journaled output lives in a blob that is gone or corrupt — the
+   * two conditions re-running the step repairs.
    *
-   * Every other unreadable reuse is a cache MISS — the step re-runs and the run
-   * continues. A missing blob was the exception: it threw, so a run whose only problem
-   * was one absent file became permanently unresumable, even though re-running the step
-   * would simply produce the answer again. Callers treat absence as a miss.
+   * A missing blob used to throw, so a run whose only problem was one absent file became
+   * permanently unresumable even though the step would simply produce the answer again.
+   * But the converse is just as wrong: a store that is merely UNREACHABLE — an
+   * object-store timeout, EACCES, EIO — must propagate, because replaying then duplicates
+   * the step's side effects and pays for its provider call a second time to recover data
+   * that was never lost. Only absence and corruption are a miss; everything else is the
+   * storage layer's problem and belongs to the caller.
    */
   async loadOutput(journaled: unknown): Promise<unknown | undefined> {
     if (
@@ -392,9 +397,18 @@ export class RunRuntime {
       typeof (journaled as { $outputBlob?: unknown }).$outputBlob === "string"
     ) {
       const ref = (journaled as { $outputBlob: string }).$outputBlob;
+      let text: string;
       try {
-        return JSON.parse(await this.host.blobs.getText(ref)) as unknown;
+        text = await this.host.blobs.getText(ref);
+      } catch (err) {
+        if (isBlobBeyondRepair(err)) return undefined;
+        throw err;
+      }
+      try {
+        return JSON.parse(text) as unknown;
       } catch {
+        // Hash-verified bytes that are not JSON: the blob is intact and unusable, which a
+        // re-run repairs just as absence does.
         return undefined;
       }
     }

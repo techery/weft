@@ -45,4 +45,45 @@ describe("rejectUnknownInput", () => {
     const def = wf(z.object({ base: z.string() }).transform((v) => [v.base]));
     await expect(rejectUnknownInput({ base: "main" }, def, "t")).resolves.toBeUndefined();
   });
+
+  it("accepts a key a transform RENAMES", async () => {
+    // The output has no `base` — the transform consumed it and handed back `baseRef`.
+    // Comparing key lists alone reads that as "silently dropped" and refuses the
+    // workflow's own documented flag. Whether the schema READ the key is the actual
+    // question, and only re-validating without it can answer that.
+    const def = wf(z.object({ base: z.string() }).transform(({ base }) => ({ baseRef: base })));
+    await expect(rejectUnknownInput({ base: "release-2.0" }, def, "review")).resolves.toBeUndefined();
+  });
+
+  it("still refuses a typo alongside a renaming transform", async () => {
+    // The other half of the same schema: `base` is load-bearing, `basse` is not, and the
+    // relaxation above must not swallow the typo it sits next to.
+    const def = wf(
+      z.object({ base: z.string().default("main") }).transform(({ base }) => ({ baseRef: base })),
+    );
+    await expect(rejectUnknownInput({ base: "main", basse: "x" }, def, "review")).rejects.toThrow(
+      /no input field "basse"/,
+    );
+  });
+
+  it("refuses a renamed key whose value the transform ignores", async () => {
+    // A default makes the key optional, so dropping it still validates — but it lands on
+    // a DIFFERENT value, which is the schema saying it read the key.
+    const def = wf(
+      z.object({ base: z.string().default("main") }).transform(({ base }) => ({ baseRef: base })),
+    );
+    await expect(rejectUnknownInput({ base: "release-2.0" }, def, "review")).resolves.toBeUndefined();
+  });
+
+  it("does not mistake an inherited property name for a declared field", async () => {
+    // `in` walks the prototype chain, so `constructor`, `toString` and `__proto__` all
+    // read as "kept" on any ordinary object literal — every one of them a typo that
+    // would run the workflow on its defaults instead.
+    const def = wf(z.object({ base: z.string().default("main") }));
+    for (const key of ["constructor", "toString", "valueOf", "hasOwnProperty"]) {
+      await expect(rejectUnknownInput({ [key]: "x" }, def, "review")).rejects.toThrow(
+        new RegExp(`no input field "${key}"`),
+      );
+    }
+  });
 });

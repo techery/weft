@@ -131,13 +131,38 @@ valid:
 - **A busy SQLite index was deleted as if corrupt.** `SQLITE_BUSY`, `EACCES` and other
   transient failures now propagate; only verified corruption discards the file.
 
+A second Codex pass over those fixes found four more — again, every one of them inside a
+fix rather than the original code:
+
+- **An unreachable blob store re-ran a completed step.** The blob-loss repair caught
+  *every* read failure as a cache miss, and `FsBlobStore` had already flattened EACCES and
+  EIO into "not found" before the caller could tell. Only absence and corruption are
+  repairable now; a fault propagates rather than duplicating a step's side effects and
+  paying for its provider call again.
+- **`cancel()`'s drain timer was unreferenced**, so a one-shot process could exit
+  mid-wait — before `run.cancelled` was journaled — losing the bounded guarantee in
+  exactly the handle-free hang it exists for. The timer is the remaining work, not a
+  watcher of it; it is referenced now and cleared as soon as the race settles.
+- **The corrupt SQLite file was unlinked with its connection still open.** Corruption
+  surfaces from the first PRAGMA, not from `open()`, so the handle is live: on Windows the
+  unlink fails and the repair path becomes the failure it prevents.
+- **The unknown-flag check refused renaming transforms.** A schema that reads `--base` and
+  returns `baseRef` looked like a silently dropped flag; `in` also read inherited names
+  like `constructor` as declared. Each candidate key is now probed against the schema
+  twice — removed, and replaced with a value nothing accepts — and only a key that changes
+  nothing under both is called unknown.
+
+The pattern is the finding. Across three review rounds, the large majority of later
+defects lived in the fixes for earlier ones, not in the code originally audited. A fix is
+new code and needs the same adversarial pass as anything else.
+
 ## Measured baseline
 
 ```
 pnpm install                 ✓
 pnpm typecheck               ✓  tsc --strict, 175 files
 pnpm lint                    ✓  biome, 1 info
-pnpm test                    ✓  610 passed (610), 29 files, 30.9s
+pnpm test                    ✓  684 passed (684), 41 files, 36.0s
 weft doctor                  ✓  ready
 weft check                   ✓  all workflows gate clean
 npx tsx examples/*/main.ts   ✓  all seven run offline

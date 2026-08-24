@@ -58,3 +58,54 @@ describe("a journaled output whose blob is gone", () => {
     expect(calls).toBe(2); // re-ran rather than failing
   });
 });
+
+/** A store whose reads fail without the data being gone: EACCES, EIO, a stalled mount. */
+class UnreachableBlobStore extends MemoryBlobStore {
+  reads = 0;
+  override async get(ref: string): Promise<Uint8Array> {
+    this.reads++;
+    throw Object.assign(new Error(`EACCES: permission denied, open '${ref}'`), { code: "EACCES" });
+  }
+}
+
+describe("a journaled output whose blob is merely UNREACHABLE", () => {
+  test("fails the resume instead of paying for the step again", async () => {
+    // The converse of the test above, and the more expensive mistake. Replay treats an
+    // unreadable output as a cache miss and re-runs the step — right when the answer is
+    // genuinely lost, wrong when the volume is briefly unreachable: the step's side
+    // effects happen a second time and the provider bills a second call to recover data
+    // that is still sitting on disk. Absence and corruption are repairable; a fault is
+    // the storage layer's problem and belongs to the caller.
+    let calls = 0;
+    const def = defineWorkflow(
+      { name: "big", description: "big", input: z.object({}), output: Out },
+      async (ctx) => {
+        const r = await ctx.agent("produce something large", { schema: Big, key: "produce" });
+        await ctx.human.approve({ action: "ship?" });
+        return { text: r.text };
+      },
+    );
+    const builder = () =>
+      mock().on({ key: "produce" }, () => {
+        calls++;
+        return { text: "y".repeat(4096) };
+      });
+
+    const config = { limits: { blobThresholdBytes: 1 } };
+    const t1 = testEngine({ builder: builder(), config });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    await h1.result;
+    expect(calls).toBe(1);
+
+    const blobs = new UnreachableBlobStore();
+    const t2 = reopen(t1, { builder: builder(), config, blobs });
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    await expect(h2.result).rejects.toThrow(/EACCES/);
+    expect(blobs.reads).toBeGreaterThan(0); // it really did try to read the output
+    expect(calls).toBe(1); // and never re-ran the step behind it
+  });
+});
