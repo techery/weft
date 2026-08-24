@@ -87,7 +87,9 @@ export function createApp(weft: Weft): Hono {
 
   app.get("/api/runs/:id/pending", async (c) => {
     try {
-      return c.json(pendingOf(await stateOf(weft, c.req.param("id"))));
+      const runId = c.req.param("id");
+      const state = await stateOf(weft, runId);
+      return c.json(await pendingAcross(weft, state, new Set([runId])));
     } catch (err) {
       return fail(c, err);
     }
@@ -200,6 +202,29 @@ async function stateOf(weft: Weft, runId: string): Promise<RunState> {
   for await (const record of weft.engine.journal.read(runId)) records.push(record);
   if (records.length === 0) throw new Error(`run ${runId} not found`);
   return reduceState(records);
+}
+
+/**
+ * Pending requests across the run AND its live descendants: a child suspended
+ * on a person suspends the whole tree, and its request lives only in the
+ * child's journal. Each entry carries the OWNING run's id, and the engine
+ * routes an answer submitted under the parent id to that owner either way.
+ */
+async function pendingAcross(weft: Weft, state: RunState, seen: Set<string>): Promise<PendingRequest[]> {
+  const out = pendingOf(state);
+  for (const { childRunId } of state.children) {
+    if (seen.has(childRunId)) continue;
+    seen.add(childRunId);
+    let child: RunState;
+    try {
+      child = await stateOf(weft, childRunId);
+    } catch {
+      continue; // scheduled but never journaled
+    }
+    if (child.status === "complete" || child.status === "failed" || child.status === "cancelled") continue;
+    out.push(...(await pendingAcross(weft, child, seen)));
+  }
+  return out;
 }
 
 /** The same shape `engine.pending()` reports, derived from the same fold as the rest. */
@@ -336,6 +361,36 @@ function streamJournal(
       heartbeat.unref?.();
       abort.signal.addEventListener("abort", close, { once: true });
 
+      // Descendant journals feed the SAME stream as unnumbered `child` events: a
+      // question raised inside a sub-workflow must nudge the UI even though the
+      // selected run's own journal stays quiet. No `id:` on them — Last-Event-ID
+      // keeps meaning "index in the SELECTED run's journal".
+      const watched = new Set<string>([runId]);
+      const spawnChild = (childId: string): void => {
+        if (watched.has(childId)) return;
+        watched.add(childId);
+        void (async () => {
+          try {
+            for await (const record of weft.engine.watch(childId, { signal: abort.signal })) {
+              if (closed) break;
+              send(`event: child\ndata: ${JSON.stringify(record)}\n\n`);
+              if (record.ev.type === "step.scheduled" && record.ev.childRunId !== undefined) {
+                spawnChild(record.ev.childRunId);
+              }
+            }
+          } catch {
+            // a vanished child journal only stops ITS feed
+          }
+        })();
+      };
+      // A reconnect resumes PAST the step.scheduled records that name the
+      // children, so seed the watches from the current projection too.
+      void stateOf(weft, runId)
+        .then((state) => {
+          for (const child of state.children) spawnChild(child.childRunId);
+        })
+        .catch(() => undefined);
+
       void (async () => {
         try {
           for await (const record of weft.engine.watch(runId, {
@@ -344,6 +399,9 @@ function streamJournal(
           })) {
             if (closed) break;
             send(sseRecord(record));
+            if (record.ev.type === "step.scheduled" && record.ev.childRunId !== undefined) {
+              spawnChild(record.ev.childRunId);
+            }
           }
         } catch (err) {
           send(`event: error\ndata: ${JSON.stringify({ error: messageOf(err) })}\n\n`);

@@ -340,6 +340,12 @@ pre.tail { max-height: 320px; overflow-y: auto; white-space: pre; word-break: no
       renderTail();
       scheduleRefresh();
     };
+    live.addEventListener('child', function () {
+      // A sub-workflow journaled something (often the question the parent is
+      // blocked on): re-fetch state and pending, but keep the tail single-journal.
+      if (source !== live) return;
+      scheduleRefresh();
+    });
     live.onerror = function () {
       // The browser reconnects on its own; a closed run simply stops producing records.
     };

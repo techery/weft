@@ -43,6 +43,21 @@ export default defineWorkflow(
 );
 `;
 
+/** A parent whose only work is a child that asks — the tree suspends on the CHILD's journal. */
+const NESTED = `import { defineWorkflow, z } from "@weft/sdk";
+const child = defineWorkflow(
+  { name: "gatechild", description: "asks", input: z.object({}), output: z.object({ approved: z.boolean() }) },
+  async (ctx) => {
+    const v = await ctx.human.approve({ action: "child gate" });
+    return { approved: v.approved };
+  },
+);
+export default defineWorkflow(
+  { name: "nested", description: "parent of an asking child", input: z.object({}), output: z.object({ approved: z.boolean() }) },
+  async (ctx) => (await ctx.workflow(child, {})) as { approved: boolean },
+);
+`;
+
 const opened: Weft[] = [];
 const roots: string[] = [];
 
@@ -452,6 +467,34 @@ describe("startDaemon", () => {
       await daemon.close();
       await daemon.close(); // idempotent: a second stop is not an error
     }
+  });
+
+  it("reports and answers a CHILD's pending request through the selected parent", async () => {
+    const cwd = await repo();
+    await writeFile(path.join(cwd, ".weft", "workflows", "nested.ts"), NESTED, "utf8");
+    const h = await open(cwd);
+    const { def } = await resolveWorkflow(h.weft, "nested");
+    const run = await h.weft.engine.start(def, { input: {}, cwd });
+    const o = await run.outcome();
+    if (o.status !== "waiting_for_human") throw new Error("expected the child gate");
+
+    // The question lives ONLY in the child's journal; the endpoint must follow
+    // state.children or the UI renders no answer form for the parent-id flow.
+    const res = await h.app.request(`/api/runs/${run.runId}/pending`);
+    expect(res.status).toBe(200);
+    const pending = (await res.json()) as Array<{ id: string; question: string; runId: string }>;
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.question).toContain("child gate");
+    expect(pending[0]?.runId).not.toBe(run.runId); // owned by the CHILD run
+
+    // Answered through the PARENT id — the engine routes to the owner.
+    const answered = await h.app.request(`/api/runs/${run.runId}/answer`, {
+      method: "POST",
+      body: JSON.stringify({ requestId: pending[0]?.id, answer: { approved: true } }),
+      headers: { "content-type": "application/json" },
+    });
+    expect(answered.status).toBe(200);
+    expect(await run.result).toEqual({ approved: true });
   });
 
   it("stops even with an event stream still open", async () => {

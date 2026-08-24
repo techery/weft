@@ -2236,3 +2236,63 @@ describe("codex review findings, round 23 (PR #1)", () => {
     }
   });
 });
+
+describe("codex review findings, round 24 (PR #1)", () => {
+  const gate = defineWorkflow(
+    { name: "gatehold", description: "g", input: z.object({}), output: z.object({ go: z.boolean() }) },
+    async (ctx) => {
+      const a = await ctx.human.ask({ question: "go?", schema: z.object({ go: z.boolean() }) });
+      return { go: a.go };
+    },
+  );
+
+  test("a tailer killed by a transient watch failure recovers and still delivers answers", async () => {
+    class FlakyWatch extends MemoryJournalStore {
+      failures = 1;
+      override watch(runId: string, opts?: { fromIndex?: number; signal?: AbortSignal }) {
+        if (this.failures > 0) {
+          this.failures--;
+          throw new Error("EIO: watch failed");
+        }
+        return super.watch(runId, opts);
+      }
+    }
+    const journal = new FlakyWatch();
+    const blobs = new MemoryBlobStore();
+    const owner = new Engine({ journal, blobs, providers: new ProviderRegistry() });
+    const h = await owner.start(gate, { input: {}, cwd: await tempDir() });
+    const o = await h.outcome();
+    if (o.status !== "waiting_for_human") throw new Error("expected the gate");
+    // A DIFFERENT process answers durably while the owner's tailer is down.
+    // Permanently dead, the answer would sit in the journal undelivered forever;
+    // the recovered tailer replays the backlog from its cursor and delivers it.
+    const outside = new Engine({ journal, blobs, providers: new ProviderRegistry() });
+    await outside.answer(h.runId, o.pending[0]?.id ?? "", { go: true });
+    expect(await h.result).toEqual({ go: true });
+  }, 10_000);
+
+  test("a permanently failing tailer fences the run instead of stranding it", async () => {
+    vi.useFakeTimers();
+    try {
+      class DeadWatch extends MemoryJournalStore {
+        override watch(): AsyncIterable<JournalRecord & { i: number }> {
+          throw new Error("EIO: watch is broken");
+        }
+      }
+      const engine = new Engine({
+        journal: new DeadWatch(),
+        blobs: new MemoryBlobStore(),
+        providers: new ProviderRegistry(),
+      });
+      const h = await engine.start(gate, { input: {}, cwd: await tempDir() });
+      await h.outcome();
+      // Five straight failures (backoffs 1+2+4+5s) mean the store is broken, not
+      // busy: cross-process answers and cancels can never arrive, so the run
+      // must stop rather than hold its lease while deaf.
+      await vi.advanceTimersByTimeAsync(20_000);
+      await expect(h.result).rejects.toMatchObject({ code: "detached" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

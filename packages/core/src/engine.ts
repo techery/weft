@@ -433,13 +433,13 @@ export class Engine implements EngineHost {
   }
 
   /** The run's ownership claim now belongs to another process: stop this copy. */
-  private fenceLostRun(active: ActiveRun): void {
+  private fenceLostRun(active: ActiveRun, reason?: string): void {
     if (active.leaseTimer) clearInterval(active.leaseTimer);
     active.tail?.abort();
     active.runtime.fence(
       new StepError(
         "detached",
-        `run ${active.runtime.runId}: ownership claim lost to another process — stopping this copy without a journaled outcome`,
+        `run ${active.runtime.runId}: ${reason ?? "ownership claim lost to another process"} — stopping this copy without a journaled outcome`,
         { step: { kind: "workflow", runId: active.runtime.runId } },
       ),
     );
@@ -613,26 +613,47 @@ export class Engine implements EngineHost {
    * processes must still not RUN the same run at once.
    */
   private async tailExternalEvents(active: ActiveRun, fromIndex: number, signal: AbortSignal): Promise<void> {
-    try {
-      for await (const rec of this.journal.watch(active.runtime.runId, { fromIndex, signal })) {
-        // Externally appended records belong in the active projection too, or the
-        // terminal snapshot describes an answered request as still pending.
-        if (!active.seen.has(rec.i)) {
-          active.seen.add(rec.i);
-          active.records.push(rec);
-          active.sinceSnapshot++;
+    let cursor = fromIndex;
+    let failures = 0;
+    while (!signal.aborted) {
+      try {
+        for await (const rec of this.journal.watch(active.runtime.runId, { fromIndex: cursor, signal })) {
+          failures = 0;
+          cursor = Math.max(cursor, rec.i + 1);
+          // Externally appended records belong in the active projection too, or the
+          // terminal snapshot describes an answered request as still pending.
+          if (!active.seen.has(rec.i)) {
+            active.seen.add(rec.i);
+            active.records.push(rec);
+            active.sinceSnapshot++;
+          }
+          const ev = rec.ev;
+          if (ev.type === "human.answered") {
+            active.runtime.deliverAnswer(ev.id, structuredClone(ev.answer), ev.answeredBy);
+          } else if (ev.type === "signal.received") {
+            active.runtime.deliverSignal(ev.name, structuredClone(ev.payload));
+          } else if (ev.type === "run.cancelled") {
+            active.runtime.externalCancel();
+          }
         }
-        const ev = rec.ev;
-        if (ev.type === "human.answered") {
-          active.runtime.deliverAnswer(ev.id, structuredClone(ev.answer), ev.answeredBy);
-        } else if (ev.type === "signal.received") {
-          active.runtime.deliverSignal(ev.name, structuredClone(ev.payload));
-        } else if (ev.type === "run.cancelled") {
-          active.runtime.externalCancel();
+        return; // the watch ended cleanly (abort, or a terminal close by the store)
+      } catch {
+        // A REQUESTED abort is the normal shutdown path. Anything else killing
+        // the sole external-event tailer would strand every future
+        // cross-process answer, signal, and cancel — durably appended, never
+        // delivered — so retry; a store broken beyond a few attempts fences
+        // the run, exactly like a lost lease.
+        if (signal.aborted) return;
+        failures++;
+        if (failures >= 5) {
+          this.fenceLostRun(active, "the external-event tailer failed repeatedly");
+          return;
         }
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, Math.min(5_000, 500 * 2 ** failures));
+          timer.unref?.();
+        });
       }
-    } catch {
-      // the tailer dies silently when the watch is aborted or the store goes away
     }
   }
 
