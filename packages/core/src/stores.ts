@@ -262,7 +262,7 @@ export class MemoryBlobStore implements BlobStore {
 
   async get(ref: string): Promise<Uint8Array> {
     const data = this.blobs.get(ref);
-    if (!data) throw new Error(`blob not found: ${ref}`);
+    if (!data) throw new BlobMissingError(ref);
     return data;
   }
 
@@ -273,4 +273,44 @@ export class MemoryBlobStore implements BlobStore {
   async has(ref: string): Promise<boolean> {
     return this.blobs.has(ref);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Blob read failures
+// ---------------------------------------------------------------------------
+
+/**
+ * The blob is genuinely absent.
+ *
+ * Distinct from every other read failure because only these two conditions are
+ * REPAIRABLE by re-running the step that produced the blob. A store that is merely
+ * unreachable — an object-store timeout, EACCES, EIO — must not be mistaken for one of
+ * them: replaying then duplicates the step's side effects and pays for its provider call
+ * again, to recover data that was never lost.
+ */
+export class BlobMissingError extends Error {
+  readonly code = "blob_missing";
+  constructor(readonly ref: string) {
+    super(`blob not found: ${ref}`);
+    this.name = "BlobMissingError";
+  }
+}
+
+/** The blob is present but its content does not hash to its name. */
+export class BlobCorruptError extends Error {
+  readonly code = "blob_corrupt";
+  constructor(
+    readonly ref: string,
+    actual: string,
+    size: number,
+  ) {
+    super(`blob ${ref} is corrupt: content hashes to ${actual} (${size} bytes on disk)`);
+    this.name = "BlobCorruptError";
+  }
+}
+
+/** The two conditions a re-run repairs. Anything else is the storage layer's problem. */
+export function isBlobBeyondRepair(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === "blob_missing" || code === "blob_corrupt";
 }

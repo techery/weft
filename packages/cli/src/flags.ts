@@ -10,7 +10,20 @@
 
 /** `--base main`, `--base=main`, `--watchOnly`, `--no-cache`. */
 export function parseDynamicFlags(tokens: readonly string[]): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
+  // Null-prototype: `--__proto__ x` on a plain object literal would SET the prototype
+  // instead of adding a field, so the flag vanished and the object grew a stranger's
+  // shape. Here every name is an ordinary own property, and the schema decides the rest.
+  const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  const seen = new Set<string>();
+  const assign = (name: string, value: unknown): void => {
+    // Silently keeping the last one hides a mistake that costs money to make twice, and
+    // there is no array form to mean "both" — `--args` is where richer input belongs.
+    if (seen.has(name)) {
+      throw new Error(`--${name} was given more than once — pass richer input with --args '{…}'`);
+    }
+    seen.add(name);
+    out[name] = value;
+  };
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i] ?? "";
     if (!token.startsWith("--")) {
@@ -28,12 +41,12 @@ export function parseDynamicFlags(tokens: readonly string[]): Record<string, unk
       }
     }
     if (raw === undefined && name.startsWith("no-")) {
-      out[camelCase(name.slice(3))] = false;
+      assign(camelCase(name.slice(3)), false);
       continue;
     }
-    out[camelCase(name)] = raw === undefined ? true : coerce(raw);
+    assign(camelCase(name), raw === undefined ? true : coerce(raw));
   }
-  return out;
+  return { ...out };
 }
 
 /** Input schemas are written in TypeScript, so `--base-ref` fills `baseRef`. */
@@ -41,10 +54,21 @@ export function camelCase(name: string): string {
   return name.replace(/-([a-z0-9])/gi, (_, ch: string) => ch.toUpperCase());
 }
 
+/**
+ * A value becomes a number only when it survives the round trip unchanged.
+ *
+ * `Number.isFinite(Number(raw))` alone accepts a great deal that is not a number to the
+ * person who typed it: a short git sha (`1e5` → 100000), a version (`1.20` → 1.2), a
+ * zero-padded code (`007` → 7), a hex literal (`0x10` → 16), even a blank (`" "` → 0).
+ * Each of those silently starts the run against something else. Requiring
+ * `String(Number(raw)) === raw` keeps the plain cases (`42`, `-3.5`) and leaves every
+ * value whose text a number cannot represent as the string it was.
+ */
 function coerce(raw: string): string | number | boolean {
   if (raw === "true") return true;
   if (raw === "false") return false;
-  if (raw !== "" && Number.isFinite(Number(raw))) return Number(raw);
+  const asNumber = Number(raw);
+  if (Number.isFinite(asNumber) && String(asNumber) === raw) return asNumber;
   return raw;
 }
 

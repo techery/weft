@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { integrationBaseCommit, type JournalRecord, treeHash } from "@techery/weft-core";
+import { mock } from "@techery/weft-provider-mock";
 import { defineWorkflow, z } from "@techery/weft-sdk";
 import { execa } from "execa";
 import { afterAll, describe, expect, test } from "vitest";
@@ -617,5 +618,53 @@ describe("ctx.git steps", () => {
     );
     const handle = await t.engine.start(def, { input: {}, cwd });
     expect(await handle.result).toEqual({ n: 2 });
+  });
+});
+
+describe("an edit that escaped the worktree", () => {
+  test("is still reported and flagged, though capture cannot see it", async () => {
+    // capturePatch only ever sees INSIDE the worktree. The provider's own filesTouched
+    // is the sole witness to an out-of-tree write, and it used to be overwritten — so
+    // `warn` mode, whose whole promise is to flag rather than block, flagged nothing.
+    const def = defineWorkflow(
+      {
+        name: "escape",
+        description: "a write step that also touches something outside the worktree",
+        input: z.object({}),
+        output: z.object({ files: z.array(z.string()) }),
+      },
+      async (ctx) => {
+        const r = await ctx.agent.detailed("edit", {
+          schema: z.object({ ok: z.boolean() }),
+          key: "edit",
+          write: { paths: ["src/**"], mode: "warn" },
+        });
+        await ctx.discard([r]);
+        return { files: r.files };
+      },
+    );
+
+    const t = testEngine({
+      builder: mock().on({ key: "edit" }, () => ({ ok: true }), {
+        writes: { "src/a.ts": "export const a = 1;\n" },
+        filesTouched: ["src/a.ts", "../outside.ts", "/etc/somewhere.conf"],
+      }),
+    });
+    const cwd = await tempRepo();
+    const h = await t.engine.start(def, { input: {}, cwd });
+    const out = (await h.result) as { files: string[] };
+
+    expect(out.files).toContain("src/a.ts");
+    expect(out.files).toContain("../outside.ts");
+    expect(out.files).toContain("/etc/somewhere.conf");
+
+    const records: JournalRecord[] = [];
+    for await (const rec of t.journal.read(h.runId)) records.push(rec);
+    const violation = records.find((r) => r.ev.type === "scope.violation");
+    expect(violation).toBeDefined();
+    if (violation?.ev.type === "scope.violation") {
+      expect(violation.ev.files).toContain("../outside.ts");
+      expect(violation.ev.files).toContain("/etc/somewhere.conf");
+    }
   });
 });

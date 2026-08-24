@@ -22,16 +22,41 @@ import { execa } from "execa";
 import type { Git, RawResult } from "./index.ts";
 import { GitError } from "./index.ts";
 
-/** Environment overrides that keep git non-interactive and its output parseable. */
-const GIT_ENV: Record<string, string> = {
+/**
+ * Environment overrides that keep git non-interactive and its output parseable.
+ *
+ * `GIT_EXTERNAL_DIFF` names a program git runs INSTEAD of producing a diff, and it comes
+ * from the operator's shell, not the repository. Left alone, every captured patch is
+ * whatever that program printed — `capturePatch` would journal it, `git apply` would
+ * refuse it, and the agent's work would be silently lost.
+ *
+ * REMOVED, not emptied. An empty value is not "unset": git takes it as the command to run
+ * and dies with `cannot run : No such file or directory` on any diff that does not also
+ * pass `--no-ext-diff` — the same trap `-c diff.external=` sprang, walked back into one
+ * layer over. `undefined` drops the key from the child's environment (execa merges over
+ * `process.env`, and a key with no value is not passed), leaving git with no external
+ * differ at all rather than a broken one.
+ */
+const GIT_ENV: Record<string, string | undefined> = {
   GIT_TERMINAL_PROMPT: "0",
   GIT_PAGER: "cat",
   GIT_OPTIONAL_LOCKS: "0",
   LC_ALL: "C",
+  GIT_EXTERNAL_DIFF: undefined,
 };
 
 /** Prefix for commands whose output we parse: keeps non-ASCII paths unquoted. */
 const RAW_PATHS = ["-c", "core.quotePath=false"];
+
+/**
+ * Every diff-family call carries this. A repository can attach EXECUTABLE helpers to a
+ * plain `git diff` through config (`diff.external`) or `.gitattributes`
+ * (`diff.<driver>.command`, `.textconv`), and the operator's shell can through
+ * `GIT_EXTERNAL_DIFF`. Any of them replaces the hunks with that program's stdout — which
+ * a typed read must not execute, and which `git apply` can never apply, so a captured
+ * patch becomes an agent's silently discarded work.
+ */
+const NO_EXT_DIFF = ["--no-ext-diff", "--no-textconv"];
 
 /** Longest stderr excerpt carried in a GitError message; the full text stays on `.stderr`. */
 const STDERR_EXCERPT = 400;
@@ -66,6 +91,12 @@ export class GitCli implements Git {
     // scan (status, diff, ls-files) — repository-configured code that a typed,
     // approval-free read must never run. Disabled on EVERY invocation: for
     // writes the fsmonitor is only a scan optimization, so nothing is lost.
+    //
+    // `diff.external` is the same hazard and CANNOT be disabled this way: git reads an
+    // empty value as the command to run and dies with "cannot run :", and unlike the
+    // environment variable there is no config key to un-set from out here. `--no-ext-diff`
+    // on each diff-family call is the documented override, and it beats the config and the
+    // environment variable both — see NO_EXT_DIFF.
     const result = await execa("git", ["-c", "core.fsmonitor=false", ...args], {
       cwd: this.cwd,
       reject: false,
@@ -161,7 +192,7 @@ export class GitCli implements Git {
     // uncommitted edits count as changes too. -z: NUL-delimited records with no
     // C-quoting — a filename holding a newline, tab, quote, or backslash
     // round-trips exactly instead of arriving mangled (or as two entries).
-    const { stdout } = await this.plumb(["diff", "--name-status", "-z", sha]);
+    const { stdout } = await this.plumb(["diff", ...NO_EXT_DIFF, "--name-status", "-z", sha]);
     const files: Array<{ path: string; status: GitFileStatus }> = [];
     const seen = new Set<string>();
     const tokens = stdout.split("\0");
@@ -190,7 +221,7 @@ export class GitCli implements Git {
     // `diff.<driver>.textconv` rewrites the blobs, both running by default on
     // porcelain diffs. A typed READ must never execute repository-controlled
     // code, so both invocations disable them explicitly.
-    const args = ["--no-ext-diff", "--no-textconv", ...diffArgs(range)];
+    const args = [...NO_EXT_DIFF, ...diffArgs(range)];
     const { stdout } = await this.raw(["diff", ...args]);
     const numstat = await this.plumb(["diff", "--numstat", ...args]);
     return { patch: stdout, stats: parseNumstat(numstat.stdout) };
@@ -230,7 +261,7 @@ export class GitCli implements Git {
     // Showing a COMMIT renders its patch, which runs .gitattributes textconv
     // helpers by default — the same repository-controlled execution diff()
     // refuses. Blob refs ignore the flags, so they are safe unconditionally.
-    const { stdout } = await this.raw(["show", "--no-ext-diff", "--no-textconv", refArg(ref)]);
+    const { stdout } = await this.raw(["show", ...NO_EXT_DIFF, refArg(ref)]);
     return { content: stdout };
   }
 
@@ -407,7 +438,7 @@ export class GitCli implements Git {
     // -z: even with core.quotePath=false, a pathname holding a newline, tab,
     // quote or backslash is C-quoted in line-oriented output — callers would
     // try to resolve the quoted SPELLING, not the file.
-    const { stdout } = await this.plumb(["diff", "--name-only", "--diff-filter=U", "-z"]);
+    const { stdout } = await this.plumb(["diff", ...NO_EXT_DIFF, "--name-only", "--diff-filter=U", "-z"]);
     return [...new Set(stdout.split("\0").filter((path) => path !== ""))];
   }
 }

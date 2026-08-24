@@ -12,6 +12,7 @@ import {
   persistInlineScript,
   persistWorkflowRef,
   resolveWorkflow,
+  resumeOptions,
   type Weft,
 } from "../src/index.ts";
 import { cleanupRoots, HELLO_WORKFLOW, tempRoot, write } from "./helpers.ts";
@@ -105,9 +106,12 @@ export default defineWorkflow(
 
     // A later process re-resolves the recorded path — no registry entry involved.
     const persisted = await persistedDefOf(weft, run.runId);
-    expect(persisted?.meta.description).toBe("path gate");
+    expect(persisted?.def.meta.description).toBe("path gate");
     if (persisted === undefined) throw new Error("path ref not reconstructed");
-    const resumed = await weft.engine.resume(run.runId, { def: persisted });
+    // The bundle hash travels with the definition: it is the only stamp that catches an
+    // edit inside a module the workflow body merely delegates to.
+    expect(persisted.hash).toMatch(/^[0-9a-f]{16,}$/);
+    const resumed = await weft.engine.resume(run.runId, resumeOptions(persisted));
     const again = await resumed.outcome();
     if (again.status !== "waiting_for_human") throw new Error("expected suspension again");
     await weft.engine.answer(run.runId, again.pending[0]!.id, { approved: true });

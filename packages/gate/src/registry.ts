@@ -23,6 +23,8 @@ import { GateError } from "./rules.ts";
 /** Structurally the `WorkflowRegistry` @techery/weft-core's Engine takes (gate does not import core). */
 export interface WorkflowRegistry {
   get(name: string): Promise<WorkflowDefinition | undefined>;
+  /** Bundle content hash of what `get(name)` returns; the engine's resume compares it. */
+  hashOf?(name: string): Promise<string | undefined>;
 }
 
 export interface WorkflowListEntry {
@@ -43,6 +45,7 @@ export interface FileWorkflowRegistry extends WorkflowRegistry {
   /** Every loadable workflow in the directory, sorted by name. Missing directory → `[]`. */
   list(): Promise<WorkflowListEntry[]>;
   load(name: string): Promise<RegistryLoadResult>;
+  hashOf(name: string): Promise<string | undefined>;
 }
 
 export interface RegistryOptions {
@@ -148,6 +151,12 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
     async get(name: string): Promise<WorkflowDefinition | undefined> {
       const entry = await find(name);
       return entry?.def;
+    },
+
+    async hashOf(name: string): Promise<string | undefined> {
+      // Same cached fold `get` just did, so the pair names one version of one file.
+      const entry = await find(name);
+      return entry?.hash;
     },
   };
 }

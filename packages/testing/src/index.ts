@@ -13,6 +13,11 @@
  *
  * Fixtures go through the engine's normal validation and journaling: a fixture
  * that would not pass in production fails the test.
+ *
+ * The store conformance suites live at `@techery/weft-testing/conformance`. They are the
+ * only thing here that imports `vitest`, and importing them from this entry point made
+ * `vitest` a hard runtime requirement of `runWorkflow` — unresolvable from a published
+ * install, where it is the consumer's dependency and not this package's.
  */
 
 export type {
@@ -22,8 +27,6 @@ export type {
   MockRuleOptions,
 } from "@techery/weft-provider-mock";
 export { mock } from "@techery/weft-provider-mock";
-export type { StoreFixture } from "./conformance.ts";
-export { blobStoreConformance, journalStoreConformance } from "./conformance.ts";
 export type {
   BashFixtures,
   ExecFixtures,

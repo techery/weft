@@ -11,7 +11,7 @@ import type {
   RunStatus,
   RunSummary,
 } from "@techery/weft-core";
-import { type RunState, reduceState } from "@techery/weft-core";
+import { type RunState, reduceState, renderReport, renderTree } from "@techery/weft-core";
 
 interface RunCache {
   count: number;
@@ -23,6 +23,18 @@ interface RunCache {
 function absent(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException).code;
   return code === "ENOENT" || code === "ENOTDIR";
+}
+
+/**
+ * True when a run cannot be summarized because its own records are DAMAGED, or because
+ * it stopped existing while the listing was walking the directory. Both are permanent
+ * for this pass and neither is the listing's problem: an unparseable record will never
+ * parse, and a deleted run has nothing left to report. Everything else — EACCES, EIO,
+ * EMFILE — says the run is fine and the storage is not, and hiding it there both lies to
+ * `weft ls` and deletes the row on the next index rebuild.
+ */
+function damagedOrGone(err: unknown): boolean {
+  return err instanceof SyntaxError || absent(err);
 }
 
 /** Live view of a held file lock: `held()` turns false when renewal fails past the stale threshold. */
@@ -112,7 +124,24 @@ export class FsJournalStore implements JournalStore {
       // Anything on disk past the committed offset is a crashed writer's torn tail
       // (reconcile consumed every complete line): cut it or this append corrupts it
       // into an unparseable record that blocks resume and repair forever.
+      //
+      // Re-reconciled first, and that is not belt-and-braces. The lock can be STOLEN
+      // from a holder frozen past the stale threshold — a GC pause, a suspended VM, a
+      // stalled disk — and a peer that took it may have committed and fsynced real
+      // records in the window between the reconcile above and this line. Truncating
+      // them would destroy acknowledged data. A second reconcile folds anything
+      // COMPLETE into the offset, so only a genuinely torn trailing line is ever cut.
       try {
+        await this.reconcile(runId, cached);
+        if (!mutex.held()) throw new Error(`run ${runId}: append lock lost mid-operation`);
+        // And re-test the CAS. The check above ran against the PRE-steal fold; if the
+        // second reconcile just took in records a peer committed while this holder was
+        // frozen, `cached.count` has moved and the caller's read is stale after all.
+        // Writing anyway makes a conditional append unconditional in the one window
+        // where the condition matters — a stale cancel landing on top of a peer's
+        // run.completed, which is exactly what appendIf exists to refuse. Declining here
+        // leaves any torn tail for the next append (which re-reconciles) to cut.
+        if (expectedCount !== undefined && cached.count !== expectedCount) return undefined;
         const { size } = await fs.stat(this.journalPath(runId));
         if (size > cached.byteOffset) await fs.truncate(this.journalPath(runId), cached.byteOffset);
       } catch (err) {
@@ -409,7 +438,23 @@ export class FsJournalStore implements JournalStore {
     }
     const out: RunSummary[] = [];
     for (const runId of entries) {
-      const summary = await this.summarize(runId);
+      // One damaged run must not hide every healthy one. `weft ls` is how a person
+      // finds the run that needs repairing, so a corrupt line in ONE journal throwing
+      // out of the whole listing takes away the tool they would use to fix it.
+      //
+      // DAMAGE only, though. This used to swallow every failure, and a listing is not a
+      // read-only convenience: `RunIndex.rebuild()` clears the table and repopulates it
+      // from exactly this list, so a healthy run dropped here for a transient EACCES or
+      // EIO is also deleted from the index — a storage hiccup quietly unmaking durable
+      // rows. An unparseable record will never parse, so skipping it is the repair path;
+      // a fault means the run is fine and the volume is not, and it belongs to the
+      // caller. Same line the blob store draws.
+      let summary: RunSummary | undefined;
+      try {
+        summary = await this.summarize(runId);
+      } catch (err) {
+        if (!damagedOrGone(err)) throw err;
+      }
       if (!summary) continue;
       if (filter.status && summary.status !== filter.status) continue;
       if (filter.workflow && summary.workflow !== filter.workflow) continue;
@@ -428,7 +473,13 @@ export class FsJournalStore implements JournalStore {
     try {
       const statePath = join(this.runDir(runId), "state.json");
       const [projStat, jStat] = await Promise.all([fs.stat(statePath), fs.stat(this.journalPath(runId))]);
-      if (jStat.mtimeMs <= projStat.mtimeMs) {
+      // Strict `<`: filesystem timestamps are coarse enough that an append and the
+      // snapshot it triggered routinely share an mtime, and `<=` then trusted a
+      // projection written BEFORE the record that superseded it — reporting a terminal
+      // run as executing forever, which is the exact failure this check exists to catch.
+      // An equal stamp is not evidence of freshness, so it distrusts the projection and
+      // pays for one journal fold.
+      if (jStat.mtimeMs < projStat.mtimeMs) {
         const raw = await fs.readFile(statePath, "utf8");
         const state = JSON.parse(raw) as RunState;
         return {
@@ -618,12 +669,24 @@ export class FsJournalStore implements JournalStore {
     };
   }
 
-  /** Rebuild a run's projections from its journal (used by `weft doctor`/repair). */
+  /**
+   * Rebuild a run's projections from its journal (used by `weft doctor`/repair).
+   *
+   * All three, not just `state.json`: they are projections of the same events, and a
+   * repair that refreshed one left the other two as they were — a deleted `report.md`
+   * stayed deleted and a stale one kept reporting the status the run had when it was
+   * last written. "Only journal.jsonl has to survive" is only true if this rebuilds
+   * everything that claim covers.
+   */
   async rebuildProjections(runId: string): Promise<void> {
     const records: JournalRecord[] = [];
     for await (const rec of this.read(runId)) records.push(rec);
     if (records.length === 0) return;
     const state = reduceState(records);
-    await this.snapshot(runId, { state });
+    await this.snapshot(runId, {
+      state,
+      tree: renderTree(state),
+      report: renderReport(state),
+    });
   }
 }

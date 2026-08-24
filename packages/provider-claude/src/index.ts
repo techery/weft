@@ -96,9 +96,15 @@ function withOutputSection(req: AgentRequest): string {
 
 /**
  * What the agent passed, still unvalidated — the engine checks it against the real
- * schema. A model that stringifies its object regardless is met halfway: a string that
- * parses as JSON is the value it meant, and one that does not is handed on untouched so
- * the engine's error names the real problem instead of a parse failure.
+ * schema.
+ *
+ * The string branch is DEFENSIVE, not a rescue path: the tool declares `result` as an
+ * object and the sdk-mcp server validates that before this handler runs, so a model that
+ * stringified its answer is refused at the boundary and retries — which is the intended
+ * behaviour, and is what keeps the declared shape steering the model. This only matters
+ * if a value ever reaches the handler unvalidated. A string that parses as JSON is the
+ * value it meant; one that does not is handed on untouched so the engine's error names
+ * the real problem instead of a parse failure.
  */
 function capturedValue(args: unknown): unknown {
   const result = (args as { result?: unknown }).result;

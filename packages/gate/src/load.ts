@@ -130,6 +130,14 @@ function createSandbox(): vm.Context {
     setInterval: banned("setInterval() is unavailable in workflow code - use ctx.sleep() in a loop"),
     setImmediate: banned("setImmediate() is unavailable in workflow code - use ctx.sleep()"),
     process: { env: sandboxProcessEnv() },
+    // GC timing is not deterministic, so anything observing collection replays differently.
+    WeakRef: bannedClass("WeakRef is unavailable in workflow code - GC timing is not deterministic"),
+    FinalizationRegistry: bannedClass(
+      "FinalizationRegistry is unavailable in workflow code - GC timing is not deterministic",
+    ),
+    // Reads ambient ICU data and the host timezone: the same workflow would build a
+    // different prompt, and sort findings differently, on a differently configured box.
+    Intl: sandboxIntl(),
   };
   return vm.createContext(sandbox, { name: "weft:workflow" });
 }
@@ -203,6 +211,39 @@ function banned(message: string): () => never {
   return () => {
     throw new Error(message);
   };
+}
+
+/**
+ * A banned global that is normally CONSTRUCTED. An arrow thrower reports "X is not a
+ * constructor" and buries the guidance, so this throws the real message from the
+ * constructor as well as from a plain call.
+ */
+/**
+ * `Intl` is a namespace object, so replacing it with a thrower would fail at
+ * `Intl.DateTimeFormat` — a property read, not a call. A proxy refuses on the read
+ * instead, which is where the guidance is useful.
+ */
+function sandboxIntl(): typeof Intl {
+  return new Proxy(
+    {},
+    {
+      get(_target, property) {
+        throw new Error(
+          `Intl.${String(property)} is unavailable in workflow code - it reads ambient ` +
+            `locale and timezone data; format explicitly instead`,
+        );
+      },
+    },
+  ) as typeof Intl;
+}
+
+function bannedClass(message: string): new (...args: unknown[]) => never {
+  const shim = function bannedConstructor(): never {
+    throw new Error(message);
+  };
+  return shim as unknown as new (
+    ...args: unknown[]
+  ) => never;
 }
 
 /**

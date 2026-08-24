@@ -76,6 +76,44 @@ describe("Semaphore", () => {
     expect(order).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
+  test("a task that ignores its abort does not keep the permit", async () => {
+    // The engine's step timeout aborts an unresponsive attempt and gives up on it, but
+    // the zombie keeps running. Holding the permit until it settles wedges every later
+    // step behind work nothing can stop — with the default cap that is the whole run.
+    const sem = new Semaphore(1);
+    const ac = new AbortController();
+    const hung = sem.with(() => new Promise<never>(() => undefined), ac.signal);
+    hung.catch(() => undefined);
+
+    let ran = false;
+    const queued = sem.with(async () => {
+      ran = true;
+    });
+
+    ac.abort();
+    await Promise.race([
+      queued,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("permit never freed")), 2_000)),
+    ]);
+    expect(ran).toBe(true);
+  });
+
+  test("a settled task releases exactly once, even with an abort afterwards", async () => {
+    const sem = new Semaphore(1);
+    const ac = new AbortController();
+    expect(await sem.with(async () => "done", ac.signal)).toBe("done");
+    ac.abort();
+    // A double release would let two holders in at once.
+    const held = await sem.acquire();
+    let second = false;
+    void sem.acquire().then(() => {
+      second = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(second).toBe(false);
+    held();
+  });
+
   test("aborted waiters leave the queue", async () => {
     const sem = new Semaphore(1);
     const release = await sem.acquire();
@@ -91,11 +129,16 @@ describe("Semaphore", () => {
 
 describe("OrderedDelivery", () => {
   test("delivers strictly in journaled order while pure", async () => {
-    const d = new OrderedDelivery([10, 20, 30], () => 0);
+    // `busy` is what tells the watchdog a continuation is still on its way: the runtime
+    // counts live dispatches plus replay-path I/O. While the step that will deliver 10
+    // is still working, the replay has not quiesced and 20 must stay parked.
+    let busy = 1;
+    const d = new OrderedDelivery([10, 20, 30], () => busy);
     const done: number[] = [];
     const p20 = d.deliver(20).then(() => done.push(20));
     await new Promise((r) => setTimeout(r, 5));
     expect(done).toEqual([]);
+    busy = 0;
     await d.deliver(10).then(() => done.push(10));
     await p20;
     await d.deliver(30).then(() => done.push(30));
@@ -354,5 +397,35 @@ describe("StepError ergonomics", () => {
       kind: "sideeffect",
       runId: "7f3a",
     });
+  });
+});
+
+describe("ctx.pipeline builders", () => {
+  test("branching a pipeline does not merge the branches' stages", async () => {
+    const { runWorkflow } = await import("@techery/weft-testing");
+    const { defineWorkflow } = await import("@techery/weft-sdk");
+
+    const wf = defineWorkflow(
+      {
+        name: "branch",
+        description: "two branches off one prefix",
+        input: z.object({}),
+        output: z.object({ a: z.array(z.number()), b: z.array(z.number()) }),
+      },
+      async (ctx) => {
+        const base = ctx.pipeline([1, 2, 3]).map((n) => (n as number) * 10);
+        // Sharing one mutable stage array made these two see each other's stages.
+        const a = await base.map((n) => (n as number) + 1).run();
+        const b = await base.map((n) => (n as number) + 2).run();
+        return {
+          a: ctx.ok(a) as number[],
+          b: ctx.ok(b) as number[],
+        };
+      },
+    );
+
+    const { output } = await runWorkflow(wf, { input: {} });
+    expect(output.a).toEqual([11, 21, 31]);
+    expect(output.b).toEqual([12, 22, 32]);
   });
 });

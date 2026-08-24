@@ -8,7 +8,7 @@ import { promises as fs } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { CanUseTool, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRequest } from "@techery/weft-core";
-import picomatch from "picomatch";
+import { scopeMatcher } from "@techery/weft-isolation";
 import {
   baseToolName,
   EDIT_TOOLS,
@@ -124,8 +124,10 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
   const denied = new Set(req.tools?.deny ?? []);
   const scope = req.writeScope;
   const patterns = scope ? [...scope.paths, ...(scope.also ?? [])] : [];
-  // An empty scope matches nothing — same rule as the post-hoc check in @techery/weft-isolation.
-  const inScope = patterns.length > 0 ? picomatch(patterns, { dot: true }) : () => false;
+  // The SAME predicate the post-hoc patch check uses. Compiling a second matcher here is
+  // how the live gate kept fail-open picomatch semantics (`!` exclusions ignored, an
+  // exclusion-only scope permitting everything) after checkScope was fixed.
+  const inScope = scope ? scopeMatcher(scope) : () => false;
   const scopeMessage = `outside this step's write scope (allowed: ${patterns.join(", ") || "nothing"})`;
 
   return async (toolName, input) => {
@@ -137,7 +139,19 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
     if (EDIT_TOOLS.has(base)) {
       if (!allowEdits) return deny(READ_ONLY_MESSAGE);
       const target = editTargetPath(input);
-      if (target === undefined) return allow;
+      if (target === undefined) {
+        // The tool's path argument is not one this screen recognises, so there is nothing
+        // to check it against. Under a STRICT scope that has to be a denial: allowing it
+        // meant the boundary stopped enforcing the moment an edit tool's input shape
+        // changed upstream, silently and without a trace. `warn` keeps landing the edit —
+        // post-hoc patch capture is what flags it there.
+        if (scope?.mode === "strict") {
+          return deny(
+            `${base}: this step has a strict write scope and the tool's target path could not be determined`,
+          );
+        }
+        return allow;
+      }
       const path = workspacePath(req.cwd, target);
       if (scope && !inScope(path)) {
         // "warn" lands the edit and lets the post-hoc patch capture flag it.
@@ -153,20 +167,20 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
 
     if (base === "Bash") {
       const command = typeof input.command === "string" ? input.command : "";
+      // Repository config can attach EXECUTABLE diff/textconv drivers to a plain
+      // `git diff`/`log`/`show`/`blame` through .gitattributes, so every git command
+      // this gate permits runs wrapped. Applied to WRITE steps too: the wrapper only
+      // disables those drivers, the fsmonitor hook and git's optional locks, and a
+      // strict write scope that let repository-configured code execute would be a
+      // weaker boundary than the read-only gate beside it.
+      const permit: PermissionResult = /\bgit\b/.test(command)
+        ? { behavior: "allow", updatedInput: { ...input, command: GIT_READ_WRAPPER + command } }
+        : allow;
       // Read-only steps run in the integration cwd, not a worktree, so the shell is
       // deny-by-default there: only commands known not to write may run.
       if (!allowEdits) {
         if (!isReadOnlyCommand(command)) return deny(READ_ONLY_MESSAGE);
-        // Repository config can attach EXECUTABLE diff/textconv drivers to a
-        // plain `git diff`/`log`/`show` through .gitattributes: the command
-        // runs wrapped so the read gate's allow cannot execute them.
-        if (/\bgit\b/.test(command)) {
-          return {
-            behavior: "allow",
-            updatedInput: { ...input, command: GIT_READ_WRAPPER + command },
-          };
-        }
-        return allow;
+        return permit;
       }
       // A STRICT write scope relies on worktree patch capture, which only sees the
       // worktree — and EVERY command can write, not just a recognized writer
@@ -206,13 +220,13 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
         if (decision.behavior === "deny") {
           return deny(decision.message ?? `a writable shell command under a strict scope needs approval`);
         }
-        return allow;
+        return permit;
       }
       if (isRiskyCommand(command)) {
         const decision = await req.hitl.onPermission({ tool: toolName, input, risk: "high" });
         if (decision.behavior === "deny") return deny(decision.message ?? "denied by the approval policy");
       }
-      return allow;
+      return permit;
     }
 
     return allow;

@@ -92,7 +92,16 @@ function fakeQuery(scripts: TurnScript[]): { fn: QueryFn; calls: Call[] } {
     return (async function* stream(): AsyncGenerator<unknown, void> {
       for (const attempt of script.gate ?? [])
         call.decisions.push(await ask(options, attempt.tool, attempt.input));
-      if (script.emit) await registeredTool(options).handler({ result: script.emit.payload }, {});
+      if (script.emit) {
+        // The sdk-mcp server validates arguments against the declared shape BEFORE it
+        // dispatches, so the harness must too. Calling the handler directly let tests
+        // assert behaviour for payloads production rejects at the boundary — two of them
+        // contradicted each other for exactly that reason.
+        const registered = registeredTool(options);
+        if (registered.inputSchema.safeParse({ result: script.emit.payload }).success) {
+          await registered.handler({ result: script.emit.payload }, {});
+        }
+      }
       for (const message of script.messages ?? []) yield message;
     })();
   };
@@ -440,6 +449,64 @@ describe("the tool gate", () => {
     expect((await ask(options, "Edit", { file_path: "/etc/hosts" })).behavior).toBe("deny");
   });
 
+  test("git commands are wrapped under a WRITE scope too, not just a read-only step", async () => {
+    // The read gate wrapped git so a repository-configured diff/textconv driver could
+    // not execute. A strict WRITE scope let the same command through unwrapped, making
+    // the stronger boundary the weaker one.
+    const options = await gateContext(
+      request({ tools: { allowEdits: true }, writeScope: { paths: ["src/**"], mode: "strict" } }),
+    );
+    const decision = await ask(options, "Bash", { command: "git diff HEAD" });
+    expect(decision.behavior).toBe("allow");
+    expect((decision as { updatedInput?: { command?: string } }).updatedInput?.command).toContain(
+      "--no-ext-diff",
+    );
+  });
+
+  test("a strict scope denies an edit whose target it cannot determine", async () => {
+    // Fail-open here meant the boundary stopped enforcing the moment an edit tool's
+    // input shape changed upstream -- silently, and with nothing in the record.
+    const strict = await gateContext(
+      request({ tools: { allowEdits: true }, writeScope: { paths: ["src/**"], mode: "strict" } }),
+    );
+    expect((await ask(strict, "Edit", { unexpected_field: "x" })).behavior).toBe("deny");
+
+    // `warn` still lands it; the post-hoc patch capture is what flags it there.
+    const warn = await gateContext(
+      request({ tools: { allowEdits: true }, writeScope: { paths: ["src/**"], mode: "warn" } }),
+    );
+    expect((await ask(warn, "Edit", { unexpected_field: "x" })).behavior).toBe("allow");
+  });
+
+  test("the live gate honours `!` exclusions, like the post-hoc check", async () => {
+    // Both used to compile their own picomatch matcher, and picomatch's array semantics
+    // report src/auth/secret.ts as a MATCH here -- so the exclusion the author wrote did
+    // nothing at the one point where it could still prevent the edit.
+    const options = await gateContext(
+      request({
+        tools: { allowEdits: true },
+        writeScope: { paths: ["src/auth/**", "!src/auth/secret.ts"], mode: "strict" },
+      }),
+    );
+
+    expect(await ask(options, "Edit", { file_path: `${CWD}/src/auth/login.ts` })).toEqual({
+      behavior: "allow",
+    });
+    const denial = await ask(options, "Edit", { file_path: `${CWD}/src/auth/secret.ts` });
+    expect(denial.behavior).toBe("deny");
+  });
+
+  test("a scope of only exclusions grants nothing, not everything", async () => {
+    const options = await gateContext(
+      request({
+        tools: { allowEdits: true },
+        writeScope: { paths: ["!secrets/**"], mode: "strict" },
+      }),
+    );
+    expect((await ask(options, "Edit", { file_path: `${CWD}/anything.ts` })).behavior).toBe("deny");
+    expect((await ask(options, "Edit", { file_path: `${CWD}/secrets/key.pem` })).behavior).toBe("deny");
+  });
+
   test("warn write scope lets an out-of-scope edit land for the post-hoc check to flag", async () => {
     const options = await gateContext(
       request({ tools: { allowEdits: true }, writeScope: { paths: ["src/auth/**"], mode: "warn" } }),
@@ -461,9 +528,11 @@ describe("the tool gate", () => {
       request({ tools: { allowEdits: true }, hitl: { onPermission: decide, onAsk: async () => ({}) } }),
     );
 
-    expect(await ask(options, "Bash", { command: "git push origin main" })).toEqual({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: "git push origin main" })).toMatchObject({
+      behavior: "allow",
+    });
     // Global git options must not smuggle a push past the broker.
-    expect(await ask(options, "Bash", { command: "git -C . push origin HEAD:main" })).toEqual({
+    expect(await ask(options, "Bash", { command: "git -C . push origin HEAD:main" })).toMatchObject({
       behavior: "allow",
     });
     expect(await ask(options, "Bash", { command: "npm publish --access public" })).toEqual({
@@ -472,23 +541,23 @@ describe("the tool gate", () => {
     });
     // An alias defined on the command line expands inside git, out of this
     // screen's sight — any such invocation goes to approval conservatively.
-    expect(await ask(options, "Bash", { command: "git -c alias.ship=push ship origin main" })).toEqual({
+    expect(await ask(options, "Bash", { command: "git -c alias.ship=push ship origin main" })).toMatchObject({
       behavior: "allow",
     });
     // Quoting must not smuggle a push past the broker: the shell resolves
     // `git p'u'sh` to `git push` before git ever sees it.
-    expect(await ask(options, "Bash", { command: "git p'u'sh origin main" })).toEqual({
+    expect(await ask(options, "Bash", { command: "git p'u'sh origin main" })).toMatchObject({
       behavior: "allow",
     });
-    expect(await ask(options, "Bash", { command: 'git "push" origin main' })).toEqual({
+    expect(await ask(options, "Bash", { command: 'git "push" origin main' })).toMatchObject({
       behavior: "allow",
     });
-    expect(await ask(options, "Bash", { command: "git -C . 'pu'sh origin HEAD:main" })).toEqual({
+    expect(await ask(options, "Bash", { command: "git -C . 'pu'sh origin HEAD:main" })).toMatchObject({
       behavior: "allow",
     });
     // Ordinary commands never reach the broker.
     expect(await ask(options, "Bash", { command: "pnpm test" })).toEqual({ behavior: "allow" });
-    expect(await ask(options, "Bash", { command: "git commit -m x" })).toEqual({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: "git commit -m x" })).toMatchObject({ behavior: "allow" });
 
     expect(seen).toHaveLength(7);
     expect(seen.every((r) => r.risk === "high")).toBe(true);
@@ -567,9 +636,9 @@ describe("the tool gate", () => {
       expect(denial.behavior, command).toBe("deny");
     }
     // Worktree-local git stays available to a write agent.
-    expect(await ask(options, "Bash", { command: "git status" })).toEqual({ behavior: "allow" });
-    expect(await ask(options, "Bash", { command: "git add src/a.ts" })).toEqual({ behavior: "allow" });
-    expect(await ask(options, "Bash", { command: "git diff HEAD" })).toEqual({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: "git status" })).toMatchObject({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: "git add src/a.ts" })).toMatchObject({ behavior: "allow" });
+    expect(await ask(options, "Bash", { command: "git diff HEAD" })).toMatchObject({ behavior: "allow" });
     expect(mutatesSharedGitMetadata("git commit -m config")).toBe(false); // an ARGUMENT named config is fine
   });
 
@@ -609,13 +678,17 @@ describe("the tool gate", () => {
       // The optional index refresh is a WRITE: after a tracked file's stat
       // info changes, a plain `git status` rewrites .git/index — the wrapped
       // one (GIT_OPTIONAL_LOCKS=0) must leave it untouched.
-      await utimes(join(cwd, "a.txt"), new Date(), new Date());
+      // Only the direction that is guaranteed is asserted. The index refresh is
+      // OPTIONAL — git documents it as an optimisation it may skip — so "an unwrapped
+      // status rewrites .git/index" is not a property git offers, and asserting it made
+      // this test fail about one run in six for a reason unrelated to the wrapper. What
+      // the wrapper promises is the other direction, and that holds every time.
+      const shifted = new Date(Date.now() - 60_000);
+      await utimes(join(cwd, "a.txt"), shifted, shifted);
       const index = join(cwd, ".git", "index");
       const before = (await stat(index)).mtimeMs;
       execFileSync("bash", ["-c", `${GIT_READ_WRAPPER}git status`], { cwd, stdio: "ignore" });
       expect((await stat(index)).mtimeMs).toBe(before);
-      execFileSync("bash", ["-c", "git status"], { cwd, stdio: "ignore" });
-      expect((await stat(index)).mtimeMs).not.toBe(before);
     } finally {
       await rm(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
@@ -763,7 +836,12 @@ describe("finalize, repair and abort", () => {
     expect(inputSchema.safeParse({ result: '{"ok":true}' }).success).toBe(false);
   });
 
-  test("parses a result the model handed over as a JSON string", async () => {
+  test("a stringified result is refused at the tool boundary, not silently accepted", async () => {
+    // `capturedValue` can parse a JSON string, but nothing in production hands it one:
+    // the declared object shape is validated before the handler runs, so the model gets
+    // an in-band tool error naming the problem and retries. The suite used to assert
+    // BOTH that the string is rejected by inputSchema and that it round-trips through
+    // the handler — true only because the harness called the handler directly.
     const { fn } = fakeQuery([
       {
         emit: { payload: '{"ok":true,"n":3}' as unknown as Record<string, unknown> },
@@ -772,25 +850,7 @@ describe("finalize, repair and abort", () => {
     ]);
     const provider = createClaudeProvider({ queryFn: fn });
 
-    const result = await provider.run(request(), control());
-
-    expect(result.output).toEqual({ ok: true, n: 3 });
-  });
-
-  test("hands a string that is not JSON through untouched", async () => {
-    // The engine owns validation: its error should name the real problem rather than
-    // a parse failure this adapter invented.
-    const { fn } = fakeQuery([
-      {
-        emit: { payload: "not json at all" as unknown as Record<string, unknown> },
-        messages: [resultMessage()],
-      },
-    ]);
-    const provider = createClaudeProvider({ queryFn: fn });
-
-    const result = await provider.run(request(), control());
-
-    expect(result.output).toBe("not json at all");
+    await expect(provider.run(request(), control())).rejects.toThrow(/without calling structured_output/);
   });
 
   test("onMaxTurns fail does not spend a second turn", async () => {

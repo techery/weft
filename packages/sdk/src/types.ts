@@ -42,7 +42,15 @@ export interface RetryOptions {
 export interface AgentOptions<S extends AnySchema> {
   /** Required on every step: the only way out is a value this schema validates. */
   schema: S;
-  /** Stable identity for replay, tests, and the tree. Auto `Phase/agent#N` if omitted. */
+  /**
+   * Stable identity for replay, tests, and the tree.
+   *
+   * Omitted, a step is identified by its CONTENT alone (prompt, schema, routing), and the
+   * auto `Phase/agent#N` is a display label that identity ignores. That is fine until two
+   * call sites can produce the same content: replay then cannot tell them apart, and
+   * rather than hand one the other's journaled answer it re-runs them. Give each call a
+   * distinct key whenever that is possible — it is what makes their results reusable.
+   */
   key?: string;
   /** Cosmetic label for the tree; defaults to the key. */
   label?: string;

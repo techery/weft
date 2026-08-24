@@ -15,6 +15,7 @@ import {
   type WorkflowDefinition,
 } from "@techery/weft-sdk";
 import { Budget } from "./budget.ts";
+import { sha256Hex } from "./canonical.ts";
 import { type EngineConfig, type EngineConfigInput, resolveConfig } from "./config.ts";
 import { buildCtx } from "./ctx.ts";
 import type { JournalEvent, JournalRecord } from "./events.ts";
@@ -34,8 +35,111 @@ import type { BlobStore, JournalStore, RunLease, RunListFilter, RunSummary } fro
 
 const tracer = trace.getTracer("weft");
 
+/** How long cancel() waits for an aborted run to unwind before fencing it anyway. */
+const CANCEL_DRAIN_MS = 5_000;
+
+/** How long shutdown() waits for each run to unwind before leaving it claimed. */
+const SHUTDOWN_DRAIN_MS = 5_000;
+
+/**
+ * Races a run's completion against a deadline: `true` if it unwound, `false` if the
+ * bound expired.
+ *
+ * The timer is deliberately REFERENCED, and the difference is not stylistic. Every other
+ * timer the engine arms — lease renewal, the tailer's retry backoff — is unref'd because
+ * it merely watches work that keeps the process alive on its own. This one IS the
+ * remaining work: unref'd, a one-shot process (`weft cancel`, a CLI shutdown) exits
+ * mid-drain, before the timeout branch journals `run.cancelled` and retires the run —
+ * losing the bounded guarantee in exactly the case it was written for.
+ *
+ * A wedged STEP does not reach that state on its own: `withTimeout` holds a referenced
+ * timer of its own for the same reason, and it outlives a provider that ignores its
+ * abort. The reachable case is a workflow BODY that wedges outside any step — a bare
+ * never-settling promise, a wedged library call, a listener that never fires — where no
+ * step timer exists and this is the only thing left holding the loop. Do not unref it on
+ * the reasoning that steps cover themselves; they do, and the body does not.
+ *
+ * Cleared as soon as the race settles, so a run that drains early never delays the exit.
+ */
+function drainWithin(result: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    result.then(
+      () => true,
+      () => true,
+    ),
+    new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), ms);
+    }),
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+/**
+ * The engine's own version stamp for a workflow body, journaled with the run and
+ * compared on resume to decide whether step POSITIONS still name the same call sites.
+ *
+ * Not a replacement for the host's `defHash` but a floor beneath it: this one needs no
+ * plumbing and so exists for every caller, including library ones that never bundle. It
+ * is also strictly weaker, and in one way that matters — a body which delegates to an
+ * imported helper (`return buildSteps(ctx)`) keeps the same `toString()` no matter how
+ * the helper's call sites are edited. `positionsTrusted` folds in the bundle hash for
+ * exactly that reason; see `versionUnchanged`.
+ *
+ * It is not a content address either — two genuinely different workflows sharing a body
+ * text would collide — and that is fine, because a false "unchanged" only restores the
+ * previous behaviour.
+ */
+function definitionHash(def: WorkflowDefinition): string {
+  return sha256Hex(`${def.meta.name ?? ""}\n${def.run.toString()}`);
+}
+
+/**
+ * Whether the script being resumed is the one the journal was written by. A run created
+ * before this was journaled carries none; treat that as unchanged, because the only
+ * thing the answer gates is an extra re-run, and an old journal should not start paying
+ * for one.
+ */
+function scriptUnchanged(current: string, journaled: string | undefined): boolean {
+  return journaled === undefined || journaled === current;
+}
+
+/**
+ * Whether step positions can still be trusted to name the same call sites: both stamps
+ * must agree, and each abstains when either side lacks it.
+ *
+ * Two stamps because neither covers the other. The body hash reaches every caller but
+ * sees only `def.run`'s own source, so an edit inside an imported helper is invisible to
+ * it — the body reads identical while the call sites underneath it moved. The bundle
+ * hash covers the whole module graph and catches that, but only a host that bundles
+ * produces one, and it also moves for edits that touch no call site at all. Requiring
+ * agreement takes the union of what they detect; the cost of a spurious disagreement is
+ * an extra re-run of an ambiguous keyless step, which is the side that cannot be wrong.
+ */
+function versionUnchanged(
+  current: { body: string; bundle?: string },
+  journaled: { bodyHash?: string; defHash?: string },
+): boolean {
+  return (
+    scriptUnchanged(current.body, journaled.bodyHash) &&
+    (current.bundle === undefined || scriptUnchanged(current.bundle, journaled.defHash))
+  );
+}
+
 export interface WorkflowRegistry {
   get(name: string): Promise<WorkflowDefinition | undefined>;
+  /**
+   * The bundle content hash of what `get(name)` would return right now, when the registry
+   * knows one.
+   *
+   * A run started by registry name journals the host's hash, but a resume by name has no
+   * host in the loop to re-supply it — and without it the version check falls back to the
+   * body hash alone, which cannot see an edit inside a module the workflow delegates to.
+   * Asking the registry closes that for every host at once, including any the plumbing in
+   * `resumeOptions` never reaches.
+   */
+  hashOf?(name: string): Promise<string | undefined>;
 }
 
 export interface EngineOptions {
@@ -62,6 +166,13 @@ export interface StartOptions {
 export interface ResumeOptions {
   def?: WorkflowDefinition;
   reuse?: ReuseMode;
+  /**
+   * Bundle content hash of the script being resumed. Compared against the one the run
+   * journaled to decide whether step positions still name the same call sites: it is the
+   * only stamp that sees an edit inside a module `def.run` merely delegates to. Omit it
+   * and the check falls back to the body hash alone.
+   */
+  defHash?: string;
 }
 
 export type RunOutcome =
@@ -201,7 +312,11 @@ export class Engine implements EngineHost {
         {
           type: "run.created",
           runId,
-          workflow: { name, ...(opts.defHash !== undefined ? { defHash: opts.defHash } : {}) },
+          workflow: {
+            name,
+            ...(opts.defHash !== undefined ? { defHash: opts.defHash } : {}),
+            bodyHash: definitionHash(def),
+          },
           // Raw, not inputCheck.value: a transformed value (string → Date) would
           // serialize lossily and hand a resumed execution a different input type.
           input: rawInput,
@@ -236,12 +351,22 @@ export class Engine implements EngineHost {
     if (created?.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
 
     let def = opts.def;
-    if (!def && this.registry) def = await this.registry.get(created.workflow.name);
+    // The caller's hash names the definition the CALLER brought; a registry lookup here
+    // brings its own, and mixing them would compare one script's stamp against another's.
+    let bundleHash = opts.def !== undefined ? opts.defHash : undefined;
+    if (!def && this.registry) {
+      def = await this.registry.get(created.workflow.name);
+      if (def) bundleHash = await this.registry.hashOf?.(created.workflow.name);
+    }
     if (!def) {
       throw new Error(
         `run ${runId}: no definition for "${created.workflow.name}" (pass def or configure a registry)`,
       );
     }
+    const resumeOpts: ResumeOptions = {
+      ...opts,
+      ...(bundleHash !== undefined ? { defHash: bundleHash } : {}),
+    };
 
     // The journal holds the RAW input; reapply the schema so a transform hands the
     // resumed execution the same shape (a Date, a default) the first one saw.
@@ -258,7 +383,7 @@ export class Engine implements EngineHost {
     // still executing would run it twice.
     const lease = await this.claimRun(runId);
     try {
-      return await this.resumeSetup(runId, records, created, def, opts, inputCheck.value, lease);
+      return await this.resumeSetup(runId, records, created, def, resumeOpts, inputCheck.value, lease);
     } catch (err) {
       // Setup failed before drive() (whose finally owns the release from launch
       // on): the claim must not outlive an execution that never started.
@@ -296,6 +421,18 @@ export class Engine implements EngineHost {
       abort: new AbortController(),
       agentCounter: { count: agentDispatches, warned: false },
       reuse: opts.reuse ?? "content",
+      // An edited script moves every step after the edit, so a step's seq no longer
+      // names the same call site the journal recorded it at. Salvage by content still
+      // works — that is the point of edit-tolerant replay — but a KEYLESS step whose
+      // content matches several journaled entries can no longer be resolved by position,
+      // and replay re-runs it instead of serving whichever entry landed at its seq.
+      positionsTrusted: versionUnchanged(
+        {
+          body: definitionHash(def),
+          ...(opts.defHash !== undefined ? { bundle: opts.defHash } : {}),
+        },
+        created.workflow,
+      ),
     };
     // A crash AFTER a durable budget.sampled but BEFORE the paid step's terminal
     // record leaves that call's spend visible ONLY in the sample: the cumulative
@@ -1003,6 +1140,23 @@ export class Engine implements EngineHost {
       for await (const rec of this.journal.read(childId)) records.push(rec);
       const created = records.find((r) => r.ev.type === "run.created")?.ev;
       if (created?.type === "run.created") rawInput = created.input === undefined ? {} : created.input;
+      // Re-entering a child is a resume, and it needs the same guard the root got. A
+      // child that defaulted to trusting positions served the deleted call site's answer
+      // to the one that slid into its seq — the exact failure the version stamp exists to
+      // stop, reachable through any `ctx.workflow` whose definition changed.
+      //
+      // INHERITED, not just compared. A child has only its own body hash to go on: no
+      // host resolved it, so there is no bundle stamp at this level, and the body of a
+      // child that delegates to an imported helper reads identical however that helper is
+      // edited. The root's resume DID see the bundle move — and it is the same bundle,
+      // holding this child's call sites too. Starting a child at `true` there would hand
+      // back the disagreement the root just established.
+      shared.positionsTrusted =
+        parent.shared.positionsTrusted !== false &&
+        versionUnchanged(
+          { body: definitionHash(def) },
+          created?.type === "run.created" ? created.workflow : {},
+        );
       replay = ReplayIndex.fromRecords(records);
       // The child's journaled agent dispatches are NOT re-counted here: the
       // root's resume walked every durable descendant journal already, and a
@@ -1071,7 +1225,11 @@ export class Engine implements EngineHost {
         {
           type: "run.created",
           runId: childId,
-          workflow: { name: def.meta.name ?? spec.name },
+          // The child stamps its own version for the same reason the root does: it has
+          // its own journal, its own replay, and its own call sites to move. No bundle
+          // hash exists here — a child definition is a value in the parent's module, not
+          // something a host resolved and hashed — so the body hash is the whole check.
+          workflow: { name: def.meta.name ?? spec.name, bodyHash: definitionHash(def) },
           input: rawInput,
           cwd: parent.cwd,
           depth: parent.depth + 1,
@@ -1418,7 +1576,59 @@ export class Engine implements EngineHost {
       // Reject (never answer) pending human waits: the run must end cancelled,
       // not proceed as if someone had denied the request.
       this.cancelHumanWaitsAcross(active);
-      await active.result.catch(() => undefined);
+      // BOUNDED, the way shutdown() drains: an abort is a request, and a step that
+      // ignores it — a provider SDK with no cancellation, a wedged subprocess — used to
+      // hang cancel() for as long as it kept running, with no way for a caller (or a
+      // person at the CLI) to get an answer. Past the bound the run is fenced and
+      // journaled cancelled anyway, so the projection tells the truth; the zombie's work
+      // was already declared unobservable. (The lease is deliberately kept — see below.)
+      const drained = await drainWithin(active.result, CANCEL_DRAIN_MS);
+      if (!drained) {
+        // Journal BEFORE fencing: a fenced runtime refuses every append, so the order
+        // decides whether the projection ends up saying "cancelled" or stays stuck on
+        // "executing" forever.
+        //
+        // Its failure is the caller's answer, not something to swallow. The durable
+        // journal is what "cancelled" MEANS here — the in-process run is gone either way,
+        // but if ENOSPC or EIO ate this record the journal still says `executing`, the
+        // retained claim expires on its TTL, and the next process resumes and re-executes
+        // a run this call reported as cancelled. Reported as success that is silent and
+        // unrecoverable; reported as failure the caller can retry, and a later cancel()
+        // finds no active entry and takes the journal path below, whose appendIf records
+        // the cancellation once the volume comes back.
+        let journalFailure: unknown;
+        try {
+          await this.appendTerminal(active, [{ type: "run.cancelled" }]);
+        } catch (err) {
+          journalFailure = err;
+        }
+        active.runtime.status = "cancelled";
+        active.runtime.fence(
+          new CancelledError(`run ${runId} was cancelled; a step is still draining`, {
+            kind: "workflow",
+            runId,
+          }),
+        );
+        // Retire the execution independently of the promise nothing can settle.
+        // `fence()` cannot resolve what `def.run` is already awaiting, so `active.result`
+        // stays pending forever — and both cleanup paths hang off it: launch()'s chain
+        // never drops the active entry, and drive()'s finally never stops lease renewal.
+        // Left alone, a "cancelled" run renews its claim indefinitely, tells other
+        // processes it is still active, and hands every later resume() in THIS engine
+        // the same hung promise. Dropping the entry makes a resume replay from the
+        // journal, which is where the cancellation is recorded.
+        active.tail?.abort();
+        if (active.leaseTimer) clearInterval(active.leaseTimer);
+        if (this.active.get(runId) === active) this.active.delete(runId);
+        // The lease is NOT released: the zombie may still be writing, and handing the
+        // run to another process while it does is worse than waiting out the claim's
+        // TTL. shutdown() takes the same position for the same reason.
+        //
+        // Retire first, then raise. The abort was requested and the execution is
+        // unobservable whatever the journal says, so leaving a wedged entry behind would
+        // add a second failure to the one being reported.
+        if (journalFailure !== undefined) throw journalFailure;
+      }
       return;
     }
     if (!(await this.journal.exists(runId))) throw new Error(`run ${runId} not found`);
@@ -1481,16 +1691,9 @@ export class Engine implements EngineHost {
       );
     }
     for (const active of actives) {
-      const drained = await Promise.race([
-        active.result.then(
-          () => true,
-          () => true,
-        ),
-        new Promise<boolean>((resolve) => {
-          const timer = setTimeout(() => resolve(false), 5_000);
-          timer.unref?.();
-        }),
-      ]);
+      // Same referenced bound as cancel(): shutdown() drains the actives in sequence, so
+      // an early exit here would also skip every run after this one in the list.
+      const drained = await drainWithin(active.result, SHUTDOWN_DRAIN_MS);
       if (!drained) continue; // never release ownership over still-live work
       await active.runtime.flushAppends();
       // Releases are owner-checked, so drive()'s own release (already run by the

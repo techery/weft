@@ -84,7 +84,12 @@ export type JournalEvent =
   | {
       type: "run.created";
       runId: string;
-      workflow: { name: string; defHash?: string };
+      /**
+       * `defHash` is the host's bundle hash (absent for library callers). `bodyHash`
+       * is the engine's own version stamp for the workflow body, always present, and is
+       * what resume compares to decide whether step POSITIONS still mean anything.
+       */
+      workflow: { name: string; defHash?: string; bodyHash?: string };
       input: unknown;
       cwd: string;
       baseRef?: string;

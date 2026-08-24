@@ -78,4 +78,10 @@ export type {
   RunListFilter,
   RunSummary,
 } from "./stores.ts";
-export { MemoryBlobStore, MemoryJournalStore } from "./stores.ts";
+export {
+  BlobCorruptError,
+  BlobMissingError,
+  isBlobBeyondRepair,
+  MemoryBlobStore,
+  MemoryJournalStore,
+} from "./stores.ts";

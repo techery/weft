@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { JournalRecord, JournalStore, RunStatus, RunSummary, StepState } from "@techery/weft-core";
@@ -88,8 +88,44 @@ export class RunIndex {
 
   constructor(opts: RunIndexOptions) {
     if (opts.dbPath !== ":memory:") mkdirSync(dirname(opts.dbPath), { recursive: true });
-    this.db = new DatabaseSync(opts.dbPath);
-    this.migrate();
+    let opened: DatabaseSync | undefined;
+    try {
+      opened = new DatabaseSync(opts.dbPath);
+      this.db = opened;
+      this.migrate();
+    } catch (err) {
+      // Nothing here is a source of truth — every row is a fold over a journal — so
+      // discarding a CORRUPT file is safe, and refusing to open is not: it takes
+      // `weft ls` down with it and there is no other repair path.
+      //
+      // Corruption only. A lock contention (SQLITE_BUSY / SQLITE_LOCKED) or a transient
+      // I/O or permission failure means the database is fine and someone else is using
+      // it; deleting it there would destroy a healthy index, and its WAL and SHM out
+      // from under a live connection. Those propagate. An in-memory database has nothing
+      // to delete either way.
+      // Whatever happens next, this constructor is not returning an object that owns
+      // `opened`, so the handle is closed either way. Corruption surfaces from the first
+      // PRAGMA as often as from open() itself, so it is usually LIVE here — and a live
+      // handle owns the file: unlinking underneath it fails outright on Windows
+      // (EBUSY/EPERM), turning the recovery path into the hard failure it exists to
+      // avoid, and on POSIX leaves the deleted inode behind this connection with its WAL
+      // and SHM recreated against a file no longer at that path. On the propagating side
+      // a caller may retry — a leaked descriptor per attempt is a slow leak in the one
+      // situation (a contended or briefly unreadable index) that expects retries. A close
+      // that itself fails changes nothing about what has to happen next.
+      try {
+        opened?.close();
+      } catch {
+        // already closed, or never opened
+      }
+      if (opts.dbPath === ":memory:" || !isCorruption(err)) throw err;
+      rmSync(opts.dbPath, { force: true });
+      // SQLite's sidecars belong to the file just discarded.
+      rmSync(`${opts.dbPath}-wal`, { force: true });
+      rmSync(`${opts.dbPath}-shm`, { force: true });
+      this.db = new DatabaseSync(opts.dbPath);
+      this.migrate();
+    }
   }
 
   /** Drop-and-recreate on any version drift; derived data is never migrated. */
@@ -327,4 +363,20 @@ function numberOf(value: unknown): number {
 /** LIKE wildcards in user text are literal; the statement declares `\` as the escape. */
 function escapeLike(text: string): string {
   return text.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
+/**
+ * Whether an open/migrate failure means the FILE is unusable, as opposed to busy or
+ * briefly unreadable. `node:sqlite` surfaces the sqlite result code on `errcode` where it
+ * can; the message check covers builds and paths that do not.
+ *
+ * SQLITE_NOTADB (26) and SQLITE_CORRUPT (11) are the two that say "this is not a database
+ * I can read". Anything else — SQLITE_BUSY, SQLITE_LOCKED, EACCES, EIO — is a condition
+ * that passes, and the file must survive it.
+ */
+export function isCorruption(err: unknown): boolean {
+  const code = (err as { errcode?: unknown })?.errcode;
+  if (typeof code === "number" && (code === 11 || code === 26)) return true;
+  const message = err instanceof Error ? err.message.toLowerCase() : "";
+  return message.includes("not a database") || message.includes("malformed") || message.includes("corrupt");
 }

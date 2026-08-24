@@ -32,6 +32,27 @@ const REQUIRED_ALLOW_BARE: readonly string[] = ["@techery/weft-sdk"];
 
 const TIMERS = new Set(["setTimeout", "setInterval", "setImmediate"]);
 
+/**
+ * Reachable only through the garbage collector, whose timing v8 does not promise. A
+ * workflow whose result depends on when a reference was collected replays differently on
+ * the same journal.
+ */
+const GC_GLOBALS = new Set(["WeakRef", "FinalizationRegistry"]);
+
+/**
+ * Locale- and timezone-sensitive formatting and collation. These read ambient ICU data
+ * and the host timezone, so the same workflow produces different prompts — and a
+ * different `localeCompare` sort order — on a differently configured machine.
+ */
+const LOCALE_METHODS = new Set([
+  "toLocaleString",
+  "toLocaleDateString",
+  "toLocaleTimeString",
+  "toLocaleLowerCase",
+  "toLocaleUpperCase",
+  "localeCompare",
+]);
+
 /** Every rule and the fix-it it hands back — the whole banned list, in one place. */
 const FIX_ITS = {
   "no-date-now": "Date.now() is unavailable - use ctx.now()",
@@ -41,6 +62,11 @@ const FIX_ITS = {
   "no-global-fetch": "fetch() is unavailable - use ctx.fetch(url, { schema })",
   "no-process-env": "process.env is unavailable - use ctx.env.get() / ctx.secret()",
   "no-require": "require() is unavailable - use a relative import; helpers belong in ./lib",
+  "no-gc-globals":
+    "WeakRef/FinalizationRegistry are unavailable - GC timing is not deterministic, so a replay would diverge",
+  "no-locale":
+    "locale-sensitive formatting is unavailable - it reads ambient ICU data and the host timezone; format explicitly (toFixed, toISOString, a plain comparator)",
+  "no-intl": "Intl is unavailable - it reads ambient locale and timezone; format explicitly",
   "no-bare-import":
     "bare imports are not allowed in workflow code - relative imports are bundled; put helpers in ./lib",
 } as const satisfies Record<string, string>;
@@ -119,6 +145,26 @@ export function checkSource(
       report(node, "no-math-random", "Math.random() is not allowed in workflow code");
     } else if (member?.object === "process" && member.property === "env") {
       report(node, "no-process-env", "process.env is not allowed in workflow code");
+    } else if (member?.object === "Intl") {
+      report(node, "no-intl", `Intl.${member.property} is not allowed in workflow code`);
+    }
+
+    // Property name only, like every other rule here: no scope analysis, so a method of
+    // your own called `localeCompare` is still a finding. Renaming it is the cheap cure.
+    if (
+      (ts.isPropertyAccessExpression(node) && LOCALE_METHODS.has(node.name.text)) ||
+      (ts.isElementAccessExpression(node) &&
+        ts.isStringLiteralLike(node.argumentExpression) &&
+        LOCALE_METHODS.has(node.argumentExpression.text))
+    ) {
+      const name = ts.isPropertyAccessExpression(node)
+        ? node.name.text
+        : (node.argumentExpression as ts.StringLiteralLike).text;
+      report(node, "no-locale", `${name}() is not allowed in workflow code`);
+    }
+
+    if (ts.isIdentifier(node) && GC_GLOBALS.has(node.text) && !isDeclarationName(node)) {
+      report(node, "no-gc-globals", `${node.text} is not allowed in workflow code`);
     }
 
     if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "Date") {
@@ -181,6 +227,27 @@ function staticMemberAccess(node: ts.Node): { object: string; property: string }
     return { object: node.expression.text, property: node.argumentExpression.text };
   }
   return undefined;
+}
+
+/**
+ * True when the identifier IS the name being declared (`const WeakRef = …`, a property
+ * key, a parameter). Flagging those would report the declaration rather than a use, and a
+ * workflow is free to name its own things whatever it likes.
+ */
+function isDeclarationName(node: ts.Identifier): boolean {
+  const parent = node.parent as ts.Node | undefined;
+  if (!parent) return false;
+  if (ts.isPropertyAccessExpression(parent) && parent.name === node) return true;
+  if (ts.isPropertyAssignment(parent) && parent.name === node) return true;
+  if (ts.isBindingElement(parent) && parent.propertyName === node) return true;
+  return (
+    (ts.isVariableDeclaration(parent) ||
+      ts.isParameter(parent) ||
+      ts.isFunctionDeclaration(parent) ||
+      ts.isClassDeclaration(parent) ||
+      ts.isImportSpecifier(parent)) &&
+    parent.name === node
+  );
 }
 
 /** Relative imports are bundled and hashed with the script; absolute paths likewise. */

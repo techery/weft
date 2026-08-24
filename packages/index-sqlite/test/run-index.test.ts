@@ -3,7 +3,8 @@
  * different shape: whatever the journals say, the rows agree — and if the rows are
  * ever lost, dropped, or stale, a rebuild restores exactly the same answers.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { readlinkSync } from "node:fs";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -11,6 +12,7 @@ import { MemoryJournalStore } from "@techery/weft-core";
 import { FsJournalStore } from "@techery/weft-store-fs";
 import { afterEach, describe, expect, test } from "vitest";
 import { RunIndex, SCHEMA_VERSION } from "../src/index.ts";
+import { isCorruption } from "../src/run-index.ts";
 import { type RunSpec, readRecords, seedRun, steppingClock } from "./helpers.ts";
 
 const temps: string[] = [];
@@ -319,5 +321,77 @@ describe("persistence", () => {
     const check = new DatabaseSync(dbPath);
     expect(check.prepare("PRAGMA user_version").get()?.["user_version"]).toBe(SCHEMA_VERSION);
     check.close();
+  });
+});
+
+describe("opening a damaged index", () => {
+  const temps: string[] = [];
+  afterEach(async () => {
+    for (const dir of temps.splice(0)) await rm(dir, { recursive: true, force: true });
+  });
+  const tempDb = async (): Promise<string> => {
+    const dir = await mkdtemp(join(tmpdir(), "weft-idx-"));
+    temps.push(dir);
+    return join(dir, "index.sqlite");
+  };
+
+  test("a corrupt file is discarded and rebuilt rather than taking `weft ls` down", async () => {
+    const dbPath = await tempDb();
+    new RunIndex({ dbPath }).close();
+    await writeFile(dbPath, "this is not a database at all");
+
+    // Opening must succeed: the rows are a fold over journals, so losing them is safe.
+    const index = new RunIndex({ dbPath });
+    expect(index.search({})).toEqual([]);
+    index.close();
+  });
+
+  test.skipIf(process.platform !== "linux")(
+    "the corrupt connection is closed before its file is deleted",
+    async () => {
+      // The file opens fine and only the first PRAGMA reports it corrupt, so by the time
+      // recovery runs, this process HOLDS the file open. Unlinking underneath a live
+      // connection fails outright on Windows (EBUSY/EPERM) — turning the repair path into
+      // the hard failure it exists to prevent — and on POSIX leaves the old connection
+      // attached to a deleted inode, recreating its WAL and SHM against a file no longer
+      // at that path.
+      const dbPath = await tempDb();
+      new RunIndex({ dbPath }).close();
+      await writeFile(dbPath, "this is not a database at all");
+
+      const index = new RunIndex({ dbPath });
+      // /proc names what this process still holds; a handle over an unlinked file is
+      // marked "(deleted)". The recovered index's OWN fd is live at the same path, so
+      // that marker is exactly what separates the two.
+      const held = (await readdir("/proc/self/fd")).map((fd) => {
+        try {
+          return readlinkSync(join("/proc/self/fd", fd));
+        } catch {
+          return ""; // the entry closed while we were listing
+        }
+      });
+      const orphans = held.filter((link) => link.startsWith(dbPath) && link.includes("(deleted)"));
+      expect(orphans).toEqual([]);
+
+      expect(index.search({})).toEqual([]);
+      index.close();
+    },
+  );
+
+  test("a busy database is NOT deleted — the file is healthy, someone else is using it", async () => {
+    const dbPath = await tempDb();
+    new RunIndex({ dbPath }).close();
+    const before = await readFile(dbPath);
+
+    // Simulate the transient class: a failure that is not corruption must propagate
+    // rather than destroy a healthy index (and its WAL/SHM) under a live connection.
+    const busy = Object.assign(new Error("database is locked"), { errcode: 5 });
+    expect(isCorruption(busy)).toBe(false);
+    expect(isCorruption(Object.assign(new Error("file is not a database"), { errcode: 26 }))).toBe(true);
+    expect(isCorruption(new Error("database disk image is malformed"))).toBe(true);
+    expect(isCorruption(new Error("EACCES: permission denied"))).toBe(false);
+
+    // The file the healthy open produced is still exactly as it was.
+    expect(await readFile(dbPath)).toEqual(before);
   });
 });

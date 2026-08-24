@@ -1776,21 +1776,22 @@ describe("codex review findings, round 15 (PR #1)", () => {
 });
 
 describe("codex review findings, round 16 (PR #1)", () => {
-  test("a resumed budget knows how many calls its restored spend came from", () => {
+  test("a resumed budget knows how many calls its restored spend came from", async () => {
     // Two prior calls averaged 100 tokens; plenty of budget remains.
     const resumed = new Budget({ tokens: 1_000 });
     resumed.restore(200, 0, 2);
     // With the samples restored, TWO concurrent reservations fit the average.
     // With them lost, the first call counts as an unpriced probe and the second
-    // would be refused despite being easily affordable.
-    const r1 = resumed.reserveCall({ kind: "agent" });
-    const r2 = resumed.reserveCall({ kind: "agent" });
+    // would PARK behind it despite being easily affordable.
+    const r1 = await resumed.reserveCall({ kind: "agent" });
+    const r2 = await resumed.reserveCall({ kind: "agent" });
     r1();
     r2();
-    // The observed-average gate still enforces: a tight remainder refuses.
+    // The observed-average gate still enforces: with nothing in flight to wait for,
+    // a tight remainder refuses rather than parking forever.
     const tight = new Budget({ tokens: 700 });
     tight.restore(600, 0, 2); // avg 300, remaining 100
-    expect(() => tight.reserveCall({ kind: "agent" })).toThrow(/budget/);
+    await expect(tight.reserveCall({ kind: "agent" })).rejects.toThrow(/budget/);
   });
 });
 

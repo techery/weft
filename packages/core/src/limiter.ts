@@ -31,12 +31,36 @@ export class Semaphore {
     });
   }
 
+  /**
+   * Run `fn` holding one permit, released when `fn` settles OR when `signal` aborts,
+   * whichever comes first.
+   *
+   * Releasing only on settlement leaks the permit forever to a step that ignores its
+   * abort: the engine's timeout gives up after a bounded drain and fails the step, but
+   * the zombie keeps the slot. With a small cap — `min(16, cpus - 2)` is 2 on a
+   * four-core box — a couple of unresponsive provider calls wedge the whole run, and no
+   * timeout or cancellation can recover it. Freeing on abort can briefly exceed the cap
+   * by the number of zombies, which is the right trade: the engine has already declared
+   * their work unobservable, and a bounded overshoot beats a permanent deadlock.
+   */
   async with<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     const release = await this.acquire(signal);
+    let released = false;
+    const free = () => {
+      if (released) return;
+      released = true;
+      release();
+    };
+    // `acquire` resolves on a microtask even when a permit is free, so an abort raised
+    // between taking the permit and subscribing would be missed entirely — and that is
+    // the common case, not a corner: the caller aborts as soon as it gives up.
+    if (signal?.aborted) free();
+    else signal?.addEventListener("abort", free, { once: true });
     try {
       return await fn();
     } finally {
-      release();
+      free();
+      signal?.removeEventListener("abort", free);
     }
   }
 

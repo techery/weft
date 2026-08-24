@@ -30,6 +30,10 @@
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"
+    },
+    "./conformance": {
+      "types": "./src/conformance.ts",
+      "default": "./src/conformance.ts"
     }
   },
   "files": [
@@ -46,6 +50,10 @@
       ".": {
         "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
+      },
+      "./conformance": {
+        "types": "./dist/conformance.d.ts",
+        "default": "./dist/conformance.js"
       }
     }
   },
@@ -62,5 +70,13 @@
   },
   "devDependencies": {
     "@types/picomatch": "^4.0.2"
+  },
+  "peerDependencies": {
+    "vitest": ">=3"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
   }
 }

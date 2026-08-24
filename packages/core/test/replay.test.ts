@@ -1,4 +1,5 @@
 import type { JournalRecord } from "@techery/weft-core";
+import { mock } from "@techery/weft-provider-mock";
 import { defineWorkflow, z } from "@techery/weft-sdk";
 import { afterAll, describe, expect, test } from "vitest";
 import { cleanupRepos, reopen, tempDir, testEngine } from "./helpers.ts";
@@ -307,5 +308,380 @@ describe("replay & edit-tolerant resume", () => {
     const h2 = await t3.engine.resume(h1.runId, { def: parent });
     expect(await h2.result).toEqual({ ok: true });
     expect(t3.builder.calls).toHaveLength(0);
+  });
+});
+
+describe("replay identity: a cache hit must not lie", () => {
+  const Colours = z.object({ before: z.string(), after: z.string() });
+  const Answer = z.object({ answer: z.string() });
+
+  /** The slice of `ctx` the delegated-helper tests use, once, instead of at every cast. */
+  type Delegated = {
+    agent(prompt: string, opts: unknown): Promise<{ answer: string }>;
+    human: { approve(opts: unknown): Promise<unknown> };
+  };
+
+  /**
+   * Two probes ask the same question either side of a change to the world. Their prompt
+   * and schema are identical and neither carries a `key`, so the journal cannot tell
+   * them apart by content. Deleting the first slides the second into seq 1 — where the
+   * fast path would hand it the deleted probe's PRE-change answer.
+   */
+  test("deleting one of two identical keyless steps re-runs rather than serving the stale entry", async () => {
+    let world = "RED";
+    const both = defineWorkflow(
+      { name: "world", description: "world", input: z.object({}), output: Colours },
+      async (ctx) => {
+        const before = await ctx.agent("what colour is the build?", { schema: Answer });
+        world = "GREEN";
+        const after = await ctx.agent("what colour is the build?", { schema: Answer });
+        await ctx.human.approve({ action: "ship?" });
+        return { before: before.answer, after: after.answer };
+      },
+    );
+    const onlyAfter = defineWorkflow(
+      { name: "world", description: "world", input: z.object({}), output: Colours },
+      async (ctx) => {
+        world = "GREEN";
+        const after = await ctx.agent("what colour is the build?", { schema: Answer });
+        await ctx.human.approve({ action: "ship?" });
+        return { before: "n/a", after: after.answer };
+      },
+    );
+
+    const answerWorld = () => mock().on({}, () => ({ answer: world }));
+    const t1 = testEngine({ builder: answerWorld() });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(both, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    expect(await h1.result).toEqual({ before: "RED", after: "GREEN" });
+
+    world = "GREEN";
+    const t2 = reopen(t1, { builder: answerWorld() });
+    const h2 = await t2.engine.resume(h1.runId, { def: onlyAfter });
+    const o2 = await h2.outcome();
+    if (o2.status === "waiting_for_human") {
+      await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    }
+    // The pre-change "RED" must not survive the edit.
+    expect((await h2.result) as { after: string }).toMatchObject({ after: "GREEN" });
+
+    const recs = await records(t2.journal, h1.runId);
+    expect(
+      recs.some((r) => r.ev.type === "replay.diverged" && /ambiguous keyless identity/.test(r.ev.reason)),
+    ).toBe(true);
+  });
+
+  /**
+   * The body hash sees `def.run`'s own source and nothing else, so a body that delegates
+   * — `async (ctx) => steps(ctx)` — reads identical no matter how the module behind
+   * `steps` is edited. The bundle hash is what covers that module, and `positionsTrusted`
+   * folds both in.
+   */
+  test("an edit inside a delegated module is caught by the bundle hash", async () => {
+    let world = "RED";
+    let steps: (ctx: never) => Promise<{ before: string; after: string }>;
+    const bothSteps = async (ctx: never) => {
+      const c = ctx as unknown as Delegated;
+      const before = await c.agent("what colour is the build?", { schema: Answer });
+      world = "GREEN";
+      const after = await c.agent("what colour is the build?", { schema: Answer });
+      await c.human.approve({ action: "ship?" });
+      return { before: before.answer, after: after.answer };
+    };
+    const laterStepsOnly = async (ctx: never) => {
+      const c = ctx as unknown as Delegated;
+      world = "GREEN";
+      const after = await c.agent("what colour is the build?", { schema: Answer });
+      await c.human.approve({ action: "ship?" });
+      return { before: "n/a", after: after.answer };
+    };
+    // ONE definition across both runs: `def.run.toString()` is byte-identical, so the
+    // body hash cannot tell the two versions apart. Only the bundle hash can.
+    const def = defineWorkflow(
+      { name: "delegated", description: "delegated", input: z.object({}), output: Colours },
+      async (ctx) => steps(ctx as never),
+    );
+
+    const answerWorld = () => mock().on({}, () => ({ answer: world }));
+    steps = bothSteps;
+    const t1 = testEngine({ builder: answerWorld() });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(def, { input: {}, cwd, defHash: "bundle-v1" });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    expect(await h1.result).toEqual({ before: "RED", after: "GREEN" });
+
+    // The helper module changed — one probe deleted — and the host's bundle hash moved
+    // with it, which is the only signal available.
+    steps = laterStepsOnly;
+    world = "GREEN";
+    const t2 = reopen(t1, { builder: answerWorld() });
+    const h2 = await t2.engine.resume(h1.runId, { def, defHash: "bundle-v2" });
+    const o2 = await h2.outcome();
+    if (o2.status === "waiting_for_human") {
+      await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    }
+    expect((await h2.result) as { after: string }).toMatchObject({ after: "GREEN" });
+    const recs = await records(t2.journal, h1.runId);
+    expect(
+      recs.some((r) => r.ev.type === "replay.diverged" && /ambiguous keyless identity/.test(r.ev.reason)),
+    ).toBe(true);
+  });
+
+  test("an unchanged bundle hash still serves both identical steps for free", async () => {
+    // The other half: the stamp must not make every resume re-run. Same script, same
+    // bundle hash, two identical keyless steps — nothing re-dispatches.
+    let calls = 0;
+    const def = defineWorkflow(
+      { name: "twice-hashed", description: "twice", input: z.object({}), output: Colours },
+      async (ctx) => {
+        const a = await ctx.agent("same question", { schema: Answer });
+        const b = await ctx.agent("same question", { schema: Answer });
+        await ctx.human.approve({ action: "ship?" });
+        return { before: a.answer, after: b.answer };
+      },
+    );
+    const builder = () =>
+      mock().on({}, () => {
+        calls++;
+        return { answer: "same" };
+      });
+    const t1 = testEngine({ builder: builder() });
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir(), defHash: "bundle-v1" });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    await h1.result;
+    expect(calls).toBe(2);
+
+    const t2 = reopen(t1, { builder: builder() });
+    const h2 = await t2.engine.resume(h1.runId, { def, defHash: "bundle-v1" });
+    const o2 = await h2.outcome();
+    if (o2.status === "waiting_for_human") {
+      await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    }
+    await h2.result;
+    expect(calls).toBe(2); // nothing re-dispatched
+  });
+
+  /**
+   * A child run has its own journal, its own replay and its own call sites to move, so it
+   * needs the same version stamp the root gets. It used to journal only its name and
+   * default to trusting positions, which handed the second of two identical keyless
+   * probes the deleted first one's answer — inside any `ctx.workflow` whose definition
+   * changed between the runs.
+   */
+  test("a child workflow's own edit re-runs its ambiguous keyless step", async () => {
+    let world = "RED";
+    const childBoth = defineWorkflow(
+      { name: "probe", description: "probe", input: z.object({}), output: Colours },
+      async (ctx) => {
+        const before = await ctx.agent("what colour is the build?", { schema: Answer });
+        world = "GREEN";
+        const after = await ctx.agent("what colour is the build?", { schema: Answer });
+        await ctx.human.approve({ action: "child gate" });
+        return { before: before.answer, after: after.answer };
+      },
+    );
+    const childLater = defineWorkflow(
+      { name: "probe", description: "probe", input: z.object({}), output: Colours },
+      async (ctx) => {
+        world = "GREEN";
+        const after = await ctx.agent("what colour is the build?", { schema: Answer });
+        await ctx.human.approve({ action: "child gate" });
+        return { before: "n/a", after: after.answer };
+      },
+    );
+    const parentOf = (child: typeof childBoth) =>
+      defineWorkflow(
+        { name: "outer", description: "outer", input: z.object({}), output: Colours },
+        async (ctx) => (await ctx.workflow(child, {})) as { before: string; after: string },
+      );
+
+    const answerWorld = () => mock().on({}, () => ({ answer: world }));
+    const t1 = testEngine({ builder: answerWorld() });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(parentOf(childBoth), { input: {}, cwd });
+    // The child suspends on its own gate; the parent surfaces it.
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    const runs = await t1.journal.list();
+    const childRun = runs.find((r) => r.parentRunId === h1.runId);
+    expect(childRun).toBeDefined();
+    await t1.engine.answer(childRun!.runId, o1.pending[0]!.id, { approved: true });
+    expect(await h1.result).toEqual({ before: "RED", after: "GREEN" });
+
+    // The CHILD's definition changed; the parent's did not.
+    world = "GREEN";
+    const t2 = reopen(t1, { builder: answerWorld() });
+    const h2 = await t2.engine.resume(h1.runId, { def: parentOf(childLater) });
+    const o2 = await h2.outcome();
+    if (o2.status === "waiting_for_human") {
+      await t2.engine.answer(childRun!.runId, o2.pending[0]!.id, { approved: true });
+    }
+    // The pre-change "RED" must not survive the child's edit either.
+    expect((await h2.result) as { after: string }).toMatchObject({ after: "GREEN" });
+    const childRecs = await records(t2.journal, childRun!.runId);
+    expect(
+      childRecs.some(
+        (r) => r.ev.type === "replay.diverged" && /ambiguous keyless identity/.test(r.ev.reason),
+      ),
+    ).toBe(true);
+  });
+
+  test("a registry resume asks the registry for the current bundle hash", async () => {
+    // A run started by NAME journals the host's hash, but a resume by name has no host in
+    // the loop to re-supply it: persistedDefOf returns undefined for registry runs and the
+    // hosts pass no defHash. The check then fell back to the body hash alone — blind to an
+    // edit inside a module the workflow delegates to. The registry is the one thing that
+    // knows both the definition and its current version, so the engine asks it.
+    let world = "RED";
+    let steps: (ctx: never) => Promise<{ before: string; after: string }>;
+    const bothSteps = async (ctx: never) => {
+      const c = ctx as unknown as Delegated;
+      const before = await c.agent("what colour is the build?", { schema: Answer });
+      world = "GREEN";
+      const after = await c.agent("what colour is the build?", { schema: Answer });
+      await c.human.approve({ action: "ship?" });
+      return { before: before.answer, after: after.answer };
+    };
+    const laterStepsOnly = async (ctx: never) => {
+      const c = ctx as unknown as Delegated;
+      world = "GREEN";
+      const after = await c.agent("what colour is the build?", { schema: Answer });
+      await c.human.approve({ action: "ship?" });
+      return { before: "n/a", after: after.answer };
+    };
+    const def = defineWorkflow(
+      { name: "registered", description: "registered", input: z.object({}), output: Colours },
+      async (ctx) => steps(ctx as never),
+    );
+    // A registry that answers by name and reports the version of what it just handed back.
+    let bundle = "bundle-v1";
+    const registry = {
+      get: async () => def,
+      hashOf: async () => bundle,
+    };
+
+    const answerWorld = () => mock().on({}, () => ({ answer: world }));
+    steps = bothSteps;
+    const t1 = testEngine({ builder: answerWorld(), registry });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(def, { input: {}, cwd, defHash: bundle });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    expect(await h1.result).toEqual({ before: "RED", after: "GREEN" });
+
+    // The helper module changed; the registry re-bundles and reports the new version.
+    steps = laterStepsOnly;
+    bundle = "bundle-v2";
+    world = "GREEN";
+    // No `def` and no `defHash` — a registry resume, exactly as the hosts issue it.
+    const t2 = reopen(t1, { builder: answerWorld(), registry });
+    const h2 = await t2.engine.resume(h1.runId);
+    const o2 = await h2.outcome();
+    if (o2.status === "waiting_for_human") {
+      await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    }
+    expect((await h2.result) as { after: string }).toMatchObject({ after: "GREEN" });
+  });
+
+  test("a child inherits the root's bundle disagreement", async () => {
+    // The child has only its own body hash: no host resolved it, so there is no bundle
+    // stamp at that level, and a child body that delegates reads identical however the
+    // helper is edited. The ROOT saw the bundle move — and it is the same bundle, holding
+    // this child's call sites too — so the child must start from that answer, not `true`.
+    let world = "RED";
+    let steps: (ctx: never) => Promise<{ before: string; after: string }>;
+    const childBoth = async (ctx: never) => {
+      const c = ctx as unknown as Delegated;
+      const before = await c.agent("what colour is the build?", { schema: Answer });
+      world = "GREEN";
+      const after = await c.agent("what colour is the build?", { schema: Answer });
+      await c.human.approve({ action: "child gate" });
+      return { before: before.answer, after: after.answer };
+    };
+    const childLater = async (ctx: never) => {
+      const c = ctx as unknown as Delegated;
+      world = "GREEN";
+      const after = await c.agent("what colour is the build?", { schema: Answer });
+      await c.human.approve({ action: "child gate" });
+      return { before: "n/a", after: after.answer };
+    };
+    // ONE child definition and ONE parent definition across both runs: every body hash in
+    // the tree is byte-identical, and the root's bundle hash is the only moving part.
+    const child = defineWorkflow(
+      { name: "probe-delegated", description: "probe", input: z.object({}), output: Colours },
+      async (ctx) => steps(ctx as never),
+    );
+    const parent = defineWorkflow(
+      { name: "outer-delegated", description: "outer", input: z.object({}), output: Colours },
+      async (ctx) => (await ctx.workflow(child, {})) as { before: string; after: string },
+    );
+
+    const answerWorld = () => mock().on({}, () => ({ answer: world }));
+    steps = childBoth;
+    const t1 = testEngine({ builder: answerWorld() });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(parent, { input: {}, cwd, defHash: "bundle-v1" });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    const runs = await t1.journal.list();
+    const childRun = runs.find((r) => r.parentRunId === h1.runId);
+    expect(childRun).toBeDefined();
+    await t1.engine.answer(childRun!.runId, o1.pending[0]!.id, { approved: true });
+    expect(await h1.result).toEqual({ before: "RED", after: "GREEN" });
+
+    steps = childLater;
+    world = "GREEN";
+    const t2 = reopen(t1, { builder: answerWorld() });
+    const h2 = await t2.engine.resume(h1.runId, { def: parent, defHash: "bundle-v2" });
+    const o2 = await h2.outcome();
+    if (o2.status === "waiting_for_human") {
+      await t2.engine.answer(childRun!.runId, o2.pending[0]!.id, { approved: true });
+    }
+    expect((await h2.result) as { after: string }).toMatchObject({ after: "GREEN" });
+  });
+
+  test("an unchanged resume of the same two identical steps still costs zero calls", async () => {
+    let calls = 0;
+    const def = defineWorkflow(
+      { name: "twice", description: "twice", input: z.object({}), output: Colours },
+      async (ctx) => {
+        const before = await ctx.agent("what colour is the build?", { schema: Answer });
+        const after = await ctx.agent("what colour is the build?", { schema: Answer });
+        await ctx.human.approve({ action: "ship?" });
+        return { before: before.answer, after: after.answer };
+      },
+    );
+    const counting = () =>
+      mock().on({}, () => {
+        calls++;
+        return { answer: "RED" };
+      });
+
+    const t1 = testEngine({ builder: counting() });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    await h1.result;
+    expect(calls).toBe(2);
+
+    const t2 = reopen(t1, { builder: counting() });
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status === "waiting_for_human") {
+      await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    }
+    await h2.result;
+    // Edit-tolerant replay is unaffected when the script did not change.
+    expect(calls).toBe(2);
   });
 });

@@ -45,20 +45,27 @@ export function testEngine(
 /** Fresh engine over the SAME stores — simulates a new process for resume tests. */
 export function reopen(
   prev: TestEngine,
-  opts: { config?: EngineConfigInput; registry?: WorkflowRegistry; builder?: MockAgentBuilder } = {},
+  opts: {
+    config?: EngineConfigInput;
+    registry?: WorkflowRegistry;
+    builder?: MockAgentBuilder;
+    /** Stand in for a blob store whose files did not survive (a pruned cache, a partial restore). */
+    blobs?: MemoryBlobStore;
+  } = {},
 ): TestEngine {
   const builder = opts.builder ?? mock();
+  const blobs = opts.blobs ?? prev.blobs;
   const providers = new ProviderRegistry();
   providers.register(builder.provider("claude"));
   providers.register(builder.provider("codex"));
   const engine = new Engine({
     journal: prev.journal,
-    blobs: prev.blobs,
+    blobs,
     providers,
     config: opts.config ?? {},
     ...(opts.registry ? { registry: opts.registry } : {}),
   });
-  return { engine, journal: prev.journal, blobs: prev.blobs, builder };
+  return { engine, journal: prev.journal, blobs, builder };
 }
 
 const cleanups: Array<() => Promise<void>> = [];

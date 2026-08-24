@@ -54,6 +54,11 @@ export interface MockRuleOptions {
   usage?: Partial<Usage>;
   /** Files written into the request cwd before responding (write-step fixtures). */
   writes?: Record<string, string>;
+  /**
+   * What the provider reports it touched. Defaults to the `writes` keys. Set it
+   * explicitly to model a path capture cannot see — an absolute one, or a `../` escape.
+   */
+  filesTouched?: string[];
   delayMs?: number;
   /** Consume the rule after N matches (default: unlimited). */
   times?: number;
@@ -175,9 +180,11 @@ export class MockProvider implements AgentProvider {
         : rule.respond;
     const sessionId = `mock-${this.id}-${++this.sessionCounter}`;
     this.sessions.set(sessionId, req);
+    const filesTouched = rule.opts.filesTouched ?? Object.keys(rule.opts.writes ?? {});
     return {
       output,
       usage: { input: 100, output: 50, ...rule.opts.usage },
+      ...(filesTouched.length > 0 ? { filesTouched } : {}),
       sessionId,
       transcript: `mock transcript for ${req.key ?? req.label}\nprompt: ${req.prompt.slice(0, 500)}`,
     };
