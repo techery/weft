@@ -245,12 +245,11 @@ async function pendingAcross(weft: Weft, state: RunState, seen: Set<string>): Pr
   for (const { childRunId } of state.children) {
     if (seen.has(childRunId)) continue;
     seen.add(childRunId);
-    let child: RunState;
-    try {
-      child = await stateOf(weft, childRunId);
-    } catch {
-      continue; // scheduled but never journaled
-    }
+    // Only confirmed ABSENCE is skippable (a child scheduled but never
+    // journaled). An unreadable child journal must surface instead of /pending
+    // silently omitting the child's outstanding approval.
+    if (!(await weft.engine.exists(childRunId))) continue;
+    const child = await stateOf(weft, childRunId);
     if (child.status === "complete" || child.status === "failed" || child.status === "cancelled") continue;
     out.push(...(await pendingAcross(weft, child, seen)));
   }

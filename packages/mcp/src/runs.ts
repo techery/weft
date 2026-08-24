@@ -135,12 +135,12 @@ async function pendingAcross(
   for (const { childRunId } of state.children) {
     if (seen.has(childRunId)) continue;
     seen.add(childRunId);
-    let child: RunState;
-    try {
-      child = await weft.engine.state(childRunId);
-    } catch {
-      continue; // scheduled but never journaled
-    }
+    // Only confirmed ABSENCE is skippable (a child scheduled but never
+    // journaled). A journal that exists but cannot be read must surface —
+    // swallowing it here made weft_wait report "running" forever over a child
+    // whose outstanding approval simply could not be loaded.
+    if (!(await weft.engine.exists(childRunId))) continue;
+    const child = await weft.engine.state(childRunId);
     if (terminalOf(child)) continue;
     const deep = await pendingAcross(weft, child, seen);
     if (deep) return deep;

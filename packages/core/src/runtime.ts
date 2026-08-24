@@ -1126,11 +1126,24 @@ export class RunRuntime {
         if (this.fencedWith || this.detachedFromHost) return;
         let count = 0;
         let standing = false;
+        let terminal = false;
         for await (const rec of this.host.journal.read(this.runId)) {
           count++;
           if (rec.ev.type === "human.answered" && rec.ev.id === id) standing = true;
           else if (rec.ev.type === "human.rejected" && rec.ev.id === id) standing = false;
+          else if (
+            rec.ev.type === "run.completed" ||
+            rec.ev.type === "run.failed" ||
+            rec.ev.type === "run.cancelled"
+          ) {
+            terminal = true;
+          }
         }
+        // A TERMINAL event landed between this deadline firing and its append
+        // (an external process's cancel): abandon the timeout answer — same
+        // contract as Engine.answer()'s CAS. Appending after run.cancelled
+        // would resolveAnswer() into workflow code already past its death.
+        if (terminal) return;
         if (standing) return; // a real answer won this request
         if (await this.host.journal.appendIf(this.runId, count, [event])) break;
       }

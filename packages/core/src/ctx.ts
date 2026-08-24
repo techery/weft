@@ -1623,15 +1623,30 @@ export function buildCtx(rt: RunRuntime): Ctx {
             // provenance is the whole justification: on a first execution an
             // existing name is someone else's branch, and quietly checking it
             // out (ignoring `from`) would land later commits on it — let the
-            // plain create fail on the collision instead.
-            if (io.reExecuting && opts?.checkout && (await gitHandle.revParse(name)) !== null) {
-              await gitHandle.checkout(name);
-              return;
+            // plain create fail on the collision instead. The probe names the
+            // EXACT namespace: an unqualified name also resolves a same-named
+            // TAG, and recovering through one would check the tag out DETACHED
+            // instead of recreating the requested branch.
+            if (io.reExecuting && opts?.checkout) {
+              const branchRef = await gitHandle.raw(
+                ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`],
+                { allowFailure: true },
+              );
+              if (branchRef.exitCode === 0) {
+                await gitHandle.checkout(name);
+                return;
+              }
             }
             await gitHandle.branchCreate(name, opts ?? {});
           },
           async () => {
-            if ((await gitHandle.revParse(name)) === null) return false;
+            // refs/heads exactly: a same-named tag must not vouch for a branch
+            // deleted while the run was suspended.
+            const branchRef = await gitHandle.raw(
+              ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`],
+              { allowFailure: true },
+            );
+            if (branchRef.exitCode !== 0) return false;
             if (!opts?.checkout) return true;
             // create-and-checkout only holds while the tree is still ON the
             // branch (mirrors the checkout verifier): the ref surviving an

@@ -4200,3 +4200,77 @@ describe("codex review findings, round 59 (PR #1)", () => {
     }
   });
 });
+
+describe("codex review findings, round 60 (PR #1)", () => {
+  test("a deadline losing to a terminal event abandons the timeout answer", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = testEngine();
+      const def = defineWorkflow(
+        { name: "deadcas", description: "d", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+        async (ctx) => {
+          const go = await ctx.human.approve({
+            action: "soon?",
+            timeout: "1s",
+            onTimeout: { default: { approved: false } },
+          });
+          return { ok: go.approved };
+        },
+      );
+      const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+      h.result.catch(() => undefined);
+      const o = await h.outcome();
+      if (o.status !== "waiting_for_human") throw new Error("expected suspension");
+      // An EXTERNAL process cancels the run while the owner's deadline is
+      // armed. The deadline's CAS fold reads the larger journal — it must see
+      // the terminal event and abandon, exactly like Engine.answer(): a
+      // timeout answer appended after run.cancelled resumes dead workflow code.
+      await t.journal.append(h.runId, [{ type: "run.cancelled" }]);
+      await vi.advanceTimersByTimeAsync(1_100);
+      const recs = await records(t.journal, h.runId);
+      expect(recs.some((r) => r.ev.type === "human.answered")).toBe(false);
+      await t.engine.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("branch recovery probes refs/heads, never a same-named tag", async () => {
+    const t1 = testEngine();
+    const cwd = await tempRepo({ "a.txt": "base\n" });
+    // A LEGAL tag shares the name before the run ever starts.
+    await execa("git", ["tag", "release"], { cwd });
+    const def = defineWorkflow(
+      { name: "brns", description: "b", input: z.object({}), output: z.object({ current: z.string() }) },
+      async (ctx) => {
+        await ctx.git.branch.create("release", { checkout: true });
+        await ctx.human.ask({ question: "go on?", schema: z.object({ go: z.boolean() }) });
+        const b = await ctx.git.branches();
+        return { current: b.current };
+      },
+    );
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the ask");
+    await t1.engine.shutdown();
+    // The BRANCH is deleted while the run is suspended; the tag remains. An
+    // unqualified probe resolves the tag and recovery would check it out
+    // DETACHED — later live commits would land on no branch at all.
+    await execa("git", ["checkout", "main"], { cwd });
+    await execa("git", ["branch", "-D", "release"], { cwd });
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the ask again");
+    await t2.engine.answer(h1.runId, o2.pending[0]?.id ?? "", { go: true });
+    const result = (await h2.result) as { current: string };
+    // Beside a same-named tag git abbreviates the branch as "heads/release"
+    // to disambiguate — either spelling is the branch, never the tag.
+    expect(["release", "heads/release"]).toContain(result.current);
+    // symbolic-ref FAILS on a detached HEAD — the exact symptom of recovering
+    // through the tag — and must name the recreated branch.
+    const symbolic = await execa("git", ["symbolic-ref", "HEAD"], { cwd });
+    expect(symbolic.stdout.trim()).toBe("refs/heads/release");
+  });
+});

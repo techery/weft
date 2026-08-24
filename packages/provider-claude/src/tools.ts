@@ -413,13 +413,18 @@ export function mutatesSharedGitMetadata(command: string): boolean {
   const resolved = command.replace(/\\\r?\n/g, "").replace(/[\\'"]/g, "");
   for (const raw of resolved.replace(/\d*>&\d+/g, " ").split(/\|\||&&|[;|\n&]/)) {
     const words = raw.trim().split(/\s+/);
-    let i = 0;
-    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] as string)) i++;
-    const head = words[i];
-    if (head === undefined) continue;
-    if ((head.split("/").pop() ?? head) !== "git") continue;
-    const sub = gitSubcommandOf(words.slice(i));
-    if (sub !== undefined && SHARED_GIT_METADATA_SUBCOMMANDS.has(sub)) return true;
+    // ANY position, not just the segment head: wrappers re-execute their tail
+    // (`command git branch x`, `env git branch x`, `sh -c git branch x` once
+    // quotes resolve, nice/nohup/timeout/xargs chains), and unwrapping each
+    // wrapper's own option grammar is a losing game. Scanning every word can
+    // over-deny an argument that merely LOOKS like git (`grep git config
+    // README`) — in a strict scope that costs one turn, the safe direction.
+    for (let j = 0; j < words.length; j++) {
+      const w = words[j] as string;
+      if (w !== "git" && !w.endsWith("/git")) continue;
+      const sub = gitSubcommandOf(words.slice(j));
+      if (sub !== undefined && SHARED_GIT_METADATA_SUBCOMMANDS.has(sub)) return true;
+    }
   }
   return false;
 }

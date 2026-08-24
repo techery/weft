@@ -545,6 +545,13 @@ describe("the tool gate", () => {
       "git notes add -m x",
       "git fetch origin",
       "git pull origin main",
+      // Wrappers re-execute their tail: the metadata screen must see through
+      // them, not just the segment's first word.
+      "command git branch leaked",
+      "env git branch leaked",
+      "sh -c 'git branch leaked'",
+      "nice -n 10 git config weft.marker changed",
+      "nohup git fetch origin",
     ]) {
       const denial = await ask(options, "Bash", { command });
       expect(denial.behavior, command).toBe("deny");

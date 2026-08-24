@@ -1563,6 +1563,15 @@ export class Engine implements EngineHost {
     return this.journal.list(filter);
   }
 
+  /**
+   * True when the run has at least one journal record. Hosts walking recorded
+   * children use this to tell "scheduled but never journaled" (skippable) from
+   * "journaled but unreadable" (a storage failure that must surface).
+   */
+  async exists(runId: string): Promise<boolean> {
+    return this.journal.exists(runId);
+  }
+
   watch(runId: string, opts?: { fromIndex?: number; signal?: AbortSignal }): AsyncIterable<JournalRecord> {
     return this.journal.watch(runId, opts);
   }
