@@ -113,6 +113,24 @@ Found and fixed by the follow-up audit, in rough order of severity:
   bypassed the validation production performs), and a flaky assertion on git's *optional*
   index refresh.
 
+A Codex deep review of the resulting PR found four more, all in the fixes above, all
+valid:
+
+- **`cancel()`'s bounded drain left a zombie.** `fence()` cannot settle the promise
+  `def.run` is awaiting, and both cleanup paths hang off it — so a "cancelled" run stayed
+  active, renewed its claim forever, and handed every later `resume()` the same pending
+  promise. The execution is now retired independently; the lease is deliberately *not*
+  released, because the zombie may still write.
+- **Rejecting unknown CLI input broke open schemas.** `.passthrough()` and `.catchall()`
+  have a `shape` too, so checking against it refused the very fields such a workflow
+  exists to receive. The check now asks what validation *did* — which keys came back —
+  rather than what the shape lists, which also makes it vendor-neutral.
+- **Removing a registered submodule read as an accidental nested repository.** The
+  gitlink check matched on `oldMode`, and a deleted submodule is already gone from
+  `.gitmodules`; only newly introduced gitlinks are refused now.
+- **A busy SQLite index was deleted as if corrupt.** `SQLITE_BUSY`, `EACCES` and other
+  transient failures now propagate; only verified corruption discards the file.
+
 ## Measured baseline
 
 ```

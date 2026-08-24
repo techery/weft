@@ -1487,6 +1487,20 @@ export class Engine implements EngineHost {
             runId,
           }),
         );
+        // Retire the execution independently of the promise nothing can settle.
+        // `fence()` cannot resolve what `def.run` is already awaiting, so `active.result`
+        // stays pending forever — and both cleanup paths hang off it: launch()'s chain
+        // never drops the active entry, and drive()'s finally never stops lease renewal.
+        // Left alone, a "cancelled" run renews its claim indefinitely, tells other
+        // processes it is still active, and hands every later resume() in THIS engine
+        // the same hung promise. Dropping the entry makes a resume replay from the
+        // journal, which is where the cancellation is recorded.
+        active.tail?.abort();
+        if (active.leaseTimer) clearInterval(active.leaseTimer);
+        if (this.active.get(runId) === active) this.active.delete(runId);
+        // The lease is NOT released: the zombie may still be writing, and handing the
+        // run to another process while it does is worse than waiting out the claim's
+        // TTL. shutdown() takes the same position for the same reason.
       }
       return;
     }

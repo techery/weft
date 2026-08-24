@@ -92,14 +92,18 @@ export class RunIndex {
       this.db = new DatabaseSync(opts.dbPath);
       this.migrate();
     } catch (err) {
-      // Nothing here is a source of truth: every row is a fold over a journal, so
-      // discarding the file is always safe — and refusing to open is not, because a
-      // corrupt index would take `weft ls` down with it and there is no other repair
-      // path. A truncated or garbage file is deleted and rebuilt from scratch. An
-      // in-memory database has nothing to delete, so its failure is genuine.
-      if (opts.dbPath === ":memory:") throw err;
+      // Nothing here is a source of truth — every row is a fold over a journal — so
+      // discarding a CORRUPT file is safe, and refusing to open is not: it takes
+      // `weft ls` down with it and there is no other repair path.
+      //
+      // Corruption only. A lock contention (SQLITE_BUSY / SQLITE_LOCKED) or a transient
+      // I/O or permission failure means the database is fine and someone else is using
+      // it; deleting it there would destroy a healthy index, and its WAL and SHM out
+      // from under a live connection. Those propagate. An in-memory database has nothing
+      // to delete either way.
+      if (opts.dbPath === ":memory:" || !isCorruption(err)) throw err;
       rmSync(opts.dbPath, { force: true });
-      // SQLite's sidecars belong to the file we just discarded.
+      // SQLite's sidecars belong to the file just discarded.
       rmSync(`${opts.dbPath}-wal`, { force: true });
       rmSync(`${opts.dbPath}-shm`, { force: true });
       this.db = new DatabaseSync(opts.dbPath);
@@ -342,4 +346,20 @@ function numberOf(value: unknown): number {
 /** LIKE wildcards in user text are literal; the statement declares `\` as the escape. */
 function escapeLike(text: string): string {
   return text.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
+/**
+ * Whether an open/migrate failure means the FILE is unusable, as opposed to busy or
+ * briefly unreadable. `node:sqlite` surfaces the sqlite result code on `errcode` where it
+ * can; the message check covers builds and paths that do not.
+ *
+ * SQLITE_NOTADB (26) and SQLITE_CORRUPT (11) are the two that say "this is not a database
+ * I can read". Anything else — SQLITE_BUSY, SQLITE_LOCKED, EACCES, EIO — is a condition
+ * that passes, and the file must survive it.
+ */
+export function isCorruption(err: unknown): boolean {
+  const code = (err as { errcode?: unknown })?.errcode;
+  if (typeof code === "number" && (code === 11 || code === 26)) return true;
+  const message = err instanceof Error ? err.message.toLowerCase() : "";
+  return message.includes("not a database") || message.includes("malformed") || message.includes("corrupt");
 }

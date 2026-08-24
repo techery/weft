@@ -59,6 +59,22 @@ describe("nested git repositories", () => {
     );
   });
 
+  test("removing a registered submodule is not mistaken for one", async () => {
+    // A deleted submodule shows oldMode 160000 and is already gone from the staged
+    // .gitmodules, so matching on oldMode refused the whole capture.
+    const inner = await initRepo({ "lib.ts": "export const lib = 1;\n" });
+    const repo = await initRepo({ "README.md": "x\n" });
+    await git(repo, "-c", "protocol.file.allow=always", "submodule", "add", inner, "vendor");
+    await git(repo, "commit", "-m", "add submodule");
+
+    const wt = await worktreeOf(repo);
+    await git(wt, "-c", "protocol.file.allow=always", "submodule", "deinit", "-f", "vendor");
+    await git(wt, "rm", "-f", "vendor");
+
+    const captured = await capturePatch({ worktreePath: wt, alsoInclude: ["**"] });
+    expect(captured.files).toContain("vendor");
+  });
+
   test("an ordinary directory still captures its files", async () => {
     const repo = await initRepo({ "README.md": "x\n" });
     const wt = await worktreeOf(repo);

@@ -16,6 +16,7 @@ import {
   type Weft,
   type WorkflowDefinition,
 } from "@techery/weft-host";
+import { validateSchema } from "@techery/weft-sdk";
 import { Command } from "commander";
 import pc from "picocolors";
 import { allowBareOf, openWeft, parseReuse } from "../context.ts";
@@ -45,7 +46,7 @@ export function runCommand(io: CliIo): Command {
       try {
         const input = { ...parseArgsJson(opts.args), ...parseDynamicFlags(cmd.args.slice(1)) };
         const { def, name, hash, code } = await resolveRef(weft, ref, io);
-        rejectUnknownInput(input, def, name);
+        await rejectUnknownInput(input, def, name);
         const reuse = parseReuse(opts.reuse);
         const budget = opts.budget === undefined ? undefined : parseBudget(opts.budget);
 
@@ -111,26 +112,44 @@ async function resolveRef(weft: Weft, ref: string, io: CliIo): Promise<ResolvedR
 }
 
 /**
- * Refuse an input field the workflow does not declare.
+ * Refuse an input field the workflow's schema silently drops.
  *
  * Dynamic flags accept any `--name value`, and a Zod object strips what it does not know,
  * so `weft run review --basse release-2.0` used to review `main` and say nothing. Every
  * flag a person types is a decision about what this run costs; a typo has to be a
  * refusal, not a default.
+ *
+ * The test is what the schema DID, not what its shape lists. An open schema —
+ * `.passthrough()`, `.loose()`, `.catchall(…)` — has a `shape` too, and reading that
+ * would reject the very fields such a workflow exists to receive. Validating and asking
+ * which keys came back out answers the real question for any Standard Schema, without
+ * reaching into one vendor's internals.
  */
-function rejectUnknownInput(input: Record<string, unknown>, def: WorkflowDefinition, name: string): void {
+export async function rejectUnknownInput(
+  input: Record<string, unknown>,
+  def: WorkflowDefinition,
+  name: string,
+): Promise<void> {
+  const keys = Object.keys(input);
+  if (keys.length === 0) return;
+  const checked = await validateSchema(def.meta.input, input);
+  // A schema that REJECTS the input says so in its own words, and the engine surfaces
+  // that in a moment. Nothing to add here.
+  if (!checked.ok) return;
+  const out = checked.value;
+  // A transform can return anything; only a plain object compares key-for-key.
+  if (typeof out !== "object" || out === null || Array.isArray(out)) return;
+  const kept = out as Record<string, unknown>;
+  const dropped = keys.filter((key) => !(key in kept));
+  if (dropped.length === 0) return;
+
+  // The shape, where there is one, is used only for the hint.
   const shape = (def.meta.input as { shape?: Record<string, unknown> } | undefined)?.shape;
-  // Only object schemas declare a field list. Anything else (a union, a passthrough, a
-  // non-zod Standard Schema) validates on its own terms and is left alone.
-  if (shape === undefined || typeof shape !== "object") return;
-  const declared = new Set(Object.keys(shape));
-  const unknown = Object.keys(input).filter((key) => !declared.has(key));
-  if (unknown.length === 0) return;
-  const known = [...declared].sort();
+  const declared = shape && typeof shape === "object" ? Object.keys(shape).sort() : [];
   throw new Error(
-    `${name} has no input field ${unknown.map((k) => `"${k}"`).join(", ")}` +
-      (known.length > 0
-        ? ` — it takes ${known.map((k) => `--${kebabCase(k)}`).join(", ")}`
+    `${name} has no input field ${dropped.map((k) => `"${k}"`).join(", ")}` +
+      (declared.length > 0
+        ? ` — it takes ${declared.map((k) => `--${kebabCase(k)}`).join(", ")}`
         : " — it takes no input"),
   );
 }

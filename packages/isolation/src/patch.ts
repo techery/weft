@@ -186,7 +186,11 @@ async function refuseAccidentalGitlinks(git: ReturnType<typeof createGit>, workt
     i++;
     if (path === undefined || path === "") continue;
     const [oldMode, newMode] = meta.slice(1).split(" ");
-    if (oldMode === GITLINK_MODE || newMode === GITLINK_MODE) gitlinks.push(path);
+    // Only a NEWLY introduced gitlink. A deleted or relocated submodule shows
+    // oldMode 160000 with the entry already gone from the staged .gitmodules, so
+    // matching on oldMode classified a legitimate removal as an accidental repository
+    // and refused the whole capture.
+    if (newMode === GITLINK_MODE && oldMode !== GITLINK_MODE) gitlinks.push(path);
   }
   if (gitlinks.length === 0) return;
 
