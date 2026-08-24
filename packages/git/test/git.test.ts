@@ -337,6 +337,21 @@ describe("snapshot and revParse", () => {
     expect((await git.status()).unstaged).toEqual(["a.txt"]);
   });
 
+  test("snapshot captures UNTRACKED files too — not just tracked modifications", async () => {
+    const git = await initRepo();
+    await seed(git, { "a.txt": "one\n" }, "init");
+    await write(git, "a.txt", "changed\n");
+    await write(git, "brand-new.txt", "untracked content\n");
+
+    // `stash create` would silently omit brand-new.txt: the returned ref would
+    // not describe the tree this method promises to capture.
+    const snap = await git.snapshot();
+    expect((await git.fileAt(snap.ref, "a.txt")).content).toBe("changed\n");
+    expect((await git.fileAt(snap.ref, "brand-new.txt")).content).toBe("untracked content\n");
+    // Nothing moved: HEAD, index, and working tree are untouched.
+    expect((await git.status()).untracked).toEqual(["brand-new.txt"]);
+  });
+
   test("snapshot of a clean tree is HEAD", async () => {
     const git = await initRepo();
     const sha = await seed(git, { "a.txt": "one\n" }, "init");

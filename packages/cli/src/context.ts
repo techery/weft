@@ -5,7 +5,7 @@
  * started.
  */
 import { join, resolve } from "node:path";
-import { createWeft, type Weft } from "@weft/host";
+import { createWeft, mergedAllowBare, type Weft } from "@weft/host";
 import type { Command } from "commander";
 
 export interface GlobalOptions {
@@ -40,9 +40,9 @@ export function workflowsDir(weft: Weft): string {
   return configured ? resolve(weft.cwd, configured) : join(weft.weftDir, "workflows");
 }
 
-/** The extra bare imports this repo allows workflow code, in the shape the gate takes. */
+/** The repo's bare-import allowance (defaults + config extras), in the shape the gate takes. */
 export function allowBareOf(weft: Weft): { allowBare?: string[] } {
-  const allowBare = weft.config.workflows?.allowBare;
+  const allowBare = mergedAllowBare(weft.config);
   return allowBare ? { allowBare } : {};
 }
 

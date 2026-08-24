@@ -69,9 +69,10 @@ export interface CreateWeftOptions {
 /**
  * Config allowBare entries EXTEND the default bare imports (@weft/sdk, zod) —
  * they never replace them: enabling lodash must not make every Zod-based
- * workflow fail to load.
+ * workflow fail to load. EVERY loader entry point (registry, inline source,
+ * path refs — host, CLI, and MCP alike) must resolve the list through here.
  */
-function mergedAllowBare(config: WeftConfig): string[] | undefined {
+export function mergedAllowBare(config: WeftConfig): string[] | undefined {
   const extra = config.workflows?.allowBare;
   if (!extra || extra.length === 0) return undefined;
   return [...new Set([...DEFAULT_ALLOW_BARE, ...extra])];

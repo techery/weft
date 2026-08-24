@@ -187,6 +187,25 @@ export default defineWorkflow(
     expect(done.output?.isNull).toBe(true);
   });
 
+  it("inline source keeps its zod when the config adds extra bare imports", async () => {
+    const cwd = await tempRepo();
+    await mkdir(path.join(cwd, ".weft"), { recursive: true });
+    // The config EXTENDS the defaults: enabling an unrelated package must not
+    // cost inline workflows their zod import.
+    await writeFile(
+      path.join(cwd, ".weft", "config.json"),
+      JSON.stringify({ workflows: { allowBare: ["left-pad"] } }),
+    );
+    const s = await session(cwd);
+    const started = await json<{ runId: string }>(s, "weft_run", {
+      source: HELLO,
+      input: { name: "cfg" },
+    });
+    const done = await json<WaitReply>(s, "weft_wait", { runId: started.runId, timeout: "10s" });
+    expect(done.status).toBe("complete");
+    expect(done.output?.greeting).toBe("hello cfg");
+  });
+
   it("a failed start leaves no orphaned provenance behind", async () => {
     const s = await session();
     // The input fails hello's schema, so engine.start throws AFTER the inline

@@ -28,6 +28,7 @@ export {
   INDEX_FILE,
   inlineDefOf,
   isWorkflowPathRef,
+  mergedAllowBare,
   persistedDefOf,
   persistInlineScript,
   persistWorkflowRef,

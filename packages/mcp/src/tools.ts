@@ -17,6 +17,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
   isWorkflowPathRef,
   loadWorkflow,
+  mergedAllowBare,
   parseBudget,
   persistedDefOf,
   persistInlineScript,
@@ -315,7 +316,8 @@ async function loadInline(
   weft: Weft,
   source: string,
 ): Promise<{ def: WorkflowDefinition; hash?: string; code?: string }> {
-  const allowBare = weft.config.workflows?.allowBare;
+  // Merged with the defaults: config extras must not cost inline code its zod.
+  const allowBare = mergedAllowBare(weft.config);
   const loaded = await loadWorkflow({
     source,
     cwd: weft.cwd,

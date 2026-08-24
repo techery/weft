@@ -6,6 +6,10 @@
  * values; writes return just enough (shas) to idempotency-check on resume.
  */
 
+import { randomUUID } from "node:crypto";
+import { rm as fsRm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   GitBlameLine,
   GitCommitInfo,
@@ -216,11 +220,31 @@ export class GitCli implements Git {
   }
 
   async snapshot(): Promise<{ ref: string }> {
-    const { stdout } = await this.raw(["stash", "create", "weft snapshot"]);
-    const ref = stdout.trim();
-    if (ref !== "") return { ref };
-    // A clean tree produces no stash commit; HEAD already describes the state.
-    return { ref: (await this.head()).sha };
+    // NOT `stash create`: it omits untracked files, so its ref would misdescribe
+    // the tree this method promises to capture. A throwaway index — HEAD-seeded
+    // so gitignore-matched tracked files stay in, then `add -A` for everything
+    // else — becomes a dangling commit without touching HEAD, the real index, or
+    // the working tree.
+    const indexFile = join(tmpdir(), `weft-snap-${randomUUID()}`);
+    const env = {
+      GIT_INDEX_FILE: indexFile,
+      GIT_AUTHOR_NAME: "weft",
+      GIT_AUTHOR_EMAIL: "weft@snapshot.invalid",
+      GIT_COMMITTER_NAME: "weft",
+      GIT_COMMITTER_EMAIL: "weft@snapshot.invalid",
+    };
+    try {
+      await this.raw(["read-tree", "HEAD"], { env });
+      await this.raw(["add", "-A", "."], { env });
+      const tree = (await this.raw(["write-tree"], { env })).stdout.trim();
+      const headTree = (await this.raw(["rev-parse", "HEAD^{tree}"])).stdout.trim();
+      // A tree identical to HEAD needs no commit; HEAD already describes the state.
+      if (tree === headTree) return { ref: (await this.head()).sha };
+      const commit = await this.raw(["commit-tree", tree, "-p", "HEAD", "-m", "weft snapshot"], { env });
+      return { ref: commit.stdout.trim() };
+    } finally {
+      await fsRm(indexFile, { force: true }).catch(() => undefined);
+    }
   }
 
   async revParse(ref: string): Promise<string | null> {
