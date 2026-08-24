@@ -213,6 +213,13 @@ export class ReplayIndex {
           index.signalsByName.set(ev.name, list);
           break;
         }
+        case "signal.rejected": {
+          // The refused delivery was consumed even though its step failed:
+          // processed in journal order, this marks exactly the payload the
+          // failed step took, so a corrected one appended later is next in line.
+          index.takeSignal(ev.name);
+          break;
+        }
         case "patch.merged": {
           index.mergedBaseTrees.add(ev.baseTree);
           break;

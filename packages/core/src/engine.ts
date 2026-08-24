@@ -995,19 +995,21 @@ export class Engine implements EngineHost {
         key: spec.key ?? spec.name,
         runId: parent.runId,
       });
-      // A FAILED child's paid steps must still reach the parent journal: without
-      // this, a parent resumed with edited code that skips the child would
-      // restore a budget that never saw the spend and could sail past its
-      // ceiling. Cancellations pass through untouched — rewrapping would
-      // un-cancel the run.
-      if (!isCancellation(stepError)) {
-        const usage = rollUp();
-        if (usage.input > 0 || usage.output > 0 || usage.usd > 0 || usage.samples > 0) {
-          await parent
-            .append([
-              { type: "budget.sampled", tokens: parent.budget.spentTokens(), usd: parent.budget.spentUsd() },
-            ])
-            .catch(() => undefined);
+      // An unwinding child's paid steps must still reach the parent journal:
+      // without this, a parent resumed with edited code that skips the child
+      // would restore a budget that never saw the spend and could sail past
+      // its ceiling. On a CANCELLED child (the parent's own cancel included)
+      // only the sample is persisted — it is the resume-time LOWER BOUND on
+      // spend — and the cancellation passes through untouched, since rewrapping
+      // would un-cancel the run.
+      const usage = rollUp();
+      if (usage.input > 0 || usage.output > 0 || usage.usd > 0 || usage.samples > 0) {
+        await parent
+          .append([
+            { type: "budget.sampled", tokens: parent.budget.spentTokens(), usd: parent.budget.spentUsd() },
+          ])
+          .catch(() => undefined);
+        if (!isCancellation(stepError)) {
           const detail =
             typeof stepError.detail === "object" && stepError.detail !== null ? stepError.detail : {};
           throw new StepError(stepError.code, stepError.message, {
@@ -1220,13 +1222,25 @@ export class Engine implements EngineHost {
     await this.journal.append(runId, [{ type: "signal.received", name, payload }]);
   }
 
+  /** Reject pending human waits on this run AND its live descendants: children
+   * share the abort controller, but a human wait resolves through its OWN
+   * runtime — left standing, a child suspended on a person would never unwind
+   * and the parent's cancel would hang forever. */
+  private cancelHumanWaitsAcross(active: ActiveRun): void {
+    active.runtime.cancelHumanWaits();
+    for (const childId of active.children) {
+      const child = this.active.get(childId);
+      if (child) this.cancelHumanWaitsAcross(child);
+    }
+  }
+
   async cancel(runId: string): Promise<void> {
     const active = this.active.get(runId);
     if (active) {
       active.runtime.shared.abort.abort(new CancelledError());
       // Reject (never answer) pending human waits: the run must end cancelled,
       // not proceed as if someone had denied the request.
-      active.runtime.cancelHumanWaits();
+      this.cancelHumanWaitsAcross(active);
       await active.result.catch(() => undefined);
       return;
     }

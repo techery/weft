@@ -131,6 +131,10 @@ export type JournalEvent =
   | HumanAnsweredEvent
   | HumanRejectedEvent
   | { type: "signal.received"; name: string; payload: unknown }
+  // A delivered payload the waiting step REFUSED (schema violation): replay must
+  // treat that delivery as consumed, or resume re-takes it ahead of any
+  // corrected payload appended later and the run wedges permanently.
+  | { type: "signal.rejected"; seq: number; name: string }
   | { type: "timer.fired"; seq: number; deadline: number }
   // patches
   | { type: "patch.captured"; seq: number; key: string; ref: string; files: string[]; outOfScope?: string[] }

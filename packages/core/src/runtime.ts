@@ -532,6 +532,14 @@ export class RunRuntime {
         },
       ]);
       const scheduledAt = scheduled[0]!.at;
+      // A timed wait resumed mid-flight keeps its ORIGINAL deadline: the prior
+      // incomplete schedule anchors the clock, so repeated restarts can never
+      // stretch a ten-minute timeout indefinitely. (Clamped to 1ms — a zero
+      // would read as "no timeout" downstream.)
+      const timeoutMs =
+        spec.timeoutMs !== undefined && priorScheduledAt !== undefined
+          ? Math.max(1, priorScheduledAt + spec.timeoutMs - this.host.clock())
+          : spec.timeoutMs;
 
       const maxAttempts = 1 + (spec.retry?.attempts ?? 0);
       let attempt = 0;
@@ -563,7 +571,7 @@ export class RunRuntime {
             unmarkWaiting,
           };
           const outcome = await this.stepContext.run({ seq }, () =>
-            this.withTimeout(spec.execute(io), spec.timeoutMs, ref, stepAbort),
+            this.withTimeout(spec.execute(io), timeoutMs, ref, stepAbort),
           );
           unmarkWaiting();
           if (this.signal.aborted) throw new CancelledError("run cancelled", ref);

@@ -606,11 +606,24 @@ export function buildCtx(rt: RunRuntime): Ctx {
                   files = [...files, ...changedIgnored];
                 }
                 if (afterSnap !== inPlaceSnap || newIgnored.length > 0) {
+                  // -z: raw NUL-delimited paths. Line splitting hands back the
+                  // C-QUOTED spelling of a hostile name (quote, backslash,
+                  // newline), which checkScope flags but restorePatchFiles then
+                  // rolls back at the wrong (nonexistent) path — the real
+                  // out-of-scope edit would survive a "strict" scope.
                   const changed =
                     afterSnap !== inPlaceSnap
-                      ? (await gitHandle.raw(["diff", "--name-only", inPlaceSnap, afterSnap])).stdout
-                          .split("\n")
-                          .map((f) => f.trim())
+                      ? (
+                          await gitHandle.raw([
+                            "diff",
+                            "--name-only",
+                            "--no-renames",
+                            "-z",
+                            inPlaceSnap,
+                            afterSnap,
+                          ])
+                        ).stdout
+                          .split("\0")
                           .filter((f) => f !== "")
                       : [];
                   files = [...changed, ...newIgnored];
@@ -1381,6 +1394,31 @@ export function buildCtx(rt: RunRuntime): Ctx {
         { ref, discard: opts?.discard ?? false },
         opts,
         () => gitHandle.checkout(ref, opts?.discard ? { discard: true } : {}),
+        // A journaled checkout only holds while the tree is still ON that ref:
+        // served past an external branch switch, every later live commit or
+        // push lands on the wrong branch. Discard checkouts restore PATHS, not
+        // HEAD — content drift is invisible here, so they keep replaying as
+        // completed rather than clobbering later steps' edits on every resume.
+        opts?.discard
+          ? undefined
+          : async () => {
+              const current = await gitHandle.raw(["rev-parse", "--abbrev-ref", "HEAD"], {
+                allowFailure: true,
+              });
+              if (current.exitCode === 0 && current.stdout.trim() === ref) return true;
+              // A LOCAL BRANCH ref must be re-checked-out even when HEAD sits on
+              // the same commit — later live commits would land on the wrong
+              // branch. Only a tag/sha checkout (detached) compares commits.
+              const isBranch = await gitHandle.raw(["show-ref", "--verify", "--quiet", `refs/heads/${ref}`], {
+                allowFailure: true,
+              });
+              if (isBranch.exitCode === 0) return false;
+              const want = await gitHandle.raw(["rev-parse", "--verify", `${ref}^{commit}`], {
+                allowFailure: true,
+              });
+              const head = await gitHandle.raw(["rev-parse", "HEAD"], { allowFailure: true });
+              return want.exitCode === 0 && head.exitCode === 0 && want.stdout.trim() === head.stdout.trim();
+            },
       ),
     fetch: (opts) =>
       gitWrite(
@@ -1987,6 +2025,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
       label: `signal:${name}`,
       payload: { op: "signal", name },
       schemaJson: wire.json,
+      // Reuse an incomplete schedule so a timed wait resumes with only the
+      // REMAINDER of its deadline — restarts must not re-arm the full timeout.
+      reuseIncomplete: true,
       ...(opts?.timeout !== undefined ? { timeoutMs: parseDuration(opts.timeout) } : {}),
       revive: async (journaled) => {
         const check = await validateSchema(schema, journaled);
@@ -2001,6 +2042,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
         const payload = await rt.takeOrAwaitSignal(name, io);
         const check = await validateSchema(schema, payload);
         if (!check.ok) {
+          // Durably consume the refused delivery: without this marker a resume
+          // re-takes the SAME invalid payload ahead of any corrected one
+          // appended later, and the run can never get past this step.
+          await rt.append([{ type: "signal.rejected", seq: io.seq, name }]);
           throw new StepError(
             "invalid_output",
             `signal ${name}: payload failed schema validation: ${check.issues.map((i) => `${i.path}: ${i.message}`).join("; ")}`,

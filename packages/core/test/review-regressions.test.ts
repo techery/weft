@@ -3125,3 +3125,177 @@ describe("codex review findings, round 36 (PR #1)", () => {
     expect(kept.records).toBe(5);
   });
 });
+
+describe("codex review findings, round 39 (PR #1)", () => {
+  test("a cancelled child's paid spend survives into the parent's sampled floor", async () => {
+    const Ok = z.object({ ok: z.boolean() });
+    const child = defineWorkflow(
+      { name: "cancelkid", description: "c", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("pay one", { schema: Ok, key: "c1" });
+        await ctx.human.ask({ question: "go on?", schema: z.object({ go: z.boolean() }) });
+        return {};
+      },
+    );
+    const mkParent = (skipChild: boolean) =>
+      defineWorkflow(
+        { name: "cancelpar", description: "c", input: z.object({}), output: z.object({}) },
+        async (ctx) => {
+          if (!skipChild) await ctx.workflow(child, {}, { key: "kid" });
+          await ctx.agent("pay two", { schema: Ok, key: "p2" });
+          return {};
+        },
+      );
+    const t1 = testEngine();
+    t1.builder.on({ prompt: /pay/ }, { ok: true });
+    const h1 = await t1.engine.start(mkParent(false), {
+      input: {},
+      cwd: await tempDir(),
+      budget: { tokens: 200 },
+    });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the child to suspend");
+    await t1.engine.cancel(h1.runId);
+    await h1.result.catch(() => undefined);
+    // The cancelled child's 150 charged tokens must be visible in the parent
+    // journal as a sampled floor — the roll-up never ran.
+    const recs = await records(t1.journal, h1.runId);
+    const sampled = recs.filter((r) => r.ev.type === "budget.sampled").at(-1)?.ev;
+    if (sampled?.type !== "budget.sampled") throw new Error("expected a budget.sampled floor");
+    expect(sampled.tokens).toBe(150);
+
+    // Resumed with edited code that SKIPS the child entirely: restoration reads
+    // only the parent journal, so the floor is all that guards the 200-token
+    // cap — without it p2's 150 tokens spend a second time (300 through 200).
+    const t2 = reopen(t1);
+    t2.builder.on({ prompt: /pay/ }, { ok: true });
+    const h2 = await t2.engine.resume(h1.runId, { def: mkParent(true) });
+    await expect(h2.result).rejects.toMatchObject({ code: "budget_exceeded" });
+  });
+
+  test("a strict resolver's out-of-scope file with a hostile name is still rolled back", async () => {
+    const FixResult = z.object({ summary: z.string() });
+    const hostile = 'sneaky"file\\name.txt';
+    const t = testEngine();
+    t.builder.on({ key: "fix:q" }, { summary: "edit" }, { writes: { "a.txt": "AGENT\n" } });
+    // The resolver fixes the conflict AND drops an out-of-scope file whose name
+    // git C-quotes in line-oriented output (quote + backslash).
+    t.builder.on(
+      { key: "merge:fix:q" },
+      { resolved: true, notes: "fixed" },
+      { writes: { "a.txt": "RESOLVED\n", [hostile]: "LOOT\n" } },
+    );
+    const cwd = await tempRepo({ "a.txt": "base\n" });
+    const def = defineWorkflow(
+      { description: "qq", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        const fix = await ctx.agent.detailed("fix", {
+          schema: FixResult,
+          key: "fix:q",
+          write: { paths: ["a.txt"] },
+        });
+        await ctx.bash("printf 'MAIN\\n' > a.txt");
+        await ctx.integrate([fix], { onConflict: "agent" });
+        return {};
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd });
+    await h.result;
+    // The C-quoted spelling used to be flagged but rolled back at the WRONG
+    // (nonexistent) path, so the real out-of-scope file survived a strict scope.
+    expect(existsSync(join(cwd, hostile))).toBe(false);
+    const recs = await records(t.journal, h.runId);
+    const violation = recs.find((r) => r.ev.type === "scope.violation" && r.ev.files.includes(hostile));
+    expect(violation).toBeDefined();
+  });
+
+  test("a completed checkout re-establishes its branch when HEAD moved externally", async () => {
+    const t1 = testEngine();
+    const cwd = await tempRepo({ "a.txt": "base\n" });
+    await execa("git", ["branch", "feature"], { cwd });
+    const def = defineWorkflow(
+      {
+        name: "cobr",
+        description: "c",
+        input: z.object({}),
+        output: z.object({ current: z.string() }),
+      },
+      async (ctx) => {
+        await ctx.git.checkout("feature");
+        await ctx.human.ask({ question: "go on?", schema: z.object({ go: z.boolean() }) });
+        const b = await ctx.git.branches();
+        return { current: b.current };
+      },
+    );
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the ask");
+    await t1.engine.shutdown();
+    // An external actor switches back to main while the run is suspended: the
+    // journaled checkout must not be served as still-done, or the closing live
+    // steps run on the wrong branch.
+    await execa("git", ["checkout", "main"], { cwd });
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the ask again");
+    await t2.engine.answer(h1.runId, o2.pending[0]?.id ?? "", { go: true });
+    expect(await h2.result).toEqual({ current: "feature" });
+  });
+
+  test("an invalid signal payload is consumed durably; a corrected one unwedges the run", async () => {
+    const def = defineWorkflow(
+      { name: "sigfix", description: "s", input: z.object({}), output: z.object({ n: z.number() }) },
+      async (ctx) => {
+        const v = await ctx.signal("go", z.object({ n: z.number() }));
+        return { n: v.n };
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_signal") throw new Error("expected the signal wait");
+    await t1.engine.signal(h1.runId, "go", { n: "bad" });
+    await expect(h1.result).rejects.toMatchObject({ code: "invalid_output" });
+    // A corrected payload lands after the failure. Without the durable
+    // rejection marker, replay re-takes the INVALID delivery first, forever.
+    await t1.journal.append(h1.runId, [{ type: "signal.received", name: "go", payload: { n: 7 } }]);
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    expect(await h2.result).toEqual({ n: 7 });
+  });
+
+  test("a resumed signal timeout keeps its ORIGINAL deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const def = defineWorkflow(
+        { name: "sigto", description: "s", input: z.object({}), output: z.object({}) },
+        async (ctx) => {
+          await ctx.signal("never", z.object({}), { timeout: "10m" });
+          return {};
+        },
+      );
+      const t1 = testEngine();
+      const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+      const o1 = await h1.outcome();
+      if (o1.status !== "waiting_for_signal") throw new Error("expected the signal wait");
+      await vi.advanceTimersByTimeAsync(8 * 60_000); // 8 of the 10 minutes elapse
+      h1.result.catch(() => undefined);
+      await t1.engine.shutdown();
+
+      const t2 = reopen(t1);
+      const h2 = await t2.engine.resume(h1.runId, { def });
+      const o2 = await h2.outcome();
+      if (o2.status !== "waiting_for_signal") throw new Error("expected the wait to resume");
+      const settled = expect(h2.result).rejects.toMatchObject({ code: "timeout" });
+      // Only ~2 minutes remain on the original deadline; a re-armed FULL
+      // timeout would still be pending 3 minutes from now.
+      await vi.advanceTimersByTimeAsync(3 * 60_000);
+      await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
