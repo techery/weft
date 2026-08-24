@@ -293,6 +293,7 @@ describe("the tool gate", () => {
       `python -c 'open("f","w").write("x")'`,
       "ls $(echo anything)",
       "find src -name '*.tmp' -delete",
+      "find . -maxdepth 0 -fls smuggled.txt", // find's f-actions WRITE to a named file
       "xargs rm",
       "env bash -c 'touch changed'", // a launcher smuggles any command
       "sort -o clobbered input.txt", // an allow-listed reader with a write flag

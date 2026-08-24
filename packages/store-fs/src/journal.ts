@@ -25,6 +25,11 @@ function absent(err: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
+/** Live view of a held file lock: `held()` turns false when renewal fails past the stale threshold. */
+interface LockMutex {
+  held(): boolean;
+}
+
 /**
  * JSONL journal, one directory per run. Appends are a single write + fsync per
  * batch; indices are monotonic per run. watch() serves in-process appends
@@ -94,12 +99,16 @@ export class FsJournalStore implements JournalStore {
     // Reconcile → truncate → write must be atomic ACROSS PROCESSES: without the
     // lock, a writer that reconciled before a peer's complete record landed would
     // "recover" that committed record as a torn tail and truncate it away.
-    return this.withAppendLock(runId, async () => {
+    return this.withAppendLock(runId, async (mutex) => {
       await this.reconcile(runId, cached);
       // Conditional append (appendIf): the caller acted on a journal of
       // expectedCount records; anything a peer committed since invalidates that
       // read, so decline INSIDE the lock and let the caller re-fold.
       if (expectedCount !== undefined && cached.count !== expectedCount) return undefined;
+      // A mutex whose renewal failed past the stale threshold may already belong
+      // to another writer: truncating or appending now could cut or interleave
+      // with THEIR records.
+      if (!mutex.held()) throw new Error(`run ${runId}: append lock lost mid-operation`);
       // Anything on disk past the committed offset is a crashed writer's torn tail
       // (reconcile consumed every complete line): cut it or this append corrupts it
       // into an unparseable record that blocks resume and repair forever.
@@ -139,7 +148,7 @@ export class FsJournalStore implements JournalStore {
     });
   }
 
-  private withAppendLock<T>(runId: string, fn: () => Promise<T>): Promise<T> {
+  private withAppendLock<T>(runId: string, fn: (mutex: LockMutex) => Promise<T>): Promise<T> {
     return this.withFileLock(join(this.runDir(runId), "journal.lock"), `run ${runId}`, fn);
   }
 
@@ -153,7 +162,11 @@ export class FsJournalStore implements JournalStore {
    * even that from cascading.) Acquisition gives up loudly after 30s rather than
    * hanging.
    */
-  private async withFileLock<T>(lockPath: string, what: string, fn: () => Promise<T>): Promise<T> {
+  private async withFileLock<T>(
+    lockPath: string,
+    what: string,
+    fn: (mutex: LockMutex) => Promise<T>,
+  ): Promise<T> {
     const token = randomUUID();
     const started = Date.now();
     for (;;) {
@@ -220,13 +233,31 @@ export class FsJournalStore implements JournalStore {
     }
     // Keep the held lock visibly alive: contenders judge staleness by mtime, and
     // without renewal a slow critical section would get "stolen" mid-write.
+    // Renewal FAILURES are counted: four misses span the 10s stale threshold,
+    // after which a contender may legitimately steal the lock — the critical
+    // section no longer holds the mutex and must stop mutating shared state.
+    let renewalMisses = 0;
+    let lost = false;
     const renew = setInterval(() => {
       const now = new Date();
-      void fs.utimes(lockPath, now, now).catch(() => undefined);
+      void fs.utimes(lockPath, now, now).then(
+        () => {
+          renewalMisses = 0;
+        },
+        () => {
+          renewalMisses++;
+          if (renewalMisses >= 4) lost = true;
+        },
+      );
     }, 2_500);
     renew.unref?.();
+    const mutex: LockMutex = { held: () => !lost };
     try {
-      return await fn();
+      const result = await fn(mutex);
+      if (lost) {
+        throw new Error(`${what}: lock renewal failed and the mutex may be stolen (${lockPath})`);
+      }
+      return result;
     } finally {
       clearInterval(renew);
       // Owner-checked release: if this append overran the stale threshold and lost
@@ -515,27 +546,33 @@ export class FsJournalStore implements JournalStore {
       await fs.writeFile(tmp, claim());
       await fs.rename(tmp, path);
     };
-    const guard = <T>(fn: () => Promise<T>): Promise<T> => this.withFileLock(lockPath, `run ${runId}`, fn);
-    const acquired = await guard(async () => {
+    const guard = <T>(fn: (mutex: LockMutex) => Promise<T>): Promise<T> =>
+      this.withFileLock(lockPath, `run ${runId}`, fn);
+    // Every owner mutation re-checks the mutex right before writing: a lock
+    // whose renewal failed past the stale threshold may already be a
+    // contender's, and writing then would evict a live claim.
+    const acquired = await guard(async (mutex) => {
       const prev = await readOwner();
       if (prev && typeof prev.expiresAt === "number" && prev.expiresAt > Date.now()) return false;
+      if (!mutex.held()) throw new Error(`run ${runId}: owner lock lost mid-acquisition`);
       await writeClaim(); // free or expired: safe to take under the mutex
       return true;
     });
     if (!acquired) return undefined;
     return {
       refresh: () =>
-        guard(async () => {
+        guard(async (mutex) => {
           // CAS: the expiry-based takeover above can move the claim to a new owner
           // the moment ours expires, so re-check IDENTITY inside the mutex — an
           // unconditional rewrite here would evict that owner mid-execution.
           if ((await readOwner())?.owner !== token) return false; // lost: caller must stop
+          if (!mutex.held()) throw new Error(`run ${runId}: owner lock lost mid-refresh`);
           await writeClaim();
           return true;
         }),
       release: () =>
-        guard(async () => {
-          if ((await readOwner())?.owner === token) await fs.rm(path, { force: true });
+        guard(async (mutex) => {
+          if ((await readOwner())?.owner === token && mutex.held()) await fs.rm(path, { force: true });
         }),
     };
   }

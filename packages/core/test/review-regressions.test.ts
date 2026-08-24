@@ -2358,3 +2358,28 @@ describe("codex review findings, round 25 (PR #1)", () => {
     });
   });
 });
+
+describe("codex review findings, round 26 (PR #1)", () => {
+  test("a cyclic value is reported as unjournalable at its path, not a stack overflow", async () => {
+    const { jsonUnsafeAt } = await import("@weft/core");
+    const loop: Record<string, unknown> = { x: 1 };
+    loop["self"] = loop;
+    expect(jsonUnsafeAt(loop)).toMatch(/\$\.self \(circular reference\)/);
+    const ring: unknown[] = [1];
+    ring.push(ring);
+    expect(jsonUnsafeAt(ring)).toMatch(/circular reference/);
+    // Shared (diamond) references serialize fine and must stay LEGAL.
+    const shared = { k: 1 };
+    expect(jsonUnsafeAt({ left: shared, right: shared, list: [shared, shared] })).toBeUndefined();
+
+    // And through the public surface: a cyclic input fails with the typed error.
+    const def = defineWorkflow(
+      { name: "cyc", description: "c", input: z.object({}).loose(), output: z.object({}) },
+      async () => ({}),
+    );
+    const t = testEngine();
+    await expect(t.engine.start(def, { input: loop, cwd: await tempDir() })).rejects.toMatchObject({
+      code: "invalid_input",
+    });
+  });
+});

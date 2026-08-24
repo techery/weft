@@ -146,9 +146,10 @@ export function isReadOnlyCommand(command: string): boolean {
       if (/\s-[a-zA-Z]*O|\s--open-files-in-pager/.test(seg)) return false;
       continue;
     }
-    // find reads — unless told to delete or execute.
+    // find reads — unless told to delete, execute, or WRITE: every f-action
+    // (-fls, -fprint, -fprint0, -fprintf) sends output to a named file.
     if (name === "find") {
-      if (/\s-(?:delete|exec|execdir|ok|okdir|fprint\w*)\b/.test(seg)) return false;
+      if (/\s-(?:delete|exec|execdir|ok|okdir|fls|fprint\w*)\b/.test(seg)) return false;
       continue;
     }
     // sort reads — unless -o/--output turns it into a file writer. Every spelling

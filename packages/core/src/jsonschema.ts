@@ -226,7 +226,7 @@ function deepEqual(a: unknown, b: unknown): boolean {
  * that distinguishes absent from present-undefined would flip on resume. Omit
  * the key instead of writing undefined into it.
  */
-export function jsonUnsafeAt(value: unknown, path = "$"): string | undefined {
+export function jsonUnsafeAt(value: unknown, path = "$", ancestors?: WeakSet<object>): string | undefined {
   if (value === null) return undefined;
   const kind = typeof value;
   if (kind === "string" || kind === "boolean") return undefined;
@@ -234,10 +234,21 @@ export function jsonUnsafeAt(value: unknown, path = "$"): string | undefined {
   if (kind === "undefined" || kind === "bigint" || kind === "function" || kind === "symbol") {
     return `${path} (${kind})`;
   }
+  // Ancestor-stack cycle check: a value containing ITSELF can never be
+  // journaled, and recursing into it would blow the stack instead of naming the
+  // path. Entries are removed on the way back up, so shared (diamond)
+  // references — which JSON serializes fine, duplicated — stay legal.
   if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i++) {
-      const bad = jsonUnsafeAt(value[i], `${path}[${i}]`);
-      if (bad !== undefined) return bad;
+    const seen = (ancestors ??= new WeakSet());
+    if (seen.has(value)) return `${path} (circular reference)`;
+    seen.add(value);
+    try {
+      for (let i = 0; i < value.length; i++) {
+        const bad = jsonUnsafeAt(value[i], `${path}[${i}]`, seen);
+        if (bad !== undefined) return bad;
+      }
+    } finally {
+      seen.delete(value);
     }
     return undefined;
   }
@@ -250,9 +261,16 @@ export function jsonUnsafeAt(value: unknown, path = "$"): string | undefined {
     const name = (value as object).constructor?.name ?? "object";
     return `${path} (${name})`;
   }
-  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    const bad = jsonUnsafeAt(entry, `${path}.${key}`);
-    if (bad !== undefined) return bad;
+  const seen = (ancestors ??= new WeakSet());
+  if (seen.has(value as object)) return `${path} (circular reference)`;
+  seen.add(value as object);
+  try {
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      const bad = jsonUnsafeAt(entry, `${path}.${key}`, seen);
+      if (bad !== undefined) return bad;
+    }
+  } finally {
+    seen.delete(value as object);
   }
   return undefined;
 }
