@@ -229,10 +229,13 @@ function shellWords(command: string): string[][] | null {
  * git commands whose subcommand comes first, so `$1` is always it. And a
  * pathname-valued core.fsmonitor is a HOOK git runs on any worktree scan
  * (`status`, `diff`, `ls-files`), so every wrapped invocation disables it —
- * a read-only step must never execute repository-configured code.
+ * a read-only step must never execute repository-configured code. Every
+ * invocation also sets GIT_OPTIONAL_LOCKS=0: a plain `git status` opportunistically
+ * REWRITES .git/index (the optional refresh), and a read-only step must
+ * neither modify nor contend on the integration repository's index.
  */
 export const GIT_READ_WRAPPER =
-  'git() { case "$1" in diff|log|show) _s=$1; shift; command git -c core.fsmonitor=false "$_s" --no-ext-diff --no-textconv "$@";; *) command git -c core.fsmonitor=false "$@";; esac; }; ';
+  'git() { case "$1" in diff|log|show) _s=$1; shift; GIT_OPTIONAL_LOCKS=0 command git -c core.fsmonitor=false "$_s" --no-ext-diff --no-textconv "$@";; *) GIT_OPTIONAL_LOCKS=0 command git -c core.fsmonitor=false "$@";; esac; }; ';
 
 export function isReadOnlyCommand(command: string): boolean {
   const segments = shellWords(command);
@@ -371,12 +374,15 @@ const RISKY_PATTERNS: readonly RegExp[] = [
 /**
  * Git subcommands that mutate REPOSITORY METADATA a linked worktree shares
  * with the integration checkout: config (aliases, hook paths, fsmonitor),
- * remotes (config again), shared refs, object pruning, and the worktree list
- * itself. A strict write scope relies on worktree patch capture, which sees
- * none of that — and a planted config value outlives the step and steers
- * every later one. Deny-by-default: `git config user.email` (a read) is
- * refused along with the writes; the one turn it costs is the price of not
- * parsing config's full option grammar.
+ * remotes (config again), shared refs (branches, tags, notes, the stash,
+ * remote-tracking refs), object pruning, and the worktree list itself. A
+ * strict write scope relies on worktree patch capture, which sees none of
+ * that — and a planted config value or a `git branch leaked` outlives the
+ * step, invisible to cleanup. Deny-by-default: `git config user.email` and
+ * `git checkout -- file` (worktree-local spellings) are refused along with
+ * the writes; the one turn they cost is the price of not parsing each
+ * subcommand's full option grammar to split its ref-creating forms
+ * (`checkout -b`, `switch -c`) from its local ones.
  */
 const SHARED_GIT_METADATA_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "config",
@@ -390,6 +396,14 @@ const SHARED_GIT_METADATA_SUBCOMMANDS: ReadonlySet<string> = new Set([
   "reflog",
   "filter-branch",
   "replace",
+  "branch",
+  "tag",
+  "checkout",
+  "switch",
+  "stash",
+  "notes",
+  "fetch",
+  "pull",
 ]);
 
 /** True when any segment runs a git subcommand that touches shared repository metadata. */

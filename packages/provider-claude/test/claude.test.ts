@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
@@ -366,6 +366,8 @@ describe("the tool gate", () => {
       expect(updated?.command, command).toContain("--no-ext-diff --no-textconv");
       // A pathname-valued core.fsmonitor is a HOOK any worktree scan executes.
       expect(updated?.command, command).toContain("-c core.fsmonitor=false");
+      // The optional index refresh is a WRITE to .git/index a read must skip.
+      expect(updated?.command, command).toContain("GIT_OPTIONAL_LOCKS=0");
     };
     expect(await ask(options, "Read", { file_path: `${CWD}/src/a.ts` })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Bash", { command: "rg -n 'todo' src 2>&1" })).toEqual({ behavior: "allow" });
@@ -532,6 +534,17 @@ describe("the tool gate", () => {
       "git update-ref refs/heads/main HEAD",
       "git reflog expire --all",
       "echo ok && git config weft.marker changed", // any segment in a chain counts
+      // Shared REFS are repository metadata too: a branch, tag, note, stash
+      // entry, or remote-tracking ref created from the worktree lands in the
+      // integration repository, invisible to patch capture and cleanup.
+      "git branch leaked",
+      "git checkout -b leaked",
+      "git switch -c leaked",
+      "git tag leaked",
+      "git stash", // moves the step's OWN changes out of patch capture's sight
+      "git notes add -m x",
+      "git fetch origin",
+      "git pull origin main",
     ]) {
       const denial = await ask(options, "Bash", { command });
       expect(denial.behavior, command).toBe("deny");
@@ -566,6 +579,16 @@ describe("the tool gate", () => {
         stdio: "ignore",
       });
       expect(existsSync(marker)).toBe(false);
+      // The optional index refresh is a WRITE: after a tracked file's stat
+      // info changes, a plain `git status` rewrites .git/index — the wrapped
+      // one (GIT_OPTIONAL_LOCKS=0) must leave it untouched.
+      await utimes(join(cwd, "a.txt"), new Date(), new Date());
+      const index = join(cwd, ".git", "index");
+      const before = (await stat(index)).mtimeMs;
+      execFileSync("bash", ["-c", `${GIT_READ_WRAPPER}git status`], { cwd, stdio: "ignore" });
+      expect((await stat(index)).mtimeMs).toBe(before);
+      execFileSync("bash", ["-c", "git status"], { cwd, stdio: "ignore" });
+      expect((await stat(index)).mtimeMs).not.toBe(before);
     } finally {
       await rm(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }

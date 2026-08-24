@@ -3975,3 +3975,40 @@ describe("codex review findings, round 57 (PR #1)", () => {
     await t.engine.shutdown();
   });
 });
+
+describe("codex review findings, round 58 (PR #1)", () => {
+  test("tag replay verifies refs/tags, never a same-named branch", async () => {
+    const t1 = testEngine();
+    const cwd = await tempRepo({ "a.txt": "base\n" });
+    // A LEGAL branch shares the name before the run ever starts.
+    await execa("git", ["branch", "release"], { cwd });
+    const def = defineWorkflow(
+      { name: "tagns", description: "t", input: z.object({}), output: z.object({ sha: z.string() }) },
+      async (ctx) => {
+        const head = await ctx.git.head();
+        const tag = await ctx.git.tag("release", { ref: head.sha });
+        await ctx.human.ask({ question: "publish?", schema: z.object({ go: z.boolean() }) });
+        return { sha: tag.sha };
+      },
+    );
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the ask");
+    const original = (await execa("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
+    await t1.engine.shutdown();
+    // The TAG is deleted while the run is suspended; the branch remains,
+    // pointing at the journaled sha. A bare `release^{commit}` resolves the
+    // branch and would vouch for a tag that no longer exists — replay must
+    // notice the tag is gone and re-establish it.
+    await execa("git", ["tag", "-d", "release"], { cwd });
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the ask again");
+    await t2.engine.answer(h1.runId, o2.pending[0]?.id ?? "", { go: true });
+    expect(await h2.result).toEqual({ sha: original });
+    const peeled = await execa("git", ["rev-parse", "--verify", "refs/tags/release^{commit}"], { cwd });
+    expect(peeled.stdout.trim()).toBe(original);
+  });
+});

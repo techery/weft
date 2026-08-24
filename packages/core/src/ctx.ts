@@ -1570,7 +1570,14 @@ export function buildCtx(rt: RunRuntime): Ctx {
         { name, ref: opts?.ref ?? null },
         opts,
         async (io) => {
-          if (io.reExecuting && (await gitHandle.revParse(name)) !== null) {
+          // The EXACT namespace everywhere: a bare `name^{commit}` also
+          // resolves a same-named BRANCH, which would vouch for a tag that no
+          // longer exists (deleted during suspension) or probe the wrong ref.
+          const tagRef = `refs/tags/${name}`;
+          const existing = await gitHandle.raw(["rev-parse", "--verify", "--quiet", tagRef], {
+            allowFailure: true,
+          });
+          if (io.reExecuting && existing.exitCode === 0) {
             // Re-execution after a refused verify: THIS step planted the tag
             // once and it now stands at the wrong target — re-establish it.
             // Only that provenance justifies -f; on a first execution an
@@ -1583,11 +1590,11 @@ export function buildCtx(rt: RunRuntime): Ctx {
           // The tagged COMMIT rides the journal so resume can tell "this tag
           // still points where this step put it" from "someone re-pointed it
           // with tag -f while the run was suspended".
-          const peeled = await gitHandle.raw(["rev-parse", "--verify", `${name}^{commit}`]);
+          const peeled = await gitHandle.raw(["rev-parse", "--verify", `${tagRef}^{commit}`]);
           return { sha: peeled.stdout.trim() };
         },
         async (journaled) => {
-          const peeled = await gitHandle.raw(["rev-parse", "--verify", `${name}^{commit}`], {
+          const peeled = await gitHandle.raw(["rev-parse", "--verify", `refs/tags/${name}^{commit}`], {
             allowFailure: true,
           });
           if (peeled.exitCode !== 0) return false;
