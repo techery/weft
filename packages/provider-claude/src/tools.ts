@@ -133,24 +133,36 @@ export function isReadOnlyCommand(command: string): boolean {
     while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] as string)) i++;
     const head = words[i];
     if (head === undefined) return false;
+    // An env override that changes WHICH code runs turns any allow-listed
+    // reader into arbitrary execution: `PATH=. diff a b` resolves ./diff, and
+    // LD_PRELOAD/LD_* steer the dynamic loader. No read needs either.
+    if (words.slice(0, i).some((w) => /^(?:PATH|LD_[A-Za-z0-9_]*)=/.test(w))) return false;
     const name = head.split("/").pop() ?? head;
     if (name === "git") {
       const sub = words[i + 1];
       if (sub === undefined || !READ_GIT_SUBCOMMANDS.has(sub)) return false;
       // The diff family's --output=<file> sends the result to a FILE: a "read"
-      // subcommand alone is not proof of read-only behavior.
-      if (/\s--output\b/.test(seg)) return false;
-      // --ext-diff, --textconv and --filters EXECUTE external helpers git picks
-      // up from config or environment (`GIT_EXTERNAL_DIFF=touch git diff
-      // --ext-diff` runs touch; `cat-file --filters` runs the path's configured
-      // clean/smudge commands); and a GIT_* assignment prefix exists precisely
-      // to steer git toward such helpers — a read never needs one.
-      if (/\s--(?:ext-diff|textconv|filters)\b/.test(seg)) return false;
+      // subcommand alone is not proof of read-only behavior. Prefix form: git
+      // accepts unambiguous long-option abbreviations, so --out(=x) works too.
+      if (/\s--out/.test(seg)) return false;
+      // --ext-diff and --textconv EXECUTE external helpers git picks up from
+      // config or environment (`GIT_EXTERNAL_DIFF=touch git diff --ext-diff`
+      // runs touch); and a GIT_* assignment prefix exists precisely to steer
+      // git toward such helpers — a read never needs one. Prefixes cover the
+      // abbreviations git accepts (--ext-d, --textc) while --extended-regexp
+      // and --text stay allowed.
+      if (/\s--ext(?!ended)|\s--textc/.test(seg)) return false;
+      // cat-file: --filters runs the path's clean/smudge commands and
+      // --textconv its textconv command, and git accepts abbreviations down to
+      // --fi / --tex here — so every --f…/--t… long option is refused
+      // (--follow-symlinks is the only read nicety lost).
+      if (sub === "cat-file" && /\s--[ft]/.test(seg)) return false;
       if (words.slice(0, i).some((w) => /^GIT_[A-Za-z0-9_]*=/.test(w))) return false;
       // grep's -O/--open-files-in-pager EXECUTES the named pager on the matched
       // files (bare -O runs the default pager). Every spelling: bare, attached
-      // (-Ocmd), clustered (-iO), long with or without a value.
-      if (/\s-[a-zA-Z]*O|\s--open-files-in-pager/.test(seg)) return false;
+      // (-Ocmd), clustered (-iO), long abbreviated (--op…) with or without a
+      // value — --only-matching stays --on, untouched.
+      if (/\s-[a-zA-Z]*O|\s--op/.test(seg)) return false;
       continue;
     }
     // find reads — unless told to delete, execute, or WRITE: every f-action
@@ -162,11 +174,17 @@ export function isReadOnlyCommand(command: string): boolean {
     // ripgrep reads — unless --pre EXECUTES a preprocessor command on every
     // searched file (`rg --pre touch pattern file` runs `touch file`).
     if (name === "rg" && /\s--pre\b/.test(seg)) return false;
+    // GNU diff reads — unless -l/--paginate pipes the output through the `pr`
+    // program resolved from PATH (a repository-local `pr` would execute).
+    // Clustered spellings count (-lu, -tl), and --pag… covers the long form's
+    // unambiguous abbreviations without catching --palette.
+    if (name === "diff" && /\s-[a-zA-Z]*l|\s--pag/.test(seg)) return false;
     // sort reads — unless -o/--output turns it into a file writer. Every spelling
     // counts: separated (-o FILE), attached (-oFILE), clustered (-ro FILE), long
-    // (--output FILE, --output=FILE) — a short-option group ending in o takes the
-    // next word as its output file.
-    if (name === "sort" && /\s(?:-[a-zA-Z]*o|--output)/.test(seg)) return false;
+    // (--output FILE, --output=FILE) and its GNU abbreviations (--o…, sort's only
+    // long option on o) — a short-option group ending in o takes the next word
+    // as its output file.
+    if (name === "sort" && /\s(?:-[a-zA-Z]*o|--o)/.test(seg)) return false;
     // uniq reads — unless a SECOND positional argument names its output file
     // (`uniq input output` WRITES output). Conservative: two option-free words
     // refuse the command, a separated flag argument (-f 2) included; `-` counts

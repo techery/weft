@@ -232,7 +232,13 @@ export class MemoryJournalStore implements JournalStore {
   }
 
   async snapshot(runId: string, projections: Projections): Promise<void> {
-    Object.assign(this.runFor(runId).projections, projections);
+    const run = this.runFor(runId);
+    // The journal is append-only, so a reduction covering fewer records is
+    // OLDER: publishing it over a newer one would freeze a stale status.
+    const covered = (projections.state as { records?: number } | undefined)?.records;
+    const standing = (run.projections.state as { records?: number } | undefined)?.records;
+    if (typeof covered === "number" && typeof standing === "number" && standing > covered) return;
+    Object.assign(run.projections, projections);
   }
 
   async readSnapshot(runId: string): Promise<Projections | undefined> {

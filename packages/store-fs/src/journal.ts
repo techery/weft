@@ -471,20 +471,40 @@ export class FsJournalStore implements JournalStore {
   async snapshot(runId: string, projections: Projections): Promise<void> {
     const dir = this.runDir(runId);
     await fs.mkdir(dir, { recursive: true });
-    const writes: Array<Promise<void>> = [];
-    const writeAtomic = async (file: string, content: string) => {
-      // Unique per write: concurrent snapshots of the same run must not rename
-      // each other's temp file out from under themselves (ENOENT / torn mixes).
-      const tmp = join(dir, `.${file}.${randomUUID().slice(0, 8)}.tmp`);
-      await fs.writeFile(tmp, content);
-      await fs.rename(tmp, join(dir, file));
+    const publish = async () => {
+      const writes: Array<Promise<void>> = [];
+      const writeAtomic = async (file: string, content: string) => {
+        // Unique per write: concurrent snapshots of the same run must not rename
+        // each other's temp file out from under themselves (ENOENT / torn mixes).
+        const tmp = join(dir, `.${file}.${randomUUID().slice(0, 8)}.tmp`);
+        await fs.writeFile(tmp, content);
+        await fs.rename(tmp, join(dir, file));
+      };
+      if (projections.state !== undefined)
+        writes.push(writeAtomic("state.json", JSON.stringify(projections.state, null, 2)));
+      if (projections.tree !== undefined)
+        writes.push(writeAtomic("tree.json", JSON.stringify(projections.tree, null, 2)));
+      if (projections.report !== undefined) writes.push(writeAtomic("report.md", projections.report));
+      await Promise.all(writes);
     };
-    if (projections.state !== undefined)
-      writes.push(writeAtomic("state.json", JSON.stringify(projections.state, null, 2)));
-    if (projections.tree !== undefined)
-      writes.push(writeAtomic("tree.json", JSON.stringify(projections.tree, null, 2)));
-    if (projections.report !== undefined) writes.push(writeAtomic("report.md", projections.report));
-    await Promise.all(writes);
+    // Atomic renames prevent torn files, not stale ORDER: an engine and a
+    // daemon reducing the same run concurrently could let the older reduction
+    // land last and stand until the next journal write. The reduction's covered
+    // record count orders them (the journal is append-only), compared and
+    // published under one cross-process lock.
+    const covered = (projections.state as { records?: number } | undefined)?.records;
+    if (typeof covered !== "number") return publish();
+    return this.withFileLock(join(dir, "snapshot.lock"), `snapshot ${runId}`, async () => {
+      try {
+        const standing = JSON.parse(await fs.readFile(join(dir, "state.json"), "utf8")) as {
+          records?: number;
+        };
+        if (typeof standing.records === "number" && standing.records > covered) return;
+      } catch {
+        // no standing snapshot (or an unreadable one): publish
+      }
+      await publish();
+    });
   }
 
   async readSnapshot(runId: string): Promise<Projections | undefined> {

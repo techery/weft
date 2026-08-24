@@ -78,6 +78,12 @@ export interface RunState {
   budget: { tokens: number; usd: number };
   replay: { salvaged: number; diverged: number };
   children: Array<{ seq: number; childRunId: string }>;
+  /**
+   * Journal records this reduction covered. The journal is append-only, so the
+   * count orders reductions across processes: a snapshot writer must never let
+   * a smaller count replace a larger one.
+   */
+  records: number;
 }
 
 export function reduceState(records: JournalRecord[]): RunState {
@@ -101,6 +107,7 @@ export function reduceState(records: JournalRecord[]): RunState {
     budget: { tokens: 0, usd: 0 },
     replay: { salvaged: 0, diverged: 0 },
     children: [],
+    records: records.length,
   };
   // seq restarts at 0 on resume, so one seq can be scheduled twice across passes;
   // keep every occurrence in the list while completed/failed apply to the latest.

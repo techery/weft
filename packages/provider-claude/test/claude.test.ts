@@ -311,8 +311,18 @@ describe("the tool gate", () => {
       "GIT_EXTERNAL_DIFF=touch git diff --ext-diff", // git EXECUTES the helper the env names
       "git diff --ext-diff",
       "git show --textconv HEAD", // textconv filters are external commands too
+      "git show --textc HEAD", // ...and git accepts unambiguous long-option abbreviations
       "git cat-file --filters HEAD:README.md", // runs the path's clean/smudge commands
+      "git cat-file --fi HEAD:README.md", // ...abbreviated down to --fi it still filters
+      "git diff --out=clobbered", // abbreviation of --output writes a file all the same
       "GIT_PAGER=touch git log", // a GIT_* override on a "read" exists to steer helpers
+      "PATH=. diff -l a.txt b.txt", // -l/--paginate EXECUTES `pr` from the supplied PATH
+      "diff --paginate a.txt b.txt",
+      "diff --pag a.txt b.txt", // GNU getopt accepts unambiguous abbreviations
+      "diff -ul a.txt b.txt", // clustered short spelling still paginates
+      "PATH=. grep todo src/a.ts", // a PATH override resolves ANY reader to ./grep
+      "LD_PRELOAD=./x.so cat f.txt", // loader overrides run injected code
+      "sort --o clobbered input.txt", // GNU sort abbreviates --output too
     ]) {
       expect(await ask(options, "Bash", { command }), command).toEqual({
         behavior: "deny",
@@ -329,6 +339,13 @@ describe("the tool gate", () => {
     expect(await ask(options, "Bash", { command: "git cat-file -p HEAD:README.md" })).toEqual({
       behavior: "allow",
     });
+    expect(await ask(options, "Bash", { command: "git grep --extended-regexp 'todo.+fix' src" })).toEqual({
+      behavior: "allow",
+    });
+    expect(await ask(options, "Bash", { command: "git log --first-parent --oneline" })).toEqual({
+      behavior: "allow",
+    });
+    expect(await ask(options, "Bash", { command: "diff -u a.txt b.txt" })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Bash", { command: "sort -u -r input.txt | head" })).toEqual({
       behavior: "allow",
     });

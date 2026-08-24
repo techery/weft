@@ -158,6 +158,24 @@ describe("capturePatch", () => {
     expect(files).toEqual(["we\nird.txt"]);
   });
 
+  test("a rename reports BOTH paths, not just the destination", async () => {
+    const repo = await initRepo();
+    const body = `${"stable content line\n".repeat(20)}`;
+    await seed(repo, { "src/original.ts": body }, "init");
+    const handle = await addWorktree({ repoRoot: repo.cwd, dir: await worktreePath() });
+    // Rename detection (on by default since git 2.9) collapses this to one "R"
+    // entry naming only the destination — a strict scope allowing the new path
+    // would then wave through the deletion of the out-of-scope source.
+    await rm(path.join(handle.path, "src/original.ts"));
+    await writeIn(handle.path, "allowed/moved.ts", body);
+
+    const { patch, files } = await capturePatch({ worktreePath: handle.path });
+    expect([...files].sort()).toEqual(["allowed/moved.ts", "src/original.ts"]);
+    // The patch itself stays decomposed too: a pure rename record would carry
+    // no content for the fallback parsers to see.
+    expect(patch).not.toContain("rename from");
+  });
+
   test("carries binary files from capture through apply", async () => {
     const repo = await initRepo();
     const original = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);

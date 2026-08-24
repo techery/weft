@@ -351,6 +351,26 @@ describe("projections", () => {
     expect(round?.report).toBe(report);
   });
 
+  test("an older reduction can never replace a newer snapshot", async () => {
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    await store.append("run-a", [runCreated("run-a", "audit")]);
+    const older = reduceState(await drain(store, "run-a"));
+    await store.append("run-a", [{ type: "run.completed", output: { ok: true } }]);
+    const newer = reduceState(await drain(store, "run-a"));
+
+    // Two writers race (an engine and a daemon's refresh): the OLDER reduction
+    // lands last. Atomic renames alone would let it stand — and summarize()
+    // trusts any projection at least as fresh as the journal, indefinitely.
+    await store.snapshot("run-a", { state: newer });
+    await store.snapshot("run-a", { state: older });
+
+    const kept = JSON.parse(await readFile(join(dir, "run-a", "state.json"), "utf8")) as RunState;
+    expect(kept.status).toBe("complete");
+    expect(kept.records).toBe(2);
+    expect((await store.list())[0]?.status).toBe("complete");
+  });
+
   test("readSnapshot is undefined until something is written", async () => {
     const store = new FsJournalStore(await tempDir());
     await store.append("run-a", [runCreated("run-a", "audit")]);

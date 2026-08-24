@@ -3079,3 +3079,49 @@ describe("codex review findings, round 35 (PR #1)", () => {
     expect(completed.usage?.usd).toBeCloseTo(0.25, 6);
   });
 });
+
+describe("codex review findings, round 36 (PR #1)", () => {
+  test("a conflict rollback restores a pre-existing IGNORED file, never deletes it", async () => {
+    const FixResult = z.object({ summary: z.string() });
+    const t = testEngine();
+    // The agent un-ignores secrets.env in its worktree and ships its own copy:
+    // the patch then collides with the user's pre-existing ignored original.
+    t.builder.on(
+      { key: "fix:ig" },
+      { summary: "shipped" },
+      { writes: { ".gitignore": "", "secrets.env": "AGENT\n" } },
+    );
+    const cwd = await tempRepo({
+      ".gitignore": "secrets.env\n",
+      "a.txt": "base\n",
+      "secrets.env": "ORIGINAL\n",
+    });
+    const def = defineWorkflow(
+      { description: "ig", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        const fix = await ctx.agent.detailed("ship config", {
+          schema: FixResult,
+          key: "fix:ig",
+          write: { paths: [".gitignore", "secrets.env"] },
+        });
+        await ctx.integrate([fix], { onConflict: "fail" });
+        return {};
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd });
+    await expect(h.result).rejects.toMatchObject({ code: "conflict" });
+    // The rollback snapshot skipped ignored files, so the collision target was
+    // read as patch-created and rm'd — destroying the user's original.
+    expect(await readFile(join(cwd, "secrets.env"), "utf8")).toBe("ORIGINAL\n");
+    expect(await readFile(join(cwd, ".gitignore"), "utf8")).toBe("secrets.env\n");
+  });
+
+  test("memory store: an older reduction cannot replace a newer snapshot", async () => {
+    const store = new MemoryJournalStore();
+    await store.snapshot("m1", { state: { records: 5, status: "complete" } });
+    await store.snapshot("m1", { state: { records: 3, status: "running" } });
+    const kept = (await store.readSnapshot("m1"))?.state as { records?: number; status?: string };
+    expect(kept.status).toBe("complete");
+    expect(kept.records).toBe(5);
+  });
+});

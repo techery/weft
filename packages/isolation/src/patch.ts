@@ -22,13 +22,19 @@ export async function capturePatch(opts: { worktreePath: string }): Promise<{
   // Staging first is what folds untracked files into the diff.
   await git.raw(["add", "-A"]);
   // -z: NUL-delimited, unquoted paths — a filename holding a newline must reach
-  // checkScope() as ONE path, not two nonexistent ones.
-  const names = await git.raw(["diff", "--cached", "--name-only", "-z"]);
+  // checkScope() as ONE path, not two nonexistent ones. --no-renames: rename
+  // detection (on by default since git 2.9) would list only the DESTINATION of
+  // `git mv old new`, letting a rename out of an allowed path delete its
+  // out-of-scope source unchecked; decomposed to delete+add, both paths list.
+  const names = await git.raw(["diff", "--cached", "--name-only", "--no-renames", "-z"]);
   const files = splitNul(names.stdout);
   if (files.length === 0) return { patch: "", files: [] };
   // --binary embeds full content for binary files (images, archives); without it
   // the patch says only "Binary files differ" and can never be applied.
-  const { stdout } = await git.raw(["diff", "--cached", "--binary"]);
+  // --no-renames again: a rename record would re-couple the two paths the file
+  // list just decomposed (and a 100%-similarity rename carries no ---/+++ lines
+  // for the stderr fallback to name); delete+add hunks are self-contained.
+  const { stdout } = await git.raw(["diff", "--cached", "--binary", "--no-renames"]);
   return { patch: stdout, files };
 }
 

@@ -165,7 +165,7 @@ export async function treeHash(cwd: string): Promise<string> {
  * restored, never deleted as if the patch had created it). Returns HEAD when the
  * tree is already identical to it.
  */
-export async function integrationBaseCommit(cwd: string): Promise<string> {
+export async function integrationBaseCommit(cwd: string, alsoInclude: string[] = []): Promise<string> {
   const indexFile = join(tmpdir(), `weft-index-${randomUUID()}`);
   const env = {
     ...process.env,
@@ -180,6 +180,22 @@ export async function integrationBaseCommit(cwd: string): Promise<string> {
     // matches would look untracked to `add -A` and silently drop out of the tree.
     await execa("git", ["read-tree", "HEAD"], { cwd, env });
     await execa("git", ["add", "-A", "."], { cwd, env });
+    // A rollback restores its caller's target paths FROM this snapshot: a
+    // pre-existing IGNORED file at one of those paths is skipped by `add -A`,
+    // so the rollback would read it as patch-created and DELETE the user's
+    // original. Force the named collision targets in (existing paths only —
+    // `add -f` fails on a pathspec matching nothing).
+    const present: string[] = [];
+    for (const file of alsoInclude) {
+      if (
+        await nodeFs.lstat(join(cwd, file)).then(
+          () => true,
+          () => false,
+        )
+      )
+        present.push(file);
+    }
+    if (present.length > 0) await execa("git", ["add", "-f", "--", ...present], { cwd, env });
     const tree = (await execa("git", ["write-tree"], { cwd, env })).stdout.trim();
     const head = (await execa("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
     const headTree = (await execa("git", ["rev-parse", "HEAD^{tree}"], { cwd })).stdout.trim();
@@ -1818,8 +1834,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
             const baseTree = await treeHash(rt.cwd);
             // Rollback snapshot must include untracked files (stash-create cannot):
             // a user's pre-existing untracked file that a patch collides with is
-            // restored on skip/abort, never deleted as patch-created.
-            const snapRef = await integrationBaseCommit(rt.cwd);
+            // restored on skip/abort, never deleted as patch-created. The patch's
+            // own targets ride along force-added, so even an IGNORED pre-existing
+            // collision file is restorable rather than removed.
+            const snapRef = await integrationBaseCommit(rt.cwd, patch.files);
             const patchText = await rt.host.blobs.getText(patch.ref);
             const applied = await applyPatchToTree({ repoRoot: rt.cwd, patch: patchText });
             if (applied.ok) {
