@@ -171,9 +171,24 @@ A third pass found five more, four of them again inside earlier fixes:
   runs are skipped. (This one was flagged in the previous round's write-up as a design
   question; the index-rebuild consequence settles it.)
 
+A fourth pass found the two paths the version stamp still did not reach, both inside the
+fix above:
+
+- **A registry resume passed no bundle hash.** `persistedDefOf` returns undefined for
+  registry runs, so the host plumbing skipped exactly the case where the *start* had
+  journaled a hash. `WorkflowRegistry` gained an optional `hashOf(name)` and the engine
+  asks it directly — which fixes every host at once, including any the plumbing never
+  reaches.
+- **Children did not inherit the root's disagreement.** A child has only its own body hash
+  (nothing resolved and bundled it), so a delegating child body reads identical however
+  the helper is edited — even when the root's resume had already seen that same bundle
+  move. A child now starts from the root's answer rather than from `true`.
+
 The pattern is the finding. Across four review rounds, the large majority of later defects
-lived in the fixes for earlier ones, not in the code originally audited. A fix is new code
-and needs the same adversarial pass as anything else.
+lived in the fixes for earlier ones, not in the code originally audited — and the deeper
+version of that: a fix aimed at one path leaves the sibling paths untouched, so the
+question after every fix is which other callers reach the same code. A fix is new code and
+needs the same adversarial pass as anything else.
 
 ## Measured baseline
 
@@ -181,7 +196,7 @@ and needs the same adversarial pass as anything else.
 pnpm install                 ✓
 pnpm typecheck               ✓  tsc --strict, 175 files
 pnpm lint                    ✓  biome, 1 info
-pnpm test                    ✓  690 passed (690), 41 files, 38.1s
+pnpm test                    ✓  692 passed (692), 41 files, 38.5s
 weft doctor                  ✓  ready
 weft check                   ✓  all workflows gate clean
 npx tsx examples/*/main.ts   ✓  all seven run offline

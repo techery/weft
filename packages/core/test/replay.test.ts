@@ -315,6 +315,12 @@ describe("replay identity: a cache hit must not lie", () => {
   const Colours = z.object({ before: z.string(), after: z.string() });
   const Answer = z.object({ answer: z.string() });
 
+  /** The slice of `ctx` the delegated-helper tests use, once, instead of at every cast. */
+  type Delegated = {
+    agent(prompt: string, opts: unknown): Promise<{ answer: string }>;
+    human: { approve(opts: unknown): Promise<unknown> };
+  };
+
   /**
    * Two probes ask the same question either side of a change to the world. Their prompt
    * and schema are identical and neither carries a `key`, so the journal cannot tell
@@ -378,10 +384,7 @@ describe("replay identity: a cache hit must not lie", () => {
     let world = "RED";
     let steps: (ctx: never) => Promise<{ before: string; after: string }>;
     const bothSteps = async (ctx: never) => {
-      const c = ctx as unknown as {
-        agent(p: string, o: unknown): Promise<{ answer: string }>;
-        human: { approve(o: unknown): Promise<unknown> };
-      };
+      const c = ctx as unknown as Delegated;
       const before = await c.agent("what colour is the build?", { schema: Answer });
       world = "GREEN";
       const after = await c.agent("what colour is the build?", { schema: Answer });
@@ -389,10 +392,7 @@ describe("replay identity: a cache hit must not lie", () => {
       return { before: before.answer, after: after.answer };
     };
     const laterStepsOnly = async (ctx: never) => {
-      const c = ctx as unknown as {
-        agent(p: string, o: unknown): Promise<{ answer: string }>;
-        human: { approve(o: unknown): Promise<unknown> };
-      };
+      const c = ctx as unknown as Delegated;
       world = "GREEN";
       const after = await c.agent("what colour is the build?", { schema: Answer });
       await c.human.approve({ action: "ship?" });
@@ -531,6 +531,121 @@ describe("replay identity: a cache hit must not lie", () => {
         (r) => r.ev.type === "replay.diverged" && /ambiguous keyless identity/.test(r.ev.reason),
       ),
     ).toBe(true);
+  });
+
+  test("a registry resume asks the registry for the current bundle hash", async () => {
+    // A run started by NAME journals the host's hash, but a resume by name has no host in
+    // the loop to re-supply it: persistedDefOf returns undefined for registry runs and the
+    // hosts pass no defHash. The check then fell back to the body hash alone — blind to an
+    // edit inside a module the workflow delegates to. The registry is the one thing that
+    // knows both the definition and its current version, so the engine asks it.
+    let world = "RED";
+    let steps: (ctx: never) => Promise<{ before: string; after: string }>;
+    const bothSteps = async (ctx: never) => {
+      const c = ctx as unknown as Delegated;
+      const before = await c.agent("what colour is the build?", { schema: Answer });
+      world = "GREEN";
+      const after = await c.agent("what colour is the build?", { schema: Answer });
+      await c.human.approve({ action: "ship?" });
+      return { before: before.answer, after: after.answer };
+    };
+    const laterStepsOnly = async (ctx: never) => {
+      const c = ctx as unknown as Delegated;
+      world = "GREEN";
+      const after = await c.agent("what colour is the build?", { schema: Answer });
+      await c.human.approve({ action: "ship?" });
+      return { before: "n/a", after: after.answer };
+    };
+    const def = defineWorkflow(
+      { name: "registered", description: "registered", input: z.object({}), output: Colours },
+      async (ctx) => steps(ctx as never),
+    );
+    // A registry that answers by name and reports the version of what it just handed back.
+    let bundle = "bundle-v1";
+    const registry = {
+      get: async () => def,
+      hashOf: async () => bundle,
+    };
+
+    const answerWorld = () => mock().on({}, () => ({ answer: world }));
+    steps = bothSteps;
+    const t1 = testEngine({ builder: answerWorld(), registry });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(def, { input: {}, cwd, defHash: bundle });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    expect(await h1.result).toEqual({ before: "RED", after: "GREEN" });
+
+    // The helper module changed; the registry re-bundles and reports the new version.
+    steps = laterStepsOnly;
+    bundle = "bundle-v2";
+    world = "GREEN";
+    // No `def` and no `defHash` — a registry resume, exactly as the hosts issue it.
+    const t2 = reopen(t1, { builder: answerWorld(), registry });
+    const h2 = await t2.engine.resume(h1.runId);
+    const o2 = await h2.outcome();
+    if (o2.status === "waiting_for_human") {
+      await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    }
+    expect((await h2.result) as { after: string }).toMatchObject({ after: "GREEN" });
+  });
+
+  test("a child inherits the root's bundle disagreement", async () => {
+    // The child has only its own body hash: no host resolved it, so there is no bundle
+    // stamp at that level, and a child body that delegates reads identical however the
+    // helper is edited. The ROOT saw the bundle move — and it is the same bundle, holding
+    // this child's call sites too — so the child must start from that answer, not `true`.
+    let world = "RED";
+    let steps: (ctx: never) => Promise<{ before: string; after: string }>;
+    const childBoth = async (ctx: never) => {
+      const c = ctx as unknown as Delegated;
+      const before = await c.agent("what colour is the build?", { schema: Answer });
+      world = "GREEN";
+      const after = await c.agent("what colour is the build?", { schema: Answer });
+      await c.human.approve({ action: "child gate" });
+      return { before: before.answer, after: after.answer };
+    };
+    const childLater = async (ctx: never) => {
+      const c = ctx as unknown as Delegated;
+      world = "GREEN";
+      const after = await c.agent("what colour is the build?", { schema: Answer });
+      await c.human.approve({ action: "child gate" });
+      return { before: "n/a", after: after.answer };
+    };
+    // ONE child definition and ONE parent definition across both runs: every body hash in
+    // the tree is byte-identical, and the root's bundle hash is the only moving part.
+    const child = defineWorkflow(
+      { name: "probe-delegated", description: "probe", input: z.object({}), output: Colours },
+      async (ctx) => steps(ctx as never),
+    );
+    const parent = defineWorkflow(
+      { name: "outer-delegated", description: "outer", input: z.object({}), output: Colours },
+      async (ctx) => (await ctx.workflow(child, {})) as { before: string; after: string },
+    );
+
+    const answerWorld = () => mock().on({}, () => ({ answer: world }));
+    steps = childBoth;
+    const t1 = testEngine({ builder: answerWorld() });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(parent, { input: {}, cwd, defHash: "bundle-v1" });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    const runs = await t1.journal.list();
+    const childRun = runs.find((r) => r.parentRunId === h1.runId);
+    expect(childRun).toBeDefined();
+    await t1.engine.answer(childRun!.runId, o1.pending[0]!.id, { approved: true });
+    expect(await h1.result).toEqual({ before: "RED", after: "GREEN" });
+
+    steps = childLater;
+    world = "GREEN";
+    const t2 = reopen(t1, { builder: answerWorld() });
+    const h2 = await t2.engine.resume(h1.runId, { def: parent, defHash: "bundle-v2" });
+    const o2 = await h2.outcome();
+    if (o2.status === "waiting_for_human") {
+      await t2.engine.answer(childRun!.runId, o2.pending[0]!.id, { approved: true });
+    }
+    expect((await h2.result) as { after: string }).toMatchObject({ after: "GREEN" });
   });
 
   test("an unchanged resume of the same two identical steps still costs zero calls", async () => {

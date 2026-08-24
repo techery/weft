@@ -129,6 +129,17 @@ function versionUnchanged(
 
 export interface WorkflowRegistry {
   get(name: string): Promise<WorkflowDefinition | undefined>;
+  /**
+   * The bundle content hash of what `get(name)` would return right now, when the registry
+   * knows one.
+   *
+   * A run started by registry name journals the host's hash, but a resume by name has no
+   * host in the loop to re-supply it — and without it the version check falls back to the
+   * body hash alone, which cannot see an edit inside a module the workflow delegates to.
+   * Asking the registry closes that for every host at once, including any the plumbing in
+   * `resumeOptions` never reaches.
+   */
+  hashOf?(name: string): Promise<string | undefined>;
 }
 
 export interface EngineOptions {
@@ -340,12 +351,22 @@ export class Engine implements EngineHost {
     if (created?.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
 
     let def = opts.def;
-    if (!def && this.registry) def = await this.registry.get(created.workflow.name);
+    // The caller's hash names the definition the CALLER brought; a registry lookup here
+    // brings its own, and mixing them would compare one script's stamp against another's.
+    let bundleHash = opts.def !== undefined ? opts.defHash : undefined;
+    if (!def && this.registry) {
+      def = await this.registry.get(created.workflow.name);
+      if (def) bundleHash = await this.registry.hashOf?.(created.workflow.name);
+    }
     if (!def) {
       throw new Error(
         `run ${runId}: no definition for "${created.workflow.name}" (pass def or configure a registry)`,
       );
     }
+    const resumeOpts: ResumeOptions = {
+      ...opts,
+      ...(bundleHash !== undefined ? { defHash: bundleHash } : {}),
+    };
 
     // The journal holds the RAW input; reapply the schema so a transform hands the
     // resumed execution the same shape (a Date, a default) the first one saw.
@@ -362,7 +383,7 @@ export class Engine implements EngineHost {
     // still executing would run it twice.
     const lease = await this.claimRun(runId);
     try {
-      return await this.resumeSetup(runId, records, created, def, opts, inputCheck.value, lease);
+      return await this.resumeSetup(runId, records, created, def, resumeOpts, inputCheck.value, lease);
     } catch (err) {
       // Setup failed before drive() (whose finally owns the release from launch
       // on): the claim must not outlive an execution that never started.
@@ -1118,14 +1139,24 @@ export class Engine implements EngineHost {
     if (resuming) {
       for await (const rec of this.journal.read(childId)) records.push(rec);
       const created = records.find((r) => r.ev.type === "run.created")?.ev;
-      if (created?.type === "run.created") {
-        rawInput = created.input === undefined ? {} : created.input;
-        // Re-entering a child is a resume, and it needs the same guard the root got. A
-        // child that defaulted to trusting positions served the deleted call site's
-        // answer to the one that slid into its seq — the exact failure the version stamp
-        // exists to stop, reachable through any `ctx.workflow` whose definition changed.
-        shared.positionsTrusted = versionUnchanged({ body: definitionHash(def) }, created.workflow);
-      }
+      if (created?.type === "run.created") rawInput = created.input === undefined ? {} : created.input;
+      // Re-entering a child is a resume, and it needs the same guard the root got. A
+      // child that defaulted to trusting positions served the deleted call site's answer
+      // to the one that slid into its seq — the exact failure the version stamp exists to
+      // stop, reachable through any `ctx.workflow` whose definition changed.
+      //
+      // INHERITED, not just compared. A child has only its own body hash to go on: no
+      // host resolved it, so there is no bundle stamp at this level, and the body of a
+      // child that delegates to an imported helper reads identical however that helper is
+      // edited. The root's resume DID see the bundle move — and it is the same bundle,
+      // holding this child's call sites too. Starting a child at `true` there would hand
+      // back the disagreement the root just established.
+      shared.positionsTrusted =
+        parent.shared.positionsTrusted !== false &&
+        versionUnchanged(
+          { body: definitionHash(def) },
+          created?.type === "run.created" ? created.workflow : {},
+        );
       replay = ReplayIndex.fromRecords(records);
       // The child's journaled agent dispatches are NOT re-counted here: the
       // root's resume walked every durable descendant journal already, and a
