@@ -281,6 +281,21 @@ export function buildCtx(rt: RunRuntime): Ctx {
       journaled: unknown,
       entry?: { usage?: Usage; sessionId?: string; attempts?: number },
     ) => {
+      // A durable SUPPRESSION (onError:"null"): the failure was converted to
+      // the declared fallback once — replay keeps that decision instead of
+      // re-running the paid optional step, whose fresh outcome could differ.
+      if (
+        typeof journaled === "object" &&
+        journaled !== null &&
+        (journaled as { $suppressed?: boolean }).$suppressed === true
+      ) {
+        return {
+          value: null,
+          usage: entry?.usage ?? { input: 0, output: 0 },
+          files: [],
+          attempts: entry?.attempts ?? 1,
+        } as unknown as DetailedAgentResult<InferOut<S>>;
+      }
       const out = journaled as { value: unknown; files: string[]; patch: PatchRef | null };
       const check = await validateSchema(opts.schema, out.value);
       if (!check.ok) {
@@ -774,6 +789,22 @@ export function buildCtx(rt: RunRuntime): Ctx {
     } catch (err) {
       if (opts.onError === "null" && err instanceof StepError && !isCancellation(err)) {
         rt.recordDrop(err);
+        // The suppression must be DURABLE: with only step.failed on record, a
+        // resume re-runs this paid optional step, and a now-successful attempt
+        // would change control flow. A sentinel completion replays as the same
+        // declared fallback (reviveDetailed serves it as value: null).
+        if (err.step.seq !== undefined && err.step.runId === rt.runId) {
+          await rt
+            .append([
+              {
+                type: "step.completed",
+                seq: err.step.seq,
+                output: { $suppressed: true },
+                attempts: err.attempts ?? 1,
+              },
+            ])
+            .catch(() => undefined);
+        }
         return null;
       }
       throw err;

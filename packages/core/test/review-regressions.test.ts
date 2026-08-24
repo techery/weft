@@ -3480,3 +3480,66 @@ describe("codex review findings, round 46 (PR #1)", () => {
     expect(await readFile(join(cwd, "dist/out.js"), "utf8")).toBe("BUILT\n");
   });
 });
+
+describe("codex review findings, round 48 (PR #1)", () => {
+  test("the agent hard cap survives resume instead of granting a fresh batch", async () => {
+    const Ok = z.object({ ok: z.boolean() });
+    const def = defineWorkflow(
+      { name: "capped4", description: "c", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("one", { schema: Ok, key: "a1" });
+        await ctx.agent("two", { schema: Ok, key: "a2" });
+        await ctx.human.ask({ question: "go on?", schema: z.object({ go: z.boolean() }) });
+        await ctx.agent("three", { schema: Ok, key: "a3" });
+        await ctx.agent("four", { schema: Ok, key: "a4" });
+        return {};
+      },
+    );
+    const t1 = testEngine({ config: { limits: { agentHard: 3 } } });
+    t1.builder.on({ key: "*" }, { ok: true });
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the ask");
+    await t1.engine.shutdown();
+
+    // Two dispatches already happened. A resume that resets the tree-wide
+    // counter to zero would fund TWO more (4 total through a cap of 3).
+    const t2 = reopen(t1, { config: { limits: { agentHard: 3 } } });
+    t2.builder.on({ key: "*" }, { ok: true });
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the ask again");
+    await t2.engine.answer(h1.runId, o2.pending[0]?.id ?? "", { go: true });
+    await expect(h2.result).rejects.toThrow(/agent step cap exceeded/);
+  });
+
+  test("a suppressed onError:'null' failure replays as null, never re-spending", async () => {
+    const Ok = z.object({ ok: z.boolean() });
+    const def = defineWorkflow(
+      { name: "optnull", description: "o", input: z.object({}), output: z.object({ got: z.string() }) },
+      async (ctx) => {
+        const v = await ctx.agent("maybe", { schema: Ok, key: "opt", onError: "null" });
+        await ctx.human.ask({ question: "go on?", schema: z.object({ go: z.boolean() }) });
+        return { got: v === null ? "null" : "value" };
+      },
+    );
+    const t1 = testEngine();
+    t1.builder.on({ key: "opt" }, () => {
+      throw new Error("transient outage");
+    });
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the ask");
+    await t1.engine.shutdown();
+
+    // The provider is healthy now: without a durable suppression, the resumed
+    // optional step re-runs, succeeds, and control flow silently flips.
+    const t2 = reopen(t1);
+    t2.builder.on({ key: "opt" }, { ok: true });
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the ask again");
+    await t2.engine.answer(h1.runId, o2.pending[0]?.id ?? "", { go: true });
+    expect(await h2.result).toEqual({ got: "null" });
+  });
+});

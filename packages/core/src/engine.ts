@@ -277,11 +277,19 @@ export class Engine implements EngineHost {
     lease: RunLease | undefined,
   ): RunHandle {
     const replay = ReplayIndex.fromRecords(records);
+    // The agent hard cap counts DISPATCHES across the whole run tree, and
+    // served steps never re-bump: a counter reset to zero would grant every
+    // resume a fresh full batch, defeating the runaway-workflow safety cap.
+    // Every dispatch appended one agent step.scheduled — restore from those.
+    let agentDispatches = 0;
+    for (const r of records) {
+      if (r.ev.type === "step.scheduled" && r.ev.kind === "agent") agentDispatches++;
+    }
     const shared: SharedRunResources = {
       // The journaled ceiling survives resume; spend restores from journaled usage.
       budget: new Budget(created.budget ?? {}),
       abort: new AbortController(),
-      agentCounter: { count: 0, warned: false },
+      agentCounter: { count: agentDispatches, warned: false },
       reuse: opts.reuse ?? "content",
     };
     // A crash AFTER a durable budget.sampled but BEFORE the paid step's terminal
@@ -856,6 +864,11 @@ export class Engine implements EngineHost {
       const created = records.find((r) => r.ev.type === "run.created")?.ev;
       if (created?.type === "run.created") rawInput = created.input === undefined ? {} : created.input;
       replay = ReplayIndex.fromRecords(records);
+      // The child's journaled agent dispatches count against the SHARED
+      // tree-wide cap, exactly as the root resume restores its own journal's.
+      for (const rec of records) {
+        if (rec.ev.type === "step.scheduled" && rec.ev.kind === "agent") shared.agentCounter.count++;
+      }
       // A crash AFTER a durable budget.sampled but BEFORE the paid step's
       // terminal record leaves that call's spend visible ONLY in the sample
       // (the root resume above guards the same way; samples in a child journal

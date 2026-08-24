@@ -159,6 +159,40 @@ type WaitReply = {
   };
 };
 
+describe("RunStore eviction", () => {
+  it("drops a settled handle so later waits consult the journal, keeping replacements", async () => {
+    const { RunStore } = await import("../src/runs.ts");
+    const store = new RunStore();
+    const pending = (runId: string) => {
+      let settle!: (v: unknown) => void;
+      const result = new Promise((r) => {
+        settle = r;
+      });
+      return {
+        settle,
+        handle: { runId, result, outcome: async () => ({ status: "complete", output: {} }) },
+      };
+    };
+    const first = pending("r1");
+    store.track({ handle: first.handle as never });
+    expect(store.get("r1")).toBeDefined();
+    // Another host may resume the run after this handle settles: liveWait over
+    // the settled snapshot would report the stale outcome forever.
+    first.settle({});
+    await new Promise((r) => setTimeout(r, 10));
+    expect(store.get("r1")).toBeUndefined();
+
+    // A replacement tracked before the OLD handle settles must survive it.
+    const old = pending("r2");
+    store.track({ handle: old.handle as never });
+    const fresh = pending("r2");
+    store.track({ handle: fresh.handle as never });
+    old.settle({});
+    await new Promise((r) => setTimeout(r, 10));
+    expect(store.get("r2")?.handle).toBe(fresh.handle);
+  });
+});
+
 describe("the weft MCP server", () => {
   it("advertises the seven session tools", async () => {
     const s = await session();

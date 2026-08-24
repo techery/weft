@@ -596,6 +596,10 @@ export class RunRuntime {
             this.signal.aborted && !isCancellation(err)
               ? new CancelledError("run cancelled", ref)
               : StepError.from(err, ref);
+          // An error BUILT inside execute() carries its own step ref, usually
+          // without the seq only this runner knows: enrich it so downstream
+          // consumers (drops, durable suppression) can address the step.
+          if (stepError.step.seq === undefined) (stepError.step as { seq?: number }).seq = seq;
           const retryable =
             !isCancellation(stepError) &&
             stepError.code !== "budget_exceeded" &&

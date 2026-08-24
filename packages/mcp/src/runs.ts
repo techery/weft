@@ -65,6 +65,14 @@ export class RunStore {
 
   track(run: TrackedRun): TrackedRun {
     this.runs.set(run.handle.runId, run);
+    // A SETTLED handle is a snapshot: another host can resume the run after
+    // this one finishes with it, and liveWait over the old handle would keep
+    // reporting the stale outcome forever. Evict on settle so later waits
+    // consult the journal (unless a newer handle has replaced this one).
+    const evict = () => {
+      if (this.runs.get(run.handle.runId) === run) this.runs.delete(run.handle.runId);
+    };
+    void run.handle.result.then(evict, evict);
     return run;
   }
 
