@@ -392,6 +392,31 @@ describe("projections", () => {
     expect(report).toMatch(/^# rev \d$/);
   });
 
+  test("a peer's committed records are never truncated as a torn tail", async () => {
+    // The lock can be stolen from a holder frozen past the stale threshold, so a peer's
+    // complete, fsynced records can land between one writer's reconcile and its
+    // truncate. Only a genuinely incomplete trailing line may ever be cut.
+    const dir = await tempDir();
+    const store = new FsJournalStore(dir);
+    await store.append("run-p", [runCreated("run-p", "audit")]);
+
+    // A peer appends behind this instance's back, then a crashed writer leaves a torn
+    // tail after it. The peer's line is complete; the fragment is not.
+    const file = join(dir, "run-p", "journal.jsonl");
+    const peer = `${JSON.stringify({ i: 1, at: 1, ev: { type: "log", message: "from a peer" } })}\n`;
+    await appendFile(file, `${peer}{"i":2,"at":2,"ev":{"type":"lo`);
+
+    await store.append("run-p", [{ type: "log", message: "mine" }]);
+
+    const records: JournalRecord[] = [];
+    for await (const rec of store.read("run-p")) records.push(rec);
+    const messages = records
+      .map((r) => (r.ev.type === "log" ? r.ev.message : undefined))
+      .filter((m): m is string => m !== undefined);
+    expect(messages).toContain("from a peer");
+    expect(messages).toContain("mine");
+  });
+
   test("rebuildProjections restores every projection, not just state.json", async () => {
     // "Only journal.jsonl has to survive" is the claim; tree.json and report.md were not
     // rebuilt, so a deleted one stayed deleted and a stale one kept reporting the status

@@ -54,13 +54,10 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@techery/weft-core": "workspace:*",
     "@anthropic-ai/claude-agent-sdk": "^0.3.241",
-    "picomatch": "^4.0.5",
-    "zod": "^4.4.3",
-    "@techery/weft-sdk": "workspace:*"
-  },
-  "devDependencies": {
-    "@types/picomatch": "^4.0.2"
+    "@techery/weft-core": "workspace:*",
+    "@techery/weft-isolation": "workspace:*",
+    "@techery/weft-sdk": "workspace:*",
+    "zod": "^4.4.3"
   }
 }

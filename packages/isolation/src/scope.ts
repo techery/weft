@@ -49,6 +49,26 @@ export function checkScope(
   files: string[],
   scope: Pick<WriteScope, "paths" | "also">,
 ): { inScope: string[]; outOfScope: string[] } {
+  const matches = scopeMatcher(scope);
+  const inScope: string[] = [];
+  const outOfScope: string[] = [];
+  for (const file of files) {
+    (matches(file) ? inScope : outOfScope).push(file);
+  }
+  return { inScope, outOfScope };
+}
+
+/**
+ * The single predicate a declared write scope means.
+ *
+ * Exported because the scope is enforced in two places — the Claude adapter denies an
+ * out-of-scope edit live through `canUseTool`, and `checkScope` partitions the captured
+ * patch afterwards. They used to compile their own matchers, so the live gate kept the
+ * fail-open picomatch semantics after the post-hoc check was fixed: `!` exclusions
+ * ignored, and an exclusion-only scope permitting the whole tree. One matcher, one
+ * meaning.
+ */
+export function scopeMatcher(scope: Pick<WriteScope, "paths" | "also">): (file: string) => boolean {
   const patterns = [...(scope.paths ?? []), ...(scope.also ?? [])];
   const include: string[] = [];
   const exclude: string[] = [];
@@ -61,11 +81,8 @@ export function checkScope(
   const included = include.length > 0 ? picomatch(include, { dot: true }) : () => false;
   const excluded = exclude.length > 0 ? picomatch(exclude, { dot: true }) : () => false;
 
-  const inScope: string[] = [];
-  const outOfScope: string[] = [];
-  for (const file of files) {
+  return (file: string): boolean => {
     const candidate = matchable(file);
-    (included(candidate) && !excluded(candidate) ? inScope : outOfScope).push(file);
-  }
-  return { inScope, outOfScope };
+    return included(candidate) && !excluded(candidate);
+  };
 }

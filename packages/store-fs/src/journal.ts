@@ -112,7 +112,16 @@ export class FsJournalStore implements JournalStore {
       // Anything on disk past the committed offset is a crashed writer's torn tail
       // (reconcile consumed every complete line): cut it or this append corrupts it
       // into an unparseable record that blocks resume and repair forever.
+      //
+      // Re-reconciled first, and that is not belt-and-braces. The lock can be STOLEN
+      // from a holder frozen past the stale threshold — a GC pause, a suspended VM, a
+      // stalled disk — and a peer that took it may have committed and fsynced real
+      // records in the window between the reconcile above and this line. Truncating
+      // them would destroy acknowledged data. A second reconcile folds anything
+      // COMPLETE into the offset, so only a genuinely torn trailing line is ever cut.
       try {
+        await this.reconcile(runId, cached);
+        if (!mutex.held()) throw new Error(`run ${runId}: append lock lost mid-operation`);
         const { size } = await fs.stat(this.journalPath(runId));
         if (size > cached.byteOffset) await fs.truncate(this.journalPath(runId), cached.byteOffset);
       } catch (err) {

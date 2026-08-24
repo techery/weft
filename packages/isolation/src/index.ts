@@ -17,5 +17,5 @@ export type ApplyOutcome = { ok: true } | { ok: false; conflicts: string[] };
 
 // The ops themselves live alongside this file; their doc comments travel with them.
 export { applyPatchToTree, capturePatch, restoreFiles } from "./patch.ts";
-export { checkScope } from "./scope.ts";
+export { checkScope, scopeMatcher } from "./scope.ts";
 export { addWorktree, removeWorktree } from "./worktree.ts";

@@ -8,7 +8,7 @@ import { promises as fs } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import type { CanUseTool, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentRequest } from "@techery/weft-core";
-import picomatch from "picomatch";
+import { scopeMatcher } from "@techery/weft-isolation";
 import {
   baseToolName,
   EDIT_TOOLS,
@@ -124,8 +124,10 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
   const denied = new Set(req.tools?.deny ?? []);
   const scope = req.writeScope;
   const patterns = scope ? [...scope.paths, ...(scope.also ?? [])] : [];
-  // An empty scope matches nothing — same rule as the post-hoc check in @techery/weft-isolation.
-  const inScope = patterns.length > 0 ? picomatch(patterns, { dot: true }) : () => false;
+  // The SAME predicate the post-hoc patch check uses. Compiling a second matcher here is
+  // how the live gate kept fail-open picomatch semantics (`!` exclusions ignored, an
+  // exclusion-only scope permitting everything) after checkScope was fixed.
+  const inScope = scope ? scopeMatcher(scope) : () => false;
   const scopeMessage = `outside this step's write scope (allowed: ${patterns.join(", ") || "nothing"})`;
 
   return async (toolName, input) => {

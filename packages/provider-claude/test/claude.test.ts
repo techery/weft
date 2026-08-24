@@ -440,6 +440,35 @@ describe("the tool gate", () => {
     expect((await ask(options, "Edit", { file_path: "/etc/hosts" })).behavior).toBe("deny");
   });
 
+  test("the live gate honours `!` exclusions, like the post-hoc check", async () => {
+    // Both used to compile their own picomatch matcher, and picomatch's array semantics
+    // report src/auth/secret.ts as a MATCH here -- so the exclusion the author wrote did
+    // nothing at the one point where it could still prevent the edit.
+    const options = await gateContext(
+      request({
+        tools: { allowEdits: true },
+        writeScope: { paths: ["src/auth/**", "!src/auth/secret.ts"], mode: "strict" },
+      }),
+    );
+
+    expect(await ask(options, "Edit", { file_path: `${CWD}/src/auth/login.ts` })).toEqual({
+      behavior: "allow",
+    });
+    const denial = await ask(options, "Edit", { file_path: `${CWD}/src/auth/secret.ts` });
+    expect(denial.behavior).toBe("deny");
+  });
+
+  test("a scope of only exclusions grants nothing, not everything", async () => {
+    const options = await gateContext(
+      request({
+        tools: { allowEdits: true },
+        writeScope: { paths: ["!secrets/**"], mode: "strict" },
+      }),
+    );
+    expect((await ask(options, "Edit", { file_path: `${CWD}/anything.ts` })).behavior).toBe("deny");
+    expect((await ask(options, "Edit", { file_path: `${CWD}/secrets/key.pem` })).behavior).toBe("deny");
+  });
+
   test("warn write scope lets an out-of-scope edit land for the post-hoc check to flag", async () => {
     const options = await gateContext(
       request({ tools: { allowEdits: true }, writeScope: { paths: ["src/auth/**"], mode: "warn" } }),

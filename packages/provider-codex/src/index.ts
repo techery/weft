@@ -151,6 +151,42 @@ function turnSignal(req: AgentRequest, ctl: RunControl): { signal: AbortSignal; 
 }
 
 /**
+ * JSON Schema keyword positions, so the walk below rewrites SCHEMAS and nothing else.
+ *
+ * A blind `Object.entries` recursion cannot tell a schema from data. It descends into
+ * `const`, `default`, `enum` and `examples` — literal values a workflow chose — and if one
+ * happens to be an object with a `type: "object"` and a `properties` key, it comes back
+ * rewritten, with `additionalProperties: false` and a `required` list bolted on. The value
+ * the model is shown is then not the value the author wrote.
+ */
+/** Keyword whose value is a single subschema. */
+const SCHEMA_KEYWORDS = new Set([
+  "additionalItems",
+  "additionalProperties",
+  "contains",
+  "else",
+  "if",
+  "items",
+  "not",
+  "propertyNames",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+]);
+
+/** Keyword whose value is an array of subschemas. */
+const SCHEMA_LIST_KEYWORDS = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
+
+/** Keyword whose value maps names to subschemas. */
+const SCHEMA_MAP_KEYWORDS = new Set([
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "patternProperties",
+  "properties",
+]);
+
+/**
  * OpenAI's structured outputs accept a strict subset of JSON Schema, and the engine's
  * wire schema is not written in it: `z.toJSONSchema` leaves `additionalProperties`
  * unset, and it omits any property carrying a default from `required`. Both are hard
@@ -161,24 +197,56 @@ function turnSignal(req: AgentRequest, ctl: RunControl): { signal: AbortSignal; 
  * properties, which is what OpenAI documents. Tightening the WIRE schema cannot make a
  * bad value pass — the engine still validates the response against the real schema, and
  * a field the model was forced to emit is one the real schema either accepts or repairs.
+ *
+ * Two things are deliberately left alone. A meaningful `additionalProperties` (a Zod
+ * `.catchall()`) is not overwritten with `false`: the vendor cannot express it, and an
+ * API error naming the schema is better than silently dropping the keys it allowed.
+ * `items` on an array is a subschema, not an object's property map, so a tuple or an
+ * array of objects is rewritten one level down and not at the array itself.
  */
-function toStrictSchema(node: unknown): unknown {
-  if (Array.isArray(node)) return node.map(toStrictSchema);
+export function toStrictSchema(node: unknown): unknown {
+  if (Array.isArray(node)) return node;
   if (typeof node !== "object" || node === null) return node;
 
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
-    out[key] = toStrictSchema(value);
+    if (SCHEMA_KEYWORDS.has(key)) {
+      out[key] = toStrictSchema(value);
+    } else if (SCHEMA_LIST_KEYWORDS.has(key)) {
+      out[key] = Array.isArray(value) ? value.map(toStrictSchema) : value;
+    } else if (SCHEMA_MAP_KEYWORDS.has(key)) {
+      out[key] =
+        typeof value === "object" && value !== null && !Array.isArray(value)
+          ? Object.fromEntries(
+              Object.entries(value as Record<string, unknown>).map(([name, sub]) => [
+                name,
+                toStrictSchema(sub),
+              ]),
+            )
+          : value;
+    } else {
+      // Not a schema position: `const`, `default`, `enum`, `examples`, `title`, `type`…
+      // carry data or metadata and pass through byte for byte.
+      out[key] = value;
+    }
   }
 
   const properties = out.properties;
-  if (out.type === "object" && typeof properties === "object" && properties !== null) {
-    out.additionalProperties = false;
+  if (isObjectSchema(out) && typeof properties === "object" && properties !== null) {
+    if (out.additionalProperties === undefined || out.additionalProperties === false) {
+      out.additionalProperties = false;
+    }
     // A property with a default is optional to Zod but must still be listed here: the
     // model has to produce every key, and the real schema decides what the value means.
     out.required = Object.keys(properties as Record<string, unknown>);
   }
   return out;
+}
+
+/** `type` may be a union (`["object", "null"]`) — an object schema either way. */
+function isObjectSchema(node: Record<string, unknown>): boolean {
+  const type = node.type;
+  return type === "object" || (Array.isArray(type) && type.includes("object"));
 }
 
 async function runTurn(

@@ -238,19 +238,15 @@ importers:
       '@techery/weft-core':
         specifier: workspace:*
         version: link:../core
+      '@techery/weft-isolation':
+        specifier: workspace:*
+        version: link:../isolation
       '@techery/weft-sdk':
         specifier: workspace:*
         version: link:../sdk
-      picomatch:
-        specifier: ^4.0.5
-        version: 4.0.5
       zod:
         specifier: ^4.4.3
         version: 4.4.3
-    devDependencies:
-      '@types/picomatch':
-        specifier: ^4.0.2
-        version: 4.0.3
 
   packages/provider-codex:
     dependencies:
