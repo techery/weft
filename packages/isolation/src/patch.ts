@@ -9,9 +9,6 @@ import { join } from "node:path";
 import { createGit } from "@weft/git";
 import type { ApplyOutcome } from "./index.ts";
 
-/** Prefix for commands whose output is parsed: keeps non-ASCII paths unquoted. */
-const RAW_PATHS = ["-c", "core.quotePath=false"];
-
 /**
  * Capture everything the agent changed in the worktree as one patch:
  * stage all (including untracked), then diff --cached against the base.
