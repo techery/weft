@@ -77,6 +77,17 @@ export class Budget {
     else this.chargedCalls += samples;
   }
 
+  /**
+   * Credit spend to THIS scope only — the ancestors already account for it.
+   * Used when a capped child resumes: the parent chain restored the rolled-up
+   * spend through the parent journal, but the fresh child Budget's own ledger
+   * must still see it, or a 500-token cap that burned 300 has 500 again.
+   */
+  restoreLocal(tokens: number, usd: number): void {
+    this.tokens += tokens;
+    this.usd += usd;
+  }
+
   spentTokens(): number {
     return this.tokens;
   }

@@ -215,7 +215,13 @@ export function isRiskyCommand(command: string): boolean {
     while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i] as string)) i++;
     const head = words[i];
     if (head === undefined) continue;
-    if ((head.split("/").pop() ?? head) !== "git") continue;
+    // `op=push; git "$op" origin HEAD:main` IS a push, assembled out of this
+    // screen's sight. A dynamic EXECUTABLE, an eval, or a dynamic git
+    // subcommand cannot be proven non-publishing — route them to the broker.
+    if (/[$`]/.test(head)) return true;
+    const name = head.split("/").pop() ?? head;
+    if (name === "eval") return true;
+    if (name !== "git") continue;
     const gitWords = words.slice(i);
     // `git -c alias.ship=push ship …` runs whatever the alias expands to — the
     // expansion happens inside git, out of this screen's sight. Any alias
@@ -225,7 +231,9 @@ export function isRiskyCommand(command: string): boolean {
       if (w.startsWith("-calias.")) return true;
       if (w === "-c" && (gitWords[j + 1] ?? "").startsWith("alias.")) return true;
     }
-    if (gitSubcommandOf(gitWords) === "push") return true;
+    const sub = gitSubcommandOf(gitWords);
+    if (sub === "push") return true;
+    if (sub !== undefined && /[$`]/.test(sub)) return true;
   }
   return false;
 }

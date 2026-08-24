@@ -11,6 +11,7 @@ import {
   READ_ONLY_MESSAGE,
   STRUCTURED_OUTPUT_TOOL,
 } from "../src/index.ts";
+import { isRiskyCommand } from "../src/tools.ts";
 
 const SESSION = "sess-abc-123";
 const CWD = "/work/repo";
@@ -630,5 +631,20 @@ describe("usage on failure (codex review round 16, PR #1)", () => {
     await expect(provider.run(request({ onMaxTurns: "finalize" }), control())).rejects.toMatchObject({
       usage: { input: 800, output: 350 },
     });
+  });
+});
+
+describe("risky classification of dynamic commands", () => {
+  test("a publishing action assembled by expansion routes to the broker", () => {
+    // The shell resolves these into `git push …` AFTER the textual screen ran.
+    expect(isRiskyCommand('op=push; git "$op" origin HEAD:main')).toBe(true);
+    expect(isRiskyCommand("git $CMD origin main")).toBe(true);
+    expect(isRiskyCommand("$PUBLISH --now")).toBe(true);
+    expect(isRiskyCommand("`printf git` push origin main")).toBe(true);
+    expect(isRiskyCommand("eval git push origin main")).toBe(true);
+    // Provably static commands stay un-gated: expansions in ARGUMENTS are fine.
+    expect(isRiskyCommand("echo $HOME")).toBe(false);
+    expect(isRiskyCommand("git status")).toBe(false);
+    expect(isRiskyCommand("git log --grep=$PATTERN")).toBe(false);
   });
 });

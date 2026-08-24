@@ -331,14 +331,23 @@ export class Engine implements EngineHost {
       // A refresh that reports the claim LOST (this process stalled past the TTL
       // and another took over) must stop this runtime, not merely stop renewing:
       // the new owner is executing the same run against the same journal.
+      // A refresh that REJECTS counts as a miss: three consecutive failed
+      // renewals span the 15s claim TTL, after which another process may
+      // legitimately own the run — an unrefreshable lease is a lost lease,
+      // never a shrug.
+      let refreshFailures = 0;
       active.leaseTimer = setInterval(
         () =>
           void lease
             .refresh()
             .then((held) => {
+              refreshFailures = 0;
               if (held === false) this.fenceLostRun(active);
             })
-            .catch(() => undefined),
+            .catch(() => {
+              refreshFailures++;
+              if (refreshFailures >= 3) this.fenceLostRun(active);
+            }),
         5_000,
       );
       active.leaseTimer.unref?.();
@@ -777,11 +786,22 @@ export class Engine implements EngineHost {
       replay = ReplayIndex.fromRecords(records);
       // The child's own journaled spend charges up the shared chain — minus what
       // the parent's failed-step roll-ups already restored through ITS journal.
+      const deltaTokens = Math.max(0, replay.totalUsage.tokens - priorRolled.input - priorRolled.output);
+      const deltaUsd = Math.max(0, replay.totalUsage.usd - priorRolled.usd);
       shared.budget.restore(
-        Math.max(0, replay.totalUsage.tokens - priorRolled.input - priorRolled.output),
-        Math.max(0, replay.totalUsage.usd - priorRolled.usd),
+        deltaTokens,
+        deltaUsd,
         Math.max(0, replay.totalUsage.samples - priorRolled.samples),
       );
+      // A child with its OWN cap must see its FULL journaled spend locally: the
+      // delta keeps the ancestors honest, but this fresh Budget's ledger starts
+      // at zero — a 500-token cap that already burned 300 has 200 left, not 500.
+      if (spec.budget) {
+        shared.budget.restoreLocal(
+          Math.max(0, replay.totalUsage.tokens - deltaTokens),
+          Math.max(0, replay.totalUsage.usd - deltaUsd),
+        );
+      }
     } else {
       const rawBad = jsonUnsafeAt(rawInput);
       if (rawBad !== undefined) {

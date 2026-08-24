@@ -482,12 +482,18 @@ export class FsJournalStore implements JournalStore {
     const token = randomUUID();
     const claim = () => JSON.stringify({ owner: token, pid: process.pid, expiresAt: Date.now() + ttl });
     const readOwner = async (): Promise<{ owner?: string; expiresAt?: number } | undefined> => {
+      let raw: string;
       try {
-        return JSON.parse(await fs.readFile(path, "utf8")) as { owner?: string; expiresAt?: number };
-      } catch {
-        // absent, or corrupt (a crashed writer): either way nobody live holds it
+        raw = await fs.readFile(path, "utf8");
+      } catch (err) {
+        // Claims are written atomically (tmp+rename), so only ABSENCE means
+        // unowned. An EIO/EACCES — or the parse failure below — must abort the
+        // operation: reading it as "no owner" would authorize overwriting a
+        // still-live claim and set two processes on the same run.
+        if (!absent(err)) throw err;
         return undefined;
       }
+      return JSON.parse(raw) as { owner?: string; expiresAt?: number };
     };
     const writeClaim = async (): Promise<void> => {
       // Atomic rename so a crash mid-write can never leave a torn claim behind.
@@ -499,7 +505,7 @@ export class FsJournalStore implements JournalStore {
     const acquired = await guard(async () => {
       const prev = await readOwner();
       if (prev && typeof prev.expiresAt === "number" && prev.expiresAt > Date.now()) return false;
-      await writeClaim(); // free, expired, or corrupt: safe to take under the mutex
+      await writeClaim(); // free or expired: safe to take under the mutex
       return true;
     });
     if (!acquired) return undefined;

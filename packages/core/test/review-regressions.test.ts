@@ -2161,3 +2161,78 @@ describe("codex review findings, round 22 (PR #1)", () => {
     expect(completed).toBeDefined();
   });
 });
+
+describe("codex review findings, round 23 (PR #1)", () => {
+  test("a capped child that spent before failing cannot spend its full cap again after resume", async () => {
+    const t1 = testEngine();
+    // First c2 call fails AFTER c1 spent 150 tokens; on resume c2 would succeed.
+    t1.builder.on({ key: "c2" }, () => {
+      throw new Error("transient provider outage");
+    });
+    t1.builder.on({ prompt: /pay/ }, { ok: true });
+    const child = defineWorkflow(
+      { name: "capped", description: "c", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("pay one", { schema: z.object({ ok: z.boolean() }), key: "c1" });
+        await ctx.agent("pay two", { schema: z.object({ ok: z.boolean() }), key: "c2", repair: 0 });
+        return {};
+      },
+    );
+    const parent = defineWorkflow(
+      { name: "capholder", description: "c", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.workflow(child, {}, { key: "kid", budget: { tokens: 200 } });
+        return {};
+      },
+    );
+    const h1 = await t1.engine.start(parent, { input: {}, cwd: await tempDir() });
+    await expect(h1.result).rejects.toThrow();
+    await t1.engine.shutdown();
+
+    // Resume with a healthy provider. The child's FRESH Budget must remember the
+    // 150 tokens its cap already covered — with an empty local ledger, the
+    // 200-token cap would fund another 150-token call (300 total through a
+    // 200-token ceiling).
+    const t2 = reopen(t1);
+    t2.builder.on({ prompt: /pay/ }, { ok: true });
+    const h2 = await t2.engine.resume(h1.runId, { def: parent });
+    await expect(h2.result).rejects.toMatchObject({ code: "budget_exceeded" });
+  });
+
+  test("an unrefreshable lease fences the run instead of letting it run unowned", async () => {
+    vi.useFakeTimers();
+    try {
+      class UnrefreshableLeases extends MemoryJournalStore {
+        override async acquireRun() {
+          return {
+            refresh: async (): Promise<boolean> => {
+              throw new Error("EIO: renewal failed");
+            },
+            release: async () => {},
+          };
+        }
+      }
+      const def = defineWorkflow(
+        { name: "held", description: "h", input: z.object({}), output: z.object({ go: z.boolean() }) },
+        async (ctx) => {
+          const a = await ctx.human.ask({ question: "hold?", schema: z.object({ go: z.boolean() }) });
+          return { go: a.go };
+        },
+      );
+      const engine = new Engine({
+        journal: new UnrefreshableLeases(),
+        blobs: new MemoryBlobStore(),
+        providers: new ProviderRegistry(),
+      });
+      const h = await engine.start(def, { input: {}, cwd: await tempDir() });
+      const o = await h.outcome();
+      if (o.status !== "waiting_for_human") throw new Error("expected suspension");
+      // Three consecutive failed renewals span the claim TTL: the run must stop,
+      // because another process may legitimately own it by now.
+      await vi.advanceTimersByTimeAsync(16_000);
+      await expect(h.result).rejects.toMatchObject({ code: "detached" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
