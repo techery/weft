@@ -186,7 +186,7 @@ interface PendingWait {
 const TIMEOUT_DENY_MARKER = { $timeout: "deny" } as const;
 
 /** Node's timer ceiling (2^31-1 ms): anything past it clamps to ~1ms unless chunked. */
-const MAX_TIMER_MS = 2_147_483_647;
+export const MAX_TIMER_MS = 2_147_483_647;
 
 // ---------------------------------------------------------------------------
 // RunRuntime

@@ -90,13 +90,25 @@ export class GitCli implements Git {
   // -- reads -----------------------------------------------------------------
 
   async status(): Promise<GitStatusResult> {
-    const { stdout } = await this.plumb(["status", "--porcelain=v2", "--branch", "--untracked-files=all"]);
+    // -z: NUL-terminated entries, and no C-quoting — a pathname holding a
+    // newline, tab, quote, or backslash comes back verbatim instead of as its
+    // quoted spelling. A rename entry's ORIGINAL path rides as its own NUL field.
+    const { stdout } = await this.plumb([
+      "status",
+      "--porcelain=v2",
+      "--branch",
+      "--untracked-files=all",
+      "-z",
+    ]);
     const staged: string[] = [];
     const unstaged: string[] = [];
     const untracked: string[] = [];
     let branch = "";
     let entries = 0;
-    for (const line of splitLines(stdout)) {
+    const tokens = stdout.split("\0");
+    for (let i = 0; i < tokens.length; i++) {
+      const line = tokens[i] ?? "";
+      if (line === "") continue;
       if (line.startsWith("# branch.head ")) {
         branch = line.slice("# branch.head ".length).trim();
         continue;
@@ -111,6 +123,7 @@ export class GitCli implements Git {
       const fields = line.split(" ");
       const kind = fields[0] ?? "";
       const path = entryPath(kind, fields);
+      if (kind === "2") i++; // skip the rename's origPath field
       if (path === "") continue;
       // Unmerged entries have no meaningful staged half; they read as work in progress.
       if (kind === "u") {

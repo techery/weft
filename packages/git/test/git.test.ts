@@ -185,6 +185,27 @@ describe("head, branches and mergeBase", () => {
   });
 });
 
+describe("status with hostile pathnames", () => {
+  test("paths with newlines, tabs, and quotes come back verbatim, renames intact", async () => {
+    const git = await initRepo();
+    await seed(git, { "line\nbreak.txt": "one\n" }, "init");
+    await write(git, "line\nbreak.txt", "two\n"); // unstaged modification
+    await write(git, 'we"ird\ttab', "new\n"); // untracked
+    const s = await git.status();
+    // Without -z, porcelain C-quotes these and the parser reported the QUOTED
+    // spelling as the filename.
+    expect(s.unstaged).toEqual(["line\nbreak.txt"]);
+    expect(s.untracked).toEqual(['we"ird\ttab']);
+
+    // A rename's original path is its own NUL record — it must be skipped, not
+    // glued onto the target or misread as another entry.
+    await git.raw(["mv", "line\nbreak.txt", "moved\nname.txt"]);
+    const s2 = await git.status();
+    expect(s2.staged).toEqual(["moved\nname.txt"]);
+    expect(s2.staged).not.toContain("line\nbreak.txt");
+  });
+});
+
 describe("changedSince", () => {
   test("filenames with newlines, tabs, and quotes round-trip exactly", async () => {
     const git = await initRepo();

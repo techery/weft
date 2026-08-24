@@ -52,7 +52,7 @@ import type { BlobRefJson } from "./events.ts";
 import { toWireSchema, unwrapWireValue } from "./jsonschema.ts";
 import { mapWithConcurrency } from "./limiter.ts";
 import type { AgentRequest, AgentResult } from "./provider.ts";
-import { type RunRuntime, type StepIO, sleep as sleepMs } from "./runtime.ts";
+import { MAX_TIMER_MS, type RunRuntime, type StepIO, sleep as sleepMs } from "./runtime.ts";
 
 const RISK_ORDER: Risk[] = ["low", "medium", "high", "irreversible"];
 
@@ -1550,6 +1550,11 @@ export function buildCtx(rt: RunRuntime): Ctx {
         label: `check:${name}`,
         payload: { name, fn: true, required },
         onSettle: settle,
+        // A function check's real inputs live in its CLOSURE — invisible to the
+        // content hash. Serving a journaled pass could vouch for an artifact a
+        // diverged upstream step has since replaced, so validation re-runs on
+        // every resume instead of being served.
+        verifyServe: async () => false,
         execute: async () => {
           const abort = new AbortController();
           let timer: NodeJS.Timeout | undefined;
@@ -1557,7 +1562,18 @@ export function buildCtx(rt: RunRuntime): Ctx {
             const outcome = await Promise.race([
               Promise.resolve().then(() => opts.fn!(abort.signal)),
               new Promise<typeof TIMED_OUT>((resolve) => {
-                timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
+                // Chunked: Node clamps a single timer past 2^31-1ms to ~1ms,
+                // which would FAIL a 30-day check almost immediately.
+                const deadline = Date.now() + timeoutMs;
+                const arm = (): void => {
+                  const remaining = deadline - Date.now();
+                  if (remaining <= 0) {
+                    resolve(TIMED_OUT);
+                    return;
+                  }
+                  timer = setTimeout(arm, Math.min(remaining, MAX_TIMER_MS));
+                };
+                arm();
               }),
             ]);
             if (outcome === TIMED_OUT) {

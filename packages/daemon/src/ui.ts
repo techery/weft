@@ -555,7 +555,9 @@ pre.tail { max-height: 320px; overflow-y: auto; white-space: pre; word-break: no
         return;
       }
       submit.disabled = true;
-      post(runPath(runId, '/answer'), { requestId: request.id, answer: value })
+      // Request ids are RUN-LOCAL (parallel children each have an h1): post to
+      // the run that OWNS this request, not the selected parent.
+      post(runPath(request.runId || runId, '/answer'), { requestId: request.id, answer: value })
         .then(function () {
           pendingKey = null;
           notice('');

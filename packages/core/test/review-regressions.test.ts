@@ -2635,3 +2635,62 @@ describe("codex review findings, round 30 (PR #1)", () => {
     expect(b.remainingTokens()).toBe(10);
   });
 });
+
+describe("codex review findings, round 31 (PR #1)", () => {
+  test("a function check re-runs on resume instead of serving a stale verdict", async () => {
+    let calls = 0;
+    const def = defineWorkflow(
+      { name: "revalidate", description: "r", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        // The check's real input lives in its CLOSURE — the content hash sees a
+        // constant payload, so a served pass could vouch for a replaced artifact.
+        await ctx.check("closure", {
+          fn: () => {
+            calls++;
+            return true;
+          },
+          required: true,
+        });
+        const v = await ctx.human.approve({ action: "done?" });
+        return { ok: v.approved };
+      },
+    );
+    const t1 = testEngine();
+    const h1 = await t1.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the gate");
+    expect(calls).toBe(1);
+    await t1.engine.shutdown();
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the gate again");
+    // Served, the callback never runs again and calls stays 1.
+    expect(calls).toBe(2);
+    await t2.engine.answer(h1.runId, o2.pending[0]?.id ?? "", { approved: true });
+    expect(await h2.result).toEqual({ ok: true });
+  });
+
+  test("a 30-day function-check timeout does not fail the check almost immediately", async () => {
+    const t = testEngine();
+    const def = defineWorkflow(
+      { name: "patientcheck", description: "p", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        // 50ms of real validation under a 30-day ceiling: the old direct timer
+        // clamps to ~1ms and records a FAILED required check.
+        await ctx.check("slowish", {
+          fn: async () => {
+            await new Promise((r) => setTimeout(r, 50));
+            return true;
+          },
+          required: true,
+          timeout: "30d",
+        });
+        return {};
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    expect(await h.result).toEqual({});
+  });
+});
