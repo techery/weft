@@ -438,9 +438,11 @@ export class RunRuntime {
 
     // ---- serve from journal ----
     let match = this.replay?.matchStep(seq, hash, spec.kind, spec.key, this.shared.reuse);
+    let refused: import("./replay.ts").CompletedEntry | undefined;
     if (match && spec.verifyServe) {
       const loaded = await this.loadOutput(match.entry.output);
       if (!(await spec.verifyServe(loaded))) {
+        refused = match.entry;
         match.entry.consumed = true;
         this.consumedEntries++;
         await this.append([
@@ -495,8 +497,18 @@ export class RunRuntime {
       }
       // A verify-refused COMPLETED step re-executes under a fresh seq: it must
       // re-enter the SAME child run (whose journal replays it), never spawn a
-      // fresh one and re-run everything from scratch.
-      childRunId ??= this.replay?.childRunIdOf(hash, spec.kind);
+      // fresh one and re-run everything from scratch. The id comes from the
+      // EXACT entry matchStep consumed for this occurrence — a hash-wide
+      // lookup would hand every same-hash call the last call's child. The
+      // journaled output names the id actually used (collisions regenerate
+      // it); the entry's scheduled record is the fallback.
+      if (childRunId === undefined && refused !== undefined) {
+        const out = refused.output as { childRunId?: unknown } | null | undefined;
+        childRunId =
+          out && typeof out === "object" && typeof out.childRunId === "string"
+            ? out.childRunId
+            : refused.childRunId;
+      }
       childRunId ??= spec.newChildRunId?.();
     }
 

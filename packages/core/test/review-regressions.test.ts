@@ -3740,3 +3740,46 @@ describe("codex review findings, round 50 (PR #1)", () => {
     }
   });
 });
+
+describe("codex review findings, round 52 (PR #1)", () => {
+  test("same-hash sibling children each re-enter their OWN journal on resume", async () => {
+    const N = z.object({ n: z.number() });
+    const child = defineWorkflow(
+      { name: "twin", description: "t", input: z.object({}), output: N },
+      async (ctx) => ctx.agent("pick a number", { schema: N }),
+    );
+    const parent = defineWorkflow(
+      {
+        name: "twinhold",
+        description: "t",
+        input: z.object({}),
+        output: z.object({ a: z.number(), b: z.number() }),
+      },
+      async (ctx) => {
+        // Identical input, NO keys: both workflow steps share one identity
+        // hash, but each ran its own child with a nondeterministic result.
+        const r1 = (await ctx.workflow(child, {})) as { n: number };
+        const r2 = (await ctx.workflow(child, {})) as { n: number };
+        await ctx.human.ask({ question: "go on?", schema: z.object({ go: z.boolean() }) });
+        return { a: r1.n, b: r2.n };
+      },
+    );
+    const t1 = testEngine();
+    let calls = 0;
+    t1.builder.on({ prompt: /pick/ }, () => ({ n: ++calls }));
+    const h1 = await t1.engine.start(parent, { input: {}, cwd: await tempDir() });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the ask");
+    await t1.engine.shutdown();
+
+    // A hash-wide child lookup would re-enter the LAST child's journal for
+    // BOTH occurrences, substituting its output for the first child's. No mock
+    // rules exist here, so any re-dispatch would fail the run outright.
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def: parent });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the ask again");
+    await t2.engine.answer(h1.runId, o2.pending[0]?.id ?? "", { go: true });
+    expect(await h2.result).toEqual({ a: 1, b: 2 });
+  });
+});
