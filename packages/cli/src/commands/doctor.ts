@@ -59,9 +59,7 @@ export function doctorCommand(io: CliIo): Command {
         for (const file of files) {
           const full = path.resolve(workflowsDir(weft), file);
           if (listed.has(full)) continue;
-          checks.push(
-            await workflowCheck({ name: file.replace(/\.ts$/, ""), file: full }, cwd, allowBareOf(weft)),
-          );
+          checks.push(await unlistedFileCheck(full, cwd, allowBareOf(weft)));
         }
 
         say(
@@ -157,6 +155,38 @@ function credentialChecks(): Check[] {
       detail: codex ? "OPENAI_API_KEY set" : "no OPENAI_API_KEY — run `codex login` or export the key",
     },
   ];
+}
+
+/**
+ * A file the registry did not list is either a HELPER module (`./schemas.ts`
+ * bundles cleanly but exports no workflow — fine, `weft check` classifies it the
+ * same way) or genuinely broken, which must fail rather than hide behind the
+ * registry's silence.
+ */
+async function unlistedFileCheck(
+  file: string,
+  cwd: string,
+  allowBare: { allowBare?: string[] },
+): Promise<Check> {
+  const name = path.basename(file, ".ts");
+  try {
+    await loadWorkflow({ entry: file, ...allowBare });
+    return { verdict: "ok", label: name, detail: path.relative(cwd, file) };
+  } catch (err) {
+    if (
+      err instanceof GateError &&
+      err.diagnostics.length > 0 &&
+      err.diagnostics.every((d) => d.rule === "no-workflow-export")
+    ) {
+      return { verdict: "ok", label: name, detail: `${path.relative(cwd, file)} (module, not a workflow)` };
+    }
+    const count = err instanceof GateError ? err.diagnostics.length : 0;
+    return {
+      verdict: "fail",
+      label: name,
+      detail: `${count > 0 ? `${count} gate violation(s)` : (err as Error).message} — weft check ${name}`,
+    };
+  }
 }
 
 async function workflowCheck(

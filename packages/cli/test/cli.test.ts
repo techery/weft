@@ -427,8 +427,22 @@ describe("weft doctor", () => {
   });
 });
 
-describe("weft doctor with a broken workflow", () => {
-  it("reports the file the registry silently skipped instead of printing ready", async () => {
+describe("weft doctor with unlisted files", () => {
+  it("a HELPER module beside the workflows is fine — doctor stays ready", async () => {
+    const root = await tempRoot();
+    await write(root, ".weft/workflows/audit.ts", AUDIT);
+    await write(
+      root,
+      ".weft/workflows/schemas.ts",
+      'import * as z from "zod";\nexport const S = z.object({});\n',
+    );
+
+    const doctored = await cli("--cwd", root, "--mock", "doctor");
+    expect(doctored.text).toContain("module, not a workflow");
+    expect(doctored.text).toContain("ready");
+  });
+
+  it("reports a BROKEN file the registry silently skipped instead of printing ready", async () => {
     const root = await tempRoot();
     await write(root, ".weft/workflows/audit.ts", AUDIT);
     await write(root, ".weft/workflows/broken.ts", "export default {{{ not typescript");
