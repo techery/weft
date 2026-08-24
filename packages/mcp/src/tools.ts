@@ -99,10 +99,11 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
       description:
         "Long-poll one run and return on its next reportable change: " +
         '{ status: "complete", output } · { status: "failed", error } · { status: "cancelled" } · ' +
-        "{ awaiting: { id, kind, question, schema, … } } when a person must answer · " +
+        "{ awaiting: { runId, id, kind, question, schema, … } } when a person must answer · " +
         '{ status: "running" } if the timeout expires first (call again). ' +
-        "On `awaiting`, ask your user the question, then call weft_answer with a value matching `schema` " +
-        "and wait again.",
+        "On `awaiting`, ask your user the question, then call weft_answer with `awaiting.runId` " +
+        "(the request's OWNING run — a suspended child of the run you waited on, possibly) " +
+        "and a value matching `schema`, then wait again on the original run.",
       inputSchema: {
         runId: z.string().describe("The id weft_run or weft_resume returned."),
         timeout: z
@@ -127,7 +128,9 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
         "on a mismatch this returns an error naming the offending field, and the run stays suspended. " +
         'An approval takes { "approved": true } (with an optional "note").',
       inputSchema: {
-        runId: z.string(),
+        runId: z
+          .string()
+          .describe("`awaiting.runId` from weft_wait — the request's OWNING run, not the one waited on."),
         requestId: z.string().describe("`awaiting.id` from weft_wait."),
         answer: z.unknown().describe("The value, shaped by `awaiting.schema`."),
       },

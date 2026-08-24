@@ -21,6 +21,13 @@ const TIMED_OUT = Symbol("weft.timeout");
 
 /** The pending request a session must put to its user before the run can continue. */
 export interface AwaitingRequest {
+  /**
+   * The run that OWNS this request — answer here, not to the id the wait was
+   * addressed to. Request ids are run-local (two parallel children both expose
+   * an `h1`), so a parent-addressed answer can land on the wrong child once
+   * the first pending request is answered elsewhere.
+   */
+  runId: string;
   id: string;
   kind: string;
   question: string;
@@ -85,7 +92,7 @@ async function liveWait(weft: Weft, handle: RunHandle, deadline: number): Promis
   if (outcome.status === "failed") return { status: "failed", error: outcome.error.serialize() };
   if (outcome.status === "cancelled") return { status: "cancelled" };
   const first = outcome.pending[0];
-  if (first) return { awaiting: awaitingOf(first) };
+  if (first) return { awaiting: awaitingOf(first, first.runId) };
   // Suspended on a signal or a timer: there is nothing for a person to answer, so the poll
   // has to stay open. The rest of the window is served from the journal rather than by
   // re-arming `outcome()` in a loop — each call leaves an idle callback behind.
@@ -99,7 +106,7 @@ async function pollWait(weft: Weft, runId: string, deadline: number): Promise<Wa
     const terminal = terminalOf(state);
     if (terminal) return terminal;
     const pending = await pendingAcross(weft, state, new Set([runId]));
-    if (pending) return { awaiting: awaitingOf(pending) };
+    if (pending) return { awaiting: awaitingOf(pending.request, pending.runId) };
     if (!(await tick(deadline))) return { status: "running" };
   }
 }
@@ -114,9 +121,9 @@ async function pendingAcross(
   weft: Weft,
   state: RunState,
   seen: Set<string>,
-): Promise<RunState["humans"][number] | undefined> {
+): Promise<{ request: RunState["humans"][number]; runId: string } | undefined> {
   const own = state.humans.find((h) => h.status === "pending");
-  if (own) return own;
+  if (own) return { request: own, runId: state.runId };
   for (const { childRunId } of state.children) {
     if (seen.has(childRunId)) continue;
     seen.add(childRunId);
@@ -149,9 +156,11 @@ function terminalOf(state: RunState): WaitResult | undefined {
   }
 }
 
-/** Both a live `PendingRequest` and a journaled `HumanState` carry exactly these fields. */
-function awaitingOf(request: PendingRequest | RunState["humans"][number]): AwaitingRequest {
+/** Both a live `PendingRequest` and a journaled `HumanState` carry these fields;
+ * the OWNING run id rides along so answers go to the right (possibly child) run. */
+function awaitingOf(request: PendingRequest | RunState["humans"][number], runId: string): AwaitingRequest {
   return {
+    runId,
     id: request.id,
     kind: request.kind,
     question: request.question,

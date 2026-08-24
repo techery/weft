@@ -62,6 +62,22 @@ export default defineWorkflow(
 );
 `;
 
+/** A parent whose CHILD suspends on a person: the case where the awaiting
+ * request's OWNING run differs from the run the session waited on. */
+const NESTED = `import { defineWorkflow, z } from "@weft/sdk";
+const child = defineWorkflow(
+  { name: "gatechild", description: "asks", input: z.object({}), output: z.object({ approved: z.boolean() }) },
+  async (ctx) => {
+    const v = await ctx.human.approve({ action: "child gate" });
+    return { approved: v.approved };
+  },
+);
+export default defineWorkflow(
+  { name: "nested", description: "parent of an asking child", input: z.object({}), output: z.object({ approved: z.boolean() }) },
+  async (ctx) => (await ctx.workflow(child, {})) as { approved: boolean },
+);
+`;
+
 interface Session extends WeftMcpServer {
   client: Client;
   cwd: string;
@@ -133,7 +149,14 @@ type WaitReply = {
   status?: string;
   output?: { greeting?: string; at?: number; approved?: boolean; note?: string; isNull?: boolean };
   error?: { code?: string; message?: string };
-  awaiting?: { id: string; kind: string; question: string; detail?: string; schema: Record<string, unknown> };
+  awaiting?: {
+    runId: string;
+    id: string;
+    kind: string;
+    question: string;
+    detail?: string;
+    schema: Record<string, unknown>;
+  };
 };
 
 describe("the weft MCP server", () => {
@@ -247,6 +270,28 @@ export default defineWorkflow(
     const done = await json<WaitReply>(s, "weft_wait", { runId, timeout: "10s" });
     expect(done.status).toBe("complete");
     expect(done.output).toEqual({ approved: true, note: "reviewed the diff" });
+  });
+
+  it("awaiting names the OWNING child run, and the answer submitted there lands", async () => {
+    const s = await session();
+    const { runId } = await json<{ runId: string }>(s, "weft_run", { source: NESTED });
+
+    const suspended = await json<WaitReply>(s, "weft_wait", { runId, timeout: "10s" });
+    const awaiting = suspended.awaiting;
+    expect(awaiting?.question).toBe("child gate");
+    // Request ids are run-local (every child exposes an h1): without the owning
+    // run id, a parent-addressed answer can route to the WRONG child.
+    expect(awaiting?.runId).toBeDefined();
+    expect(awaiting?.runId).not.toBe(runId);
+
+    await json(s, "weft_answer", {
+      runId: awaiting?.runId,
+      requestId: awaiting?.id,
+      answer: { approved: true },
+    });
+    const done = await json<WaitReply>(s, "weft_wait", { runId, timeout: "10s" });
+    expect(done.status).toBe("complete");
+    expect(done.output?.approved).toBe(true);
   });
 
   it("rejects an answer the request schema does not accept, and leaves the run waiting", async () => {
