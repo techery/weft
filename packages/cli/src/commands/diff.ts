@@ -50,15 +50,21 @@ export function diffCommand(io: CliIo): Command {
  * One level deep: field-by-field for two objects, whole-value otherwise. Deeper is what
  * `weft explain` is for — a diff that recurses forever stops being scannable.
  */
-function shallowDiff(a: unknown, b: unknown): string[] {
+export function shallowDiff(a: unknown, b: unknown): string[] {
   if (isPlainObject(a) && isPlainObject(b)) {
     const keys = [...new Set([...Object.keys(a), ...Object.keys(b)])].sort();
     const lines: string[] = [];
     for (const key of keys) {
+      const leftHas = key in a;
+      const rightHas = key in b;
       const left = a[key];
       const right = b[key];
-      if (JSON.stringify(left ?? null) === JSON.stringify(right ?? null)) continue;
-      lines.push(`${key}: ${pc.red(jsonLine(left, 36))} ${pc.dim("→")} ${pc.green(jsonLine(right, 36))}`);
+      // Presence is part of the value: an ABSENT field and an explicit null are
+      // different outputs and must show as a change.
+      if (leftHas === rightHas && JSON.stringify(left) === JSON.stringify(right)) continue;
+      lines.push(
+        `${key}: ${pc.red(leftHas ? jsonLine(left, 36) : "(absent)")} ${pc.dim("→")} ${pc.green(rightHas ? jsonLine(right, 36) : "(absent)")}`,
+      );
     }
     return lines;
   }

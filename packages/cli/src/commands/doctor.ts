@@ -5,6 +5,7 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { configPath, GateError, loadWorkflow } from "@weft/host";
@@ -45,6 +46,22 @@ export function doctorCommand(io: CliIo): Command {
         }
         for (const entry of entries) {
           checks.push(await workflowCheck(entry, cwd, allowBareOf(weft)));
+        }
+        // registry.list() silently SKIPS files that fail to load: a broken
+        // workflow beside a healthy one must not let doctor print "ready".
+        const listed = new Set(entries.map((entry) => path.resolve(entry.file)));
+        let files: string[] = [];
+        try {
+          files = (await readdir(workflowsDir(weft))).filter((f) => f.endsWith(".ts"));
+        } catch {
+          // an absent directory is already reported by layoutChecks
+        }
+        for (const file of files) {
+          const full = path.resolve(workflowsDir(weft), file);
+          if (listed.has(full)) continue;
+          checks.push(
+            await workflowCheck({ name: file.replace(/\.ts$/, ""), file: full }, cwd, allowBareOf(weft)),
+          );
         }
 
         say(

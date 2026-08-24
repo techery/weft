@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
+import { shallowDiff } from "../src/commands/diff.ts";
 import type { CliIo } from "../src/io.ts";
 import { buildProgram } from "../src/main.ts";
 
@@ -423,6 +424,29 @@ describe("weft doctor", () => {
     expect(doctored.text).toContain("codex");
     expect(doctored.text).toContain("audit");
     expect(doctored.text).toContain("ready");
+  });
+});
+
+describe("weft doctor with a broken workflow", () => {
+  it("reports the file the registry silently skipped instead of printing ready", async () => {
+    const root = await tempRoot();
+    await write(root, ".weft/workflows/audit.ts", AUDIT);
+    await write(root, ".weft/workflows/broken.ts", "export default {{{ not typescript");
+
+    const doctored = await cli("--cwd", root, "--mock", "doctor");
+    expect(doctored.text).toContain("audit");
+    expect(doctored.text).toContain("broken");
+    expect(doctored.text).toContain("problem");
+    expect(doctored.text).not.toContain("ready");
+  });
+});
+
+describe("diff field presence", () => {
+  it("an absent field and an explicit null are DIFFERENT outputs", () => {
+    expect(shallowDiff({ a: null }, {})).toHaveLength(1);
+    expect(shallowDiff({}, { a: null })).toHaveLength(1);
+    expect(shallowDiff({ a: null }, { a: null })).toHaveLength(0);
+    expect(shallowDiff({ a: 1 }, { a: 1 })).toHaveLength(0);
   });
 });
 

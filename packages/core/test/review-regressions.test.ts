@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readFile, symlink } from "node:fs/promises";
+import { stat as fsStat, readFile, symlink, utimes, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import {
@@ -2723,5 +2723,67 @@ describe("codex review findings, round 32 (PR #1)", () => {
     expect([ra, rb].map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
     const answers = (await records(t1.journal, h1.runId)).filter((r) => r.ev.type === "human.answered");
     expect(answers).toHaveLength(1);
+  });
+});
+
+describe("codex review findings, round 33 (PR #1)", () => {
+  test("a decimal multipleOf accepts the answers the authoritative schema accepts", async () => {
+    const t = testEngine();
+    const def = defineWorkflow(
+      { name: "tenths", description: "t", input: z.object({}), output: z.object({ amount: z.number() }) },
+      async (ctx) => {
+        const amount = await ctx.human.ask({ question: "how much?", schema: z.number().multipleOf(0.1) });
+        return { amount };
+      },
+    );
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    const o = await h.outcome();
+    if (o.status !== "waiting_for_human") throw new Error("expected ask");
+    // Binary floats: 0.3 % 0.1 is ~0.1, so the structural pre-check used to
+    // refuse an answer zod itself accepts.
+    await t.engine.answer(h.runId, o.pending[0]?.id ?? "", { value: 0.3 });
+    expect(await h.result).toEqual({ amount: 0.3 });
+  });
+
+  test("a strict resolver tampering with an ignored file at SAME size and mtime is still caught", async () => {
+    const FixResult = z.object({ summary: z.string() });
+    const t = testEngine();
+    t.builder.on({ key: "fix:m" }, { summary: "edit" }, { writes: { "a.txt": "AGENT\n" } });
+    // The tamper preserves byte length AND restores mtime: a size:mtime
+    // manifest sees nothing, only content hashing does.
+    t.builder.on(
+      { key: "merge:fix:m" },
+      async (req: { cwd: string }) => {
+        const target = join(req.cwd, "secrets.env");
+        const before = await fsStat(target);
+        await writeFile(target, "TAMPERED\n"); // same 9 bytes as "ORIGINAL\n"
+        await utimes(target, before.atime, before.mtime);
+        return { resolved: true, notes: "fixed" };
+      },
+      { writes: { "a.txt": "RESOLVED\n" } },
+    );
+    const cwd = await tempRepo({
+      ".gitignore": "secrets.env\n",
+      "a.txt": "base\n",
+      "secrets.env": "ORIGINAL\n",
+    });
+    const def = defineWorkflow(
+      { description: "mm", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        const fix = await ctx.agent.detailed("fix", {
+          schema: FixResult,
+          key: "fix:m",
+          write: { paths: ["a.txt"] },
+        });
+        await ctx.bash("printf 'MAIN\\n' > a.txt");
+        await ctx.integrate([fix], { onConflict: "agent" });
+        return {};
+      },
+    );
+    const handle = await t.engine.start(def, { input: {}, cwd });
+    await expect(handle.result).rejects.toMatchObject({ code: "scope_violation" });
+    const recs = await records(t.journal, handle.runId);
+    const violation = recs.find((r) => r.ev.type === "scope.violation" && r.ev.files.includes("secrets.env"));
+    expect(violation).toBeDefined();
   });
 });

@@ -1690,7 +1690,19 @@ export function buildCtx(rt: RunRuntime): Ctx {
         }
         for (const name of names.sort()) await walk(`${clean}/${name}`);
       } else {
-        manifest.set(clean, `${stat.size}:${Math.floor(stat.mtimeMs)}`);
+        // Metadata is forgeable: a resolver can rewrite an ignored file with the
+        // same size and a preserved (or same-millisecond) mtime. CONTENT is the
+        // signature — nothing less catches every out-of-scope edit.
+        try {
+          manifest.set(
+            clean,
+            createHash("sha256")
+              .update(await nodeFs.readFile(resolveInCwd(clean)))
+              .digest("hex"),
+          );
+        } catch {
+          manifest.set(clean, `unreadable:${stat.size}:${Math.floor(stat.mtimeMs)}`);
+        }
       }
     };
     for (const entry of entries) await walk(entry);

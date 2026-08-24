@@ -193,7 +193,7 @@ function constraintCheck(s: Record<string, unknown>, value: unknown, path: strin
       push(`expected > ${s.exclusiveMinimum}`);
     if (typeof s.exclusiveMaximum === "number" && value >= s.exclusiveMaximum)
       push(`expected < ${s.exclusiveMaximum}`);
-    if (typeof s.multipleOf === "number" && s.multipleOf > 0 && value % s.multipleOf !== 0)
+    if (typeof s.multipleOf === "number" && s.multipleOf > 0 && !isMultipleOf(value, s.multipleOf))
       push(`expected a multiple of ${s.multipleOf}`);
   }
   if (Array.isArray(value)) {
@@ -203,6 +203,13 @@ function constraintCheck(s: Record<string, unknown>, value: unknown, path: strin
       push(`expected at most ${s.maxItems} item(s)`);
   }
   return issues;
+}
+
+/** Decimal-safe multipleOf: 0.3 % 0.1 is ~0.1 in binary floats, so the quotient
+ * is compared to its nearest integer with a scale-aware tolerance instead. */
+function isMultipleOf(value: number, of: number): boolean {
+  const quotient = value / of;
+  return Math.abs(quotient - Math.round(quotient)) <= 1e-9 * Math.max(1, Math.abs(quotient));
 }
 
 function joinPath(base: string, key: string): string {
