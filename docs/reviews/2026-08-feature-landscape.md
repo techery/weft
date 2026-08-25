@@ -2,7 +2,7 @@
 
 **Written:** 2026-08-24, revised 2026-08-25 to correct a framing error (see [Method](#method-and-a-correction)).
 **Against:** `da85488` on `main`. **Measured baseline, this checkout:** `pnpm install` ✓ · `pnpm test` ✓ **694 passed (694), 41 files, 48.8 s** · 16 packages, 140 source files, ~37.0k lines.
-**Scope:** everything weft ships, compared against the open-source tools that do the same *job* — help a team run repeatable, reviewable multi-agent work on a repository — on 18 dimensions, followed by a ranked build list.
+**Scope:** everything weft ships, compared against the open-source tools that do the same *job* — help a team run repeatable, reviewable multi-agent work on a repository — on 19 dimensions, followed by a ranked build list.
 **Companion:** [DX and Architecture Review](./2026-08-dx-and-architecture.md), which audits *quality*. This document is about *surface*.
 
 ---
@@ -15,7 +15,7 @@ Weft is a way to **write a coding workflow down as a program** — review, audit
 
 The three-line version:
 
-1. **Its differentiator is typed hand-off, not durability.** Of every coding-agent harness surveyed, *not one* has a typed step-to-step contract — the research notes read "no typed step-result contract" for Cline, Codex CLI, opencode, OpenHands, Aider, SWE-agent, and the worktree managers alike. goose Recipes validates the whole run's output; Claude Code's dynamic workflows validate one agent call and hand you `null` on failure. Weft requires a schema on every step, validates engine-side, and repairs in-session. That, plus a zero-token test harness for the workflow itself — which **nothing else in this field has at all** — is the actual moat.
+1. **Its differentiator is typed hand-off, not durability.** Of every coding-agent harness surveyed, *not one* has a typed step-to-step contract — the research notes read "no typed step-result contract" for Cline, Codex CLI, opencode, OpenHands, Aider, SWE-agent, and the worktree managers alike. goose Recipes validates the whole run's output; Claude Code's dynamic workflows validate one agent call and hand you `null` on failure. Weft requires a schema on every step, validates engine-side, and repairs in-session. That, plus a zero-token test harness for the workflow itself — which **nothing else in this field has at all** — and a sub-workflow call with a typed contract and an inherited budget, is the actual moat.
 2. **The write model is the other half, and it is genuinely unmatched.** Declared `write:` scopes enforced live, patches captured rather than applied, and `ctx.integrate()` as a journaled merge gate with a conflict policy and a ledger. Worktree isolation is now table stakes — Claude Code, Codex CLI, container-use, claude-squad, Crystal, Conductor, uzi and Vibe Kanban all have it. *Scoped patches that land only where you said they could* is weft's alone.
 3. **It loses on interop, on evidence, and on distribution.** It reads no `AGENTS.md`, so a write step starts stripped of the conventions every other runner ingests by default — free interop, declined. Its stdlib review patterns have never been measured, while CodeRabbit and Qodo publish F1 numbers. And it is competing for a developer's attention with GitHub Spec Kit at **131.2k stars** and Claude Code's skills-and-plugins ecosystem at **142.9k**, having published nothing.
 
@@ -27,7 +27,7 @@ The three-line version:
 
 ## Method, and a correction
 
-**The correction.** The first draft of this report compared weft against durable-execution engines — Temporal, Restate, DBOS, Inngest, Vercel Workflow DevKit — and rated it on durability dimensions. That was wrong. Durability is an *instrument* weft uses so an overnight audit or a gate waiting on a person survives the session; it is not what weft is for, and a task queue is not a competitor to a code-review workflow. Those engines have been demoted to [Appendix B](#appendix-b--where-the-durability-machinery-came-from), as prior art for the machinery. The comparison in Part 3 is rebuilt on coding-workflow dimensions, and durability appears once, as dimension 14, framed as what it is.
+**The correction.** The first draft of this report compared weft against durable-execution engines — Temporal, Restate, DBOS, Inngest, Vercel Workflow DevKit — and rated it on durability dimensions. That was wrong. Durability is an *instrument* weft uses so an overnight audit or a gate waiting on a person survives the session; it is not what weft is for, and a task queue is not a competitor to a code-review workflow. Those engines have been demoted to [Appendix B](#appendix-b--where-the-durability-machinery-came-from), as prior art for the machinery. The comparison in Part 3 is rebuilt on coding-workflow dimensions, and durability appears once, as dimension 15, framed as what it is.
 
 | Layer | How it was produced | Confidence |
 | --- | --- | --- |
@@ -62,7 +62,7 @@ export default defineWorkflow(
 
 `await` is a sequential edge. `ctx.parallel` fans out and joins (returns `Settled<T>[]`). `ctx.pipeline` runs independent lanes with no barrier between stages. `if` on a typed field is a conditional edge. `while` is a bounded loop. The graph is discovered by execution, not declared.
 
-**Steps:** `agent` (+ `agent.detailed`), `parallel`, `pipeline`, `ok`, `workflow` (sub-runs). **Humans:** `gate`, `human.ask/approve/review`. **Effects:** `fs.read/glob/stat`, `exec`, `bash`, `fetch`, `env`, `secret`, and 25 typed `git` operations. **Ledger:** `check`, `integrate`, `discard`, `note`. **Durable waits:** `signal`, `sleep`. **Journaled replacements for banned globals:** `now`, `random`, `uuid`. **Structure:** `phase`, `log`, `budget`, `run`.
+**Steps:** `agent` (+ `agent.detailed`), `parallel`, `pipeline`, `ok`, and `workflow` — a sub-workflow call taking either a definition (typed end to end) or a registry name (returns `unknown`), giving the child its own run id, its own journal, and a budget carved from the parent's. **Humans:** `gate`, `human.ask/approve/review`. **Effects:** `fs.read/glob/stat`, `exec`, `bash`, `fetch`, `env`, `secret`, and 25 typed `git` operations. **Ledger:** `check`, `integrate`, `discard`, `note`. **Durable waits:** `signal`, `sleep`. **Journaled replacements for banned globals:** `now`, `random`, `uuid`. **Structure:** `phase`, `log`, `budget`, `run`.
 
 ### Six mechanisms that carry the product
 
@@ -70,11 +70,13 @@ export default defineWorkflow(
 
 **2 — Replay is content-addressed and edit-tolerant.** Step identity is `sha256(canonicalJson{kind, payload, schema, key})` — content, not position. `matchStep` tries three tiers: same seq + same hash → any unconsumed same-hash entry (salvage) → under `--reuse key`, any unconsumed same-key entry. `run.created` stamps `bodyHash = sha256(name + def.run.toString())` plus the host's bundle `defHash`; when the stamps disagree, `positionsTrusted = false` and a keyless step matching several journaled entries **re-runs** with an `ambiguous keyless identity` divergence rather than guessing. Measured in `examples/04`: an unchanged resume costs **0 provider calls**; rewording one step costs exactly **1**; `weft replay --dry` names the diverging step before a model is called.
 
-**3 — `verifyServe`: the journal is checked against the world.** A step spec may supply `verifyServe(journaled)`; a false verdict consumes the entry, journals `replay.diverged`, and re-executes with `io.reExecuting = true`. `git.commit` checks the sha is still an ancestor of HEAD; `git.checkout` checks HEAD is still on the ref; `git.tag` checks the tag still peels to the journaled sha; `ctx.integrate` checks tree hashes and reverse-apply. This exists because weft's steps mutate a git repository rather than a database — a journaled `git commit` is only still true if the sha is still reachable. It is unusual machinery (no replay engine surveyed re-checks the world before serving), but it is plumbing in service of the coding model, not a feature anyone would choose weft for.
+**3 — `verifyServe`: the journal is checked against the world.** A step spec may supply `verifyServe(journaled)`; a false verdict consumes the entry, journals `replay.diverged`, and re-executes with `io.reExecuting = true`. `git.commit` checks the sha is still an ancestor of HEAD; `git.checkout` checks HEAD is still on the ref; `git.tag` checks the tag still peels to the journaled sha; `ctx.integrate` checks tree hashes and reverse-apply. **No other replay engine in the survey does this at all** — Temporal, Restate, DBOS, Inngest, Vercel WDK, LangGraph and MAF all serve a journaled result unconditionally.
 
 **4 — Write steps produce patches, not mutations.** A write step gets a *per-attempt* worktree at `tmpdir/weft-worktrees/<runId>/<seq>.<attempt>`, seeded from `integrationBaseCommit` — a dangling-ref-pinned commit of the current tracked + untracked tree, so later writers build on earlier `ctx.integrate()` results rather than HEAD. `capturePatch` force-stages in-scope gitignored outputs, uses `--no-renames` so a `git mv` out of scope decomposes into a checkable delete + add, and `--binary` so binary edits survive. Out-of-scope files are flagged (`warn`) or the patch quarantined (`strict`). Nothing lands until `ctx.integrate()`, and **a run that ends with un-integrated patches fails** (`engine.ts:687-692`).
 
 **5 — Humans are steps.** A human step is a journaled step whose provider is a person. `Engine.answer` serializes per `runId::requestId` and appends via `journal.appendIf` under a re-fold loop, so a standing answer, a terminal event, or a lost CAS refuses the caller — safe across processes. The answer is validated against the step's authoritative Standard Schema; a failure journals `human.rejected` and **reopens** the request rather than failing the run. Provenance is first-class: `answeredBy: "human" | "policy" | "timeout"`. Timeout policy is `deny` / `escalate` / `{ default }`.
+
+**A workflow can call another workflow.** `ctx.workflow(def, input, { budget: { fraction: 0.25 } })` runs a child as a step: its own run id, its own journal, `parentRunId` and `depth` recorded, a parent-linked budget so `min(own, ancestor headroom)` still holds, a shared abort signal and agent cap, and a `maxDepth` of 3. The step is deliberately never served from the journal — the child definition is invisible to the parent step's hash, so re-entering is the only honest option, and the child's own journal then replays it at no cost if it is unchanged. `examples/05` runs four children under one 1800-token ceiling and refuses the call that would overrun.
 
 **6 — Money is enforced, not observed.** `Budget.charge` propagates up the parent chain; `remainingTokens`/`remainingUsd` take `min(own, ancestor headroom)`; `checkBeforeStep` throws once either axis hits zero. `reserveCall` is concurrency-aware admission that **parks** rather than refuses — it requires `(inflight + 1) × (spent / samples)` to fit, serializes while no cost sample exists, and wakes parked callers on every charge. `reportsUsd` is a provider capability: when a run has a USD-only ceiling, a provider that reports no cost, *and* no price entry for the model, weft **refuses the dispatch** rather than silently charging $0.
 
@@ -206,7 +208,7 @@ The interop weft is largely declining. `AGENTS.md` in particular is free, univer
 
 ## Part 3 — The comparison
 
-18 dimensions, chosen because they separate tools that do this job rather than describing all of them. Durability sits at #14, as the instrument it is.
+19 dimensions, chosen because they separate tools that do this job rather than describing all of them. Durability sits at #15, as the instrument it is.
 
 ### Where weft stands
 
@@ -222,16 +224,17 @@ The interop weft is largely declining. `AGENTS.md` in particular is free, univer
 | 8 | How the change lands | **Leads** | `ctx.integrate()` has no equivalent anywhere. It lands in your working tree — right for a local tool — but no verb takes it further |
 | 9 | Test-gated completion | **Leads** | A required `ctx.check` gates run completion, and costs no model call |
 | 10 | Built-in review patterns | **Competitive** | A real pattern library — against products publishing F1 numbers weft has never measured |
-| 11 | Cross-vendor second opinion | **Competitive** | Per-step routing is the right shape; three provider ids and a Claude-only price table is not the right coverage |
-| 12 | Mid-run human approval | **Leads** | Durable, schema-validated, reject-and-reopen. Every rival's approval dies with the process |
-| 13 | Cost control per task | **Leads** | Hard token AND USD ceilings inherited across a run tree. SWE-agent is the only real peer |
-| 14 | Long-task survival | **Leads** | The instrument, and it works — but it only pays off on workflows that outlive a session |
-| 15 | Audit trail | **Competitive** | The richest record in the field, in a format only weft can read |
-| 16 | Parallel throughput across tasks | **Behind** | Good inside one run; two runs sharing a tree is undefined behaviour |
-| 17 | Where it runs, and what that costs | **By design** | Local-first is the posture, and it is the same one the harnesses it competes with take. The unpaid costs are local-tool basics: repo-root discovery, blob GC, a repo mutex |
-| 18 | Distribution and practice | **Absent** | Unpublished, zero users, against 131.2k and 142.9k |
+| 11 | Composing workflows out of workflows | **Leads** | Typed I/O, own journal, inherited budget — nobody else has a callable unit with a contract. Caveats: the registry-name form is untyped, and package-shared workflows escape the hash and the gate |
+| 12 | Cross-vendor second opinion | **Competitive** | Per-step routing is the right shape; three provider ids and a Claude-only price table is not the right coverage |
+| 13 | Mid-run human approval | **Leads** | Durable, schema-validated, reject-and-reopen. Every rival's approval dies with the process |
+| 14 | Cost control per task | **Leads** | Hard token AND USD ceilings inherited across a run tree. SWE-agent is the only real peer |
+| 15 | Long-task survival | **Leads** | The instrument, and it works — but it only pays off on workflows that outlive a session |
+| 16 | Audit trail | **Competitive** | The richest record in the field, in a format only weft can read |
+| 17 | Parallel throughput across tasks | **Behind** | Good inside one run; two runs sharing a tree is undefined behaviour |
+| 18 | Where it runs, and what that costs | **By design** | Local-first is the posture, and it is the same one the harnesses it competes with take. The unpaid costs are local-tool basics: repo-root discovery, blob GC, a repo mutex |
+| 19 | Distribution and practice | **Absent** | Unpublished, zero users, against 131.2k and 142.9k |
 
-**Nine leads, five competitive, one behind, one by design, two absent** — and the shape is the finding. Weft leads on everything about *the workflow as an engineering artifact*: typed hand-off, testability, scoped writes, gated integration, test-gated completion, durable humans, hard cost ceilings. It is absent on everything about *fitting into the world it runs in*: the conventions file sitting in the repo, and anyone having heard of it.
+**Ten leads, five competitive, one behind, one by design, two absent** — and the shape is the finding. Weft leads on everything about *the workflow as an engineering artifact*: typed hand-off, testability, scoped writes, gated integration, test-gated completion, composability, durable humans, hard cost ceilings. It is absent on everything about *fitting into the world it runs in*: the conventions file sitting in the repo, and anyone having heard of it.
 
 ### The dimensions in detail
 
@@ -384,7 +387,23 @@ The interop weft is largely declining. `AGENTS.md` in particular is free, univer
 | 🟨 partial | SWE-agent | The research lineage that established find-then-verify — as benchmark methodology rather than a shipped library. |
 | 🟥 none | goose / Cline / opencode / Codex CLI / Aider | Review is whatever you prompt for. |
 
-#### 11. Cross-vendor second opinion
+#### 11. Composing workflows out of workflows
+
+**Weft.** `ctx.workflow(def, input, opts)` runs another workflow as a step. The child gets **its own run id and its own journal**, `parentRunId` and `depth` recorded, a budget carved from the parent (`{ fraction }` or an absolute `{ tokens, usd }`) that is always parent-linked so `min(own, ancestor headroom)` still holds, and a shared abort signal and agent cap. Depth is capped at `maxDepth` (default 3). The step is deliberately **never served from the journal** — the child definition is invisible to the parent step's hash, so re-entering the child is the only honest option; the child's own journal then replays it for free if it is unchanged. Verified running: `examples/05` drives four children under one 1800-token ceiling and refuses the call that would overrun. **Two real limits.** The registry-name form `ctx.workflow("child", input)` returns `unknown` — typecheck confirms it is the only error in a probe where the definition form types cleanly end to end. And sharing workflows through a *package* escapes three guarantees at once: an allow-listed bare import is `external` to the bundle, so it is ungated, runs with the host's globals, and — measured — two behaviourally different versions of the same package produce an **identical bundle hash**, which is exactly the signal `positionsTrusted` relies on.
+
+| | Project | How they do it |
+| --- | --- | --- |
+| 🟩 strong | goose Recipes | The closest peer, and real: `sub_recipes` compose recipes, with the `SubRecipe` struct passing specific parameter values to a child agent, run as a separate subagent so context does not bleed. Parameters are Jinja-style template variables — untyped strings — and a child's result comes back as whatever the subagent produced unless that sub-recipe sets its own `response.json_schema`. Composition without a typed seam. |
+| 🟩 strong | Claude Code | Nested `workflow()` inside dynamic workflows, plus subagents and agent teams where a main agent owns planning and integration while specialists handle bounded tasks with their own context and tool permissions. Rich, and per-task rather than checked in: nothing composes across runs because nothing is saved. |
+| 🟨 partial | Cline agent teams | A coordinator spawns specialists that coordinate through persisted `task-board.json` / `mailbox.json`. That is composition of AGENTS, not of workflows — there is no reusable unit with declared inputs to call twice. |
+| 🟨 partial | OpenAI Codex CLI | Subagents in TOML, invoked by the model, returning **summaries** to the parent thread. Composable in the loose sense; no declared contract and no budget carve-out. |
+| 🟨 partial | opencode | A `task` tool lets an agent hand work to another declared agent. Same shape as Codex: agent-level, prose-returning. |
+| 🟨 partial | OpenHands | Sub-agents registered via a factory plus `register_agent`, but delegation is documented as designed for sequential blocking tasks — no fan-out inside a conversation. |
+| 🟥 none | GitHub Spec Kit | Phases (`specify` → `plan` → `tasks` → `implement`) are a pipeline through one project, not a callable unit. There is no way to invoke another spec's workflow and get a value back. |
+| 🟥 none | gh-aw | One workflow per file, triggered by GitHub events. Composition is one workflow emitting a safe output that triggers another — asynchronous and untyped, not a call. |
+| 🟥 none | SWE-agent / Aider / container-use / worktree managers | No composition primitive of any kind. |
+
+#### 12. Cross-vendor second opinion
 
 **Weft.** One option on one step: `ctx.agent(prompt, { provider: 'codex', ... })`. A cross-vendor refutation panel is a per-step routing choice, and the engine — not the vendor — validates what comes back. **Caveat:** only `claude`, `codex` and `mock` exist, the built-in price table is Claude-only, and `strict` scopes mean different things per provider.
 
@@ -400,7 +419,7 @@ The interop weft is largely declining. `AGENTS.md` in particular is free, univer
 | 🟨 partial | Claude Code | Per-subagent routing, but strictly inside the Anthropic family. |
 | 🟨 partial | OpenAI Codex CLI | Per-subagent model AND reasoning effort, but OpenAI models only. |
 
-#### 12. Mid-run human approval
+#### 13. Mid-run human approval
 
 **Weft.** `ctx.gate` and `ctx.human.ask/approve/review` suspend the run DURABLY. The answer can arrive hours later from the CLI, the web UI, or the session that started the run, and is validated against the step's schema; a bad answer journals `human.rejected` and REOPENS the request rather than failing the run. Provenance is recorded: `answeredBy: human | policy | timeout`.
 
@@ -415,7 +434,7 @@ The interop weft is largely declining. `AGENTS.md` in particular is free, univer
 | 🟥 none | Claude Code (dynamic workflows) | Documented: 'No mid-run user input. Only agent permission prompts can pause a run.' Multi-stage sign-off means splitting into separate workflows. |
 | 🟥 none | gh-aw | No blocking gate; safety is structural instead. |
 
-#### 13. Cost control per task
+#### 14. Cost control per task
 
 **Weft.** `Budget.charge` propagates up the parent chain; `remainingTokens`/`remainingUsd` take `min(own, ancestor headroom)`; a run tree shares one ceiling and `reserveCall` PARKS rather than refusing when a lane would overrun. A USD-only ceiling with a provider that reports no cost and has no configured price REFUSES the dispatch rather than charging $0 silently.
 
@@ -428,7 +447,7 @@ The interop weft is largely declining. `AGENTS.md` in particular is free, univer
 | 🟥 none | Claude Code | Documented as advisory: past 25 scheduled agents or 1.5M projected tokens, 'the warning does not pause or limit the run'. |
 | 🟥 none | Cline / opencode / Aider / OpenHands | Detailed per-task token and USD accounting, zero enforcement. They tell you after you spent it. |
 
-#### 14. Does a long task survive the session (the instrument)
+#### 15. Does a long task survive the session (the instrument)
 
 **Weft.** Every step is journaled; a resume re-executes the workflow body and serves completed steps from the journal, matching by CONTENT so editing the script between runs is tolerated. This is plumbing, not the product — it earns its keep exactly when a workflow is long enough or blocked long enough to outlive the session that started it, which is the case for an overnight audit or a gate waiting on a person.
 
@@ -440,7 +459,7 @@ The interop weft is largely declining. `AGENTS.md` in particular is free, univer
 | 🟥 none | Claude Code | Explicit: 'If you exit Claude Code while a workflow is running, the next session starts the workflow fresh.' Transcripts are durable; workflow runs are not. |
 | 🟥 none | goose / Aider / opencode / Codex CLI / container-use | Kill the process and the work in flight is gone. |
 
-#### 15. Audit trail of what the agent actually did
+#### 16. Audit trail of what the agent actually did
 
 **Weft.** The journal plus two generated records: `report.md` (Outcome / Changes / Checks / Ledger / Failures & drops / Remaining risk / Next step) and the live tree. `weft explain <run> <step>` shows one step's route, prompt, output, usage and attempts; `weft diff <a> <b>` compares two runs by keyed step output.
 
@@ -453,7 +472,7 @@ The interop weft is largely declining. `AGENTS.md` in particular is free, univer
 | 🟨 partial | Claude Code | `/workflows` shows the phase tree, per-agent tokens and any agent's tool calls live, and can pause a run or restart one agent — a better CONTROL surface than weft's, over a less durable record. |
 | 🟨 partial | Worktree managers | A diff view per session, and that is the record. |
 
-#### 16. Parallel throughput across tasks
+#### 17. Parallel throughput across tasks
 
 **Weft.** Within one run: `ctx.parallel` / `ctx.pipeline` with a global semaphore at `min(16, cpus−2)` and a 4096-item fan-out cap. Across runs: nothing. Two runs sharing a working tree both stage and mutate the real tree at `rt.cwd`, and the ownership lease is per-RUN, not per-repo.
 
@@ -466,7 +485,7 @@ The interop weft is largely declining. `AGENTS.md` in particular is free, univer
 | 🟨 partial | Cline agent teams | Specialists run in parallel but share `cwd`, so throughput is bought with a clobbering risk. |
 | 🟥 none | Aider / goose / opencode | One agent, one tree. |
 
-#### 17. Where it runs — and what that posture costs
+#### 18. Where it runs — and what that posture costs
 
 **Weft.** **Local, on a developer's own machine, by design.** A CLI plus an MCP server so a Claude Code or Codex session can drive it, plus a loopback-only daemon serving a single-page UI. No server, no database, no account, no code leaving the machine, and the credentials used are the ones already sitting in the developer's shell. State is `<cwd>/.weft`. The costs are real and mostly unpaid: no repo-root discovery (running from a subdirectory silently targets a different, empty `.weft`), no blob GC, and no repo-level mutex, so two runs sharing a working tree is undefined behaviour.
 
@@ -480,7 +499,7 @@ The interop weft is largely declining. `AGENTS.md` in particular is free, univer
 | 🟨 partial | gh-aw | CI-native by construction, which is a genuinely different product: the workflow runs on GitHub's machines against GitHub's checkout, with no developer present. Better for scheduled and event-driven work, unavailable for the thing you want to watch. |
 | 🟨 partial | Codex Cloud / Copilot coding agent / Jules | Hosted. The task survives your laptop closing because it was never on it — bought with sending the repo to a vendor and losing local tooling. |
 
-#### 18. Distribution and practice adoption
+#### 19. Distribution and practice adoption
 
 **Weft.** Design preview. Not on npm. Zero users. The engineering around it is real — 16 packages versioned together, a tag-driven release pipeline with `verify:packing` and `verify:install`, CI on node 22 and 24 — but nothing has shipped.
 
@@ -626,11 +645,11 @@ Each is paired with who else has it, because most "unique" features in this cate
 
 ## Part 6 — What to build
 
-42 ideas were generated and put through an adversarial critic that cut 7 as things weft already has, flagged 12 as weak, and added 8 nobody proposed. What follows is the surviving set, **re-ranked for a local-first coding tool** rather than for a durable workflow engine.
+42 ideas were generated and put through an adversarial critic that cut 7 as things weft already has, flagged 12 as weak, and added 8 nobody proposed. What follows is the surviving set, **re-ranked for a local-first coding tool** rather than for a durable workflow engine, and extended with a composition item added after this revision.
 
 Two items moved a long way under the corrected frame, and it is worth saying why:
 
-- **Per-step OpenTelemetry spans dropped out of the top ten.** They were ranked 5th when weft was being compared to workflow engines whose users run Langfuse and Phoenix. A developer running a workflow on their own laptop reads `weft report` and `weft explain`, not a trace UI. The spans are still worth emitting — `weft otel export <run>` is a nice retro-fold — but they are no longer close to the front.
+- **Per-step OpenTelemetry spans dropped out of the front of the list.** They were ranked 5th when weft was being compared to workflow engines whose users run Langfuse and Phoenix. A developer running a workflow on their own laptop reads `weft report` and `weft explain`, not a trace UI. The spans are still worth emitting — `weft otel export <run>` is a nice retro-fold — but they are no longer close to the front.
 - **The notifier moved down from 1st.** Its old justification was "a gate that suspends durably reaches nobody" — true, but written as if the reviewer were on another continent. On a dev machine the reviewer is the person who started the run and walked away. That makes it a desktop notification and a webhook, not a Slack routing system, and it makes it smaller and later.
 
 ### The build order
@@ -663,7 +682,60 @@ const fix = await ctx.agent.detailed(`Fix ${f.claim}`, {
 
 **Do not propose these as one item.** That is how neither gets done.
 
-#### 3 — Measure the review patterns, and fix the flagship · **M · high**
+#### 3 — Make composition typed across files, and hash what is shared · **M · high**
+
+**Problem.** Calling a workflow from a workflow already works, and works well — own run id, own journal, parent-linked budget, shared abort, `maxDepth` 3, and a deliberate refusal to serve the step from the journal so an edited child re-runs. Two things stop it being usable as a real composition story, and both were measured against this checkout.
+
+*The registry-name form is untyped.* A probe compiled inside the repo produces exactly one error:
+
+```ts
+const byDef  = await ctx.workflow(child, { n: 21 });
+const a: number = byDef.doubled;              // ✔ types end to end
+
+const byName = await ctx.workflow("child", { n: 21 });
+const b: number = byName.doubled;             // ✗ TS18046: 'byName' is of type 'unknown'
+```
+
+So you can have types *or* the registry, not both: import the definition and it is bundled into your workflow (losing the separately-versioned unit), or call it by name and cast.
+
+*Sharing workflows through a package escapes three guarantees at once.* `bundleWorkflow` passes `external: [...allowBare]` to esbuild, so an allow-listed bare import is never bundled — which means the gate's AST rules never see it, the loader hands it the **host's** real modules so the `node:vm` fence does not apply either, and it is absent from the bundle hash. Measured: a package whose implementation was replaced wholesale produced an **identical** hash.
+
+```console
+$ # a workflow importing an allow-listed "probe-shared" package
+gate: PASSED  hash: 4b13d7360e81
+ran: { at: 1787651247832, draw: 0.9681488854039277 }
+  -> Date.now() and Math.random() executed inside a workflow run
+
+$ # same entry file, package body replaced with different behaviour
+v1 bundle hash: 4b13d7360e81ab14
+v2 bundle hash: 4b13d7360e81ab14   <- IDENTICAL
+```
+
+That hash is what `versionUnchanged()` compares to decide `positionsTrusted`. So editing shared workflow code leaves a resume trusting step positions against a body that changed — precisely the soundness hole the body-hash stamp was added to close, reopened by the mechanism you would use to share workflows between repos.
+
+**Proposal, three parts.**
+
+1. **Type the registry form.** Generate a declaration for the workflow directory — `weft check` already loads and bundles every file, so it has `meta.input`/`meta.output` in hand — and emit `.weft/workflows.d.ts` mapping each name to its inferred I/O. A module-augmented `WorkflowRegistryMap` makes `ctx.workflow("child", …)` resolve to the child's real types, with `unknown` as the fallback for names it cannot see.
+
+```ts
+// .weft/workflows.d.ts — generated by `weft check`
+declare module "@techery/weft-sdk" {
+  interface WorkflowRegistryMap {
+    child: { input: { n: number }; output: { doubled: number } };
+    review: { input: { base: string }; output: { confirmed: Finding[] } };
+  }
+}
+```
+
+2. **Fold externals into the hash.** For every allow-listed bare import actually resolved, hash the resolved file's contents (or its package's `name@version` plus integrity, when it comes from a lockfile) into the bundle hash. This also closes the pre-existing `zod` case the audit already flagged: a Zod major bump changes every schema's wire form while `defHash` stays identical.
+
+3. **Say which externals are trusted, and mean it.** Split the config: `workflows.allowBare` keeps today's meaning (host module, ungated — correct for `zod`), and a new `workflows.include` bundles and gates the package like a relative import, so a shared *workflow* package gets the AST rules, the vm fence, and the hash. Shared workflows belong in the second list; libraries in the first.
+
+**Prior art.** goose `sub_recipes` is the closest peer and passes untyped Jinja parameters to a child agent. Nx and Turborepo hash declared inputs including dependency versions for exactly this reason; a lockfile-integrity contribution to the cache key is the standard answer. Nobody in this field types a cross-file workflow call.
+
+**Why it ranks here.** Part 1 of this is DX; parts 2 and 3 are correctness, and they bite exactly the person who does what weft is asking them to do — factor a workflow out so two repos can share it.
+
+#### 4 — Measure the review patterns, and fix the flagship · **M · high**
 
 **Problem.** `adversarialVerify` has a strict-majority rule chosen so an even panel does not kill on a tie; `judgePanel` uses best-votes with a mean-score tiebreak so one generous judge cannot carry a weak attempt. Both are good design and **neither has a number**. CodeRabbit publishes 51.2% F1 on an independent benchmark; Qodo publishes 60.1%. Worse, the flagship example does not implement its own claim: `PANEL = ["claude", "codex", "claude"]` with a `>= 2` majority means Claude alone carries a verdict, and the refuter is handed the finder's `evidence`, which the closest published work deliberately withholds to avoid anchoring.
 
@@ -673,7 +745,7 @@ const fix = await ctx.agent.detailed(`Fix ${f.claim}`, {
 
 **Why it ranks here.** Weft's whole argument against the review products is that its pattern is better because it is yours. That argument needs a number, and weft is one small harness away from being able to produce one.
 
-#### 4 — Make the CLI compose with a developer's own tooling · **S · high**
+#### 5 — Make the CLI compose with a developer's own tooling · **S · high**
 
 **Problem.** All 14 verbs emit ANSI-painted prose; `grep` for `--json` returns nothing. No way to pipe a captured patch to `git apply`. No `weft signal` though the daemon has the route. No `search`/`reindex` though `@techery/weft-index-sqlite` implements `search()` and is reachable from no host at all. No `--version`. For a local tool whose value is fitting into a workflow that already exists, this is the wrong end to leave unfinished.
 
@@ -687,7 +759,7 @@ $ weft run review --json; case $? in 2) echo "needs me" ;; 3) echo "budget" ;; e
 
 `--version` in particular is two lines: `bin/weft.js` already reads its own manifest at startup. The shared view types belong in `@techery/weft-sdk` so the daemon can import them, and the shape needs a `schemaVersion` on day one — it becomes an API the moment someone scripts against it.
 
-#### 5 — `AgentProvider` conformance suite · **S · high**
+#### 6 — `AgentProvider` conformance suite · **S · high**
 
 **Problem.** The README's package table says the adapters sit "behind a shared conformance suite". There is none — only `journalStoreConformance` and `blobStoreConformance` ship, and the adapters are verified by mutually inconsistent hand-written tests (~40 cases for Claude, ~24 for Codex). The consequence is not cosmetic: `write: { mode: "strict" }` means live `canUseTool` enforcement on Claude and *nothing live at all* on Codex, which also silently ignores `maxTurns`, `onMaxTurns` and `tools.deny`, and always returns `filesTouched: []`.
 
@@ -695,13 +767,13 @@ $ weft run review --json; case $? in 2) echo "needs me" ;; 3) echo "budget" ;; e
 
 It converts a README falsehood into a red build, and forces either the fix or the honest documentation of the asymmetry.
 
-#### 6 — Local-tool basics · **S · medium**
+#### 7 — Local-tool basics · **S · medium**
 
 **Problem.** Three things that make weft feel like a preview rather than a tool. Running any command from a subdirectory silently targets a different, empty `.weft` instead of erroring. Blobs accumulate forever — `BlobStore` is `put`/`get`/`getText`/`has` with no prune verb and no retention. And `ctx.integrate()` mutates the real tree at `rt.cwd` while the ownership lease is per-*run*, so two concurrent runs in one checkout is undefined behaviour — in a category that exists for running several agents at once.
 
 **Proposal.** Walk upward for `.weft` like every git-adjacent tool. `weft prune` doing mark-and-sweep over journals to collect `$outputBlob` / patch / transcript refs and delete the remainder, plus compaction by age. A `.weft/repo.lock` acquired with the same CAS + TTL + steal protocol as `owner.lock`, held for the duration of `integrate()` and `integrationBaseCommit()`, keyed on the resolved repo root; a run that cannot acquire it marks itself waiting (reusing `markWaiting`, so it reports as suspended rather than hung).
 
-#### 7 — Schema-aligned coercion before spending a repair turn · **S · high**
+#### 8 — Schema-aligned coercion before spending a repair turn · **S · high**
 
 **Problem.** `runProviderWithRepair` goes straight from a failed `validateSchema` to `provider.repair(...)` — a full extra model turn, charged to the budget, and on exhaustion the whole paid step dies with `schema_repair_exhausted`. A large share of real failures are fences, prose wrappers and near-miss scalars.
 
@@ -709,7 +781,7 @@ It converts a README falsehood into a red build, and forces either the fix or th
 
 **Prior art.** BAML's Schema-Aligned Parsing is exactly this: a schema-aware least-edit-distance coercion in Rust, claimed sub-10 ms, with published benchmark numbers. The cheapest quality-per-line item on the list.
 
-#### 8 — `weft fork <run> --from <step>` · **M · medium**
+#### 9 — `weft fork <run> --from <step>` · **M · medium**
 
 **Problem.** Weft built content-addressed step identity, three-tier salvage and a version stamp, then exposed three verbs over the journal, all recovery-only. When a 40-step run produces a bad plan at step 3, the options are resume (which serves the bad plan) or start over. Claude Code's `/workflows` panel can restart a single agent in place today, with far less information available to it.
 
@@ -717,7 +789,7 @@ It converts a README falsehood into a red build, and forces either the fix or th
 
 **Prior art.** DBOS `forkWorkflow(id, startStep, …)`, LangGraph's fork-by-`checkpoint_id`, Burr's `fork_from_sequence_id`.
 
-#### 9 — Tell the developer who walked away · **S–M · medium**
+#### 10 — Tell the developer who walked away · **S–M · medium**
 
 **Problem.** A `human.requested` event lands in the journal and the run parks durably. There is no notification code anywhere in `packages/*/src`, so the only ways to discover a pending gate are `weft status`, the loopback daemon page, or an MCP long-poll. Durability solves waiting; it does nothing about noticing. On a dev machine that is a smaller problem than it sounds — the person is usually nearby — but "start the audit, go to lunch, come back to a run that has been parked for 40 minutes" is exactly the workflow weft's gates exist for.
 
@@ -725,7 +797,7 @@ It converts a README falsehood into a red build, and forces either the fix or th
 
 **Prior art.** HumanLayer's contact-channel objects with escalation ladders, Windmill's signed approval links and native Slack/Teams approvals, Trigger.dev's tokens with webhook URLs — all built for the remote-team case, which is the version to grow into rather than start from.
 
-#### 10 — `reads:` scopes and a world-hash in step identity · **L · transformative**
+#### 11 — `reads:` scopes and a world-hash in step identity · **L · transformative**
 
 **Problem.** Step identity is `sha256(canonicalJson{kind, payload, schema, key})`. **The working tree an agent greps is not in it** — the README's own deviation #5 says so. A resume after the repo changed happily serves an answer computed against a repo that no longer exists.
 
@@ -737,7 +809,7 @@ It converts a README falsehood into a red build, and forces either the fix or th
 
 ### The rest of the catalogue
 
-What survived and did not make the top ten. ⚠️ marks an idea the critic found flawed *as proposed* — the underlying problem is usually real even where the mechanism is not; see [Part 7](#part-7--what-the-critic-cut). Several ecosystem items (a GitHub Action, PR-comment reports, workflow packages on npm) are kept for the record but read differently now that weft is explicitly a local tool.
+What survived and did not make the ordered list above. ⚠️ marks an idea the critic found flawed *as proposed* — the underlying problem is usually real even where the mechanism is not; see [Part 7](#part-7--what-the-critic-cut). Several ecosystem items (a GitHub Action, PR-comment reports, workflow packages on npm) are kept for the record but read differently now that weft is explicitly a local tool.
 
 **Agents & providers**
 
@@ -932,11 +1004,11 @@ Nine axes that discriminate and were not measured. Each is a real hole in Part 3
 
 ## Part 8 — Sequencing
 
-The top ten is a ranking, not a plan. Grouped into what can ship together.
+The list is a ranking, not a plan. Grouped into what can ship together.
 
 ### Sprint 1 — make it fit the machine it runs on (≈2 weeks, all S/M, no engine hot-path changes)
 
-`AGENTS.md`/`CLAUDE.md` ingestion · default-deny egress · `--json` on every read verb, documented exit codes, `weft cat`, `weft signal`, `weft search`/`reindex`, `--version` · `AgentProvider` conformance suite · repo-root discovery · `weft prune` · schema-aligned coercion · the journal format version (`v: 1` on `run.created` plus a tolerant reader — ~50 lines, and a prerequisite for a third of everything below).
+`AGENTS.md`/`CLAUDE.md` ingestion · default-deny egress · the typed registry declaration and the externals-in-the-hash fix (composition parts 1 and 2) · `--json` on every read verb, documented exit codes, `weft cat`, `weft signal`, `weft search`/`reindex`, `--version` · `AgentProvider` conformance suite · repo-root discovery · `weft prune` · schema-aligned coercion · the journal format version (`v: 1` on `run.created` plus a tolerant reader — ~50 lines, and a prerequisite for a third of everything below).
 
 The credibility items belong here too, because they cost hours and they are the first things a careful reader checks: the two-line fix to `audit-and-fix.ts`'s panel, the dead `IntegrateOptions.order` field, the two `StepErrorCode`s nothing produces, and the README's claim about a conformance suite that does not exist.
 
@@ -944,7 +1016,7 @@ Together this closes one `CRITICAL` gap outright, halves the other, and turns th
 
 ### Sprint 2 — earn the argument (≈3 weeks)
 
-The review eval corpus and `weft eval`, with golden-trace conformance as its companion · the repo-level integration mutex, so several agents in one checkout is defined behaviour · `weft fork` · `weft why <run> <step>` explaining the replay decision from `replay.salvaged` / `replay.diverged` events that already exist · desktop notification plus `weft inbox`.
+The review eval corpus and `weft eval`, with golden-trace conformance as its companion · `workflows.include` as a gated, bundled, hashed way to share workflows between repos (composition part 3) · the repo-level integration mutex, so several agents in one checkout is defined behaviour · `weft fork` · `weft why <run> <step>` explaining the replay decision from `replay.salvaged` / `replay.diverged` events that already exist · desktop notification plus `weft inbox`.
 
 This is the sprint that produces a number. Until weft can say what its refutation gate buys, the comparison against CodeRabbit and Qodo is an argument from design.
 
@@ -960,13 +1032,13 @@ Multi-worker distributed execution (breaks per-process budget admission and the 
 
 ## Part 9 — The strategic question this report cannot answer
 
-Nine leads on mechanism, and zero users. The 2026 attrition in this category is worth naming plainly: **Flowise archived at 55.4k stars, Roo Code archived at 24.3k, Vibe Kanban sunsetting at 27.9k.** Being right about the mechanism is not what decided those.
+Ten leads on mechanism, and zero users. The 2026 attrition in this category is worth naming plainly: **Flowise archived at 55.4k stars, Roo Code archived at 24.3k, Vibe Kanban sunsetting at 27.9k.** Being right about the mechanism is not what decided those.
 
 Three things follow that are decisions rather than tasks.
 
 ### Lead with the write model and the typed contract, not the orchestration
 
-The fan-out surface — `parallel`, `pipeline`, `phase`, worktree isolation, token budgets — is commoditised. Claude Code ships it free, with byte-identical caps, inside a CLI most of the audience already has open. The README currently spends its best real estate defending it. What nobody else has is: a step contract the engine enforces, a workflow you can unit-test with no model calls, declared write scopes, and `ctx.integrate()`.
+The fan-out surface — `parallel`, `pipeline`, `phase`, worktree isolation, token budgets — is commoditised. Claude Code ships it free, with byte-identical caps, inside a CLI most of the audience already has open. The README currently spends its best real estate defending it. What nobody else has is: a step contract the engine enforces, a workflow you can unit-test with no model calls, a sub-workflow call with a typed contract and an inherited budget, declared write scopes, and `ctx.integrate()`.
 
 > **The sentence that should open the README:** *weft makes an agent's change to your repo reviewable — every step schema-validated, every diff a scoped patch that lands only where you said it could, every run replayable from a journal after the session is gone.*
 

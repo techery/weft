@@ -1,5 +1,5 @@
 {
-  "note": "Coding-workflow comparison (revision 2, 2026-08-25). Supersedes comparison.json, which carried the first draft's durable-execution framing.",
+  "note": "Coding-workflow comparison (revision 3, 2026-08-25): adds dimension 11, composing workflows out of workflows. Supersedes comparison.json, which carried the first draft's durable-execution framing.",
   "standing": [
     {
       "dimension": "What a workflow *is*",
@@ -50,6 +50,11 @@
       "dimension": "Built-in review patterns",
       "standing": "competitive",
       "reason": "A real pattern library \u2014 against products publishing F1 numbers weft has never measured"
+    },
+    {
+      "dimension": "Composing workflows out of workflows",
+      "standing": "leads",
+      "reason": "Typed I/O, own journal, inherited budget \u2014 nobody else has a callable unit with a contract. Caveats: the registry-name form is untyped, and package-shared workflows escape the hash and the gate"
     },
     {
       "dimension": "Cross-vendor second opinion",
@@ -545,6 +550,57 @@
           "project": "goose / Cline / opencode / Codex CLI / Aider",
           "rating": "none",
           "note": "Review is whatever you prompt for."
+        }
+      ]
+    },
+    {
+      "dimension": "Composing workflows out of workflows",
+      "weft": "`ctx.workflow(def, input, opts)` runs another workflow as a step. The child gets **its own run id and its own journal**, `parentRunId` and `depth` recorded, a budget carved from the parent (`{ fraction }` or an absolute `{ tokens, usd }`) that is always parent-linked so `min(own, ancestor headroom)` still holds, and a shared abort signal and agent cap. Depth is capped at `maxDepth` (default 3). The step is deliberately **never served from the journal** \u2014 the child definition is invisible to the parent step's hash, so re-entering the child is the only honest option; the child's own journal then replays it for free if it is unchanged. Verified running: `examples/05` drives four children under one 1800-token ceiling and refuses the call that would overrun. **Two real limits.** The registry-name form `ctx.workflow(\"child\", input)` returns `unknown` \u2014 typecheck confirms it is the only error in a probe where the definition form types cleanly end to end. And sharing workflows through a *package* escapes three guarantees at once: an allow-listed bare import is `external` to the bundle, so it is ungated, runs with the host's globals, and \u2014 measured \u2014 two behaviourally different versions of the same package produce an **identical bundle hash**, which is exactly the signal `positionsTrusted` relies on.",
+      "others": [
+        {
+          "project": "goose Recipes",
+          "rating": "strong",
+          "note": "The closest peer, and real: `sub_recipes` compose recipes, with the `SubRecipe` struct passing specific parameter values to a child agent, run as a separate subagent so context does not bleed. Parameters are Jinja-style template variables \u2014 untyped strings \u2014 and a child's result comes back as whatever the subagent produced unless that sub-recipe sets its own `response.json_schema`. Composition without a typed seam."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "strong",
+          "note": "Nested `workflow()` inside dynamic workflows, plus subagents and agent teams where a main agent owns planning and integration while specialists handle bounded tasks with their own context and tool permissions. Rich, and per-task rather than checked in: nothing composes across runs because nothing is saved."
+        },
+        {
+          "project": "Cline agent teams",
+          "rating": "partial",
+          "note": "A coordinator spawns specialists that coordinate through persisted `task-board.json` / `mailbox.json`. That is composition of AGENTS, not of workflows \u2014 there is no reusable unit with declared inputs to call twice."
+        },
+        {
+          "project": "OpenAI Codex CLI",
+          "rating": "partial",
+          "note": "Subagents in TOML, invoked by the model, returning **summaries** to the parent thread. Composable in the loose sense; no declared contract and no budget carve-out."
+        },
+        {
+          "project": "opencode",
+          "rating": "partial",
+          "note": "A `task` tool lets an agent hand work to another declared agent. Same shape as Codex: agent-level, prose-returning."
+        },
+        {
+          "project": "OpenHands",
+          "rating": "partial",
+          "note": "Sub-agents registered via a factory plus `register_agent`, but delegation is documented as designed for sequential blocking tasks \u2014 no fan-out inside a conversation."
+        },
+        {
+          "project": "GitHub Spec Kit",
+          "rating": "none",
+          "note": "Phases (`specify` \u2192 `plan` \u2192 `tasks` \u2192 `implement`) are a pipeline through one project, not a callable unit. There is no way to invoke another spec's workflow and get a value back."
+        },
+        {
+          "project": "gh-aw",
+          "rating": "none",
+          "note": "One workflow per file, triggered by GitHub events. Composition is one workflow emitting a safe output that triggers another \u2014 asynchronous and untyped, not a call."
+        },
+        {
+          "project": "SWE-agent / Aider / container-use / worktree managers",
+          "rating": "none",
+          "note": "No composition primitive of any kind."
         }
       ]
     },
