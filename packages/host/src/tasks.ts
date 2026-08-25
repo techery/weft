@@ -687,13 +687,18 @@ export class TaskStore {
       );
       const marker = this.batchFile(context.workflowId, batchId);
       if (await fileExists(marker)) return;
-      const pendingOperations = await this.unappliedOperations(
+      const pending = await this.unappliedOperations(
         context.workflowId,
         batchId,
         operations,
         extensionSchema,
       );
-      await this.validateBatchUnlocked(context, pendingOperations, extensionSchema);
+      await this.validateBatchUnlocked(
+        context,
+        pending.operations,
+        extensionSchema,
+        pending.appliedOperationKeys,
+      );
       const actor =
         context.source === "workflow"
           ? `workflow:${context.runId}:${context.step}`
@@ -800,23 +805,29 @@ export class TaskStore {
     batchId: string,
     operations: AgentTaskOperation[],
     extensionSchema?: AnySchema,
-  ): Promise<AgentTaskOperation[]> {
+  ): Promise<{ operations: AgentTaskOperation[]; appliedOperationKeys: ReadonlySet<string> }> {
     const tasks = await this.list(workflowId, extensionSchema);
     const byId = new Map(tasks.map((task) => [task.id, task]));
     const byDedupeKey = new Map(
       tasks.flatMap((task) => (task.dedupeKey ? [[task.dedupeKey, task] as const] : [])),
     );
-    return operations.filter((operation, index) => {
+    const pending: AgentTaskOperation[] = [];
+    const appliedOperationKeys = new Set<string>();
+    for (const [index, operation] of operations.entries()) {
       const operationKey = `${batchId}:${index}`;
+      let applied: boolean;
       if (operation.op === "create") {
         const id = `task-${digest(operationKey).slice(0, 8)}`;
-        return !byId.get(id)?.appliedOperations.includes(operationKey);
+        applied = byId.get(id)?.appliedOperations.includes(operationKey) ?? false;
+      } else if (operation.op === "upsert") {
+        applied = byDedupeKey.get(operation.dedupeKey)?.appliedOperations.includes(operationKey) ?? false;
+      } else {
+        applied = byId.get(operation.id)?.appliedOperations.includes(operationKey) ?? false;
       }
-      if (operation.op === "upsert") {
-        return !byDedupeKey.get(operation.dedupeKey)?.appliedOperations.includes(operationKey);
-      }
-      return !byId.get(operation.id)?.appliedOperations.includes(operationKey);
-    });
+      if (applied) appliedOperationKeys.add(operationKey);
+      else pending.push(operation);
+    }
+    return { operations: pending, appliedOperationKeys };
   }
 
   private async recoverOperations(
@@ -885,6 +896,7 @@ export class TaskStore {
     context: AgentTaskContext,
     operations: AgentTaskOperation[],
     extensionSchema?: AnySchema,
+    appliedOperationKeys: ReadonlySet<string> = new Set(),
   ): Promise<void> {
     const current = await this.list(context.workflowId, extensionSchema);
     if (context.source === "agent") {
@@ -893,16 +905,30 @@ export class TaskStore {
       }
       const visibleIds = new Set(context.visibleTaskIds ?? []);
       const visibleDedupeKeys = new Set(context.visibleDedupeKeys ?? []);
+      const byId = new Map(current.map((task) => [task.id, task]));
+      const byDedupeKey = new Map(
+        current.flatMap((task) => (task.dedupeKey ? [[task.dedupeKey, task] as const] : [])),
+      );
+      // Only operations proven durable and omitted from this exact replay can
+      // extend the original snapshot authority to work created by the batch.
+      const wasTouchedByThisBatch = (task: WorkflowTask | undefined) =>
+        task?.appliedOperations.some((key) => appliedOperationKeys.has(key)) ?? false;
       for (const operation of operations) {
         if (
           (operation.op === "update" || operation.op === "note" || operation.op === "criterion") &&
-          !visibleIds.has(operation.id)
+          !visibleIds.has(operation.id) &&
+          !wasTouchedByThisBatch(byId.get(operation.id))
         ) {
           throw new Error(`task ${operation.id} was not present in this step's observed task context`);
         }
         if (operation.op === "upsert") {
-          const existing = current.find((task) => task.dedupeKey === operation.dedupeKey);
-          if (existing && !visibleIds.has(existing.id) && !visibleDedupeKeys.has(operation.dedupeKey)) {
+          const existing = byDedupeKey.get(operation.dedupeKey);
+          if (
+            existing &&
+            !visibleIds.has(existing.id) &&
+            !visibleDedupeKeys.has(operation.dedupeKey) &&
+            !wasTouchedByThisBatch(existing)
+          ) {
             throw new Error(
               `task ${existing.id} for dedupe key ${JSON.stringify(operation.dedupeKey)} was not present in this step's observed task context`,
             );

@@ -526,6 +526,66 @@ describe("TaskStore", () => {
     expect(await store.get("release", final.id)).toMatchObject({ status: "in_progress", revision: 3 });
   });
 
+  it("authorizes remaining operations only through applied keys from the replayed batch", async () => {
+    const root = await tempRoot();
+    const taskRoot = join(root, ".weft", "tasks");
+    const store = new TaskStore(taskRoot);
+    const context = {
+      workflowId: "review",
+      workflowName: "review",
+      runId: "run-1",
+      step: "review",
+      provider: "codex",
+      source: "agent" as const,
+      mode: "write" as const,
+      visibleTaskIds: [],
+      visibleDedupeKeys: [],
+    };
+    const batchId = "run-1:agent:7";
+    const first = {
+      op: "upsert" as const,
+      dedupeKey: "src/state.ts|store|invalid-shape",
+      create: { title: "Validate state", description: "The task was absent when observed" },
+    };
+    const second = {
+      ...first,
+      update: { priority: "high" as const },
+      note: "Recovered the remaining operation",
+    };
+
+    // Simulate a crash after operation zero was durable but before operation one
+    // or the batch marker was written.
+    await store.applyBatch(context, batchId, [first]);
+    await unlink(
+      join(taskRoot, "review", `.batch-${createHash("sha256").update(batchId).digest("hex")}.json`),
+    );
+    await expect(store.applyBatch(context, batchId, [first, second])).resolves.toBeUndefined();
+
+    const [recovered] = await store.list("review");
+    expect(recovered).toMatchObject({
+      priority: "high",
+      revision: 2,
+      appliedOperations: [`${batchId}:0`, `${batchId}:1`],
+    });
+    expect(recovered?.notes.map((note) => note.text)).toEqual(["Recovered the remaining operation"]);
+
+    const hidden = await store.create("review", {
+      dedupeKey: "src/hidden.ts|store|existing",
+      title: "Hidden",
+      description: "Unrelated durable work",
+    });
+    await expect(
+      store.applyBatch(context, "unrelated-batch", [
+        {
+          op: "upsert",
+          dedupeKey: hidden.dedupeKey ?? "",
+          create: { title: "Replacement", description: "Must remain unauthorized" },
+          update: { priority: "low" },
+        },
+      ]),
+    ).rejects.toThrow(/not present in this step's observed task context/);
+  });
+
   it("atomically upserts deduplicated work and filters journaled snapshots", async () => {
     const root = await tempRoot();
     const store = new TaskStore(join(root, ".weft", "tasks"));
