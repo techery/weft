@@ -3,7 +3,6 @@ import { SelectField } from "~/components/atoms/SelectField";
 import { TextArea } from "~/components/atoms/TextArea";
 import { Toggle } from "~/components/atoms/Toggle";
 import type { GateAnswerValue, GateQuestion } from "~/domain/types";
-import { gateToggleLabel } from "~/domain/views";
 import styles from "./GateQuestionRow.module.css";
 import { OptionCard } from "./OptionCard";
 
@@ -74,7 +73,9 @@ export function GateQuestionRow({ question, value, onSet, onToggleChip, onToggle
         ) : null}
 
         {question.kind === "toggle" ? (
-          <Toggle on={value === true} label={gateToggleLabel(value === true)} onToggle={onToggleFlag} />
+          // The caption is the field's own state, not a guess at what the flag means: the
+          // schema gives a name and a type, never a pair of prose alternatives.
+          <Toggle on={value === true} label={value === true ? "yes" : "no"} onToggle={onToggleFlag} />
         ) : null}
 
         {question.kind === "note" ? (
@@ -82,7 +83,7 @@ export function GateQuestionRow({ question, value, onSet, onToggleChip, onToggle
             rows={2}
             aria-label={question.label}
             value={typeof value === "string" ? value : ""}
-            placeholder="optional context for the report agent — journaled verbatim"
+            placeholder={question.required ? "required" : "optional — journaled verbatim"}
             onChange={(e) => onSet(e.target.value)}
           />
         ) : null}

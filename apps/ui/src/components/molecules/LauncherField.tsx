@@ -1,67 +1,99 @@
 import { PillButton } from "~/components/atoms/PillButton";
-import { TextField } from "~/components/atoms/TextField";
+import { SelectField } from "~/components/atoms/SelectField";
+import { TextArea } from "~/components/atoms/TextArea";
 import { Toggle } from "~/components/atoms/Toggle";
-import type { LauncherInputValue, WorkflowInput } from "~/domain/types";
+import type { GateQuestion } from "~/domain/types";
 import styles from "./LauncherField.module.css";
+import { OptionCard } from "./OptionCard";
 
 type Props = {
-  input: WorkflowInput;
-  value: LauncherInputValue | undefined;
-  onSet: (value: LauncherInputValue) => void;
+  question: GateQuestion;
+  value: unknown;
+  onSet: (value: unknown) => void;
   onToggleChip: (label: string) => void;
-  onToggleFlag: () => void;
 };
 
-/** One row of the launcher's input form — the shape depends on the input kind. */
-export function LauncherField({ input, value, onSet, onToggleChip, onToggleFlag }: Props) {
-  const chips = Array.isArray(value) ? value : [];
-  const flagOn = value === true;
-  const flagLabel = (flagOn ? input.options[0] : input.options[1]) ?? "";
+/**
+ * One declared input of a workflow, rendered by the control its schema asks for — the same
+ * vocabulary a gate's questions use, because both are a JSON Schema turned into a form.
+ */
+export function LauncherField({ question, value, onSet, onToggleChip }: Props) {
+  const chosen: unknown[] = Array.isArray(value) ? value : [];
 
   return (
     <div className={styles.row}>
       <span className={styles.key}>
-        {input.label}
-        {input.required ? <span className={styles.req}> *</span> : null}
+        {question.label}
+        {question.required ? <span className={styles.req}> *</span> : null}
       </span>
       <div className={styles.control}>
-        {input.kind === "text" ? (
-          <TextField
-            aria-label={input.label}
+        {question.kind === "cards" ? (
+          <span className={styles.cards}>
+            {question.options.map((option) => (
+              <OptionCard
+                key={option.label}
+                name={question.key}
+                option={option}
+                selected={value === option.label}
+                onPick={() => onSet(option.label)}
+              />
+            ))}
+          </span>
+        ) : null}
+
+        {question.kind === "choice" ? (
+          <span className={styles.seg}>
+            {question.options.map((option) => (
+              <PillButton key={option.label} on={value === option.label} onClick={() => onSet(option.label)}>
+                {option.label}
+              </PillButton>
+            ))}
+          </span>
+        ) : null}
+
+        {question.kind === "chips" ? (
+          <span className={styles.chips}>
+            {question.options.map((option) => {
+              const on = chosen.includes(option.label);
+              return (
+                <PillButton key={option.label} on={on} onClick={() => onToggleChip(option.label)}>
+                  {on ? `✓ ${option.label}` : option.label}
+                </PillButton>
+              );
+            })}
+          </span>
+        ) : null}
+
+        {question.kind === "select" ? (
+          <SelectField
+            aria-label={question.label}
             value={typeof value === "string" ? value : ""}
             onChange={(e) => onSet(e.target.value)}
+          >
+            {question.options.map((option) => (
+              <option key={option.label} value={option.label}>
+                {option.label}
+              </option>
+            ))}
+          </SelectField>
+        ) : null}
+
+        {question.kind === "toggle" ? (
+          <Toggle
+            on={value === true}
+            label={value === true ? "on" : "off"}
+            onToggle={() => onSet(value !== true)}
+            className={styles.flag}
           />
         ) : null}
 
-        {input.kind === "seg" ? (
-          <span className={styles.seg}>
-            {input.options.map((option) => (
-              <PillButton key={option} on={value === option} onClick={() => onSet(option)}>
-                {option}
-              </PillButton>
-            ))}
-          </span>
-        ) : null}
-
-        {input.kind === "chips" ? (
-          <span className={styles.chips}>
-            {input.options.map((option) => (
-              <PillButton key={option} on={chips.includes(option)} onClick={() => onToggleChip(option)}>
-                {chips.includes(option) ? `✓ ${option}` : option}
-              </PillButton>
-            ))}
-          </span>
-        ) : null}
-
-        {input.kind === "file" ? (
-          <span className={styles.file}>
-            <span className={styles.fileValue}>{typeof value === "string" ? value : ""}</span>
-            <span className={styles.fileHint}>drop or ⌘O</span>
-          </span>
-        ) : null}
-
-        {input.kind === "flag" ? (
-          <Toggle on={flagOn} label={flagLabel} onToggle={onToggleFlag} className={styles.flag} />
+        {question.kind === "note" ? (
+          <TextArea
+            rows={2}
+            aria-label={question.label}
+            value={typeof value === "string" ? value : ""}
+            onChange={(e) => onSet(e.target.value)}
+          />
         ) : null}
       </div>
     </div>

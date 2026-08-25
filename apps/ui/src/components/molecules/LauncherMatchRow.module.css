@@ -33,6 +33,9 @@
   font-size: 11px;
   color: var(--color-neutral-700);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 .arrow {
   font-family: var(--font-mono);

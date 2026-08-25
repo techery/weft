@@ -9,10 +9,20 @@ type Props = {
   backLabel: string;
   onBack: () => void;
   onOpenWorkflow: () => void;
+  canCancel: boolean;
+  cancelling: boolean;
+  onCancel: () => void;
 };
 
-export function RunHeader({ run, backLabel, onBack, onOpenWorkflow }: Props) {
-  const canCancel = run.state === "running" || run.state === "waiting";
+export function RunHeader({
+  run,
+  backLabel,
+  onBack,
+  onOpenWorkflow,
+  canCancel,
+  cancelling,
+  onCancel,
+}: Props) {
   return (
     <div className={styles.header}>
       <div className={styles.row}>
@@ -22,14 +32,16 @@ export function RunHeader({ run, backLabel, onBack, onOpenWorkflow }: Props) {
         <h2 className={styles.title}>{run.wf}</h2>
         <span className={styles.id}>{run.id}</span>
         <StatusPill kind={runPillKind(run.state)}>{run.pill}</StatusPill>
-        <button type="button" className={styles.fileLink} onClick={onOpenWorkflow}>
-          {run.file}
-        </button>
+        {run.file ? (
+          <button type="button" className={styles.fileLink} onClick={onOpenWorkflow}>
+            {run.file}
+          </button>
+        ) : null}
         <span className={styles.spacer} />
         <span className={styles.chrome}>{run.chrome}</span>
         {canCancel ? (
-          <Button variant="secondary" size="smallWide">
-            Cancel run
+          <Button variant="secondary" size="smallWide" disabled={cancelling} onClick={onCancel}>
+            {cancelling ? "Cancelling…" : "Cancel run"}
           </Button>
         ) : null}
       </div>

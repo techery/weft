@@ -5,7 +5,7 @@ import {
   type RouterHistory,
   redirect,
 } from "@tanstack/react-router";
-import { RUN_FILTERS, type RunFilter } from "~/domain/fixtures/runList";
+import { RUN_FILTERS, type RunFilter } from "~/domain/filters";
 import { isRunTab, type RunOrigin, type RunTab } from "~/domain/views";
 import { QueuePage } from "~/pages/QueuePage";
 import { RunDetailPage } from "~/pages/RunDetailPage";

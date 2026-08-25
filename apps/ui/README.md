@@ -63,15 +63,34 @@ Two rules keep it honest:
 
 ## Where the data comes from
 
-`domain/fixtures/` holds the five runs, six workflows and their diffs, exactly
-as the design specifies them. `buildRuns()` takes the current answer state and
-returns the runs, so approving or denying a gate rewrites the run it belongs
-to — its state, pill, rail, journal and the gate step's own output all move.
-Swapping in the daemon's `/api/runs` means replacing that one function; nothing
-above it knows the difference.
+The daemon that serves this page. `api/` holds the typed calls and the query
+hooks; `domain/adapt.ts` maps the daemon's wire shapes onto the domain types the
+components take. Nothing renders a value the API did not supply.
+
+That adapter is where the design and the journal are reconciled, and it makes
+three kinds of decision:
+
+- **Derived.** A workflow's shape strip and its phase labels come from its most
+  recent run's steps — nothing declares them, and the code decides them as it
+  runs.
+- **Omitted.** A step's tool calls exist only as prose inside an agent
+  transcript, and "what weft will do next" is not journaled at all. Those render
+  as absent, not as invented.
+- **Never faked.** A run started with no ceiling shows its spend and no
+  denominator, because `$0.12 / $0.00` reads as over budget.
+
+## Live updates
+
+A run's screen opens an `EventSource` on its journal. That stream does double
+duty: it is the Journal tab's content, and it is the signal to refetch the fold —
+a step that finishes appends a record, and that record is the cue. So an open run
+updates itself without polling, and a finished one costs nothing. The lists poll
+on an interval instead, since a run started from a terminal has no other way to
+reach the screen.
 
 ## State
 
-Jotai holds what is not worth a URL: gate answers, approval policy, budget,
-pool size, launcher inputs. The router holds what is: which filter, which
+TanStack Query owns everything the daemon owns. Jotai holds what is genuinely
+local: which step of the launcher is open, what has been typed into a form but
+not submitted. The router holds what deserves a URL: which filter, which
 workflow, which step of which run — so every view is a link you can share.

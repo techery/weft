@@ -59,16 +59,18 @@ export function StepPane({ run, step, stepId, onSelectStep, onGoToGate }: Props)
           ))}
         </div>
 
-        <div className={styles.block}>
-          <SectionHeading note="raw JSON">
-            <Kicker>Input</Kicker>
-          </SectionHeading>
-          <div className={styles.inputBox}>
-            {step.input.map((input, index) => (
-              <StepInputRow key={input.k} input={input} divided={index > 0} />
-            ))}
+        {step.input.length > 0 ? (
+          <div className={styles.block}>
+            <SectionHeading note="as the step was scheduled">
+              <Kicker>Input</Kicker>
+            </SectionHeading>
+            <div className={styles.inputBox}>
+              {step.input.map((input, index) => (
+                <StepInputRow key={input.k} input={input} divided={index > 0} />
+              ))}
+            </div>
           </div>
-        </div>
+        ) : null}
 
         <SectionHeading>
           <Kicker>Output</Kicker>

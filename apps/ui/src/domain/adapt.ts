@@ -1,0 +1,731 @@
+/**
+ * The daemon's shapes, as the screens' shapes.
+ *
+ * The UI was built against a design's data model, which is richer than the journal in a
+ * few places and poorer in others. This is where that is reconciled, once, so no component
+ * has to know which fields are real:
+ *
+ *   - Derived where it can be. A workflow's shape strip comes from its most recent run's
+ *     step kinds; its phase labels come from that run's phases. Neither is declared
+ *     anywhere, and both are true of the thing that actually ran.
+ *   - Omitted where nothing records it. A step's tool calls exist only as prose inside an
+ *     agent transcript, and "what weft will do next" is not journaled at all — so those
+ *     read as absent rather than as invented. The rail likewise shows only steps that have
+ *     started, which is what the design's own caption says it does.
+ *   - Never faked. A run started with no ceiling shows its spend and no denominator.
+ */
+import type {
+  ArtifactEntry,
+  HumanState,
+  JsonSchema,
+  Meta,
+  PendingRequest,
+  RunDetail,
+  RunRow,
+  RunStatus,
+  StepState,
+  WorkflowDetail,
+  WorkflowRow,
+  WorkflowStats,
+} from "~/api/types";
+import { formatElapsed } from "./journal";
+import type {
+  StepState as DomainStepState,
+  Finding,
+  Gate,
+  GateOption,
+  GateQuestion,
+  GateQuestionKind,
+  Labelled,
+  RailGroup,
+  RailStep,
+  Run,
+  RunState,
+  ShapeCell,
+  StepCell,
+  StepDetail,
+  StepInput,
+  StepKind,
+  Workflow,
+  WorkflowLabel,
+} from "./types";
+
+/* ── Identity ─────────────────────────────────────────────────────────────
+   Step ids have to survive being a URL search param, so they are derived from
+   what the journal guarantees is stable: a step's seq, a request's id. */
+
+export const stepId = (seq: number): string => `step:${seq}`;
+export const gateStepId = (requestId: string): string => `gate:${requestId}`;
+
+/* ── Status ─────────────────────────────────────────────────────────────── */
+
+const RUN_STATE: Record<RunStatus, RunState> = {
+  planning: "running",
+  executing: "running",
+  integrating: "running",
+  verifying: "running",
+  waiting_for_human: "waiting",
+  waiting_for_signal: "waiting",
+  complete: "done",
+  failed: "failed",
+  cancelled: "stopped",
+};
+
+export function runState(status: RunStatus): RunState {
+  return RUN_STATE[status] ?? "running";
+}
+
+/** The three buckets the design's rail and shape strip paint with. */
+export function stepBucket(kind: string): StepKind {
+  if (kind === "agent") return "agent";
+  if (kind === "human") return "human";
+  return "task";
+}
+
+function stepStatus(step: StepState): DomainStepState {
+  if (step.status === "ok") return "done";
+  if (step.status === "failed") return "fail";
+  return "run";
+}
+
+/* ── Formatting ───────────────────────────────────────────────────────────── */
+
+export function money(usd: number): string {
+  return `$${usd.toFixed(2)}`;
+}
+
+export function tokens(step: StepState): number {
+  return (step.usage?.input ?? 0) + (step.usage?.output ?? 0);
+}
+
+/** How long ago, in the design's terse voice. */
+export function ago(at: number | null | undefined, now = Date.now()): string {
+  if (at === null || at === undefined) return "";
+  const seconds = Math.max(0, Math.round((now - at) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} h`;
+  const days = Math.round(hours / 24);
+  return days === 1 ? "yesterday" : `${days} d`;
+}
+
+/** A wall-clock stamp for a list column, in the local zone. */
+export function clock(at: number): string {
+  return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+export function duration(from: number, to: number | undefined): string {
+  return formatElapsed((to ?? Date.now()) - from);
+}
+
+/* ── Runs ─────────────────────────────────────────────────────────────────── */
+
+export interface RunExtras {
+  /** The workflow's file, when the registry listing has been loaded. */
+  file?: string;
+  /** Journal-derived lines, when the stream has delivered them. */
+  journal?: Run["journal"];
+  /** The request blocking this run, from the queue. */
+  pending?: PendingRequest;
+  /** Changed files, from the patch route. */
+  files?: Run["files"];
+  /** The run's artifact inventory. */
+  artifacts?: Run["artifacts"];
+}
+
+export function adaptRun(detail: RunDetail, extras: RunExtras = {}): Run {
+  const state = runState(detail.status);
+  const running = detail.steps.filter((step) => step.status === "running");
+  const pending = detail.humans.filter((human) => human.status === "pending");
+  const gate = extras.pending ? adaptGate(extras.pending) : adaptGateFromState(detail, pending[0]);
+
+  return {
+    id: detail.runId,
+    wf: detail.workflow,
+    file: extras.file ?? "",
+    state,
+    chrome: chromeOf(detail),
+    pill: pillOf(detail, running.length, pending.length),
+    gateStep: gate ? gateStepId(gate.id) : null,
+    railTitle: railTitleOf(detail),
+    rail: railOf(detail, pending),
+    active: running.map((step) => ({
+      label: step.phase ?? "",
+      name: labelOf(step),
+      meta: duration(step.startedAt, undefined),
+      stepId: stepId(step.seq),
+    })),
+    findings: findingsOf(detail),
+    artifacts: extras.artifacts ?? [],
+    files: extras.files ?? [],
+    // "Committed" is not a thing the journal records; a merged patch is the nearest true
+    // statement, and it is what decides whether the changes pane still offers actions.
+    committed: detail.patches.merged.length > 0,
+    changesNote: changesNoteOf(detail),
+    branchNote: branchNoteOf(detail),
+    journal: extras.journal ?? [],
+    gate,
+    steps: stepsOf(detail, pending),
+  };
+}
+
+function chromeOf(detail: RunDetail): string {
+  const parts = [
+    `${detail.steps.length} step${detail.steps.length === 1 ? "" : "s"}`,
+    duration(detail.createdAt, terminal(detail.status) ? detail.updatedAt : undefined),
+  ];
+  const cap = detail.limits?.usd;
+  // No ceiling means no denominator: "$0.12 / $0.00" would read as over budget.
+  parts.push(cap === undefined ? money(detail.budget.usd) : `${money(detail.budget.usd)} / ${money(cap)}`);
+  return parts.join(" · ");
+}
+
+function pillOf(detail: RunDetail, running: number, pending: number): string {
+  switch (detail.status) {
+    case "waiting_for_human":
+      return pending > 1 ? `waiting on you · ${pending} questions` : "waiting on you";
+    case "waiting_for_signal":
+      return "waiting for a signal";
+    case "complete":
+      return `done · ${ago(detail.updatedAt)}`;
+    case "failed":
+      return `failed · ${detail.error?.code ?? "error"}`;
+    case "cancelled":
+      return "stopped";
+    default:
+      return running === 1 ? "1 step active" : `${running} steps active`;
+  }
+}
+
+function railTitleOf(detail: RunDetail): string {
+  return terminal(detail.status)
+    ? `Run tree · ${detail.steps.length} step${detail.steps.length === 1 ? "" : "s"} recorded`
+    : "Run tree · appended as steps start";
+}
+
+/**
+ * The rail, grouped by phase. Steps a workflow never labelled fall into one trailing
+ * group, the same way `renderTree` gathers them, so nothing is dropped for lacking a name.
+ * A pending human request is shown as `waiting`, which the step's own status cannot say —
+ * a human step is "running" right up until it is answered.
+ */
+function railOf(detail: RunDetail, pending: HumanState[]): RailGroup[] {
+  const waitingSeqs = new Set(pending.map((human) => human.seq));
+  const bySeq = new Map(detail.steps.map((step) => [step.seq, step]));
+  const grouped = new Set<number>();
+  const groups: RailGroup[] = [];
+
+  for (const phase of detail.phases) {
+    const steps = phase.steps
+      .map((seq) => bySeq.get(seq))
+      .filter((step): step is StepState => step !== undefined);
+    for (const step of steps) grouped.add(step.seq);
+    if (steps.length === 0) continue;
+    groups.push({
+      name: phase.name,
+      meta: groupMeta(steps),
+      steps: steps.map((s) => railStep(s, waitingSeqs)),
+    });
+  }
+
+  const loose = detail.steps.filter((step) => !grouped.has(step.seq));
+  if (loose.length > 0) {
+    groups.push({
+      name: "no phase",
+      meta: groupMeta(loose),
+      steps: loose.map((s) => railStep(s, waitingSeqs)),
+    });
+  }
+  return groups;
+}
+
+function groupMeta(steps: StepState[]): string {
+  const kinds = new Set(steps.map((step) => step.kind));
+  const parallel = steps.filter((step) => step.status === "running").length > 1;
+  const shape = kinds.size === 1 ? [...kinds][0] : `${steps.length} steps`;
+  return `${shape}${steps.length > 1 ? ` ×${steps.length}` : ""}${parallel ? " ∥" : ""}`;
+}
+
+function railStep(step: StepState, waiting: Set<number>): RailStep {
+  const isWaiting = step.kind === "human" && waiting.has(step.seq);
+  return {
+    id: stepId(step.seq),
+    kind: stepBucket(step.kind),
+    label: labelOf(step),
+    meta: stepMeta(step, isWaiting),
+    state: isWaiting ? "waiting" : stepStatus(step),
+    artifact: step.patchRef ? "patch" : "",
+  };
+}
+
+function stepMeta(step: StepState, waiting: boolean): string {
+  if (waiting) return "waiting on you";
+  if (step.status === "failed") return `failed${step.error?.code ? ` · ${step.error.code}` : ""}`;
+  const count = tokens(step);
+  if (count > 0) return `${(count / 1000).toFixed(1)}k tok`;
+  return duration(step.startedAt, step.endedAt);
+}
+
+function labelOf(step: StepState): string {
+  return step.label ?? step.key ?? `${step.kind}#${step.seq}`;
+}
+
+/**
+ * Findings, from the notes a run journaled. The design's findings each opened a step;
+ * `ctx.note` records no such link, so a note names itself and the card omits the footer
+ * rather than pointing at a step nothing chose.
+ */
+function findingsOf(detail: RunDetail): Finding[] {
+  return detail.notes.map((note, index) => ({
+    id: `n-${index + 1}`,
+    msg: note.text,
+    loc: note.evidence ?? "",
+    sev: note.kind,
+    stepLabel: "",
+    chip: "",
+    settled: true,
+  }));
+}
+
+function changesNoteOf(detail: RunDetail): string {
+  if (detail.patches.captured.length === 0) return "";
+  if (detail.patches.merged.length > 0) return "Merged into the working tree.";
+  if (detail.patches.discarded.length > 0) return "Discarded — nothing was applied.";
+  return "Captured in an isolated worktree. Nothing is in your tree until it is merged.";
+}
+
+function branchNoteOf(detail: RunDetail): string {
+  const captured = detail.patches.captured.length;
+  if (captured === 0) return "";
+  const merged = detail.patches.merged.length;
+  return `${captured} patch${captured === 1 ? "" : "es"} captured · ${merged} merged`;
+}
+
+function terminal(status: RunStatus): boolean {
+  return status === "complete" || status === "failed" || status === "cancelled";
+}
+
+/* ── Steps ────────────────────────────────────────────────────────────────── */
+
+function stepsOf(detail: RunDetail, pending: HumanState[]): Record<string, StepDetail> {
+  const out: Record<string, StepDetail> = {};
+  const waitingIds = new Set(pending.map((human) => human.id));
+
+  for (const step of detail.steps) {
+    out[stepId(step.seq)] = machineStep(detail, step);
+  }
+  for (const human of detail.humans) {
+    out[gateStepId(human.id)] = humanStep(human, waitingIds.has(human.id));
+  }
+  return out;
+}
+
+function machineStep(detail: RunDetail, step: StepState): StepDetail {
+  const cost = step.usage?.usd;
+  const cells: StepCell[] = [
+    { k: "kind", v: step.kind },
+    ...(step.route
+      ? [{ k: "provider", v: `${step.route.provider}${step.route.model ? `/${step.route.model}` : ""}` }]
+      : []),
+    { k: step.endedAt === undefined ? "elapsed" : "duration", v: duration(step.startedAt, step.endedAt) },
+    ...(tokens(step) > 0 ? [{ k: "tokens", v: tokens(step).toLocaleString() }] : []),
+    ...(cost !== undefined && cost > 0 ? [{ k: "cost", v: money(cost) }] : []),
+    ...(step.attempts !== undefined && step.attempts > 1
+      ? [{ k: "attempts", v: String(step.attempts) }]
+      : []),
+    ...(step.phase !== undefined ? [{ k: "phase", v: step.phase }] : []),
+    ...(step.childRunId !== undefined ? [{ k: "child run", v: step.childRunId, color: "#a9583e" }] : []),
+    ...(step.error ? [{ k: "error", v: step.error.code ?? "failed", color: "#b0483a" }] : []),
+  ];
+
+  const output = step.output;
+  const failed = step.status === "failed";
+  return {
+    title: `${labelOf(step)} · step ${step.seq}`,
+    pill: failed
+      ? "failed"
+      : step.status === "ok"
+        ? `done · ${duration(step.startedAt, step.endedAt)}`
+        : `running · ${duration(step.startedAt, undefined)}`,
+    pillKind: failed ? "fail" : step.status === "ok" ? "done" : "run",
+    action: "Copy step id",
+    cells,
+    input: inputRows(detail.inputs?.[String(step.seq)]),
+    outTitle: failed ? "step error" : step.status === "ok" ? "step output" : "step output · running",
+    outNote: failed ? "" : output === undefined ? "" : "schema-validated",
+    out: failed
+      ? [step.error?.message ?? step.error?.code ?? "the step failed with no message"]
+      : jsonLines(output),
+    streaming: step.status === "running",
+    tools: [],
+    toolsTitle: "",
+    next: failed && step.error?.message ? { k: "error", v: step.error.message, goToGate: false } : null,
+  };
+}
+
+function humanStep(human: HumanState, waiting: boolean): StepDetail {
+  return {
+    title: `${human.kind}: ${human.question}`,
+    pill: waiting ? "waiting on you" : `answered${human.answeredBy ? ` · ${human.answeredBy}` : ""}`,
+    pillKind: waiting ? "human" : "done",
+    action: "Copy gate id",
+    cells: [
+      { k: "kind", v: "human" },
+      { k: "asks", v: human.kind },
+      ...(human.risk ? [{ k: "risk", v: human.risk, color: "#a9583e" }] : []),
+      { k: "requested", v: clock(human.requestedAt) },
+      ...(human.answeredBy ? [{ k: "answered by", v: human.answeredBy }] : []),
+    ],
+    input: [
+      { k: "question", kind: "text", ref: "", title: human.question, sub: "", pills: [] },
+      ...(human.detail !== undefined
+        ? [{ k: "detail", kind: "text" as const, ref: "", title: human.detail, sub: "", pills: [] }]
+        : []),
+    ],
+    outTitle: "answer",
+    outNote: waiting ? "" : "journaled verbatim",
+    out: waiting ? ["pending — nothing moves until this is answered"] : jsonLines(human.answer),
+    streaming: false,
+    tools: [],
+    toolsTitle: "",
+    next: waiting ? { k: "needs you", v: "This question is holding the run.", goToGate: true } : null,
+  };
+}
+
+/** A step's scheduled payload, as the design's key/value rows. */
+function inputRows(payload: unknown): StepInput[] {
+  if (payload === undefined || payload === null) return [];
+  if (typeof payload !== "object" || Array.isArray(payload)) {
+    return [{ k: "payload", kind: "text", ref: "", title: compact(payload), sub: "", pills: [] }];
+  }
+  return Object.entries(payload as Record<string, unknown>).map(([key, value]) => {
+    // A list of short strings reads better as pills than as JSON.
+    if (Array.isArray(value) && value.every((v) => typeof v === "string" && v.length < 40)) {
+      return { k: key, kind: "pills" as const, ref: "", title: "", sub: "", pills: value as string[] };
+    }
+    return { k: key, kind: "text" as const, ref: "", title: compact(value), sub: "", pills: [] };
+  });
+}
+
+/** Pretty-printed JSON as lines, or one line for a scalar. */
+export function jsonLines(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (typeof value === "string") return value.split("\n");
+  try {
+    return JSON.stringify(value, null, 2).split("\n");
+  } catch {
+    return [String(value)];
+  }
+}
+
+function compact(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/* ── Gates ────────────────────────────────────────────────────────────────── */
+
+const DENIABLE = new Set(["approve", "confirm"]);
+
+export function adaptGate(request: PendingRequest): Gate {
+  const deniable = DENIABLE.has(request.kind);
+  return {
+    id: request.id,
+    runId: request.runId,
+    deniable,
+    risk: request.risk ?? "",
+    blocks: "holds the run until answered",
+    title: request.question,
+    detail: request.detail ?? "",
+    submitLabel: deniable ? "Approve & resume" : "Answer & resume",
+    denyLabel: "Deny & stop",
+    // The two buttons ARE the verdict for a deniable gate, so the schema's own boolean is
+    // not shown as a third control saying the same thing — a toggle reading "no" beside a
+    // button reading "Approve" is a question about which one the run will hear.
+    questions: schemaQuestions(request.schema as JsonSchema | null).filter(
+      (question) => !(deniable && question.key === VERDICT_FIELD),
+    ),
+  };
+}
+
+/** The field `ctx.human.approve` declares for the verdict itself. */
+export const VERDICT_FIELD = "approved";
+
+/** The same gate, built from a run's own projection when the queue was not the way in. */
+function adaptGateFromState(detail: RunDetail, human: HumanState | undefined): Gate | null {
+  if (human === undefined) return null;
+  return adaptGate({
+    runId: detail.runId,
+    id: human.id,
+    kind: human.kind,
+    question: human.question,
+    schema: human.schema,
+    createdAt: human.requestedAt,
+    workflow: detail.workflow,
+    rootRunId: detail.parentRunId ?? detail.runId,
+    rootWorkflow: detail.workflow,
+    ...(human.detail !== undefined ? { detail: human.detail } : {}),
+    ...(human.risk !== undefined ? { risk: human.risk } : {}),
+  });
+}
+
+/**
+ * A gate's form, from the JSON Schema of the answer it expects.
+ *
+ * The control is chosen from the declaration, never guessed from the field name: an enum
+ * is a set of pills, a boolean is a toggle, a long-form string is a note, everything else
+ * is a text field. An `anyOf` of consts carrying descriptions is the one shape that gets
+ * cards, because it is the only one that supplies anything to put on them.
+ */
+export function schemaQuestions(schema: JsonSchema | null): GateQuestion[] {
+  if (!schema || schema.properties === undefined) return [];
+  const required = new Set(schema.required ?? []);
+  return Object.entries(schema.properties).map(([key, property]) => {
+    const options = optionsOf(property);
+    return {
+      key,
+      label: property.title ?? key,
+      kind: controlOf(property, options),
+      options,
+      required: required.has(key),
+    };
+  });
+}
+
+function controlOf(property: JsonSchema, options: GateOption[]): GateQuestionKind {
+  if (property.type === "boolean") return "toggle";
+  if (options.length > 0) {
+    if (options.some((option) => option.desc !== "")) return "cards";
+    if (property.type === "array") return "chips";
+    return options.length > 4 ? "select" : "choice";
+  }
+  if (property.type === "array") return "chips";
+  // A field described as prose, or named like one, gets room to write in.
+  if (property.description !== undefined && property.description.length > 60) return "note";
+  return "note";
+}
+
+function optionsOf(property: JsonSchema): GateOption[] {
+  const source = property.type === "array" ? (property.items ?? {}) : property;
+  if (Array.isArray(source.enum)) {
+    return source.enum.map((value) => ({ label: String(value), meta: "", desc: "" }));
+  }
+  const branches = source.anyOf ?? source.oneOf;
+  if (branches) {
+    const consts = branches.filter((branch) => branch.const !== undefined);
+    if (consts.length === branches.length && consts.length > 0) {
+      return consts.map((branch) => ({
+        label: String(branch.const),
+        meta: "",
+        desc: branch.description ?? "",
+      }));
+    }
+  }
+  return [];
+}
+
+/** The answer object to POST, from the collected values and the schema's own types. */
+export function gateAnswer(schema: JsonSchema | null, values: Record<string, unknown>): unknown {
+  if (!schema || schema.properties === undefined) return values;
+  const out: Record<string, unknown> = {};
+  for (const [key, property] of Object.entries(schema.properties)) {
+    const value = values[key];
+    if (value === undefined || value === "") continue;
+    if (property.type === "number" || property.type === "integer") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) out[key] = parsed;
+      continue;
+    }
+    out[key] = value;
+  }
+  return out;
+}
+
+/* ── Workflows ────────────────────────────────────────────────────────────── */
+
+export interface WorkflowExtras {
+  stats?: WorkflowStats;
+  detail?: WorkflowDetail;
+  /** The most recent run of this workflow, folded — the only source of its shape. */
+  shapeSource?: RunDetail;
+}
+
+export function adaptWorkflow(row: WorkflowRow, extras: WorkflowExtras = {}): Workflow {
+  const stats = extras.stats;
+  const recent = stats?.recent ?? [];
+  return {
+    file: row.file,
+    name: row.name,
+    desc: row.description,
+    state: workflowStateOf(recent),
+    lastLabel: ago(stats?.lastRunAt),
+    ok: stats?.successRate ?? 100,
+    p50: stats?.p50Ms === null || stats?.p50Ms === undefined ? "—" : formatElapsed(stats.p50Ms),
+    cost: stats === undefined ? "—" : money(stats.p50Usd ?? 0),
+    shape: shapeOf(extras.shapeSource),
+    labels: labelsOf(extras.shapeSource),
+    // Newest-first from the API; the sparkline reads oldest-first.
+    history: [...recent].reverse().map((run) => (run.status === "complete" ? 1 : 0)),
+    historyNote: historyNoteOf(stats),
+    facts: factsOf(row, extras),
+    recent: recent.map((run) => ({
+      id: run.runId,
+      outcome: run.status,
+      ago: ago(run.createdAt),
+    })),
+    inputs: [],
+  };
+}
+
+function workflowStateOf(recent: WorkflowStats["recent"]): Workflow["state"] {
+  const live = recent.find(
+    (run) => run.status === "waiting_for_human" || run.status === "waiting_for_signal",
+  );
+  if (live) return "waiting";
+  const running = recent.find(
+    (run) => run.status === "executing" || run.status === "planning" || run.status === "verifying",
+  );
+  return running ? "running" : "idle";
+}
+
+/**
+ * The shape strip, from what the newest run actually did. Nothing declares a workflow's
+ * shape — the code decides it as it runs — so a workflow with no runs shows none.
+ */
+function shapeOf(run: RunDetail | undefined): ShapeCell[] {
+  if (!run) return [];
+  const out: ShapeCell[] = [];
+  for (const phase of run.phases) {
+    const steps = phase.steps
+      .map((seq) => run.steps.find((step) => step.seq === seq))
+      .filter((step): step is StepState => step !== undefined);
+    if (steps.length === 0) continue;
+    const kind = stepBucket(steps[0]!.kind);
+    const glyph = kind === "agent" ? "A" : kind === "human" ? "H" : "T";
+    out.push({ kind, glyph: steps.length > 1 ? `${glyph}∥` : glyph });
+  }
+  return out;
+}
+
+function labelsOf(run: RunDetail | undefined): WorkflowLabel[] {
+  if (!run) return [];
+  return run.phases.map((phase) => {
+    const steps = phase.steps
+      .map((seq) => run.steps.find((step) => step.seq === seq))
+      .filter((step): step is StepState => step !== undefined);
+    const kinds = [...new Set(steps.map((step) => step.kind))].join(" → ");
+    return { name: phase.name, meta: steps.length > 1 ? `${kinds} ×${steps.length}` : kinds };
+  });
+}
+
+function historyNoteOf(stats: WorkflowStats | undefined): string {
+  if (!stats || stats.runs === 0) return "no runs in the window";
+  const parts: string[] = [];
+  if (stats.failed > 0) parts.push(`${stats.failed} failed`);
+  if (stats.cancelled > 0) parts.push(`${stats.cancelled} cancelled`);
+  if (parts.length === 0) parts.push(`no failures in ${stats.windowDays}d`);
+  if (stats.truncated) parts.push("window truncated");
+  return parts.join(" · ");
+}
+
+/**
+ * Facts about a workflow that are actually recorded. The design listed a schedule and an
+ * owner; weft has neither concept, so this reports what it does know — where the code is,
+ * what it costs, and what the gate policy will do to it.
+ */
+function factsOf(row: WorkflowRow, extras: WorkflowExtras): Labelled[] {
+  const stats = extras.stats;
+  const out: Labelled[] = [{ k: "file", v: row.file }];
+  if (extras.detail?.defaults?.provider) {
+    out.push({ k: "provider", v: extras.detail.defaults.provider });
+  }
+  if (stats) {
+    out.push({ k: "runs · 30d", v: String(stats.runs) });
+    out.push({ k: "spend · 30d", v: money(stats.usd) });
+    if (stats.p95Ms !== null) out.push({ k: "p95", v: formatElapsed(stats.p95Ms) });
+  }
+  return out;
+}
+
+/* ── Artifacts ────────────────────────────────────────────────────────────── */
+
+export function adaptArtifacts(entries: ArtifactEntry[]): Run["artifacts"] {
+  return entries.map((entry) => ({
+    name: entry.kind === "patch" ? (entry.key ?? entry.id) : entry.id,
+    type: entry.kind === "patch" ? "patch" : "artifact",
+    size: entry.size === null ? "" : formatBytes(entry.size),
+    step: entry.producedBy?.label ?? entry.gate?.question ?? "",
+    ago: ago(entry.at),
+    ref: entry.ref,
+    available: entry.available,
+    ...(entry.preview !== undefined
+      ? { view: { kind: "code" as const, lines: entry.preview.split("\n") } }
+      : {}),
+  }));
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/* ── Runs table ───────────────────────────────────────────────────────────── */
+
+export interface RunTableEntry {
+  id: string;
+  wf: string;
+  state: RunState;
+  outcome: string;
+  started: string;
+  dur: string;
+  cost: string;
+}
+
+export function adaptRunRows(rows: RunRow[], pendingByRun: Map<string, PendingRequest>): RunTableEntry[] {
+  return [...rows]
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map((row) => ({
+      id: row.runId,
+      wf: row.workflow || "—",
+      state: runState(row.status),
+      outcome: outcomeOf(row, pendingByRun.get(row.runId)),
+      started: clock(row.createdAt),
+      dur: duration(row.createdAt, terminal(row.status) ? row.updatedAt : undefined),
+      cost: row.spend ? money(row.spend.usd) : "",
+    }));
+}
+
+function outcomeOf(row: RunRow, pending: PendingRequest | undefined): string {
+  if (pending) return pending.question;
+  switch (row.status) {
+    case "complete":
+      return "done";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "stopped";
+    case "waiting_for_signal":
+      return "waiting for a signal";
+    default: {
+      const running = row.running ?? 0;
+      return running === 1 ? "1 step active" : `${running} steps active`;
+    }
+  }
+}
+
+/* ── Chrome ───────────────────────────────────────────────────────────────── */
+
+export function statusBarFacts(meta: Meta | undefined): { pool: string; budget: string; version: string } {
+  return {
+    pool: meta ? `${meta.limits.concurrency} agents` : "—",
+    budget: meta ? `${meta.defaults.provider}${meta.defaults.model ? `/${meta.defaults.model}` : ""}` : "—",
+    version: meta ? `weft v${meta.version}` : "weft",
+  };
+}

@@ -16,3 +16,29 @@
   flex-direction: column;
   gap: 8px;
 }
+.warning {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 15px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  border: 1px dashed var(--color-accent-400);
+  font-size: 12px;
+  color: var(--color-neutral-700);
+}
+.warningRuns {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-accent-700);
+}
+.loading {
+  padding: 4px 1px;
+  font-size: 12px;
+  color: var(--color-neutral-600);
+}

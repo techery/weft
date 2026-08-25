@@ -1,5 +1,7 @@
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { useAtomValue } from "jotai";
+import { useCancelRun } from "~/api/queries";
+import { useRunView } from "~/app/useRunView";
+import { EmptyNote } from "~/components/molecules/EmptyNote";
 import { ArtifactsTab } from "~/components/organisms/ArtifactsTab";
 import { ChangesTab } from "~/components/organisms/ChangesTab";
 import { FindingsTab } from "~/components/organisms/FindingsTab";
@@ -9,25 +11,16 @@ import { RunHeader } from "~/components/organisms/RunHeader";
 import { RunRail } from "~/components/organisms/RunRail";
 import { RunTabsBar } from "~/components/organisms/RunTabsBar";
 import { StepPane } from "~/components/organisms/StepPane";
-import { hasPendingGate, resolveArtifact, resolveFile, resolveStepId, runTabs } from "~/domain/views";
-import { answeredRunsAtom, runsAtom } from "~/state/atoms";
+import { resolveArtifact, resolveFile, resolveStepId, runTabs } from "~/domain/views";
 import styles from "./RunDetailPage.module.css";
 
-const DEFAULT_ARTIFACT = "report.md";
-const DEFAULT_FILE = "src/net/fetchWithRetry.ts";
-
-/** One run: its steps, findings, artifacts, staged changes and journal. */
+/** One run: its steps, the question holding it, and everything it wrote. */
 export function RunDetailPage() {
   const { runId } = useParams({ from: "/runs/$runId" });
   const search = useSearch({ from: "/runs/$runId" });
   const navigate = useNavigate();
-  const runs = useAtomValue(runsAtom);
-  const answered = useAtomValue(answeredRunsAtom);
-  const run = runs[runId];
-
-  if (!run) {
-    return <div className={styles.missing}>No run {runId} in the journal window.</div>;
-  }
+  const cancel = useCancelRun();
+  const { run, gateSchema, diffs, isPending, error, live } = useRunView(runId);
 
   const patch = (next: Partial<typeof search>) =>
     void navigate({
@@ -37,30 +30,38 @@ export function RunDetailPage() {
       replace: true,
     });
 
-  const pendingGate = hasPendingGate(run, answered);
+  const back = () => void navigate(search.from === "runs" ? { to: "/runs", search: {} } : { to: "/queue" });
+
+  if (isPending) return <div className={styles.missing}>loading run {runId}…</div>;
+  if (error || run === undefined) {
+    return (
+      <div className={styles.missing}>
+        <EmptyNote>{error?.message ?? `No run ${runId} in the journal.`}</EmptyNote>
+      </div>
+    );
+  }
+
+  // A gate is pending while the run's own state still says a question is outstanding —
+  // the server decides that, not this page, so answering it simply stops being true.
+  const pendingGate = run.gate !== null && run.state === "waiting";
   const tabs = runTabs(run, pendingGate);
   const tab = tabs.some((t) => t.key === search.tab) && search.tab ? search.tab : "steps";
   const stepId = resolveStepId(run, search.step, pendingGate);
   const step = run.steps[stepId];
-  // The design opens the audit run on its newest artifact and first changed
-  // file; every other run falls back to its own first entry.
-  const artifact = resolveArtifact(run, search.artifact ?? DEFAULT_ARTIFACT);
-  const file = resolveFile(run, search.file ?? DEFAULT_FILE);
-  const showGate = tab === "steps" && pendingGate && stepId === run.gateStep && !!run.gate;
-
-  const goToGate = () => patch({ tab: "steps", step: run.gateStep ?? undefined });
+  const artifact = resolveArtifact(run, search.artifact);
+  const file = resolveFile(run, search.file);
+  const showGate = tab === "steps" && pendingGate && run.gate !== null && stepId === run.gateStep;
 
   return (
     <div className={styles.screen}>
       <RunHeader
         run={run}
         backLabel={search.from === "runs" ? "← Runs" : "← Queue"}
-        onBack={() =>
-          void navigate(
-            search.from === "runs" ? { to: "/runs", search: { filter: "All" } } : { to: "/queue" },
-          )
-        }
-        onOpenWorkflow={() => void navigate({ to: "/workflows", search: { wf: run.file } })}
+        onBack={back}
+        canCancel={run.state === "running" || run.state === "waiting"}
+        cancelling={cancel.isPending}
+        onCancel={() => cancel.mutate(runId)}
+        onOpenWorkflow={() => void navigate({ to: "/workflows", search: { wf: run.wf } })}
       />
 
       <RunTabsBar tabs={tabs} active={tab} onSelect={(next) => patch({ tab: next })} />
@@ -70,39 +71,67 @@ export function RunDetailPage() {
           <RunRail run={run} selectedStepId={stepId} onSelect={(id) => patch({ step: id })} />
         ) : null}
 
-        {showGate && run.gate && step ? (
-          <GatePane runId={run.id} gate={run.gate} step={step} stepId={stepId} />
-        ) : null}
-
-        {tab === "steps" && !showGate && step ? (
-          <StepPane
-            run={run}
-            step={step}
-            stepId={stepId}
-            onSelectStep={(id) => patch({ step: id })}
-            onGoToGate={goToGate}
+        {showGate && run.gate ? (
+          <GatePane
+            gate={run.gate}
+            step={step ?? fallbackStep(run.gate.title)}
+            schema={gateSchema}
+            onAnswered={() => patch({ step: undefined })}
           />
         ) : null}
 
-        {tab === "findings" ? (
-          <FindingsTab run={run} onOpenStep={(id) => patch({ tab: "steps", step: id })} />
+        {tab === "steps" && !showGate ? (
+          step ? (
+            <StepPane
+              run={run}
+              step={step}
+              stepId={stepId}
+              onSelectStep={(id) => patch({ step: id })}
+              onGoToGate={() => patch({ tab: "steps", step: run.gateStep ?? undefined })}
+            />
+          ) : (
+            <div className={styles.missing}>
+              <EmptyNote>This run has not opened a step yet.</EmptyNote>
+            </div>
+          )
         ) : null}
 
-        {tab === "artifacts" && artifact ? (
+        {tab === "findings" ? <FindingsTab run={run} /> : null}
+
+        {tab === "artifacts" ? (
           <ArtifactsTab run={run} artifact={artifact} onSelect={(name) => patch({ artifact: name })} />
         ) : null}
 
-        {tab === "changes" && file ? (
+        {tab === "changes" ? (
           <ChangesTab
             run={run}
             file={file}
+            diff={file ? diffs[file.path] : undefined}
             onSelect={(path) => patch({ file: path })}
-            onGoToGate={goToGate}
           />
         ) : null}
 
-        {tab === "journal" ? <JournalTab run={run} /> : null}
+        {tab === "journal" ? <JournalTab run={run} live={live} /> : null}
       </div>
     </div>
   );
+}
+
+/** A gate whose step the projection has not caught up with yet still has to render. */
+function fallbackStep(title: string) {
+  return {
+    title,
+    pill: "waiting on you",
+    pillKind: "human" as const,
+    action: "Copy gate id",
+    cells: [],
+    input: [],
+    outTitle: "answer",
+    outNote: "",
+    out: [],
+    streaming: false,
+    tools: [],
+    toolsTitle: "",
+    next: null,
+  };
 }

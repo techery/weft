@@ -1,17 +1,18 @@
 import { StatusDot } from "~/components/atoms/StatusDot";
-import { RUN_STATE_LABEL } from "~/domain/fixtures/runList";
+import type { RunTableEntry } from "~/domain/adapt";
+import { RUN_STATE_LABEL } from "~/domain/filters";
 import type { RunState } from "~/domain/types";
-import type { RunTableRow as Row } from "~/domain/views";
 import styles from "./RunTableRow.module.css";
 
 const STATE_TEXT: Record<RunState, string> = {
   waiting: "var(--color-accent-700)",
   running: "var(--color-accent-2-700)",
   done: "var(--color-neutral-600)",
+  failed: "var(--color-danger)",
   stopped: "var(--color-neutral-600)",
 };
 
-export function RunTableRow({ row, onOpen }: { row: Row; onOpen: () => void }) {
+export function RunTableRow({ row, onOpen }: { row: RunTableEntry; onOpen: () => void }) {
   return (
     <button type="button" className={styles.row} onClick={onOpen}>
       <span className={styles.identity}>

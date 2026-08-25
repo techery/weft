@@ -1,28 +1,23 @@
-import { useAtomValue, useSetAtom } from "jotai";
+import { useSetAtom } from "jotai";
 import type { ReactNode } from "react";
 import { useEffect } from "react";
+import { usePending } from "~/api/queries";
 import { Launcher } from "~/components/organisms/Launcher";
 import { StatusBar } from "~/components/organisms/StatusBar";
 import { type NavKey, TopBar } from "~/components/organisms/TopBar";
-import { RUN_ORDER } from "~/domain/fixtures/runs";
-import type { Workflow } from "~/domain/types";
-import { queueGroups } from "~/domain/views";
-import { budgetAtom, concurrencyAtom, openLauncherAtom, runsAtom } from "~/state/atoms";
+import { openLauncherAtom } from "~/state/atoms";
 import styles from "./AppShell.module.css";
 
 type Props = {
   active: NavKey;
-  onStartRun: (workflow: Workflow) => void;
   children: ReactNode;
 };
 
 /** Chrome that never changes: top bar, status bar, and the ⌘K launcher. */
-export function AppShell({ active, onStartRun, children }: Props) {
-  const runs = useAtomValue(runsAtom);
-  const budget = useAtomValue(budgetAtom);
-  const concurrency = useAtomValue(concurrencyAtom);
+export function AppShell({ active, children }: Props) {
+  const pending = usePending();
   const openLauncher = useSetAtom(openLauncherAtom);
-  const waitingCount = queueGroups(runs, RUN_ORDER).waiting.length;
+  const waiting = pending.data?.pending.length ?? 0;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -37,10 +32,14 @@ export function AppShell({ active, onStartRun, children }: Props) {
 
   return (
     <div className={styles.shell}>
-      <TopBar active={active} queueBadge={String(waitingCount)} onOpenLauncher={openLauncher} />
+      <TopBar
+        active={active}
+        queueBadge={waiting > 0 ? String(waiting) : undefined}
+        onOpenLauncher={openLauncher}
+      />
       <div className={styles.main}>{children}</div>
-      <StatusBar concurrency={concurrency} budget={budget} />
-      <Launcher onStart={onStartRun} />
+      <StatusBar />
+      <Launcher />
     </div>
   );
 }

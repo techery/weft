@@ -223,7 +223,7 @@ Only `journal.jsonl` has to survive; every other file in that directory is rebui
 
 | App | Owns |
 | --- | --- |
-| `@techery/weft-ui` (`apps/ui`) | The workflow manager: queue, runs, run detail, workflows, settings, and a ⌘K launcher. React + Vite + TanStack Router + Jotai, laid out atomically. See [apps/ui/README.md](./apps/ui/README.md). |
+| `@techery/weft-ui` (`apps/ui`) | The workflow manager: queue, runs, run detail, workflows, settings, and a ⌘K launcher — reading and writing the live journal through the API below. React + Vite + TanStack Router + Query + Jotai, laid out atomically. See [apps/ui/README.md](./apps/ui/README.md). |
 
 `weft ui` serves it. The manager builds into `packages/daemon/web/`, and the daemon that
 `weft ui` starts serves that directory at `/` — so `pnpm build && weft ui` opens the

@@ -56,3 +56,8 @@
 .flag {
   padding-top: 3px;
 }
+.cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

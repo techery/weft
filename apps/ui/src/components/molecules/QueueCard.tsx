@@ -2,8 +2,26 @@ import { Button } from "~/components/atoms/Button";
 import { FactCell } from "~/components/atoms/FactCell";
 import { MonoBadge } from "~/components/atoms/MonoBadge";
 import { StatusDot } from "~/components/atoms/StatusDot";
-import type { QueueCard as QueueCardModel } from "~/domain/views";
+import type { Labelled } from "~/domain/types";
 import styles from "./QueueCard.module.css";
+
+/**
+ * One card's worth of copy. The queue builds this from two different sources — a pending
+ * request and a running run's row — so the shape is what they have in common, and anything
+ * neither can supply arrives as "" or as a missing fact.
+ */
+export type QueueCardModel = {
+  /** True when the run is blocked on a human answer. */
+  needsYou: boolean;
+  wf: string;
+  sub: string;
+  ask: string;
+  detail: string;
+  /** Risk tier of the pending gate, or "" when the request declared none. */
+  risk: string;
+  action: string;
+  facts: Labelled[];
+};
 
 type Props = { card: QueueCardModel; onOpen: () => void };
 
@@ -28,17 +46,19 @@ export function QueueCard({ card, onOpen }: Props) {
               </MonoBadge>
             ) : null}
           </span>
-          <span className={styles.detail}>{card.detail}</span>
+          {card.detail ? <span className={styles.detail}>{card.detail}</span> : null}
         </span>
         <Button variant={card.needsYou ? "primary" : "secondary"} size="mediumWide" onClick={onOpen}>
           {card.action}
         </Button>
       </div>
-      <div className={styles.facts}>
-        {card.facts.map((fact, index) => (
-          <FactCell key={fact.k} variant="queue" first={index === 0} label={fact.k} value={fact.v} />
-        ))}
-      </div>
+      {card.facts.length > 0 ? (
+        <div className={styles.facts}>
+          {card.facts.map((fact, index) => (
+            <FactCell key={fact.k} variant="queue" first={index === 0} label={fact.k} value={fact.v} />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

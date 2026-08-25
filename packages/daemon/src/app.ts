@@ -28,6 +28,7 @@ import { registerMetaRoutes } from "./api/meta.ts";
 import { registerPendingRoutes } from "./api/pending.ts";
 import { registerStartRoutes } from "./api/starts.ts";
 import { registerWorkflowRoutes } from "./api/workflows.ts";
+import { detailOf } from "./detail.ts";
 import { fail, jsonBody, messageOf, page } from "./http.ts";
 import { pendingAcross, refreshProjections, repaired, stateOf } from "./state.ts";
 import { INDEX_HTML } from "./ui.ts";
@@ -131,6 +132,12 @@ export function createApp(weft: Weft, opts: CreateAppOptions = {}): Hono {
 
   app.get("/api/runs/:id", async (c) => {
     try {
+      // `?detail=1` folds the same records for the two things the projection drops: the
+      // ceiling the run was started with, and what each step was scheduled with.
+      if (c.req.query("detail") === "1") {
+        const { state, budget, inputs } = await detailOf(weft, c.req.param("id"));
+        return c.json({ ...state, budget: state.budget, limits: budget, inputs });
+      }
       return c.json(await stateOf(weft, c.req.param("id")));
     } catch (err) {
       return fail(c, err);

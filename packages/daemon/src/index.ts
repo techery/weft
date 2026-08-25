@@ -30,6 +30,7 @@ export { type PendingEntry, registerPendingRoutes } from "./api/pending.ts";
 export { registerStartRoutes } from "./api/starts.ts";
 export { registerWorkflowRoutes } from "./api/workflows.ts";
 export { type CreateAppOptions, createApp } from "./app.ts";
+export { detailOf, type RunDetail } from "./detail.ts";
 export { fail, jsonBody, messageOf, page } from "./http.ts";
 export type { DaemonHandle, StartDaemonOptions } from "./server.ts";
 export { DEFAULT_PORT, startDaemon } from "./server.ts";

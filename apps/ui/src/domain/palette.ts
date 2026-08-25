@@ -12,6 +12,7 @@ export const STATUS_COLOR: Record<RunState | StepState | WorkflowState, string> 
   idle: "#c4bdb2",
   wait: "#e6dfd8",
   fail: "#b0483a",
+  failed: "#b0483a",
   stopped: "#8e8b82",
 };
 
@@ -33,7 +34,7 @@ export const PILL_FG: Record<PillKind, string> = {
 export function runPillKind(state: RunState): PillKind {
   if (state === "waiting") return "human";
   if (state === "running") return "run";
-  if (state === "stopped") return "fail";
+  if (state === "stopped" || state === "failed") return "fail";
   return "done";
 }
 

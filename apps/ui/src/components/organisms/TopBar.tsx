@@ -1,18 +1,26 @@
 import { Link } from "@tanstack/react-router";
+import { useMeta } from "~/api/queries";
 import { Button } from "~/components/atoms/Button";
 import { StatusDot } from "~/components/atoms/StatusDot";
 import { NavTab } from "~/components/molecules/NavTab";
+import type { RunState } from "~/domain/types";
 import styles from "./TopBar.module.css";
 
 export type NavKey = "queue" | "runs" | "workflows" | "settings";
 
 type Props = {
   active: NavKey;
-  queueBadge: string;
+  /** Absent when nothing is waiting, or before the queue has answered. */
+  queueBadge?: string;
   onOpenLauncher: () => void;
 };
 
 export function TopBar({ active, queueBadge, onOpenLauncher }: Props) {
+  const meta = useMeta();
+  // Grey until /api/meta answers once: a green dot before anything replied would be
+  // claiming a reachability the page has not established yet.
+  const dot: RunState = meta.isSuccess ? "running" : meta.isError ? "failed" : "done";
+
   return (
     <header className={styles.bar}>
       <div className={styles.brand}>
@@ -20,7 +28,7 @@ export function TopBar({ active, queueBadge, onOpenLauncher }: Props) {
           <span className={styles.mark}>w</span>
           <span className={styles.word}>weft</span>
         </Link>
-        <span className={styles.repo}>acme/treel</span>
+        {meta.data ? <span className={styles.repo}>{meta.data.repo.name}</span> : null}
       </div>
       <nav className={styles.nav}>
         <NavTab to="/queue" label="Queue" badge={queueBadge} active={active === "queue"} />
@@ -32,9 +40,10 @@ export function TopBar({ active, queueBadge, onOpenLauncher }: Props) {
       <Button variant="primary" size="mediumWide" onClick={onOpenLauncher}>
         Run a workflow ⌘K
       </Button>
-      <span className={styles.daemon}>
-        <StatusDot state="running" />
-        daemon · localhost:4781
+      <span className={styles.daemon} title={meta.error?.message}>
+        <StatusDot state={dot} />
+        {/* This page is served by the daemon it talks to, so its own origin is the address. */}
+        daemon · {window.location.host}
       </span>
     </header>
   );

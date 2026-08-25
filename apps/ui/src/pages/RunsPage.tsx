@@ -1,34 +1,53 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useAtomValue } from "jotai";
+import { usePending, useRuns } from "~/api/queries";
+import type { PendingRequest } from "~/api/types";
 import { useOpenRun } from "~/app/useOpenRun";
 import { PillButton } from "~/components/atoms/PillButton";
 import { ListTable } from "~/components/molecules/ListTable";
 import { RunTableRow } from "~/components/molecules/RunTableRow";
-import { StartedBanner } from "~/components/molecules/StartedBanner";
 import { PageHeader } from "~/components/templates/PageHeader";
 import { ScrollPage } from "~/components/templates/ScrollPage";
-import { RUN_FILTERS } from "~/domain/fixtures/runList";
-import { passesRunFilter, runTableRows } from "~/domain/views";
-import { runsAtom, startedRunAtom } from "~/state/atoms";
+import { adaptRunRows, gateStepId } from "~/domain/adapt";
+import { passesFilter, RUN_FILTERS } from "~/domain/filters";
 import styles from "./RunsPage.module.css";
 
 /** The journal index for the last 30 days. */
 export function RunsPage() {
-  const runs = useAtomValue(runsAtom);
-  const started = useAtomValue(startedRunAtom);
   const search = useSearch({ from: "/runs" });
   const filter = search.filter ?? "All";
   const navigate = useNavigate();
   const openRun = useOpenRun();
+  const runs = useRuns({ spend: true });
+  const pending = usePending();
 
-  const rows = runTableRows(runs);
-  const visible = rows.filter((r) => passesRunFilter(r, filter));
+  const pendingByRun = new Map<string, PendingRequest>();
+  // Keyed by the run that OWNS the question, which is the run this table has a row for —
+  // a child's question belongs to the child's row, not its root's. The queue arrives
+  // oldest-first, so the first one kept per run is the one that stopped it.
+  for (const request of pending.data?.pending ?? []) {
+    if (!pendingByRun.has(request.runId)) pendingByRun.set(request.runId, request);
+  }
+
+  const rows = adaptRunRows(runs.data ?? [], pendingByRun);
+  const visible = rows.filter((row) => passesFilter(row.state, filter));
+  const settled = !runs.isPending && runs.error === null;
+  // The queue is where a waiting row's question comes from, so a failed queue read has to
+  // be said out loud: without it those rows quietly report a step count instead.
+  const failure = runs.error ?? pending.error;
+
+  const open = (runId: string) => {
+    const request = pendingByRun.get(runId);
+    // A run that is waiting opens on its gate, the same landing the queue gives it.
+    openRun(runId, { from: "runs", ...(request ? { step: gateStepId(request.id) } : {}) });
+  };
 
   return (
     <ScrollPage maxWidth={1180} gap={16}>
       <PageHeader
         title="Runs"
-        summary={`${rows.length} runs in the journal window · 30d`}
+        summary={
+          settled ? `${rows.length} run${rows.length === 1 ? "" : "s"} in the journal window` : undefined
+        }
         aside={
           <span className={styles.filters}>
             {RUN_FILTERS.map((f) => (
@@ -44,8 +63,6 @@ export function RunsPage() {
         }
       />
 
-      {started ? <StartedBanner wf={started.wf} file={started.file} /> : null}
-
       <ListTable
         head={
           <>
@@ -58,13 +75,16 @@ export function RunsPage() {
           </>
         }
       >
+        {runs.isPending ? <p className={styles.note}>Reading the journal…</p> : null}
+        {failure ? <p className={styles.error}>{failure.message}</p> : null}
         {visible.map((row) => (
-          <RunTableRow
-            key={row.id}
-            row={row}
-            onOpen={() => openRun(row.id, row.state === "waiting" ? "gate" : "default", "runs")}
-          />
+          <RunTableRow key={row.id} row={row} onOpen={() => open(row.id)} />
         ))}
+        {settled && visible.length === 0 ? (
+          <p className={styles.note}>
+            {rows.length === 0 ? "No runs in the journal window." : "No runs in this filter."}
+          </p>
+        ) : null}
       </ListTable>
 
       <p className={styles.footnote}>

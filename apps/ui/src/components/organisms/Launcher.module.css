@@ -157,3 +157,17 @@
   flex: 1;
   min-width: 0;
 }
+
+/* — remote states — */
+.listState {
+  padding: 12px 20px;
+}
+.state {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-600);
+}
+.stateError,
+.footError {
+  color: var(--color-danger);
+}

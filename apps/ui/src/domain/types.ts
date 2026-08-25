@@ -1,5 +1,5 @@
 /** Lifecycle of a whole run, as the journal records it. */
-export type RunState = "running" | "waiting" | "done" | "stopped";
+export type RunState = "running" | "waiting" | "done" | "stopped" | "failed";
 
 /**
  * Lifecycle of a single step. `waiting` is a human gate that wants an answer;
@@ -81,7 +81,8 @@ export type Finding = {
   chip: string;
   /** True once the step this finding opened has finished. */
   settled: boolean;
-  stepId: string;
+  /** The step this finding opened, when the record links one. */
+  stepId?: string;
 };
 
 export type CodeArtifactView = { kind: "code"; lines: string[] };
@@ -97,10 +98,15 @@ export type Artifact = {
   name: string;
   type: string;
   size: string;
-  /** Label of the step that produced it. */
+  /** Label of the step or gate that produced it. */
   step: string;
   ago: string;
-  view: ArtifactView;
+  /** Content-addressed ref — the bytes are fetched from the blob store on demand. */
+  ref: string;
+  /** False when the journal still names a ref the store no longer holds. */
+  available: boolean;
+  /** Loaded lazily; absent until the bytes arrive. */
+  view?: ArtifactView;
 };
 
 export type FileChange = { path: string; adds: number; dels: number };
@@ -137,7 +143,7 @@ export type StepDetail = {
   streaming: boolean;
   tools: ToolCall[];
   toolsTitle: string;
-  /** The dashed "what happens next" strip under the output. */
+  /** The dashed strip under the output — an error, or what the step is waiting on. */
   next: { k: string; v: string; goToGate: boolean } | null;
 };
 
@@ -155,6 +161,10 @@ export type GateQuestion = {
 
 export type Gate = {
   id: string;
+  /** The run that owns the request — not necessarily the one being viewed. */
+  runId?: string;
+  /** `approve` and `confirm` can be denied; an `ask` can only be answered. */
+  deniable?: boolean;
   risk: string;
   blocks: string;
   title: string;

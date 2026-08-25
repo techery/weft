@@ -1,33 +1,63 @@
 import { useAtomValue, useSetAtom } from "jotai";
+import { useMemo } from "react";
+import { useAnswerGate } from "~/api/queries";
+import type { JsonSchema } from "~/api/types";
 import { Button } from "~/components/atoms/Button";
 import { Kicker } from "~/components/atoms/Kicker";
 import { MonoBadge } from "~/components/atoms/MonoBadge";
 import { StatusPill } from "~/components/atoms/StatusPill";
 import { GateQuestionRow } from "~/components/molecules/GateQuestionRow";
 import { SectionHeading } from "~/components/molecules/SectionHeading";
+import { gateAnswer, VERDICT_FIELD } from "~/domain/adapt";
 import type { Gate, StepDetail } from "~/domain/types";
-import { gatePayload } from "~/domain/views";
-import {
-  denyGateAtom,
-  gateAnswersAtom,
-  setGateAnswerAtom,
-  submitGateAtom,
-  toggleGateChipAtom,
-  toggleGateFlagAtom,
-} from "~/state/atoms";
+import { clearGateDraftAtom, gateDraftAtom, setGateFieldAtom, toggleGateChipAtom } from "~/state/atoms";
 import styles from "./GatePane.module.css";
 
-type Props = { runId: string; gate: Gate; step: StepDetail; stepId: string };
+type Props = {
+  gate: Gate;
+  step: StepDetail;
+  schema: JsonSchema | null;
+  onAnswered: () => void;
+};
 
-/** The answer form for a pending human gate — this is what blocks the run. */
-export function GatePane({ runId, gate, step, stepId }: Props) {
-  const answers = useAtomValue(gateAnswersAtom);
-  const setAnswer = useSetAtom(setGateAnswerAtom);
+/**
+ * The form that unblocks a run.
+ *
+ * Its controls are derived from the schema the workflow declared for the answer, never
+ * from the field names — so a workflow that asks for something this UI has never seen still
+ * gets a usable form, and one that asks for an enum gets pills rather than a text box.
+ *
+ * Deny is only offered where denial is a meaningful answer. `ctx.human.approve` declares
+ * `{ approved, note }`, so refusing is `approved: false`; an `ask` has no such axis, and a
+ * button that submitted an arbitrary "no" into its schema would be inventing a reply.
+ */
+export function GatePane({ gate, step, schema, onAnswered }: Props) {
+  const drafts = useAtomValue(gateDraftAtom);
+  const setField = useSetAtom(setGateFieldAtom);
   const toggleChip = useSetAtom(toggleGateChipAtom);
-  const toggleFlag = useSetAtom(toggleGateFlagAtom);
-  const submit = useSetAtom(submitGateAtom);
-  const deny = useSetAtom(denyGateAtom);
-  const values = answers[gate.id] ?? {};
+  const clearDraft = useSetAtom(clearGateDraftAtom);
+  const answer = useAnswerGate();
+
+  const values = useMemo(() => drafts[gate.id] ?? {}, [drafts, gate.id]);
+  const runId = gate.runId ?? "";
+
+  const submit = (override?: Record<string, unknown>) => {
+    answer.mutate(
+      { runId, requestId: gate.id, answer: gateAnswer(schema, { ...values, ...override }) },
+      {
+        onSuccess: () => {
+          clearDraft(gate.id);
+          onAnswered();
+        },
+      },
+    );
+  };
+
+  // Previewing the approving answer: it is the one the primary button sends, and a
+  // preview that omitted the verdict would show something the run never receives.
+  const payload = JSON.stringify(
+    gateAnswer(schema, gate.deniable ? { ...values, [VERDICT_FIELD]: true } : values),
+  );
 
   return (
     <div className={styles.pane}>
@@ -36,23 +66,25 @@ export function GatePane({ runId, gate, step, stepId }: Props) {
           <h2 className={styles.title}>{step.title}</h2>
           <StatusPill kind={step.pillKind}>{step.pill}</StatusPill>
           <span className={styles.spacer} />
-          <span className={styles.stepId}>weft explain {stepId}</span>
+          <span className={styles.stepId}>{gate.id}</span>
         </div>
 
         <div className={styles.ask}>
           <div className={styles.askMeta}>
             <span className={styles.event}>human.requested · {gate.id}</span>
-            <MonoBadge bg="var(--color-accent-200)" fg="var(--color-accent-800)">
-              {`risk: ${gate.risk}`}
-            </MonoBadge>
+            {gate.risk ? (
+              <MonoBadge bg="var(--color-accent-200)" fg="var(--color-accent-800)">
+                {`risk: ${gate.risk}`}
+              </MonoBadge>
+            ) : null}
             <span className={styles.blocks}>{gate.blocks}</span>
           </div>
           <h3 className={styles.gateTitle}>{gate.title}</h3>
-          <span className={styles.detail}>{gate.detail}</span>
+          {gate.detail ? <span className={styles.detail}>{gate.detail}</span> : null}
         </div>
 
         <div className={styles.answersHead}>
-          <SectionHeading note="journaled verbatim · passed to the next step" noteNowrap>
+          <SectionHeading note="journaled verbatim · passed back to the waiting step" noteNowrap>
             <Kicker>Answers</Kicker>
           </SectionHeading>
         </div>
@@ -62,25 +94,44 @@ export function GatePane({ runId, gate, step, stepId }: Props) {
             <GateQuestionRow
               key={question.key}
               question={question}
-              value={values[question.key]}
-              onSet={(value) => setAnswer(gate.id, question.key, value)}
+              value={values[question.key] as never}
+              onSet={(value) => setField(gate.id, question.key, value)}
               onToggleChip={(label) => toggleChip(gate.id, question.key, label)}
-              onToggleFlag={() => toggleFlag(gate.id, question.key)}
+              onToggleFlag={() => setField(gate.id, question.key, values[question.key] !== true)}
             />
           ))}
+          {gate.questions.length === 0 ? (
+            <span className={styles.detail}>
+              This question declares no fields — answering it just releases the run.
+            </span>
+          ) : null}
         </div>
+
+        {answer.isError ? <span className={styles.detail}>{(answer.error as Error).message}</span> : null}
       </div>
 
       <div className={styles.foot}>
         <span className={styles.payload}>
-          <span className={styles.payloadLabel}>payload → next step</span>
-          <span className={styles.payloadValue}>{gatePayload(gate, answers)}</span>
+          <span className={styles.payloadLabel}>payload → waiting step</span>
+          <span className={styles.payloadValue}>{payload}</span>
         </span>
-        <Button variant="secondary" size="mediumWide" onClick={() => deny(runId)}>
-          {gate.denyLabel}
-        </Button>
-        <Button variant="primary" size="large" onClick={() => submit(runId)}>
-          {gate.submitLabel}
+        {gate.deniable ? (
+          <Button
+            variant="secondary"
+            size="mediumWide"
+            disabled={answer.isPending}
+            onClick={() => submit({ approved: false })}
+          >
+            {gate.denyLabel}
+          </Button>
+        ) : null}
+        <Button
+          variant="primary"
+          size="large"
+          disabled={answer.isPending}
+          onClick={() => submit(gate.deniable ? { approved: true } : undefined)}
+        >
+          {answer.isPending ? "Answering…" : gate.submitLabel}
         </Button>
       </div>
     </div>

@@ -1,198 +1,217 @@
-import { screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { type FakeDaemon, fakeDaemon } from "~/test/daemon";
 import { renderApp } from "~/test/renderApp";
 
-describe("queue", () => {
-  it("lists what is blocked on you before what is running", async () => {
+let daemon: FakeDaemon;
+
+beforeEach(() => {
+  daemon = fakeDaemon();
+});
+
+afterEach(() => {
+  daemon.restore();
+});
+
+describe("the queue", () => {
+  it("shows the question a run is blocked on, from the daemon", async () => {
     renderApp("/queue");
-    expect(await screen.findByRole("heading", { name: "Queue" })).toBeInTheDocument();
-    expect(screen.getByText("3 waiting on you · 1 running")).toBeInTheDocument();
-    expect(screen.getByText("Waiting on you · 3")).toBeInTheDocument();
-    expect(screen.getByText("Running · 1")).toBeInTheDocument();
-    expect(screen.getByText("Commit the staged fix")).toBeInTheDocument();
-    expect(screen.getByText("classify — 2 of 4 agents still working")).toBeInTheDocument();
+    expect(await screen.findByText("Approve the v0.9.0 release")).toBeInTheDocument();
+    expect(
+      screen.getByText("Publishing creates a public GitHub release — weft cannot undo it."),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/risk: high/)).toBeInTheDocument();
   });
 
-  it("badges the nav with the number of runs waiting on you", async () => {
+  it("separates what is working from what is blocked", async () => {
     renderApp("/queue");
-    const queueLink = await screen.findByRole("link", { name: /Queue/ });
-    expect(within(queueLink).getByText("3")).toBeInTheDocument();
+    await screen.findByText("Approve the v0.9.0 release");
+    expect(screen.getByText(/Waiting on you · 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Running · 1/)).toBeInTheDocument();
   });
 
-  it("opens a waiting run straight on its gate", async () => {
+  it("opens the blocked run straight on its question", async () => {
     const { user, router } = renderApp("/queue");
-    const cards = await screen.findAllByRole("button", { name: "Answer →" });
-    await user.click(cards[2]!);
-    expect(router.state.location.pathname).toBe("/runs/r-045");
-    expect(await screen.findByRole("heading", { name: "Commit the staged fix" })).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: /Answer/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/runs/r-waiting"));
+    // The question that raised the gate, not the step's seq.
+    expect(router.state.location.search).toMatchObject({ step: "gate:h1" });
+  });
+
+  it("says so when the daemon cannot be reached", async () => {
+    daemon.fail("/api/pending", 500, "EACCES: permission denied, open journal.jsonl");
+    renderApp("/queue");
+    expect(await screen.findByText(/EACCES: permission denied/)).toBeInTheDocument();
   });
 });
 
-describe("run detail", () => {
-  it("shows the gate form for the step that is holding the run", async () => {
-    renderApp("/runs/r-045?from=queue&tab=steps&step=gate-5");
-    expect(
-      await screen.findByRole("heading", { name: "gate: commit the fix · step 10" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("human.requested · gate-5")).toBeInTheDocument();
-    expect(screen.getByText("risk: write")).toBeInTheDocument();
-    expect(
-      screen.getByText('{ action: "open a PR", notify: ["#eng-alerts"], wait: true, note: "" }'),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /open a PR/ })).toBeChecked();
-    expect(screen.getByRole("button", { name: "Approve & resume" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Discard & stop" })).toBeInTheDocument();
+describe("the runs table", () => {
+  it("lists every run with what it spent", async () => {
+    renderApp("/runs");
+    expect(await screen.findByText("r-waiting")).toBeInTheDocument();
+    expect(screen.getByText("$0.71")).toBeInTheDocument();
+    expect(screen.getByText("$0.09")).toBeInTheDocument();
+    // A waiting run says what it is waiting for.
+    expect(screen.getByText("Approve the v0.9.0 release")).toBeInTheDocument();
+    expect(screen.getByText("2 steps active")).toBeInTheDocument();
+  });
+});
+
+describe("a run", () => {
+  it("shows its steps grouped by phase, with the gate marked as waiting", async () => {
+    renderApp("/runs/r-waiting?from=runs&tab=steps");
+    const rail = await screen.findByRole("navigation", { name: "Run steps" });
+    expect(within(rail).getByText("draft release notes")).toBeInTheDocument();
+    expect(within(rail).getByText("Draft")).toBeInTheDocument();
+    expect(within(rail).getByText("Review")).toBeInTheDocument();
+    // The human step is holding a question, which its own status cannot say.
+    expect(within(rail).getByText("waiting on you")).toBeInTheDocument();
   });
 
-  it("rewrites the payload as the answer changes", async () => {
-    const { user } = renderApp("/runs/r-045?from=queue&tab=steps&step=gate-5");
-    // The radio itself is visually hidden; the card is its label.
-    await user.click(await screen.findByText("commit only"));
-    await user.click(screen.getByRole("button", { name: "#on-call" }));
-    expect(
-      screen.getByText(
-        '{ action: "commit only", notify: ["#eng-alerts", "#on-call"], wait: true, note: "" }',
+  it("shows spend against the ceiling the run was actually given", async () => {
+    renderApp("/runs/r-waiting?from=runs");
+    expect(await screen.findByText(/\$0\.71 \/ \$4\.00/)).toBeInTheDocument();
+  });
+
+  it("shows a step's input, which only ?detail=1 carries", async () => {
+    renderApp("/runs/r-waiting?from=runs&tab=steps&step=step:1");
+    expect(await screen.findByText("draft release notes · step 1")).toBeInTheDocument();
+    expect(screen.getByText("since")).toBeInTheDocument();
+    expect(screen.getByText("v0.8.4")).toBeInTheDocument();
+    expect(daemon.calls.some((call) => call.path === "/api/runs/r-waiting?detail=1")).toBe(true);
+  });
+
+  it("builds the gate's form from the schema the workflow declared", async () => {
+    renderApp("/runs/r-waiting?from=queue&tab=steps&step=gate:h1");
+    expect(await screen.findByRole("heading", { name: "Approve the v0.9.0 release" })).toBeInTheDocument();
+    // `approve` declares { approved, note }. The verdict is the two buttons, so the
+    // schema's own boolean is not offered a third time as a toggle.
+    expect(screen.getByLabelText("note")).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Approve/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Deny/ })).toBeInTheDocument();
+  });
+
+  it("answers the question and the run moves on", async () => {
+    const { user } = renderApp("/runs/r-waiting?from=queue&tab=steps&step=gate:h1");
+    await user.click(await screen.findByRole("button", { name: /Approve/ }));
+
+    const answered = await waitFor(() => {
+      const call = daemon.calls.find((c) => c.method === "POST" && c.path === "/api/runs/r-waiting/answer");
+      expect(call).toBeDefined();
+      return call!;
+    });
+    expect(answered.body).toMatchObject({ requestId: "h1", answer: { approved: true } });
+    // The daemon drops the question, and the screen follows.
+    await waitFor(() => expect(screen.queryByLabelText("note")).not.toBeInTheDocument());
+  });
+
+  it("renders the captured patch, split into files", async () => {
+    renderApp("/runs/r-waiting?from=runs&tab=changes");
+    // Named twice on purpose: once in the tree, once over the hunks.
+    expect(await screen.findAllByText("CHANGELOG.md")).toHaveLength(2);
+    // The count appears on the tree row and again over the hunks.
+    expect(screen.getAllByText("+2")).toHaveLength(2);
+    expect(screen.getByText("@@ -1,2 +1,4 @@")).toBeInTheDocument();
+    expect(screen.getByText("+## v0.9.0")).toBeInTheDocument();
+  });
+
+  it("fetches an artifact's bytes only for the file being looked at", async () => {
+    renderApp("/runs/r-waiting?from=runs&tab=artifacts");
+    expect(await screen.findByText(/# Changelog/)).toBeInTheDocument();
+    expect(daemon.calls.some((call) => call.path.startsWith("/api/blobs/aaaa"))).toBe(true);
+  });
+
+  it("hides a tab the run produced nothing for", async () => {
+    renderApp("/runs/r-live?from=runs&tab=steps");
+    await screen.findAllByText("classify #815");
+    expect(screen.queryByRole("tab", { name: /Changes/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /Notes/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /Journal/ })).toBeInTheDocument();
+  });
+
+  it("cancels a live run", async () => {
+    const { user } = renderApp("/runs/r-live?from=runs");
+    await user.click(await screen.findByRole("button", { name: "Cancel run" }));
+    await waitFor(() =>
+      expect(daemon.calls.some((c) => c.method === "POST" && c.path === "/api/runs/r-live/cancel")).toBe(
+        true,
       ),
-    ).toBeInTheDocument();
+    );
   });
 
-  it("resumes the run when the gate is approved", async () => {
-    const { user } = renderApp("/runs/r-045?from=queue&tab=steps&step=gate-5");
-    await user.click(await screen.findByRole("button", { name: "Approve & resume" }));
-    expect(await screen.findByText("4 steps active")).toBeInTheDocument();
-    expect(screen.getByText("next → step 11 · push branch, started at 08:42")).toBeInTheDocument();
-    expect(screen.getByText('{ answer: "open a PR", answered_by: "you", at: "08:42" }')).toBeInTheDocument();
-  });
-
-  it("stops the run when the gate is denied", async () => {
-    const { user } = renderApp("/runs/r-045?from=queue&tab=steps&step=gate-5");
-    await user.click(await screen.findByRole("button", { name: "Discard & stop" }));
-    expect(await screen.findByText("stopped by you")).toBeInTheDocument();
-    expect(
-      screen.getByText("run.stopped — the branch was left in place and no further steps were opened."),
-    ).toBeInTheDocument();
-  });
-
-  it("moves between tabs and keeps them in the URL", async () => {
-    const { user, router } = renderApp("/runs/r-045?from=runs&tab=steps&step=verify-1");
-    await user.click(await screen.findByRole("tab", { name: /Findings/ }));
-    expect(router.state.location.search).toMatchObject({ tab: "findings" });
-    expect(screen.getByText("Lockfile still pins the vulnerable transitive dep")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("tab", { name: /Journal/ }));
-    expect(screen.getByText("verify failed · exit 1 · 2 findings recorded")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("tab", { name: /Changes/ }));
-    expect(screen.getByText("@@ -12,4 +12,9 @@ fetchWithRetry()")).toBeInTheDocument();
-    // The branch note is repeated under the tree and under the diff.
-    expect(screen.getAllByText("branch weft/r-045 · not pushed")).toHaveLength(2);
-
-    await user.click(screen.getByRole("tab", { name: /Artifacts/ }));
-    expect(screen.getByText("Dependency audit — 3 advisories")).toBeInTheDocument();
-  });
-
-  it("opens the step a finding created", async () => {
-    const { user } = renderApp("/runs/r-045?from=runs&tab=findings");
-    await user.click((await screen.findAllByRole("button", { name: "Open step" }))[1]!);
-    expect(await screen.findByRole("heading", { name: "patch call site · step 9" })).toBeInTheDocument();
-    expect(screen.getByText('grep "retryGuard" src/**')).toBeInTheDocument();
-  });
-
-  it("selects a different changed file", async () => {
-    const { user } = renderApp("/runs/r-045?from=runs&tab=changes");
-    await user.click(await screen.findByRole("button", { name: /package-lock\.json/ }));
-    expect(screen.getByText("@@ -1204,7 +1204,7 @@ node_modules/undici")).toBeInTheDocument();
-  });
-
-  it("goes back to wherever the run was opened from", async () => {
-    const { user, router } = renderApp("/runs/r-049?from=runs&tab=steps");
-    await user.click(await screen.findByRole("button", { name: "← Runs" }));
-    expect(router.state.location.pathname).toBe("/runs");
-  });
-
-  it("jumps to the workflow that defines the run", async () => {
-    const { user, router } = renderApp("/runs/r-045?from=queue&tab=steps&step=verify-1");
-    await user.click(await screen.findByRole("button", { name: "deps-audit.ts" }));
-    expect(router.state.location.pathname).toBe("/workflows");
-    expect(router.state.location.search).toMatchObject({ wf: "deps-audit.ts" });
-  });
-});
-
-describe("runs", () => {
-  it("filters the journal index", async () => {
-    const { user } = renderApp("/runs");
-    expect(await screen.findByText("5 runs in the journal window · 30d")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Finished" }));
-    expect(screen.getByText("v0.8.4 released")).toBeInTheDocument();
-    expect(screen.queryByText("gate: pick a hero")).not.toBeInTheDocument();
+  it("says plainly when a run is not in the journal", async () => {
+    renderApp("/runs/r-nope?from=runs");
+    expect(await screen.findByText(/run r-nope not found/)).toBeInTheDocument();
   });
 });
 
 describe("workflows", () => {
-  it("inspects the selected workflow", async () => {
-    const { user } = renderApp("/workflows");
-    expect(await screen.findByText(".weft/workflows/deps-audit.ts")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Issue triage/ }));
-    expect(screen.getByText(".weft/workflows/triage.ts")).toBeInTheDocument();
-    expect(screen.getByText("1 failed · rate limit at classify")).toBeInTheDocument();
-    expect(screen.getByText("on issue open")).toBeInTheDocument();
-  });
-
-  it("opens a recent run from the inspector", async () => {
-    const { user, router } = renderApp("/workflows?wf=triage.ts");
-    await user.click(await screen.findByRole("button", { name: /r-049/ }));
-    expect(router.state.location.pathname).toBe("/runs/r-049");
+  it("lists the registry and inspects the selected one", async () => {
+    renderApp("/workflows?wf=release");
+    expect(await screen.findByText("Draft and publish release notes")).toBeInTheDocument();
+    expect(screen.getByText(".weft/workflows/release.ts")).toBeInTheDocument();
   });
 });
 
 describe("settings", () => {
-  it("changes the approval policy and the pool size", async () => {
-    const { user } = renderApp("/settings");
-    const writeRow = (await screen.findByText("fs.write · labels · branch push")).parentElement!;
-    await user.click(within(writeRow).getByRole("button", { name: "auto" }));
-    expect(within(writeRow).getByRole("button", { name: "auto" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByText("pool 8 agents")).toBeInTheDocument();
-  });
-
-  it("edits the default budget and reflects it in the status bar", async () => {
-    const { user } = renderApp("/settings");
-    const budget = await screen.findByDisplayValue("$8.00");
-    await user.clear(budget);
-    await user.type(budget, "$12.00");
-    expect(screen.getByText("default budget $12.00")).toBeInTheDocument();
+  it("shows the engine's real approval tiers, not the design's invented ones", async () => {
+    renderApp("/settings");
+    await screen.findByText(/Approval policy/i);
+    for (const tier of ["low", "medium", "high", "irreversible"]) {
+      expect(screen.getByText(tier)).toBeInTheDocument();
+    }
+    expect(screen.queryByText("destructive")).not.toBeInTheDocument();
   });
 });
 
-describe("launcher", () => {
-  it("opens on ⌘K, filters, and starts a workflow with no live run", async () => {
+describe("the launcher", () => {
+  it("starts a run from the workflow's declared inputs", async () => {
     const { user, router } = renderApp("/queue");
-    await screen.findByRole("heading", { name: "Queue" });
+    await screen.findByText("Approve the v0.9.0 release");
     await user.keyboard("{Meta>}k{/Meta}");
+
     const dialog = await screen.findByRole("dialog", { name: "Run a workflow" });
-    await user.type(within(dialog).getByLabelText("Filter workflows"), "digest");
-    expect(within(dialog).getByText("1 of 6 match")).toBeInTheDocument();
-    await user.keyboard("{Enter}");
-    expect(await within(dialog).findByText(/step 2 of 2/)).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Start run ⏎" }));
-    expect(router.state.location.pathname).toBe("/runs");
-    expect(await screen.findByText("Weekly digest")).toBeInTheDocument();
-    expect(screen.getByText("queued just now · the daemon opens step 1 in a moment")).toBeInTheDocument();
+    await user.click(within(dialog).getByText("triage"));
+    // `triage` declares window as an enum, so the form offers its values as pills.
+    expect(await within(dialog).findByRole("button", { name: "24h" })).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "24h" }));
+    await user.click(within(dialog).getByRole("button", { name: /Start run/ }));
+
+    const started = await waitFor(() => {
+      const call = daemon.calls.find((c) => c.method === "POST" && c.path === "/api/runs");
+      expect(call).toBeDefined();
+      return call!;
+    });
+    expect(started.body).toMatchObject({ workflow: "triage", input: { window: "24h" } });
+    await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/runs\//));
   });
 
-  it("jumps to the live run when the workflow already has one", async () => {
-    const { user, router } = renderApp("/queue");
-    await user.click(await screen.findByRole("button", { name: "Issue triage" }));
-    const dialog = await screen.findByRole("dialog", { name: "Run a workflow" });
-    await user.click(within(dialog).getByRole("button", { name: "Start run ⏎" }));
-    expect(router.state.location.pathname).toBe("/runs/r-049");
-  });
-
-  it("closes on escape", async () => {
+  it("keeps the daemon's own refusal on screen instead of closing", async () => {
+    daemon.fail("/api/runs", 400, 'triage has no input field "whoo" — it takes --window');
     const { user } = renderApp("/queue");
-    await screen.findByRole("heading", { name: "Queue" });
+    await screen.findByText("Approve the v0.9.0 release");
     await user.keyboard("{Meta>}k{/Meta}");
-    await screen.findByRole("dialog", { name: "Run a workflow" });
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Run a workflow" });
+    await user.click(within(dialog).getByText("triage"));
+    await user.click(await within(dialog).findByRole("button", { name: /Start run/ }));
+    expect(await screen.findByText(/has no input field "whoo"/)).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Run a workflow" })).toBeInTheDocument();
+  });
+});
+
+describe("the chrome", () => {
+  it("names the repo and the pool from the daemon", async () => {
+    renderApp("/queue");
+    expect(await screen.findByText("treel")).toBeInTheDocument();
+    // The status bar says the pool size; the queue's running group says it too.
+    expect((await screen.findAllByText(/8 agents/)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/weft v0\.9\.0/)).toBeInTheDocument();
+  });
+
+  it("badges the queue with the number of outstanding questions", async () => {
+    renderApp("/queue");
+    const link = await screen.findByRole("link", { name: /Queue/ });
+    expect(await within(link).findByText("1")).toBeInTheDocument();
   });
 });
