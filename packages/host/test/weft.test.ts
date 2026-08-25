@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { mockTaskEnvelope } from "@techery/weft-provider-mock";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   createWeft,
@@ -138,17 +139,14 @@ export default defineWorkflow(
     );
     weft.mockBuilder?.on(
       { key: "path-task" },
-      {
-        result: { ok: true },
-        taskOperations: [
-          {
-            op: "create",
-            title: "Path task",
-            description: "Persist outside the registry",
-            extensions: { ownerTeam: "runtime" },
-          },
-        ],
-      },
+      mockTaskEnvelope({ ok: true }, [
+        {
+          op: "create",
+          title: "Path task",
+          description: "Persist outside the registry",
+          extensions: { ownerTeam: "runtime" },
+        },
+      ]),
     );
     const { def } = await resolveWorkflow(weft, "./flows/tracked.ts");
     const run = await weft.engine.start(def, { input: {}, cwd: weft.cwd });
@@ -249,17 +247,14 @@ export default defineWorkflow(
     expect(weft.engine.providers.ids().sort()).toEqual(["claude", "codex", "mock"]);
     weft.mockBuilder?.on(
       { key: "verdict" },
-      {
-        result: { verdict: "fine" },
-        taskOperations: [
-          {
-            op: "create",
-            title: "Record verdict",
-            description: "Carry the verdict into later workflow steps.",
-            acceptanceCriteria: ["verdict is journaled"],
-          },
-        ],
-      },
+      mockTaskEnvelope({ verdict: "fine" }, [
+        {
+          op: "create",
+          title: "Record verdict",
+          description: "Carry the verdict into later workflow steps.",
+          acceptanceCriteria: ["verdict is journaled"],
+        },
+      ]),
     );
 
     const { def } = await resolveWorkflow(weft, "verdict");

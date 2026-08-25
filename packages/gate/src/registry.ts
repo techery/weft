@@ -121,21 +121,35 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
     // broken file here is the one the caller asked for, so its error propagates — but a
     // file that simply is not a workflow (a `schemas.ts` next door) just does not match.
     const direct = path.join(dir, `${name}.ts`);
+    const entries: CacheEntry[] = [];
     const matches: CacheEntry[] = [];
     if (await isFile(direct)) {
       const entry = await loadFile(direct).catch((err: unknown) => {
         if (isNotAWorkflow(err)) return undefined;
         throw err;
       });
-      if (entry?.name === name) matches.push(entry);
+      if (entry) {
+        entries.push(entry);
+        if (entry.name === name) matches.push(entry);
+      }
     }
     for (const file of await candidates()) {
       if (file === direct) continue;
       const entry = await tolerantLoad(loadFile, file);
-      if (entry?.name === name) matches.push(entry);
+      if (entry) {
+        entries.push(entry);
+        if (entry.name === name) matches.push(entry);
+      }
     }
     assertUnique(matches, "name", name);
-    return matches[0];
+    const match = matches[0];
+    if (match)
+      assertUnique(
+        entries.filter((entry) => entry.id === match.id),
+        "id",
+        match.id,
+      );
+    return match;
   };
 
   return {
@@ -186,7 +200,7 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
   };
 }
 
-function assertUnique(entries: CacheEntry[], field: "name", value: string): void {
+function assertUnique(entries: CacheEntry[], field: "name" | "id", value: string): void {
   if (entries.length < 2) return;
   throw new GateError(
     `duplicate workflow ${field} ${JSON.stringify(value)} in ${entries.map((entry) => entry.file).join(" and ")}`,

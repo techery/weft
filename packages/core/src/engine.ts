@@ -41,6 +41,34 @@ const CANCEL_DRAIN_MS = 5_000;
 /** How long shutdown() waits for each run to unwind before leaving it claimed. */
 const SHUTDOWN_DRAIN_MS = 5_000;
 
+/** First journal format that enables implicit task context on agent steps. */
+const TASK_CONTEXT_VERSION = 1;
+
+/**
+ * Runs written before task tracking existed have no version marker and used the
+ * agent's original result schema directly. Feature-preview runs written before
+ * the marker did journal a task observation, so retain their envelope too.
+ */
+function hasImplicitTaskContext(records: JournalRecord[]): boolean {
+  const created = records.find((record) => record.ev.type === "run.created")?.ev;
+  if (created?.type === "run.created" && (created.workflow.taskContextVersion ?? 0) > 0) return true;
+  if (
+    records.some(
+      (record) =>
+        record.ev.type === "step.scheduled" &&
+        record.ev.kind === "sideeffect" &&
+        typeof record.ev.payload === "object" &&
+        record.ev.payload !== null &&
+        (record.ev.payload as { op?: unknown }).op === "task.observe",
+    )
+  ) {
+    return true;
+  }
+  // No historical agent identity can be invalidated before the first agent is
+  // scheduled, so an old run suspended earlier may safely adopt the new default.
+  return !records.some((record) => record.ev.type === "step.scheduled" && record.ev.kind === "agent");
+}
+
 /**
  * Races a run's completion against a deadline: `true` if it unwound, `false` if the
  * bound expired.
@@ -309,6 +337,7 @@ export class Engine implements EngineHost {
       workflowId,
       ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
       taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
+      defaultAgentTaskContext: this.taskTracker !== undefined,
       cwd: opts.cwd,
       depth: 0,
       shared,
@@ -330,6 +359,7 @@ export class Engine implements EngineHost {
             name,
             ...(opts.defHash !== undefined ? { defHash: opts.defHash } : {}),
             bodyHash,
+            ...(this.taskTracker ? { taskContextVersion: TASK_CONTEXT_VERSION } : {}),
             ...(taskSchemaBinding && def.meta.tasks ? { taskSchemaBinding } : {}),
             ...(def.meta.tasks ? { taskSchemaVersion: def.meta.tasks.schemaVersion ?? 1 } : {}),
           },
@@ -489,6 +519,7 @@ export class Engine implements EngineHost {
       workflowId: resumedWorkflowId,
       ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
       taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
+      defaultAgentTaskContext: hasImplicitTaskContext(records),
       cwd: created.cwd,
       depth: created.depth,
       shared,
@@ -1251,6 +1282,7 @@ export class Engine implements EngineHost {
       workflowId: childWorkflowId,
       ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
       taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
+      defaultAgentTaskContext: resuming ? hasImplicitTaskContext(records) : this.taskTracker !== undefined,
       cwd: parent.cwd,
       depth: parent.depth + 1,
       shared,
@@ -1273,6 +1305,7 @@ export class Engine implements EngineHost {
             id: def.meta.id ?? def.meta.name ?? spec.name,
             name: def.meta.name ?? spec.name,
             bodyHash,
+            ...(this.taskTracker ? { taskContextVersion: TASK_CONTEXT_VERSION } : {}),
             ...(taskSchemaBinding && def.meta.tasks ? { taskSchemaBinding } : {}),
             ...(def.meta.tasks ? { taskSchemaVersion: def.meta.tasks.schemaVersion ?? 1 } : {}),
           },
@@ -1868,6 +1901,7 @@ export class Engine implements EngineHost {
       workflowId: replayWorkflowId,
       ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
       taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
+      defaultAgentTaskContext: hasImplicitTaskContext(records),
       cwd: created.cwd,
       depth: created.depth,
       shared: {

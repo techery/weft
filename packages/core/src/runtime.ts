@@ -218,6 +218,8 @@ export interface RunRuntimeOptions {
   workflowId: string;
   taskSchemaBinding?: string;
   taskSchemaVersion?: number;
+  /** Whether agent steps with no explicit `tasks` option receive task context. */
+  defaultAgentTaskContext?: boolean;
   cwd: string;
   baseRef?: string;
   depth: number;
@@ -235,6 +237,7 @@ export class RunRuntime {
   readonly workflowId: string;
   readonly taskSchemaBinding: string | undefined;
   readonly taskSchemaVersion: number;
+  readonly defaultAgentTaskContext: boolean;
   readonly cwd: string;
   readonly baseRef: string | undefined;
   readonly depth: number;
@@ -291,6 +294,7 @@ export class RunRuntime {
     this.workflowId = opts.workflowId;
     this.taskSchemaBinding = opts.taskSchemaBinding;
     this.taskSchemaVersion = opts.taskSchemaVersion ?? 1;
+    this.defaultAgentTaskContext = opts.defaultAgentTaskContext ?? false;
     this.cwd = opts.cwd;
     this.baseRef = opts.baseRef;
     this.depth = opts.depth;

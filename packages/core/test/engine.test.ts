@@ -1,4 +1,5 @@
 import type { JournalRecord } from "@techery/weft-core";
+import { mockTaskEnvelope } from "@techery/weft-provider-mock";
 import { defineWorkflow, StepError, z } from "@techery/weft-sdk";
 import { afterAll, describe, expect, test } from "vitest";
 import { cleanupRepos, reopen, tempDir, testEngine } from "./helpers.ts";
@@ -51,6 +52,9 @@ describe("engine end to end", () => {
     expect(output).toEqual({ stepCount: 2 });
 
     const recs = await records(t.journal, handle.runId);
+    expect(recs.find((record) => record.ev.type === "run.created")?.ev).toMatchObject({
+      workflow: { taskContextVersion: 1 },
+    });
     const types = recs.map((r) => r.ev.type);
     expect(types).toContain("run.created");
     expect(types).toContain("phase");
@@ -86,6 +90,38 @@ describe("engine end to end", () => {
     ).toBe(true);
     // read-only steps get the read-only instruction
     expect(t.builder.calls[0]!.prompt).toContain("read-only");
+  });
+
+  test("mock fixtures may legitimately return result and taskOperations fields", async () => {
+    const applied: unknown[] = [];
+    const t = testEngine({
+      taskTracker: {
+        snapshot: async () => ({ total: 0, tasks: [] }),
+        schema: async () => null,
+        applyBatch: async (_context, _batchId, operations) => {
+          applied.push(...operations);
+        },
+      },
+    });
+    const fixture = { result: { verdict: "ok" }, taskOperations: ["domain-value"] };
+    t.builder.on({ key: "names" }, fixture);
+    const def = defineWorkflow(
+      { description: "field names", input: z.object({}), output: z.object({ value: z.string() }) },
+      async (ctx) => {
+        const value = await ctx.agent("Return domain fields", {
+          key: "names",
+          schema: z.object({
+            result: z.object({ verdict: z.string() }),
+            taskOperations: z.array(z.string()),
+          }),
+        });
+        return { value: `${value.result.verdict}:${value.taskOperations[0]}` };
+      },
+    );
+
+    const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    expect(await handle.result).toEqual({ value: "ok:domain-value" });
+    expect(applied).toEqual([]);
   });
 
   test("journals task observations and applies workflow-owned upserts after settlement", async () => {
@@ -169,10 +205,7 @@ describe("engine end to end", () => {
     });
     t.builder.on(
       { key: "record" },
-      {
-        result: { ok: true },
-        taskOperations: [{ op: "create", title: "Track", description: "Retry the intent" }],
-      },
+      mockTaskEnvelope({ ok: true }, [{ op: "create", title: "Track", description: "Retry the intent" }]),
     );
     const def = defineWorkflow(
       {
@@ -198,10 +231,7 @@ describe("engine end to end", () => {
     const resumed = reopen(t, { taskTracker: t.engine.taskTracker });
     resumed.builder.on(
       { key: "record" },
-      {
-        result: { ok: true },
-        taskOperations: [{ op: "create", title: "Track", description: "Retry the intent" }],
-      },
+      mockTaskEnvelope({ ok: true }, [{ op: "create", title: "Track", description: "Retry the intent" }]),
     );
     const resumedHandle = await resumed.engine.resume(handle.runId, { def });
     expect(await resumedHandle.result).toEqual({});
@@ -220,10 +250,9 @@ describe("engine end to end", () => {
         if (applyCalls === 2) throw new Error("replayed task settlement failed");
       },
     };
-    const response = {
-      result: { ok: true },
-      taskOperations: [{ op: "create" as const, title: "Track", description: "Durable intent" }],
-    };
+    const response = mockTaskEnvelope({ ok: true }, [
+      { op: "create", title: "Track", description: "Durable intent" },
+    ]);
     const def = defineWorkflow(
       {
         name: "replay-task-conflict",
@@ -278,12 +307,9 @@ describe("engine end to end", () => {
     });
     t.builder.on(
       { key: "reader" },
-      {
-        result: { ok: true },
-        taskOperations: [
-          { op: "create", title: "Unauthorized", description: "Must never reach the tracker" },
-        ],
-      },
+      mockTaskEnvelope({ ok: true }, [
+        { op: "create", title: "Unauthorized", description: "Must never reach the tracker" },
+      ]),
     );
     const def = defineWorkflow(
       { name: "reader", description: "read tasks", input: z.object({}), output: z.object({}) },
@@ -422,10 +448,9 @@ describe("engine end to end", () => {
     });
     t.builder.on(
       { key: "bad-task-result" },
-      {
-        result: { wrong: true },
-        taskOperations: [{ op: "create", title: "Must not exist", description: "Invalid result" }],
-      },
+      mockTaskEnvelope({ wrong: true }, [
+        { op: "create", title: "Must not exist", description: "Invalid result" },
+      ]),
     );
     const def = defineWorkflow(
       { id: "invalid-task-result", description: "invalid", input: z.object({}), output: z.object({}) },
@@ -845,6 +870,44 @@ describe("resume across engine instances", () => {
     const h2 = await t3.engine.resume(h1.runId, { def });
     expect(await h2.result).toEqual({ approved: true, claims: 1 });
     expect(t3.builder.calls).toHaveLength(0);
+  });
+
+  test("a pre-task-tracking run keeps legacy agent hashes when resumed by a task-enabled host", async () => {
+    const def = defineWorkflow(
+      {
+        name: "legacy-review",
+        description: "legacy review",
+        input: z.object({}),
+        output: z.object({ approved: z.boolean() }),
+      },
+      async (ctx) => {
+        await ctx.agent("review", { schema: z.object({ ok: z.boolean() }), key: "find" });
+        return ctx.human.approve({ action: "Continue?" });
+      },
+    );
+    const legacy = testEngine();
+    legacy.builder.on({ key: "find" }, { ok: true });
+    const handle = await legacy.engine.start(def, { input: {}, cwd: await tempDir() });
+    const outcome = await handle.outcome();
+    expect(outcome.status).toBe("waiting_for_human");
+    const requestId = outcome.status === "waiting_for_human" ? outcome.pending[0]!.id : "";
+    const legacyRecords = await records(legacy.journal, handle.runId);
+    expect(legacyRecords.find((record) => record.ev.type === "run.created")?.ev).not.toMatchObject({
+      workflow: { taskContextVersion: expect.any(Number) },
+    });
+
+    await legacy.engine.shutdown();
+    await reopen(legacy).engine.answer(handle.runId, requestId, { approved: true });
+    const resumed = reopen(legacy, {
+      taskTracker: {
+        snapshot: async () => ({ total: 0, tasks: [] }),
+        schema: async () => null,
+        applyBatch: async () => undefined,
+      },
+    });
+    const resumedHandle = await resumed.engine.resume(handle.runId, { def });
+    expect(await resumedHandle.result).toEqual({ approved: true });
+    expect(resumed.builder.calls).toHaveLength(0);
   });
 
   test("a resumed run reuses its journaled task observation instead of reading newer mutable state", async () => {

@@ -364,6 +364,10 @@ test("keeps only findings that survive refutation", async () => {
 `runWorkflow` also takes `exec`, `bash`, `fetch`, `env`, and `answers` fixtures, so a workflow with human
 steps and shell checks runs end to end in a unit test.
 
+Ordinary mock values are always treated as the workflow result, even when their domain schema contains fields
+named `result` and `taskOperations`. To exercise agent-requested tracker mutations explicitly, wrap the fixture
+with `mockTaskEnvelope(result, operations)` from `@techery/weft-testing`.
+
 ## Status and honest deviations
 
 This repository implements the design in the two design documents. Where it does not, it says so:

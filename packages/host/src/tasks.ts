@@ -27,6 +27,10 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const TASK_PRIORITIES = ["low", "medium", "high", "critical"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 
+/** Raw schema input retained across hydrated task mutations; JSON ignores symbols. */
+const STORED_EXTENSIONS = Symbol("weft.task.storedExtensions");
+type HydratedWorkflowTask = WorkflowTask & { [STORED_EXTENSIONS]?: unknown };
+
 export interface TaskCriterion {
   id: string;
   text: string;
@@ -307,33 +311,37 @@ export class TaskStore {
     if (currentTasks.some((candidate) => candidate.id === id)) {
       throw new Error(`task id ${id} already exists in workflow ${workflowId}`);
     }
-    const task: WorkflowTask = {
-      schemaVersion: TASK_SCHEMA_VERSION,
-      extensionSchemaVersion: this.extensionConfig(workflowId).version,
-      id,
-      workflowId,
-      ...(dedupeKey ? { dedupeKey } : {}),
-      title: cleanRequired(input.title, "title"),
-      description: cleanRequired(input.description, "description"),
-      status: statusOf(input.status ?? "todo"),
-      priority: priorityOf(input.priority ?? "medium"),
-      tags: strings(input.tags),
-      dependencies: strings(input.dependencies),
-      relatedFiles: strings(input.relatedFiles),
-      acceptanceCriteria: strings(input.acceptanceCriteria).map((text) => ({
-        id: criterionId(text),
-        text,
-        met: false,
-      })),
-      notes: input.initialNote ? [{ text: cleanRequired(input.initialNote, "note"), at: now, actor }] : [],
-      extensions: await extensionsOf(input.extensions, extensionSchema),
-      createdAt: now,
-      updatedAt: now,
-      createdBy: actor,
-      updatedBy: actor,
-      revision: 1,
-      appliedOperations: input.operationKey ? [input.operationKey] : [],
-    };
+    const extensionInput = input.extensions ?? {};
+    const task = withStoredExtensions<WorkflowTask>(
+      {
+        schemaVersion: TASK_SCHEMA_VERSION,
+        extensionSchemaVersion: this.extensionConfig(workflowId).version,
+        id,
+        workflowId,
+        ...(dedupeKey ? { dedupeKey } : {}),
+        title: cleanRequired(input.title, "title"),
+        description: cleanRequired(input.description, "description"),
+        status: statusOf(input.status ?? "todo"),
+        priority: priorityOf(input.priority ?? "medium"),
+        tags: strings(input.tags),
+        dependencies: strings(input.dependencies),
+        relatedFiles: strings(input.relatedFiles),
+        acceptanceCriteria: strings(input.acceptanceCriteria).map((text) => ({
+          id: criterionId(text),
+          text,
+          met: false,
+        })),
+        notes: input.initialNote ? [{ text: cleanRequired(input.initialNote, "note"), at: now, actor }] : [],
+        extensions: await extensionsOf(extensionInput, extensionSchema),
+        createdAt: now,
+        updatedAt: now,
+        createdBy: actor,
+        updatedBy: actor,
+        revision: 1,
+        appliedOperations: input.operationKey ? [input.operationKey] : [],
+      },
+      extensionInput,
+    );
     await this.assertDependencies(workflowId, task, extensionSchema);
     await this.write(task, true);
     return task;
@@ -376,39 +384,44 @@ export class TaskStore {
   ): Promise<WorkflowTask> {
     const actor = cleanRequired(input.actor ?? "cli", "actor");
     const now = Date.now();
-    return {
-      ...current,
-      extensionSchemaVersion: this.extensionConfig(current.workflowId).version,
-      ...(input.title !== undefined ? { title: cleanRequired(input.title, "title") } : {}),
-      ...(input.description !== undefined
-        ? { description: cleanRequired(input.description, "description") }
-        : {}),
-      ...(input.status !== undefined ? { status: statusOf(input.status) } : {}),
-      ...(input.priority !== undefined ? { priority: priorityOf(input.priority) } : {}),
-      ...(input.tags !== undefined ? { tags: strings(input.tags) } : {}),
-      ...(input.dependencies !== undefined ? { dependencies: strings(input.dependencies) } : {}),
-      ...(input.relatedFiles !== undefined ? { relatedFiles: strings(input.relatedFiles) } : {}),
-      ...(input.acceptanceCriteria !== undefined
-        ? {
-            acceptanceCriteria: criteria(
-              input.acceptanceCriteria,
-              input.resetAcceptance ? [] : current.acceptanceCriteria,
-            ),
-          }
-        : {}),
-      ...(input.extensions !== undefined
-        ? { extensions: await extensionsOf(input.extensions, extensionSchema) }
-        : {}),
-      ...(note !== undefined
-        ? { notes: [...current.notes, { text: cleanRequired(note, "note"), at: now, actor }] }
-        : {}),
-      updatedAt: now,
-      updatedBy: actor,
-      revision: current.revision + 1,
-      appliedOperations: input.operationKey
-        ? [...current.appliedOperations, input.operationKey]
-        : current.appliedOperations,
-    };
+    const extensionInput =
+      input.extensions !== undefined ? (input.extensions ?? {}) : storedExtensionsOf(current);
+    return withStoredExtensions(
+      {
+        ...current,
+        extensionSchemaVersion: this.extensionConfig(current.workflowId).version,
+        ...(input.title !== undefined ? { title: cleanRequired(input.title, "title") } : {}),
+        ...(input.description !== undefined
+          ? { description: cleanRequired(input.description, "description") }
+          : {}),
+        ...(input.status !== undefined ? { status: statusOf(input.status) } : {}),
+        ...(input.priority !== undefined ? { priority: priorityOf(input.priority) } : {}),
+        ...(input.tags !== undefined ? { tags: strings(input.tags) } : {}),
+        ...(input.dependencies !== undefined ? { dependencies: strings(input.dependencies) } : {}),
+        ...(input.relatedFiles !== undefined ? { relatedFiles: strings(input.relatedFiles) } : {}),
+        ...(input.acceptanceCriteria !== undefined
+          ? {
+              acceptanceCriteria: criteria(
+                input.acceptanceCriteria,
+                input.resetAcceptance ? [] : current.acceptanceCriteria,
+              ),
+            }
+          : {}),
+        ...(input.extensions !== undefined
+          ? { extensions: await extensionsOf(extensionInput, extensionSchema) }
+          : {}),
+        ...(note !== undefined
+          ? { notes: [...current.notes, { text: cleanRequired(note, "note"), at: now, actor }] }
+          : {}),
+        updatedAt: now,
+        updatedBy: actor,
+        revision: current.revision + 1,
+        appliedOperations: input.operationKey
+          ? [...current.appliedOperations, input.operationKey]
+          : current.appliedOperations,
+      },
+      extensionInput,
+    );
   }
 
   private async upsertUnlocked(
@@ -1013,11 +1026,15 @@ export class TaskStore {
       candidate = await config.migrate(candidate, task.extensionSchemaVersion);
     }
     const extensions = await extensionsOf(candidate, extensionSchema);
-    return { ...task, extensionSchemaVersion: config.version, extensions };
+    return withStoredExtensions(
+      { ...task, extensionSchemaVersion: config.version, extensions },
+      candidate ?? {},
+    );
   }
 
   private async write(task: WorkflowTask, createOnly = false): Promise<void> {
-    const bad = jsonUnsafeAt(task);
+    const persisted = { ...task, extensions: storedExtensionsOf(task) };
+    const bad = jsonUnsafeAt(persisted);
     if (bad !== undefined) throw new Error(`task cannot be stored as JSON at ${bad}`);
     const dir = this.workflowDir(task.workflowId);
     await mkdir(dir, { recursive: true });
@@ -1025,7 +1042,7 @@ export class TaskStore {
     const temp = join(dir, `.${task.id}.${randomUUID()}.tmp`);
     const handle = await open(temp, "wx");
     try {
-      await handle.writeFile(`${JSON.stringify(task, null, 2)}\n`, "utf8");
+      await handle.writeFile(`${JSON.stringify(persisted, null, 2)}\n`, "utf8");
       await handle.sync();
       await handle.close();
       if (createOnly) {
@@ -1193,6 +1210,23 @@ async function extensionsOf(value: unknown, schema?: AnySchema): Promise<unknown
     );
   }
   return checked.value;
+}
+
+function withStoredExtensions<T extends WorkflowTask>(task: T, stored: unknown): T {
+  Object.defineProperty(task, STORED_EXTENSIONS, {
+    value: stored,
+    writable: true,
+    configurable: true,
+    // Object spread must carry the raw input through note/status/criterion
+    // mutations; JSON.stringify still ignores symbol properties.
+    enumerable: true,
+  });
+  return task;
+}
+
+function storedExtensionsOf(task: WorkflowTask): unknown {
+  const hydrated = task as HydratedWorkflowTask;
+  return STORED_EXTENSIONS in hydrated ? hydrated[STORED_EXTENSIONS] : task.extensions;
 }
 
 function strings(values: string[] | undefined): string[] {

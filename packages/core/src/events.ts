@@ -94,6 +94,8 @@ export type JournalEvent =
         name: string;
         defHash?: string;
         bodyHash?: string;
+        /** Version of the implicit agent task-context envelope used by this run. */
+        taskContextVersion?: number;
         taskSchemaBinding?: string;
         taskSchemaVersion?: number;
       };

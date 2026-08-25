@@ -440,7 +440,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
     // In-place providers write in the integration root, where executing the human CLI
     // would bypass the journal boundary. Default task context is therefore isolated-only.
     const taskAccess =
-      opts.tasks === false || !rt.host.taskTracker || mode.writeInPlace ? undefined : (opts.tasks ?? {});
+      opts.tasks === false || !rt.host.taskTracker || mode.writeInPlace
+        ? undefined
+        : (opts.tasks ?? (rt.defaultAgentTaskContext ? {} : undefined));
     const taskMode = taskAccess?.mode ?? "write";
     const taskSelector: WorkflowTaskSelector | undefined = taskAccess
       ? {

@@ -129,6 +129,35 @@ describe("TaskStore", () => {
     expect((await reader.list("release"))[0]?.extensions).toEqual({ lane: "api" });
   });
 
+  it("persists extension schema input while returning transformed output across mutations", async () => {
+    const root = await tempRoot();
+    const extensions = z
+      .object({ source: z.string() })
+      .transform(({ source }) => ({ normalized: source.trim().toLowerCase() }));
+    const store = new TaskStore(join(root, ".weft", "tasks"), async () => extensions);
+    await store.registerWorkflow({ id: "release", name: "release" }, extensions, null);
+
+    const created = await store.create("release", {
+      title: "Normalize",
+      description: "Transform extension data",
+      extensions: { source: " API " },
+    });
+    expect(created.extensions).toEqual({ normalized: "api" });
+    expect((await store.get("release", created.id)).extensions).toEqual({ normalized: "api" });
+
+    expect((await store.addNote("release", created.id, "Still readable")).extensions).toEqual({
+      normalized: "api",
+    });
+    expect((await store.update("release", created.id, { status: "in_progress" })).extensions).toEqual({
+      normalized: "api",
+    });
+    expect((await store.get("release", created.id)).extensions).toEqual({ normalized: "api" });
+    const persisted = JSON.parse(
+      await readFile(join(root, ".weft", "tasks", "release", `${created.id}.json`), "utf8"),
+    ) as { extensions: unknown };
+    expect(persisted.extensions).toEqual({ source: " API " });
+  });
+
   it("binds each run to its exact extension schema even when another definition registers", async () => {
     const root = await tempRoot();
     const store = new TaskStore(join(root, ".weft", "tasks"));

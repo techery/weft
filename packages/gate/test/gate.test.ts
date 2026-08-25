@@ -794,6 +794,8 @@ describe("createWorkflowRegistry", () => {
     await write(dir, "ship.ts", reviewSource({ id: "shared-state", description: "Ship it" }));
     const registry = createWorkflowRegistry({ dir });
     await expect(registry.list()).rejects.toThrow(/duplicate workflow id "shared-state"/);
+    await expect(registry.load("review")).rejects.toThrow(/duplicate workflow id "shared-state"/);
+    await expect(registry.get("review")).rejects.toThrow(/duplicate workflow id "shared-state"/);
   });
 
   it("rejects duplicate callable workflow names even when their durable ids differ", async () => {
