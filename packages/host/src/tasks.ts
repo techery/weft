@@ -311,7 +311,7 @@ export class TaskStore {
     if (currentTasks.some((candidate) => candidate.id === id)) {
       throw new Error(`task id ${id} already exists in workflow ${workflowId}`);
     }
-    const extensionInput = input.extensions ?? {};
+    const extensionInput = input.extensions === undefined ? {} : input.extensions;
     const task = withStoredExtensions<WorkflowTask>(
       {
         schemaVersion: TASK_SCHEMA_VERSION,
@@ -384,8 +384,7 @@ export class TaskStore {
   ): Promise<WorkflowTask> {
     const actor = cleanRequired(input.actor ?? "cli", "actor");
     const now = Date.now();
-    const extensionInput =
-      input.extensions !== undefined ? (input.extensions ?? {}) : storedExtensionsOf(current);
+    const extensionInput = input.extensions !== undefined ? input.extensions : storedExtensionsOf(current);
     return withStoredExtensions(
       {
         ...current,
@@ -828,7 +827,7 @@ export class TaskStore {
     const migrate = config.migrate;
     const migrateCreate = async <T extends { extensions?: unknown }>(input: T): Promise<T> => ({
       ...input,
-      extensions: await migrate(input.extensions ?? {}, fromVersion),
+      extensions: await migrate(input.extensions === undefined ? {} : input.extensions, fromVersion),
     });
     const migrated: AgentTaskOperation[] = [];
     for (const operation of operations) {
@@ -1028,7 +1027,7 @@ export class TaskStore {
     const extensions = await extensionsOf(candidate, extensionSchema);
     return withStoredExtensions(
       { ...task, extensionSchemaVersion: config.version, extensions },
-      candidate ?? {},
+      candidate === undefined ? {} : candidate,
     );
   }
 
@@ -1196,7 +1195,7 @@ export class TaskStore {
 }
 
 async function extensionsOf(value: unknown, schema?: AnySchema): Promise<unknown> {
-  const candidate = value ?? {};
+  const candidate = value === undefined ? {} : value;
   if (schema === undefined) {
     if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
       throw new Error("task extensions must be a JSON object when the workflow declares no extension schema");
@@ -1251,7 +1250,11 @@ function criteria(
     assertCriterionId(id);
     unique.set(text, { id, text, met: criterion.met ?? prior?.met ?? false });
   }
-  return [...unique.values()];
+  const result = [...unique.values()];
+  if (new Set(result.map((criterion) => criterion.id)).size !== result.length) {
+    throw new Error("acceptance criterion ids must be unique");
+  }
+  return result;
 }
 
 function criterionId(text: string): string {
@@ -1438,7 +1441,7 @@ function decodeTask(
     relatedFiles: stringsAt("relatedFiles"),
     acceptanceCriteria,
     notes,
-    extensions: v.extensions ?? {},
+    extensions: v.extensions === undefined ? {} : v.extensions,
     createdAt,
     updatedAt,
     createdBy: string("createdBy"),

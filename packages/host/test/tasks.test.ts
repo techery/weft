@@ -91,6 +91,34 @@ describe("TaskStore", () => {
     );
   });
 
+  it("rejects duplicate criterion ids without corrupting the stored task", async () => {
+    const root = await tempRoot();
+    const taskRoot = join(root, ".weft", "tasks");
+    const store = new TaskStore(taskRoot);
+    const task = await store.create("review", {
+      title: "Keep readable",
+      description: "Reject malformed criterion identity",
+      acceptanceCriteria: ["Original"],
+    });
+    const file = join(taskRoot, "review", `${task.id}.json`);
+    const before = await readFile(file, "utf8");
+
+    await expect(
+      store.update("review", task.id, {
+        acceptanceCriteria: [
+          { id: "criterion-aaaaaaaaaaaa", text: "First" },
+          { id: "criterion-aaaaaaaaaaaa", text: "Second" },
+        ],
+      }),
+    ).rejects.toThrow(/criterion ids must be unique/);
+
+    expect(await readFile(file, "utf8")).toBe(before);
+    expect(await store.get("review", task.id)).toMatchObject({
+      revision: 1,
+      acceptanceCriteria: [expect.objectContaining({ text: "Original" })],
+    });
+  });
+
   it("validates persisted records and revalidates extension schema drift", async () => {
     const root = await tempRoot();
     let extensionSchema: AnySchema = z.object({ lane: z.literal("api") });
@@ -156,6 +184,33 @@ describe("TaskStore", () => {
       await readFile(join(root, ".weft", "tasks", "release", `${created.id}.json`), "utf8"),
     ) as { extensions: unknown };
     expect(persisted.extensions).toEqual({ source: " API " });
+  });
+
+  it("round-trips explicit null extensions when the workflow schema accepts null", async () => {
+    const root = await tempRoot();
+    const taskRoot = join(root, ".weft", "tasks");
+    const schema = z.null();
+    const store = new TaskStore(taskRoot, async () => schema);
+    const created = await store.create("release", {
+      title: "Nullable context",
+      description: "Preserve an explicit null",
+      extensions: null,
+    });
+    expect(created.extensions).toBeNull();
+
+    const updated = await store.update("release", created.id, {
+      status: "in_progress",
+      extensions: null,
+    });
+    expect(updated.extensions).toBeNull();
+    expect((await store.addNote("release", created.id, "Null remains explicit")).extensions).toBeNull();
+
+    const persisted = JSON.parse(await readFile(join(taskRoot, "release", `${created.id}.json`), "utf8")) as {
+      extensions: unknown;
+    };
+    expect(persisted.extensions).toBeNull();
+    const reopened = new TaskStore(taskRoot, async () => schema);
+    expect((await reopened.get("release", created.id)).extensions).toBeNull();
   });
 
   it("rejects non-JSON extension outputs before exposing task context", async () => {
