@@ -1,0 +1,870 @@
+{
+  "note": "Coding-workflow comparison (revision 2, 2026-08-25). Supersedes comparison.json, which carried the first draft's durable-execution framing.",
+  "standing": [
+    {
+      "dimension": "What a workflow *is*",
+      "standing": "competitive",
+      "reason": "Plain TS is the most expressive option; Spec Kit, goose and gh-aw got to 'checked-in artifact' first and with far less ceremony"
+    },
+    {
+      "dimension": "Reviewable, versioned, diffable",
+      "standing": "leads",
+      "reason": "A .ts file under code review, gated by <code>weft check</code> before it spends anything"
+    },
+    {
+      "dimension": "Testable without spending tokens",
+      "standing": "leads",
+      "reason": "<code>runWorkflow</code> + fixtures through real validation. <strong>No other coding tool has this at all</strong>"
+    },
+    {
+      "dimension": "Typed hand-off between steps",
+      "standing": "leads",
+      "reason": "Required schema + engine-side repair. Every coding harness surveyed says 'no typed step-result contract'"
+    },
+    {
+      "dimension": "Repo conventions ingested",
+      "standing": "absent",
+      "reason": "A write step gets a worktree stripped of AGENTS.md. Everyone else reads it by default"
+    },
+    {
+      "dimension": "Change isolation",
+      "standing": "competitive",
+      "reason": "Per-attempt worktrees are solid; container-use isolates the environment too, and Codex adds an OS sandbox"
+    },
+    {
+      "dimension": "Write-scope enforcement",
+      "standing": "leads",
+      "reason": "Declared paths, live denial, patch partition, quarantine. Only Roo's fileRegex came close, and it is archived"
+    },
+    {
+      "dimension": "How the change lands",
+      "standing": "leads",
+      "reason": "<code>ctx.integrate()</code> has no equivalent anywhere. It lands in your working tree \u2014 right for a local tool \u2014 but no verb takes it further"
+    },
+    {
+      "dimension": "Test-gated completion",
+      "standing": "leads",
+      "reason": "A required <code>ctx.check</code> gates run completion, and costs no model call"
+    },
+    {
+      "dimension": "Built-in review patterns",
+      "standing": "competitive",
+      "reason": "A real pattern library \u2014 against products publishing F1 numbers weft has never measured"
+    },
+    {
+      "dimension": "Cross-vendor second opinion",
+      "standing": "competitive",
+      "reason": "Per-step routing is the right shape; three provider ids and a Claude-only price table is not the right coverage"
+    },
+    {
+      "dimension": "Mid-run human approval",
+      "standing": "leads",
+      "reason": "Durable, schema-validated, reject-and-reopen. Every rival's approval dies with the process"
+    },
+    {
+      "dimension": "Cost control per task",
+      "standing": "leads",
+      "reason": "Hard token AND USD ceilings inherited across a run tree. SWE-agent is the only real peer"
+    },
+    {
+      "dimension": "Long-task survival",
+      "standing": "leads",
+      "reason": "The instrument, and it works \u2014 but it only pays off on workflows that outlive a session"
+    },
+    {
+      "dimension": "Audit trail",
+      "standing": "competitive",
+      "reason": "The richest record in the field, in a format only weft can read"
+    },
+    {
+      "dimension": "Parallel throughput across tasks",
+      "standing": "behind",
+      "reason": "Good inside one run; two runs sharing a tree is undefined behaviour"
+    },
+    {
+      "dimension": "Where it runs, and what that costs",
+      "standing": "by design",
+      "reason": "Local-first is the posture, and it is the same one the harnesses it competes with take. The unpaid costs are local-tool basics: repo-root discovery, blob GC, a repo mutex"
+    },
+    {
+      "dimension": "Distribution and practice",
+      "standing": "absent",
+      "reason": "Unpublished, zero users, against 131.2k and 142.9k"
+    }
+  ],
+  "dimensions": [
+    {
+      "dimension": "What a workflow *is*",
+      "weft": "A checked-in TypeScript program with a typed `input`/`output` schema. `await` is a sequential edge, `ctx.parallel` fans out, `ctx.pipeline` runs lanes, `if` on a typed field is a conditional edge. No DSL, no YAML, no graph builder \u2014 and no separate artifact to keep in sync with the program.",
+      "others": [
+        {
+          "project": "GitHub Spec Kit",
+          "rating": "strong",
+          "note": "Markdown specs driven by slash commands \u2014 `/speckit.specify` \u2192 `plan` \u2192 `tasks` \u2192 `implement`, plus `analyze` and `converge` \u2014 over 30+ coding agents. The spec is the artifact, code is the build output. 131.2k stars, MIT."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "strong",
+          "note": "Three stacked layers: Skills (markdown + frontmatter, loaded when relevant), slash commands, and subagents with their own context and tool permissions. Plus dynamic workflows, where the MODEL writes the JS orchestration from a natural-language task and you approve the phase list."
+        },
+        {
+          "project": "goose Recipes",
+          "rating": "strong",
+          "note": "YAML: title, instructions, typed `parameters` with Jinja substitution, sub-recipes, `retry.checks` as shell commands, and `response.json_schema`. The most complete declarative coding-workflow spec anyone ships."
+        },
+        {
+          "project": "gh-aw",
+          "rating": "strong",
+          "note": "YAML frontmatter (triggers, permissions, tools, engine) plus a markdown body telling the agent what to do; `gh aw compile` emits a checked-in `.lock.yml` Actions file."
+        },
+        {
+          "project": "OpenAI Codex CLI",
+          "rating": "partial",
+          "note": "TOML subagent files in `.codex/agents/`, each with name, description, model and effort. Composition is the model calling subagents, not declared control flow."
+        },
+        {
+          "project": "opencode",
+          "rating": "partial",
+          "note": "Agents as JSON blocks in `opencode.json` or markdown files in `.opencode/agents/` (filename becomes the id). Per-agent, not per-workflow."
+        },
+        {
+          "project": "Cline",
+          "rating": "partial",
+          "note": "`.clinerules` files plus agent-team config plus a TypeScript SDK. Three surfaces, no single workflow artifact."
+        },
+        {
+          "project": "Qodo PR-Agent",
+          "rating": "partial",
+          "note": "Fixed commands \u2014 `/describe`, `/review`, `/improve`, `/ask` \u2014 configured by file, not composed. The workflow is the product's, not yours."
+        },
+        {
+          "project": "SWE-agent",
+          "rating": "partial",
+          "note": "Declarative YAML configures the agent, its tools, the parser and templates \u2014 one agent loop, not a multi-step workflow."
+        },
+        {
+          "project": "Aider",
+          "rating": "none",
+          "note": "Chat commands in a REPL, with `--message` for one-shot batch use. Nothing to check in."
+        },
+        {
+          "project": "container-use",
+          "rating": "none",
+          "note": "An MCP server plus a `cu` CLI. Deliberately no workflow layer \u2014 it isolates and reviews, it does not orchestrate."
+        },
+        {
+          "project": "Worktree managers",
+          "rating": "none",
+          "note": "claude-squad, Crystal, Conductor, uzi, Vibe Kanban: a human moves cards or presses keys. No orchestration logic at all."
+        }
+      ]
+    },
+    {
+      "dimension": "Is the workflow reviewable, versioned, diffable",
+      "weft": "It is a `.ts` file in `.weft/workflows/`. It goes through code review, `git blame` works on it, and `weft check` gates it (11 AST rules plus a best-effort `tsc` pass) before a run spends anything.",
+      "others": [
+        {
+          "project": "GitHub Spec Kit",
+          "rating": "strong",
+          "note": "Specs, plans and task lists are checked-in markdown \u2014 the whole method is that they are reviewed artifacts."
+        },
+        {
+          "project": "gh-aw",
+          "rating": "strong",
+          "note": "Both the source markdown and the compiled `.lock.yml` are committed, so a reviewer sees exactly what CI will run."
+        },
+        {
+          "project": "goose Recipes",
+          "rating": "strong",
+          "note": "A YAML file in the repo, parameterised and shareable."
+        },
+        {
+          "project": "Claude Code (skills/commands)",
+          "rating": "strong",
+          "note": "Skills, commands and subagent definitions are files, distributable as plugins through a marketplace."
+        },
+        {
+          "project": "opencode / Codex CLI / Cline",
+          "rating": "strong",
+          "note": "Agent definitions and rules are all committed files."
+        },
+        {
+          "project": "Claude Code (dynamic workflows)",
+          "rating": "none",
+          "note": "The script is model-authored per task and essentially disposable. Nothing is reviewed except the phase list, in the moment."
+        },
+        {
+          "project": "Aider / worktree managers / container-use",
+          "rating": "none",
+          "note": "There is no workflow artifact to review."
+        }
+      ]
+    },
+    {
+      "dimension": "Testable without spending tokens",
+      "weft": "`runWorkflow` drives the workflow to a terminal state on a private in-memory engine; `mock().on({ key }, responder)` fixtures pass through the engine's NORMAL schema validation and journaling \u2014 a fixture that would not pass in production fails the test. `exec`, `bash`, `fetch`, `env` and `answers` fixtures included, so a workflow with human steps and shell checks runs end to end in CI.",
+      "others": [
+        {
+          "project": "SWE-agent",
+          "rating": "partial",
+          "note": "The strongest EVALUATION story anywhere \u2014 SWE-bench, SWE-smith, a stable trajectory format \u2014 but that is benchmark measurement, not unit testing, and it spends tokens."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "none",
+          "note": "Explicitly no offline or mocked execution mode. Every workflow run spends tokens."
+        },
+        {
+          "project": "goose Recipes",
+          "rating": "none",
+          "note": "No mocked-run mode; `retry.checks` verify the OUTPUT of a real run."
+        },
+        {
+          "project": "gh-aw",
+          "rating": "none",
+          "note": "`gh aw compile` validates the workflow's shape, not its behaviour."
+        },
+        {
+          "project": "Cline",
+          "rating": "none",
+          "note": "The SDK makes programmatic driving possible \u2014 the raw material for a harness \u2014 but nothing is published."
+        },
+        {
+          "project": "OpenHands",
+          "rating": "none",
+          "note": "Conventional pytest plus benchmark harnesses; no published zero-model-call replay."
+        },
+        {
+          "project": "Spec Kit / opencode / Codex CLI / Aider / PR-Agent",
+          "rating": "none",
+          "note": "No harness in any of them."
+        }
+      ]
+    },
+    {
+      "dimension": "Typed hand-off between steps",
+      "weft": "`schema` is REQUIRED on every `agent` and `human.*` call and on workflow I/O. The provider returns raw; the ENGINE validates against the real Standard Schema and, on failure, calls `provider.repair()` in the SAME session with the validation errors, up to `limits.repair`. A `z.string()` field is still prose \u2014 the guarantee is that what flows BETWEEN steps has a shape you declared.",
+      "others": [
+        {
+          "project": "Claude Code (dynamic workflows)",
+          "rating": "partial",
+          "note": "`agent(prompt, { schema })` resolves to a parsed object validated at the tool-call layer \u2014 the closest thing to weft here. But there is no documented repair loop: it resolves to `null` on failure and the caller does `.filter(Boolean)`, which erases the reason."
+        },
+        {
+          "project": "goose Recipes",
+          "rating": "partial",
+          "note": "`response.json_schema` enforces structured output for the WHOLE RUN \u2014 the same instinct, arrived at independently, but one schema at the boundary rather than a contract between steps."
+        },
+        {
+          "project": "Qodo PR-Agent",
+          "rating": "partial",
+          "note": "JSON-based prompting produces structured findings the tool then renders; the contract is internal to the product, not something you compose against."
+        },
+        {
+          "project": "Cline",
+          "rating": "none",
+          "note": "Tool-call schemas validated per the provider's function-calling contract, with retry on malformed XML. No typed step-result contract across a workflow."
+        },
+        {
+          "project": "Codex CLI",
+          "rating": "none",
+          "note": "Subagent results return to the main thread as SUMMARIES; no structured output contract for a subagent."
+        },
+        {
+          "project": "opencode",
+          "rating": "none",
+          "note": "Tool schemas validated per provider; step-level structured output is not a documented primitive."
+        },
+        {
+          "project": "OpenHands",
+          "rating": "none",
+          "note": "Pydantic models validate the EVENT envelope and tool arguments \u2014 not 'this step must return a value of this shape'."
+        },
+        {
+          "project": "Aider",
+          "rating": "none",
+          "note": "Edits are validated structurally by edit format with retry on malformed diffs. That validates the DIFF, not a step result."
+        },
+        {
+          "project": "SWE-agent",
+          "rating": "none",
+          "note": "The unit is the action, not the step result."
+        },
+        {
+          "project": "Spec Kit",
+          "rating": "none",
+          "note": "Specs, plans and tasks are prose markdown all the way down. The hand-off between phases is a document."
+        },
+        {
+          "project": "container-use / worktree managers",
+          "rating": "none",
+          "note": "No workflow layer, so nothing to type."
+        }
+      ]
+    },
+    {
+      "dimension": "Repo conventions ingested (AGENTS.md, CLAUDE.md, rules)",
+      "weft": "**None.** A weft write step hands an agent a fresh worktree stripped of the conventions every other runner in the ecosystem reads by default. `ctx.fs.read` exists, so a workflow author can pass conventions in by hand, but nothing does it for you and no example does it.",
+      "others": [
+        {
+          "project": "Claude Code",
+          "rating": "strong",
+          "note": "CLAUDE.md at every level, plus skills, plus output styles."
+        },
+        {
+          "project": "OpenAI Codex CLI",
+          "rating": "strong",
+          "note": "AGENTS.md \u2014 the convention Codex popularised and now shared across vendors."
+        },
+        {
+          "project": "Gemini CLI",
+          "rating": "strong",
+          "note": "GEMINI.md and AGENTS.md."
+        },
+        {
+          "project": "Cline",
+          "rating": "strong",
+          "note": "`.clinerules` for coding standards and architecture constraints."
+        },
+        {
+          "project": "Qodo PR-Agent",
+          "rating": "strong",
+          "note": "Reads repository `AGENTS.md` files and `SKILL.md` definitions to steer review."
+        },
+        {
+          "project": "GitHub Spec Kit",
+          "rating": "strong",
+          "note": "`/speckit.constitution` makes project principles an explicit, versioned input to every later phase."
+        },
+        {
+          "project": "opencode / goose / Aider",
+          "rating": "strong",
+          "note": "Rules files, `.goosehints`, and Aider's tree-sitter repo-map respectively \u2014 different mechanisms, same job."
+        },
+        {
+          "project": "gh-aw",
+          "rating": "strong",
+          "note": "The markdown body is where conventions go, and the repo is right there."
+        }
+      ]
+    },
+    {
+      "dimension": "Change isolation",
+      "weft": "A write step gets a PER-ATTEMPT worktree at `tmpdir/weft-worktrees/<runId>/<seq>.<attempt>`, seeded from `integrationBaseCommit` \u2014 a dangling-ref-pinned commit of the current tracked+untracked tree \u2014 so later writers build on earlier `ctx.integrate()` results rather than on HEAD.",
+      "others": [
+        {
+          "project": "container-use (Dagger)",
+          "rating": "strong",
+          "note": "The best in the field: DUAL isolation \u2014 a git worktree/branch for the code AND a Dagger container for the process, so installs, daemons, ports and env mutations are discarded with the step. The hole every worktree-only tool leaves open."
+        },
+        {
+          "project": "OpenAI Codex CLI",
+          "rating": "strong",
+          "note": "Worktree per subagent PLUS an OS sandbox (Seatbelt/Landlock/WFP), with `.git` protected even in workspace-write mode."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "strong",
+          "note": "`claude --worktree <name>` on branch `worktree-<name>`, with base controlled by `worktree.baseRef`. Enforced, not advisory."
+        },
+        {
+          "project": "Worktree managers",
+          "rating": "strong",
+          "note": "claude-squad, Crystal, Conductor, uzi, Vibe Kanban \u2014 worktree + branch per agent is literally the product; uzi also allocates per-agent dev-server ports."
+        },
+        {
+          "project": "SWE-agent",
+          "rating": "strong",
+          "note": "Docker container per instance via SWE-ReX, each with its own checkout; output is a unified diff per instance."
+        },
+        {
+          "project": "OpenHands",
+          "rating": "strong",
+          "note": "Workspace as an abstraction \u2014 local, Docker, Kubernetes or remote \u2014 with ephemeral per-agent workspaces."
+        },
+        {
+          "project": "Sculptor",
+          "rating": "strong",
+          "note": "Worktree + branch per workspace with an experimental container backend, plus Pairing Mode syncing isolated work back to the local checkout."
+        },
+        {
+          "project": "Cline agent teams",
+          "rating": "partial",
+          "note": "Shadow-git checkpoints isolate HISTORY, not the tree \u2014 team specialists share `cwd`, so parallel members can clobber each other."
+        },
+        {
+          "project": "Aider / goose / opencode",
+          "rating": "none",
+          "note": "Operate directly on the working tree."
+        }
+      ]
+    },
+    {
+      "dimension": "Write-scope enforcement",
+      "weft": "`write: { paths: [...], also: [...], mode: 'warn' | 'strict' }` makes a step a write step. On Claude the scope is enforced LIVE through `canUseTool` \u2014 scope-matched edits, symlink-escape realpath checks, a read-only bash allow-list, traversal and shared-git-metadata denial \u2014 and post-hoc by partitioning the captured patch, with `strict` quarantining an out-of-scope patch. **Asymmetric:** Codex has no permission hook, so there `strict` means post-hoc diffing only.",
+      "others": [
+        {
+          "project": "gh-aw",
+          "rating": "strong",
+          "note": "Structurally rather than by policy: the agent job holds NO write credentials, and can only emit schema-validated 'safe outputs' that a separate, differently-privileged job applies. A compromised agent cannot write."
+        },
+        {
+          "project": "Roo Code (archived)",
+          "rating": "partial",
+          "note": "`fileRegex` write restrictions per custom mode \u2014 a mode could be forbidden from touching anything but `*.md`. The closest prior art for path-scoped writes, and the project archived 2026-05."
+        },
+        {
+          "project": "opencode",
+          "rating": "partial",
+          "note": "Per-agent permission map over read / edit / bash / glob / grep / task, each `allow | ask | deny`. Capability-level, not path-level."
+        },
+        {
+          "project": "OpenAI Codex CLI",
+          "rating": "partial",
+          "note": "`sandbox_mode` confines writes to the workspace with `.git` protected \u2014 coarse-grained, and uniform across subagents."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "partial",
+          "note": "Statically blocks edits into the main checkout when running in a worktree, and screens Bash for escapes. A screen, not a path-scope declaration."
+        },
+        {
+          "project": "Aider / Cline / goose / worktree managers",
+          "rating": "none",
+          "note": "No path scoping."
+        }
+      ]
+    },
+    {
+      "dimension": "How the change lands",
+      "weft": "It does not, until you say so. A write step returns a PATCH blob; out-of-scope files are flagged or quarantined; nothing touches the integration tree until `ctx.integrate()`, which is itself a journaled step with `onConflict: 'ask' | 'fail' | 'agent'` and returns a ledger. **A run that ends with un-integrated, un-discarded patches fails.** What weft does NOT do: open a pull request.",
+      "others": [
+        {
+          "project": "gh-aw",
+          "rating": "strong",
+          "note": "Safe outputs include `create-pull-request` and `push-to-branch`, applied by a separate job. The change lands where review already happens."
+        },
+        {
+          "project": "Copilot coding agent / Codex Cloud / Jules",
+          "rating": "strong",
+          "note": "A pull request is the unit of delivery and the review surface, on the largest installed bases in the category."
+        },
+        {
+          "project": "Qodo PR-Agent / CodeRabbit",
+          "rating": "strong",
+          "note": "Land as review comments and committable suggestions on an existing PR \u2014 the whole product is the last mile weft skips."
+        },
+        {
+          "project": "Sculptor / Conductor",
+          "rating": "partial",
+          "note": "Built-in review UI with PR creation from the workspace."
+        },
+        {
+          "project": "container-use / worktree managers",
+          "rating": "partial",
+          "note": "A branch, and a human merges it. `cu diff` / `cu merge` / `cu apply` are good verbs, but there is no policy and no ledger."
+        },
+        {
+          "project": "Aider",
+          "rating": "partial",
+          "note": "Every edit is an auto-commit with a sensible message and `/undo` reverts \u2014 the strongest git INTEGRATION and the weakest isolation."
+        },
+        {
+          "project": "Cline / opencode / goose",
+          "rating": "none",
+          "note": "Edits land in the working tree as they happen."
+        }
+      ]
+    },
+    {
+      "dimension": "Test-gated completion",
+      "weft": "`ctx.check(name, { exec: ['pnpm','test'], required: true })` is a journaled step returning `{ status, evidence }`; a failing REQUIRED check gates the run's completion. Checks are free \u2014 they are shell, not a paid subagent turn.",
+      "others": [
+        {
+          "project": "goose Recipes",
+          "rating": "strong",
+          "note": "`retry { max_retries, checks }` where checks are shell commands validating the run's output \u2014 declarative success criteria, and the closest peer to `ctx.check`."
+        },
+        {
+          "project": "Aider",
+          "rating": "strong",
+          "note": "`--test-cmd` and `--lint-cmd` run after every change and feed failures back for automatic fixing. The tightest edit\u2192verify loop in the field."
+        },
+        {
+          "project": "gh-aw",
+          "rating": "strong",
+          "note": "It is a GitHub Actions job: the rest of the pipeline is right there, and a failing job blocks the safe-output apply."
+        },
+        {
+          "project": "SWE-agent",
+          "rating": "partial",
+          "note": "Tests decide the benchmark score, but they are the harness around the agent, not a gate inside its loop."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "partial",
+          "note": "Run tests by spending a subagent turn; the documented 'run tsc until it passes' pattern pays a model call every round. No engine-level gate."
+        },
+        {
+          "project": "Codex CLI / Cline / opencode / OpenHands",
+          "rating": "none",
+          "note": "Running tests is something the agent may choose to do, not something that gates anything."
+        }
+      ]
+    },
+    {
+      "dimension": "Built-in review patterns (find\u2192refute, judge panel, best-of-N)",
+      "weft": "`@techery/weft-stdlib` ships `adversarialVerify` (strict majority so an even panel does not kill on a tie), `judgePanel` (best-votes with a mean-score tiebreak, judge schema pinned to the attempt count), `loopUntilDry`, `completenessCritic` and `multiModalSweep` \u2014 as ordinary keyed steps, so they replay and test like anything else. **Unproven:** weft publishes no precision number for any of them.",
+      "others": [
+        {
+          "project": "Qodo Merge / PR-Agent",
+          "rating": "strong",
+          "note": "Multi-agent architecture with specialised reviewers running simultaneously rather than one generalist pass \u2014 and a published F1 of 60.1% across eight tools in its own February 2026 benchmark."
+        },
+        {
+          "project": "CodeRabbit",
+          "rating": "strong",
+          "note": "AI layered over 40+ bundled deterministic linters and SAST scanners; topped Martian's independent 2026 benchmark at 51.2% F1 with the broadest platform coverage."
+        },
+        {
+          "project": "Greptile",
+          "rating": "strong",
+          "note": "Indexes the entire codebase before commenting on a diff \u2014 a different bet (whole-repo context over panel structure) with 82% bug-catch claimed in its own July 2025 test."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "partial",
+          "note": "`/code-review` and ultrareview are agentic review passes with real structure, but they are commands, not composable patterns you build a workflow from."
+        },
+        {
+          "project": "SWE-agent",
+          "rating": "partial",
+          "note": "The research lineage that established find-then-verify \u2014 as benchmark methodology rather than a shipped library."
+        },
+        {
+          "project": "goose / Cline / opencode / Codex CLI / Aider",
+          "rating": "none",
+          "note": "Review is whatever you prompt for."
+        }
+      ]
+    },
+    {
+      "dimension": "Cross-vendor second opinion",
+      "weft": "One option on one step: `ctx.agent(prompt, { provider: 'codex', ... })`. A cross-vendor refutation panel is a per-step routing choice, and the engine \u2014 not the vendor \u2014 validates what comes back. **Caveat:** only `claude`, `codex` and `mock` exist, the built-in price table is Claude-only, and `strict` scopes mean different things per provider.",
+      "others": [
+        {
+          "project": "Cline",
+          "rating": "strong",
+          "note": "Anthropic, OpenAI, Gemini, 200+ via OpenRouter, Bedrock, Vertex, Ollama/LM Studio, with per-mode and per-specialist model selection."
+        },
+        {
+          "project": "opencode",
+          "rating": "strong",
+          "note": "Models.dev-backed catalogue with OAuth flows and per-agent overrides \u2014 the strongest genuinely model-agnostic story in the field."
+        },
+        {
+          "project": "OpenHands",
+          "rating": "strong",
+          "note": "A superset: LiteLLM for models, and Agent Client Protocol so whole third-party AGENTS (Claude Code, Codex, Gemini CLI) are pluggable."
+        },
+        {
+          "project": "Aider",
+          "rating": "strong",
+          "note": "Architect/editor split is real per-role routing with a demonstrated cost/quality win \u2014 an expensive model plans, a cheap one applies."
+        },
+        {
+          "project": "Qodo PR-Agent",
+          "rating": "strong",
+          "note": "GPT, Claude (incl. Opus 5), Gemini, DeepSeek, Mistral, plus LiteLLM for Bedrock/Vertex/Ollama/OpenRouter."
+        },
+        {
+          "project": "Copilot Agent HQ",
+          "rating": "strong",
+          "note": "Copilot, Claude and Codex agents under one control plane with one review surface."
+        },
+        {
+          "project": "gh-aw",
+          "rating": "partial",
+          "note": "Copilot, Claude Code, Codex, Gemini and Pi \u2014 selected in frontmatter, per workflow rather than per step."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "partial",
+          "note": "Per-subagent routing, but strictly inside the Anthropic family."
+        },
+        {
+          "project": "OpenAI Codex CLI",
+          "rating": "partial",
+          "note": "Per-subagent model AND reasoning effort, but OpenAI models only."
+        }
+      ]
+    },
+    {
+      "dimension": "Mid-run human approval",
+      "weft": "`ctx.gate` and `ctx.human.ask/approve/review` suspend the run DURABLY. The answer can arrive hours later from the CLI, the web UI, or the session that started the run, and is validated against the step's schema; a bad answer journals `human.rejected` and REOPENS the request rather than failing the run. Provenance is recorded: `answeredBy: human | policy | timeout`.",
+      "others": [
+        {
+          "project": "OpenHands",
+          "rating": "partial",
+          "note": "The best-designed in-process gating: `AlwaysConfirm()` / `NeverConfirm()` / `ConfirmRisky()` as first-class policy objects. In-process \u2014 kill it and the pending confirmation is gone."
+        },
+        {
+          "project": "Cline",
+          "rating": "partial",
+          "note": "The best per-action approval UX anywhere: Plan mode explores and asks before Act mode touches anything, every edit and command surfaces with a diff. In-process."
+        },
+        {
+          "project": "OpenAI Codex CLI",
+          "rating": "partial",
+          "note": "`approval_policy` with untrusted / on-request / never. In-process."
+        },
+        {
+          "project": "opencode",
+          "rating": "partial",
+          "note": "Per-agent `allow | ask | deny` maps \u2014 declarative and fine-grained, still in-process."
+        },
+        {
+          "project": "Sculptor / Vibe Kanban",
+          "rating": "partial",
+          "note": "Review-and-commit UIs with inline diff commenting \u2014 approval AFTER the work, which is a deliberate and defensible different bet."
+        },
+        {
+          "project": "container-use",
+          "rating": "partial",
+          "note": "Explicitly review-after rather than approve-during: let the agent run fully isolated, then `cu diff`."
+        },
+        {
+          "project": "Claude Code (dynamic workflows)",
+          "rating": "none",
+          "note": "Documented: 'No mid-run user input. Only agent permission prompts can pause a run.' Multi-stage sign-off means splitting into separate workflows."
+        },
+        {
+          "project": "gh-aw",
+          "rating": "none",
+          "note": "No blocking gate; safety is structural instead."
+        }
+      ]
+    },
+    {
+      "dimension": "Cost control per task",
+      "weft": "`Budget.charge` propagates up the parent chain; `remainingTokens`/`remainingUsd` take `min(own, ancestor headroom)`; a run tree shares one ceiling and `reserveCall` PARKS rather than refusing when a lane would overrun. A USD-only ceiling with a provider that reports no cost and has no configured price REFUSES the dispatch rather than charging $0 silently.",
+      "others": [
+        {
+          "project": "SWE-agent",
+          "rating": "strong",
+          "note": "`--agent.model.per_instance_cost_limit` genuinely stops an instance, hardened across thousands of benchmark runs. Per-instance and total, but no parent/child inheritance."
+        },
+        {
+          "project": "goose Recipes",
+          "rating": "partial",
+          "note": "`max_turns` is an enforced structural cap on iterations \u2014 not a spend ceiling."
+        },
+        {
+          "project": "OpenAI Codex CLI",
+          "rating": "partial",
+          "note": "Reasoning-effort tiers, cheaper model variants, and a concurrency cap on subagents. Structural levers, not a ceiling."
+        },
+        {
+          "project": "Roo Code (archived)",
+          "rating": "partial",
+          "note": "A cost ARCHITECTURE rather than a cap: subtasks return summaries not transcripts, keeping the orchestrator's context small."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "none",
+          "note": "Documented as advisory: past 25 scheduled agents or 1.5M projected tokens, 'the warning does not pause or limit the run'."
+        },
+        {
+          "project": "Cline / opencode / Aider / OpenHands",
+          "rating": "none",
+          "note": "Detailed per-task token and USD accounting, zero enforcement. They tell you after you spent it."
+        }
+      ]
+    },
+    {
+      "dimension": "Does a long task survive the session (the instrument)",
+      "weft": "Every step is journaled; a resume re-executes the workflow body and serves completed steps from the journal, matching by CONTENT so editing the script between runs is tolerated. This is plumbing, not the product \u2014 it earns its keep exactly when a workflow is long enough or blocked long enough to outlive the session that started it, which is the case for an overnight audit or a gate waiting on a person.",
+      "others": [
+        {
+          "project": "Codex Cloud / Copilot coding agent / Jules",
+          "rating": "strong",
+          "note": "Server-side execution: the task survives your laptop closing because it was never on your laptop."
+        },
+        {
+          "project": "OpenHands",
+          "rating": "partial",
+          "note": "A persistence directory per conversation with documented pause/resume \u2014 state restoration rather than replay, so no step-level salvage."
+        },
+        {
+          "project": "Cline agent teams",
+          "rating": "partial",
+          "note": "`task-board.json` / `mailbox.json` persist and survive restarts, but that is coordination state, not step results."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "none",
+          "note": "Explicit: 'If you exit Claude Code while a workflow is running, the next session starts the workflow fresh.' Transcripts are durable; workflow runs are not."
+        },
+        {
+          "project": "goose / Aider / opencode / Codex CLI / container-use",
+          "rating": "none",
+          "note": "Kill the process and the work in flight is gone."
+        }
+      ]
+    },
+    {
+      "dimension": "Audit trail of what the agent actually did",
+      "weft": "The journal plus two generated records: `report.md` (Outcome / Changes / Checks / Ledger / Failures & drops / Remaining risk / Next step) and the live tree. `weft explain <run> <step>` shows one step's route, prompt, output, usage and attempts; `weft diff <a> <b>` compares two runs by keyed step output.",
+      "others": [
+        {
+          "project": "Aider",
+          "rating": "strong",
+          "note": "Every AI change is a git commit with a sensible message \u2014 the simplest and most durable audit trail in the field, and the reason people still reach for it."
+        },
+        {
+          "project": "Cline",
+          "rating": "strong",
+          "note": "Shadow-git repository committing a full tree snapshot after every tool use, giving file-level undo including untracked files."
+        },
+        {
+          "project": "container-use",
+          "rating": "strong",
+          "note": "`cu log` and `cu diff` per environment: a complete record of what each agent did, discardable by deleting a branch."
+        },
+        {
+          "project": "SWE-agent",
+          "rating": "strong",
+          "note": "The trajectory format is a stable, publishable artifact \u2014 the reason its results are reproducible."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "partial",
+          "note": "`/workflows` shows the phase tree, per-agent tokens and any agent's tool calls live, and can pause a run or restart one agent \u2014 a better CONTROL surface than weft's, over a less durable record."
+        },
+        {
+          "project": "Worktree managers",
+          "rating": "partial",
+          "note": "A diff view per session, and that is the record."
+        }
+      ]
+    },
+    {
+      "dimension": "Parallel throughput across tasks",
+      "weft": "Within one run: `ctx.parallel` / `ctx.pipeline` with a global semaphore at `min(16, cpus\u22122)` and a 4096-item fan-out cap. Across runs: nothing. Two runs sharing a working tree both stage and mutate the real tree at `rt.cwd`, and the ownership lease is per-RUN, not per-repo.",
+      "others": [
+        {
+          "project": "Worktree managers",
+          "rating": "strong",
+          "note": "claude-squad, uzi, Vibe Kanban, Conductor, Crystal exist for exactly this: many agents on many tasks at once, a human as scheduler. uzi even broadcasts one instruction to every running agent."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "strong",
+          "note": "16 concurrent (fewer on low-CPU), 1,000 agents per run, plus prompt-cache-aware stagger so a fan-out pays the system-prompt prefix once."
+        },
+        {
+          "project": "Copilot Agent HQ",
+          "rating": "strong",
+          "note": "Mission control across web, VS Code and mobile for many concurrent agent tasks."
+        },
+        {
+          "project": "container-use",
+          "rating": "strong",
+          "note": "One environment per agent, unlimited in principle, each fully isolated."
+        },
+        {
+          "project": "Cline agent teams",
+          "rating": "partial",
+          "note": "Specialists run in parallel but share `cwd`, so throughput is bought with a clobbering risk."
+        },
+        {
+          "project": "Aider / goose / opencode",
+          "rating": "none",
+          "note": "One agent, one tree."
+        }
+      ]
+    },
+    {
+      "dimension": "Where it runs \u2014 and what that posture costs",
+      "weft": "**Local, on a developer's own machine, by design.** A CLI plus an MCP server so a Claude Code or Codex session can drive it, plus a loopback-only daemon serving a single-page UI. No server, no database, no account, no code leaving the machine, and the credentials used are the ones already sitting in the developer's shell. State is `<cwd>/.weft`. The costs are real and mostly unpaid: no repo-root discovery (running from a subdirectory silently targets a different, empty `.weft`), no blob GC, and no repo-level mutex, so two runs sharing a working tree is undefined behaviour.",
+      "others": [
+        {
+          "project": "Claude Code / Codex CLI / opencode / goose / Aider",
+          "rating": "strong",
+          "note": "The same posture and the bar weft is actually competing against for a developer's attention: one install, entirely local, nothing to operate. Several of them also offer a hosted mode, which weft deliberately does not."
+        },
+        {
+          "project": "container-use / worktree managers",
+          "rating": "strong",
+          "note": "Local by construction \u2014 a laptop, a repo, several agents."
+        },
+        {
+          "project": "Spec Kit",
+          "rating": "strong",
+          "note": "A local CLI that bolts onto whichever agent you already run \u2014 the least infrastructure of anything here."
+        },
+        {
+          "project": "gh-aw",
+          "rating": "partial",
+          "note": "CI-native by construction, which is a genuinely different product: the workflow runs on GitHub's machines against GitHub's checkout, with no developer present. Better for scheduled and event-driven work, unavailable for the thing you want to watch."
+        },
+        {
+          "project": "Codex Cloud / Copilot coding agent / Jules",
+          "rating": "partial",
+          "note": "Hosted. The task survives your laptop closing because it was never on it \u2014 bought with sending the repo to a vendor and losing local tooling."
+        },
+        {
+          "project": "Qodo PR-Agent",
+          "rating": "strong",
+          "note": "Runs both ways: a local CLI and Docker image, or GitHub Actions and webhooks. The clearest demonstration that local-first and CI need not be exclusive."
+        },
+        {
+          "project": "Cline / Roo / Continue",
+          "rating": "strong",
+          "note": "IDE-native, which is even closer to where the developer is than a terminal."
+        }
+      ]
+    },
+    {
+      "dimension": "Distribution and practice adoption",
+      "weft": "Design preview. Not on npm. Zero users. The engineering around it is real \u2014 16 packages versioned together, a tag-driven release pipeline with `verify:packing` and `verify:install`, CI on node 22 and 24 \u2014 but nothing has shipped.",
+      "others": [
+        {
+          "project": "GitHub Spec Kit",
+          "rating": "strong",
+          "note": "131.2k stars, MIT, integrations for 30+ coding agents. The spec-driven method has become a named practice."
+        },
+        {
+          "project": "Claude Code",
+          "rating": "strong",
+          "note": "142.9k stars on the issue tracker; Agent Skills published as an open standard in Oct 2025 with official skill repos past 157k stars, a plugin system and a Skills marketplace launched April 2026."
+        },
+        {
+          "project": "opencode",
+          "rating": "strong",
+          "note": "201k stars, MIT, ~8M reported MAU (unverified)."
+        },
+        {
+          "project": "goose",
+          "rating": "strong",
+          "note": "53.4k stars and, uniquely, vendor-neutral Linux Foundation governance \u2014 a procurement advantage for a layer that brokers competing vendors."
+        },
+        {
+          "project": "Qodo PR-Agent",
+          "rating": "strong",
+          "note": "12.7k stars, community-owned since April 2026 and reverted from AGPL-3.0 to Apache-2.0."
+        },
+        {
+          "project": "gh-aw",
+          "rating": "partial",
+          "note": "5k stars, MIT, GitHub Next \u2014 early but with the strongest possible distribution channel."
+        },
+        {
+          "project": "Category attrition",
+          "rating": "none",
+          "note": "Worth naming: Flowise archived at 55.4k, Roo Code archived at 24.3k, Vibe Kanban sunsetting at 27.9k. Being right about the mechanism is not what decided those."
+        }
+      ]
+    }
+  ]
+}
