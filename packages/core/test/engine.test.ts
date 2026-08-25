@@ -306,6 +306,58 @@ describe("engine end to end", () => {
     expect(settledAt).toBeGreaterThan(failedAt);
   });
 
+  test("onError null never suppresses an incomplete task settlement", async () => {
+    let applyCalls = 0;
+    const taskTracker = {
+      snapshot: async () => ({ total: 0, truncated: false, tasks: [] }),
+      schema: async () => null,
+      validateBatch: async () => undefined,
+      applyBatch: async () => {
+        applyCalls++;
+        if (applyCalls === 1) throw new Error("partial task settlement");
+      },
+    };
+    const response = mockTaskEnvelope({ ok: true }, [
+      { op: "create", title: "Track", description: "Complete the journaled batch" },
+    ]);
+    const def = defineWorkflow(
+      {
+        name: "unsuppressible-task-settlement",
+        description: "settlement must finish",
+        input: z.object({}),
+        output: z.object({ suppressed: z.boolean() }),
+      },
+      async (ctx) => {
+        const value = await ctx.agent("Record the task", {
+          key: "record",
+          schema: z.object({ ok: z.boolean() }),
+          tasks: { mode: "write" },
+          onError: "null",
+        });
+        return { suppressed: value === null };
+      },
+    );
+
+    const first = testEngine({ taskTracker });
+    first.builder.on({ key: "record" }, response);
+    const handle = await first.engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(handle.result).rejects.toThrow(/partial task settlement/);
+    const failedRecords = await records(first.journal, handle.runId);
+    expect(
+      failedRecords.some(
+        (record) =>
+          record.ev.type === "step.completed" &&
+          (record.ev.output as { $suppressed?: boolean }).$suppressed === true,
+      ),
+    ).toBe(false);
+
+    const resumed = reopen(first, { taskTracker });
+    const resumedHandle = await resumed.engine.resume(handle.runId, { def });
+    expect(await resumedHandle.result).toEqual({ suppressed: false });
+    expect(resumed.builder.calls).toHaveLength(0);
+    expect(applyCalls).toBe(2);
+  });
+
   test("rejects task mutations from an agent with read-only task authority", async () => {
     const applied: unknown[][] = [];
     const t = testEngine({

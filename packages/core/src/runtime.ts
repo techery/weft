@@ -36,6 +36,21 @@ import { type CompletedEntry, OrderedDelivery, type ReplayIndex, type ReuseMode 
 import type { BlobStore, JournalStore } from "./stores.ts";
 import { isBlobBeyondRepair } from "./stores.ts";
 
+// `onError: "null"` is allowed to suppress execution failures, but never a
+// post-completion settlement failure: the completed output is the durable
+// instruction for retrying partially applied side effects. Keep this marker
+// process-local so it cannot become part of the public StepError wire format.
+const settlementFailures = new WeakSet<StepError>();
+
+export function isSettlementFailure(err: unknown): boolean {
+  return err instanceof StepError && settlementFailures.has(err);
+}
+
+function markSettlementFailure(err: StepError): StepError {
+  settlementFailures.add(err);
+  return err;
+}
+
 // ---------------------------------------------------------------------------
 // Host seam (implemented by Engine)
 // ---------------------------------------------------------------------------
@@ -590,7 +605,7 @@ export class RunRuntime {
               await this.append([{ type: "step.settled", seq: entry.seq }]);
             }
           } catch (err) {
-            const stepError = StepError.from(err, { ...ref, seq: entry.seq });
+            const stepError = markSettlementFailure(StepError.from(err, { ...ref, seq: entry.seq }));
             await this.append([
               {
                 type: "step.failed",
@@ -755,6 +770,7 @@ export class RunRuntime {
             this.signal.aborted && !isCancellation(err)
               ? new CancelledError("run cancelled", ref)
               : StepError.from(err, ref);
+          if (completed) markSettlementFailure(stepError);
           // An error BUILT inside execute() carries its own step ref, usually
           // without the seq only this runner knows: enrich it so downstream
           // consumers (drops, durable suppression) can address the step.

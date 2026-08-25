@@ -64,7 +64,13 @@ import type { BlobRefJson } from "./events.ts";
 import { toWireSchema, unwrapWireValue } from "./jsonschema.ts";
 import { mapWithConcurrency } from "./limiter.ts";
 import type { AgentRequest, AgentResult, AgentTaskContext, AgentTaskOperation } from "./provider.ts";
-import { MAX_TIMER_MS, type RunRuntime, type StepIO, sleep as sleepMs } from "./runtime.ts";
+import {
+  isSettlementFailure,
+  MAX_TIMER_MS,
+  type RunRuntime,
+  type StepIO,
+  sleep as sleepMs,
+} from "./runtime.ts";
 
 const RISK_ORDER: Risk[] = ["low", "medium", "high", "irreversible"];
 
@@ -1213,7 +1219,12 @@ export function buildCtx(rt: RunRuntime): Ctx {
       const detailed = await run();
       return mode.detailed ? detailed : detailed.value;
     } catch (err) {
-      if (opts.onError === "null" && err instanceof StepError && !isCancellation(err)) {
+      if (
+        opts.onError === "null" &&
+        err instanceof StepError &&
+        !isCancellation(err) &&
+        !isSettlementFailure(err)
+      ) {
         rt.recordDrop(err);
         // The suppression must be DURABLE: with only step.failed on record, a
         // resume re-runs this paid optional step, and a now-successful attempt
