@@ -163,7 +163,13 @@ export default defineWorkflow(
                 "",
                 clip(JSON.stringify(rawFindings, null, 2), 120_000),
               ].join("\n"),
-              { schema: ConsolidatedFindings, key: "consolidate", effort: "high", tasks: false },
+              {
+                schema: ConsolidatedFindings,
+                key: "consolidate",
+                provider: reviewWith,
+                effort: "high",
+                tasks: false,
+              },
             )
           ).findings;
 

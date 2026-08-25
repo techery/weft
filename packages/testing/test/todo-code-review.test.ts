@@ -197,6 +197,7 @@ describe("task-backed code review backlog", () => {
       answers: () => ({ record: [] }),
     });
     expect(codex.calls.some((call) => call.key?.startsWith("review:"))).toBe(true);
+    expect(codex.calls.some((call) => call.key === "consolidate")).toBe(true);
     expect(codex.calls.some((call) => call.key?.startsWith("refute:"))).toBe(false);
     expect(claude.calls.some((call) => call.key?.startsWith("refute:"))).toBe(true);
     expect(claude.calls.some((call) => call.key?.startsWith("review:"))).toBe(false);
