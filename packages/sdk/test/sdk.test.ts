@@ -112,6 +112,26 @@ describe("defineWorkflow", () => {
     expect(() => defineWorkflow({ ...base, name: "review.ts" }, async () => ({}))).toThrow(/meta.name/);
     expect(() => defineWorkflow({ ...base, id: "stable-review" }, async () => ({}))).not.toThrow();
   });
+
+  test("validates workflow task schema evolution metadata", () => {
+    const base = { description: "test", input: z.object({}), output: z.object({}) };
+    expect(() => defineWorkflow({ ...base, tasks: { schemaVersion: 0 } }, async () => ({}))).toThrow(
+      /positive integer/,
+    );
+    expect(() =>
+      defineWorkflow(
+        {
+          ...base,
+          tasks: {
+            extensions: z.object({ owner: z.string() }),
+            schemaVersion: 2,
+            migrate: () => ({ owner: "platform" }),
+          },
+        },
+        async () => ({}),
+      ),
+    ).not.toThrow();
+  });
 });
 
 describe("settled helpers", () => {

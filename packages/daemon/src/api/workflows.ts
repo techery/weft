@@ -145,6 +145,8 @@ export function registerWorkflowRoutes(app: Hono, weft: Weft): void {
         input: jsonSchemaOf(loaded.def, "input"),
         output: jsonSchemaOf(loaded.def, "output"),
         taskExtensions: taskSchemaOf(loaded.def),
+        taskExtensionSchemaVersion: loaded.def.meta.tasks?.schemaVersion ?? 1,
+        tasksConfigured: loaded.def.meta.tasks !== undefined,
         defaults: meta.defaults ?? null,
       });
     } catch (err) {
@@ -216,7 +218,18 @@ export function registerWorkflowRoutes(app: Hono, weft: Weft): void {
       assertRegistryName(name);
       const entry = (await listWorkflows()).find((candidate) => candidate.name === name);
       if (!entry) throw new Error(`workflow ${name} not found`);
-      return c.json(await weft.tasks.list(entry.id));
+      const loaded = await weft.registry.load(name);
+      const workflowId = loaded.def.meta.id ?? loaded.def.meta.name ?? name;
+      await weft.tasks.registerWorkflow(
+        { id: workflowId, name: loaded.def.meta.name ?? name },
+        loaded.def.meta.tasks?.extensions,
+        taskSchemaOf(loaded.def),
+        loaded.def.meta.tasks,
+      );
+      const tasks = (await weft.tasks.list(workflowId)).map(
+        ({ appliedOperations: _internal, ...task }) => task,
+      );
+      return c.json(tasks);
     } catch (err) {
       return fail(c, err);
     }

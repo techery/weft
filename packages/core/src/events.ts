@@ -89,7 +89,14 @@ export type JournalEvent =
        * is the engine's own version stamp for the workflow body, always present, and is
        * what resume compares to decide whether step POSITIONS still mean anything.
        */
-      workflow: { id?: string; name: string; defHash?: string; bodyHash?: string };
+      workflow: {
+        id?: string;
+        name: string;
+        defHash?: string;
+        bodyHash?: string;
+        taskSchemaBinding?: string;
+        taskSchemaVersion?: number;
+      };
       input: unknown;
       cwd: string;
       baseRef?: string;

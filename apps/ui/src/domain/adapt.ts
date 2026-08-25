@@ -552,6 +552,15 @@ export function adaptGate(request: PendingRequest): Gate {
     questions: schemaQuestions(request.schema as JsonSchema | null).filter(
       (question) => !(deniable && question.key === VERDICT_FIELD),
     ),
+    ...(request.artifactRef
+      ? {
+          artifactRef: {
+            ref: request.artifactRef.$blob,
+            size: request.artifactRef.size,
+            ...(request.artifactRef.preview !== undefined ? { preview: request.artifactRef.preview } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -573,6 +582,7 @@ function adaptGateFromState(detail: RunDetail, human: HumanState | undefined): G
     rootWorkflow: detail.workflow,
     ...(human.detail !== undefined ? { detail: human.detail } : {}),
     ...(human.risk !== undefined ? { risk: human.risk } : {}),
+    ...(human.artifactRef !== undefined ? { artifactRef: human.artifactRef } : {}),
   });
 }
 
@@ -764,6 +774,9 @@ function factsOf(row: WorkflowRow, extras: WorkflowExtras): Labelled[] {
   const out: Labelled[] = [{ k: "file", v: row.file }];
   if (extras.detail?.defaults?.provider) {
     out.push({ k: "provider", v: extras.detail.defaults.provider });
+  }
+  if (extras.detail?.tasksConfigured) {
+    out.push({ k: "task schema", v: `v${extras.detail.taskExtensionSchemaVersion}` });
   }
   if (stats) {
     out.push({ k: "runs · 30d", v: String(stats.runs) });

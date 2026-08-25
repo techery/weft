@@ -33,6 +33,152 @@ export interface WriteScope {
   mode?: "warn" | "strict";
 }
 
+// ---------------------------------------------------------------------------
+// Workflow task context
+// ---------------------------------------------------------------------------
+
+export type WorkflowTaskStatus = "todo" | "in_progress" | "blocked" | "done" | "cancelled";
+export type WorkflowTaskPriority = "low" | "medium" | "high" | "critical";
+
+export interface WorkflowTaskCriterion {
+  id: string;
+  text: string;
+  met: boolean;
+}
+
+export interface WorkflowTaskNote {
+  text: string;
+  at: number;
+  actor: string;
+}
+
+/** The stable task record exposed to workflow code. */
+export interface WorkflowTaskRecord<Extensions = unknown> {
+  id: string;
+  workflowId: string;
+  extensionSchemaVersion: number;
+  dedupeKey?: string;
+  title: string;
+  description: string;
+  status: WorkflowTaskStatus;
+  priority: WorkflowTaskPriority;
+  tags: string[];
+  dependencies: string[];
+  relatedFiles: string[];
+  acceptanceCriteria: WorkflowTaskCriterion[];
+  notes: WorkflowTaskNote[];
+  extensions: Extensions;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  updatedBy: string;
+  revision: number;
+}
+
+/** Bounded task projection supplied to workflow and agent context. Full note history stays in CLI/UI. */
+export interface WorkflowTaskSummary<Extensions = unknown> {
+  id: string;
+  revision: number;
+  extensionSchemaVersion: number;
+  dedupeKey?: string;
+  title: string;
+  description: string;
+  status: WorkflowTaskStatus;
+  priority: WorkflowTaskPriority;
+  tags: string[];
+  dependencies: string[];
+  relatedFiles: string[];
+  acceptanceCriteria: WorkflowTaskCriterion[];
+  latestNote: WorkflowTaskNote | null;
+  extensions: Extensions;
+  updatedAt: number;
+}
+
+/** Filters are conjunctive; repeated values within one field are alternatives. */
+export interface WorkflowTaskSelector {
+  ids?: string[];
+  dedupeKeys?: string[];
+  statuses?: WorkflowTaskStatus[];
+  tags?: string[];
+  relatedFiles?: string[];
+  /** Defaults to 50 and is capped by the host. */
+  limit?: number;
+}
+
+export interface WorkflowTaskSnapshot<Extensions = unknown> {
+  total: number;
+  truncated: boolean;
+  tasks: WorkflowTaskSummary<Extensions>[];
+}
+
+/** Per-agent authority over the automatically injected task observation. */
+export type AgentTaskAccess = WorkflowTaskSelector & { mode?: "read" | "write" };
+
+export interface WorkflowTaskCreateInput<Extensions = unknown> {
+  title: string;
+  description: string;
+  status?: WorkflowTaskStatus;
+  priority?: WorkflowTaskPriority;
+  tags?: string[];
+  dependencies?: string[];
+  relatedFiles?: string[];
+  acceptanceCriteria?: string[];
+  extensions?: Extensions;
+}
+
+export interface WorkflowTaskUpdateInput<Extensions = unknown> {
+  title?: string;
+  description?: string;
+  status?: WorkflowTaskStatus;
+  priority?: WorkflowTaskPriority;
+  tags?: string[];
+  dependencies?: string[];
+  relatedFiles?: string[];
+  /** Replaces the criteria; `resetAcceptance` controls whether matching criteria keep their state. */
+  acceptanceCriteria?: string[];
+  resetAcceptance?: boolean;
+  extensions?: Extensions;
+  ifRevision?: number;
+}
+
+export interface WorkflowTaskUpsertInput<Extensions = unknown> {
+  create: WorkflowTaskCreateInput<Extensions>;
+  update?: WorkflowTaskUpdateInput<Extensions>;
+  /** Appended atomically with the create/update, so replay cannot lose the occurrence evidence. */
+  note?: string;
+}
+
+export interface WorkflowTaskStepOptions {
+  /** Stable step identity used by replay. */
+  key: string;
+}
+
+export interface WorkflowTasksApi {
+  /** A journaled, replay-stable observation. New runs read fresh task state; resumes reuse what they saw. */
+  observe<Extensions = unknown>(
+    selector: WorkflowTaskSelector,
+    opts: WorkflowTaskStepOptions,
+  ): Promise<WorkflowTaskSnapshot<Extensions>>;
+  /** Atomically create or update the one task identified by a workflow-scoped dedupe key. */
+  upsert<Extensions = unknown>(
+    dedupeKey: string,
+    input: WorkflowTaskUpsertInput<Extensions>,
+    opts: WorkflowTaskStepOptions,
+  ): Promise<void>;
+  update<Extensions = unknown>(
+    id: string,
+    input: WorkflowTaskUpdateInput<Extensions>,
+    opts: WorkflowTaskStepOptions,
+  ): Promise<void>;
+  note(id: string, text: string, opts: WorkflowTaskStepOptions & { ifRevision?: number }): Promise<void>;
+  setCriterion(
+    id: string,
+    criterionId: string,
+    met: boolean,
+    opts: WorkflowTaskStepOptions & { ifRevision?: number },
+  ): Promise<void>;
+}
+
 export interface RetryOptions {
   attempts: number;
   /** Delay before each retry; scales linearly with the attempt number. */
@@ -70,6 +216,8 @@ export interface AgentOptions<S extends AnySchema> {
   onMaxTurns?: "finalize" | "fail";
   /** `"throw"` (default) throws StepError; `"null"` resolves to `T | null`. */
   onError?: "throw" | "null";
+  /** Disable task context, observe it read-only, or allow validated task mutations (default). */
+  tasks?: false | AgentTaskAccess;
 }
 
 export interface Usage {
@@ -471,6 +619,7 @@ export interface Ctx {
   ): Promise<IntegrationLedger>;
   discard(results: ReadonlyArray<DetailedAgentResult<unknown> | PatchRef>): Promise<void>;
   note(note: NoteInput): Promise<void>;
+  tasks: WorkflowTasksApi;
 
   // durable waits
   signal<S extends AnySchema>(name: string, schema: S, opts?: { timeout?: Duration }): Promise<InferOut<S>>;

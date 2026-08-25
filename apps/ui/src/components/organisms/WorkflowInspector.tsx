@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { WorkflowTask } from "~/api/types";
 import { Button } from "~/components/atoms/Button";
 import { Kicker } from "~/components/atoms/Kicker";
@@ -44,6 +45,9 @@ export function WorkflowInspector({
   onRun,
   onOpenRun,
 }: Props) {
+  const [taskWindow, setTaskWindow] = useState({ workflow: workflow.name, count: 50 });
+  const visibleTaskCount = taskWindow.workflow === workflow.name ? taskWindow.count : 50;
+  const visibleTasks = tasks.slice(0, visibleTaskCount);
   return (
     <aside className={styles.panel} aria-labelledby="workflow-inspector-title">
       <div className={styles.identity}>
@@ -113,7 +117,7 @@ export function WorkflowInspector({
         <h3 id="workflow-tasks-heading" className={styles.taskHeading}>
           Tasks · {tasks.length}
         </h3>
-        {tasks.map((task) => (
+        {visibleTasks.map((task) => (
           <article key={task.id} className={styles.task} data-status={task.status}>
             <div className={styles.taskHead}>
               <span className={styles.taskStatus}>{task.status.replace("_", " ")}</span>
@@ -122,6 +126,7 @@ export function WorkflowInspector({
             </div>
             <h3 className={styles.taskTitle}>{task.title}</h3>
             <p className={styles.taskDescription}>{task.description}</p>
+            {task.dedupeKey ? <span className={styles.taskMeta}>Identity {task.dedupeKey}</span> : null}
             {task.tags.length > 0 ? (
               <div className={styles.taskTags}>
                 {task.tags.map((tag) => (
@@ -149,33 +154,25 @@ export function WorkflowInspector({
             {task.relatedFiles.length > 0 ? (
               <span className={styles.taskMeta}>Files {task.relatedFiles.join(", ")}</span>
             ) : null}
-            {task.notes.length > 0 ? (
-              <details className={styles.taskNotes}>
-                <summary>
-                  {task.notes.length === 1 ? "1 note" : `${task.notes.length} notes`} · latest by{" "}
-                  {task.notes.at(-1)?.actor}
-                </summary>
-                <ol>
-                  {task.notes.map((note) => (
-                    <li key={`${note.at}-${note.actor}-${note.text}`}>
-                      <time dateTime={new Date(note.at).toISOString()}>
-                        {new Date(note.at).toLocaleString()}
-                      </time>{" "}
-                      <strong>{note.actor}</strong>: {note.text}
-                    </li>
-                  ))}
-                </ol>
-              </details>
-            ) : null}
+            {task.notes.length > 0 ? <TaskNotes task={task} /> : null}
             {hasExtensions(task.extensions) ? (
               <pre className={styles.extensions}>{JSON.stringify(task.extensions, null, 2)}</pre>
             ) : null}
             <span className={styles.taskAudit}>
               Updated {new Date(task.updatedAt).toLocaleString()} by {task.updatedBy} · revision{" "}
-              {task.revision}
+              {task.revision} · schema v{task.extensionSchemaVersion}
             </span>
           </article>
         ))}
+        {visibleTasks.length < tasks.length ? (
+          <Button
+            variant="secondary"
+            size="mediumWide"
+            onClick={() => setTaskWindow({ workflow: workflow.name, count: visibleTaskCount + 50 })}
+          >
+            Show 50 more · {tasks.length - visibleTasks.length} remaining
+          </Button>
+        ) : null}
         {tasks.length === 0 ? (
           <span className={styles.recentEmpty}>
             {tasksPending === true
@@ -197,6 +194,28 @@ export function WorkflowInspector({
         ))}
       </div>
     </aside>
+  );
+}
+
+function TaskNotes({ task }: { task: WorkflowTask }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details className={styles.taskNotes} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>
+        {task.notes.length === 1 ? "1 note" : `${task.notes.length} notes`} · latest by{" "}
+        {task.notes.at(-1)?.actor}
+      </summary>
+      {open ? (
+        <ol>
+          {task.notes.map((note) => (
+            <li key={`${note.at}-${note.actor}-${note.text}`}>
+              <time dateTime={new Date(note.at).toISOString()}>{new Date(note.at).toLocaleString()}</time>{" "}
+              <strong>{note.actor}</strong>: {note.text}
+            </li>
+          ))}
+        </ol>
+      ) : null}
+    </details>
   );
 }
 

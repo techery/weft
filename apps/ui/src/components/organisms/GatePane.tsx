@@ -1,5 +1,6 @@
 import { useAtomValue, useSetAtom } from "jotai";
 import { useMemo } from "react";
+import { api } from "~/api/client";
 import { useAnswerGate } from "~/api/queries";
 import type { JsonSchema } from "~/api/types";
 import { Button } from "~/components/atoms/Button";
@@ -81,6 +82,16 @@ export function GatePane({ gate, step, schema, onAnswered }: Props) {
           </div>
           <h3 className={styles.gateTitle}>{gate.title}</h3>
           {gate.detail ? <span className={styles.detail}>{gate.detail}</span> : null}
+          {gate.artifactRef ? (
+            <a
+              className={styles.artifactLink}
+              href={api.blobUrl(gate.artifactRef.ref, "text")}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open attached report · {gate.artifactRef.size.toLocaleString()} bytes
+            </a>
+          ) : null}
         </div>
 
         <div className={styles.answersHead}>

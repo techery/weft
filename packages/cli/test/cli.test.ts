@@ -137,7 +137,11 @@ export default defineWorkflow(
     description: "has workflow-specific task fields",
     input: z.object({}),
     output: z.object({}),
-    tasks: { extensions: z.object({ lane: z.enum(["api", "ui"]), estimate: z.number().int() }) },
+    tasks: {
+      extensions: z.object({ lane: z.enum(["api", "ui"]), estimate: z.number().int() }),
+      schemaVersion: 2,
+      migrate: (value) => value,
+    },
   },
   async () => ({}),
 );
@@ -596,6 +600,8 @@ describe("weft task", () => {
       "Wire task context",
       "--description",
       "Share context between agent steps",
+      "--dedupe-key",
+      "context-wiring",
       "--tag",
       "context",
       "--file",
@@ -605,8 +611,91 @@ describe("weft task", () => {
       "--extensions",
       '{"lane":"api","estimate":3}',
     );
-    const task = JSON.parse(created.text) as { id: string; revision: number };
+    const task = JSON.parse(created.text) as {
+      id: string;
+      revision: number;
+      dedupeKey?: string;
+      extensionSchemaVersion: number;
+    };
     expect(task.id).toMatch(/^task-[0-9a-f]{8}$/);
+    expect(task.dedupeKey).toBe("context-wiring");
+    expect(task.extensionSchemaVersion).toBe(2);
+    expect(existsSync(path.join(root, ".weft/tasks/tracked/.workflow.json"))).toBe(true);
+
+    const upserted = await cli(
+      "--cwd",
+      root,
+      "--mock",
+      "task",
+      "--workflow",
+      "tracked",
+      "--json",
+      "upsert",
+      "--dedupe-key",
+      "context-wiring",
+      "--title",
+      "Wire reviewed task context",
+      "--description",
+      "Share verified context between agent steps",
+      "--tag",
+      "reviewed",
+      "--file",
+      "packages/core/src/ctx.ts",
+      "--acceptance",
+      "agents receive bounded task context",
+      "--extensions",
+      '{"lane":"api","estimate":5}',
+      "--note",
+      "review recurrence",
+    );
+    expect(JSON.parse(upserted.text)).toMatchObject({
+      id: task.id,
+      title: "Wire reviewed task context",
+      revision: 2,
+    });
+    expect(JSON.parse(upserted.text)).not.toHaveProperty("appliedOperations");
+
+    const filtered = await cli(
+      "--cwd",
+      root,
+      "--mock",
+      "task",
+      "--workflow",
+      "tracked",
+      "--json",
+      "list",
+      "--dedupe-key",
+      "context-wiring",
+      "--file",
+      "packages/core/src/ctx.ts",
+    );
+    expect(JSON.parse(filtered.text)).toHaveLength(1);
+
+    const occurrence = JSON.parse(
+      (
+        await cli(
+          "--cwd",
+          root,
+          "--mock",
+          "task",
+          "--workflow",
+          "tracked",
+          "--json",
+          "upsert",
+          "--dedupe-key",
+          "context-wiring",
+          "--title",
+          "Wire reviewed task context",
+          "--description",
+          "Share verified context between agent steps",
+          "--note",
+          "seen again without replacing collections",
+        )
+      ).text,
+    ) as { tags: string[]; relatedFiles: string[]; acceptanceCriteria: unknown[] };
+    expect(occurrence.tags).toEqual(["reviewed"]);
+    expect(occurrence.relatedFiles).toEqual(["packages/core/src/ctx.ts"]);
+    expect(occurrence.acceptanceCriteria).toHaveLength(1);
 
     await cli(
       "--cwd",
@@ -627,9 +716,33 @@ describe("weft task", () => {
       extensions: unknown;
     }>;
     expect(tasks).toHaveLength(1);
-    expect(tasks[0]?.notes[0]?.text).toBe("daemon endpoint is wired");
+    expect(tasks[0]?.notes.map((note) => note.text)).toEqual([
+      "review recurrence",
+      "seen again without replacing collections",
+      "daemon endpoint is wired",
+    ]);
     expect(tasks[0]?.acceptanceCriteria[0]?.met).toBe(true);
-    expect(tasks[0]?.extensions).toEqual({ lane: "api", estimate: 3 });
+    expect(tasks[0]?.extensions).toEqual({ lane: "api", estimate: 5 });
+
+    await expect(
+      cli(
+        "--cwd",
+        root,
+        "--mock",
+        "task",
+        "--workflow",
+        "tracked",
+        "create",
+        "--title",
+        "Duplicate context",
+        "--description",
+        "Must keep one logical task",
+        "--dedupe-key",
+        "context-wiring",
+        "--extensions",
+        '{"lane":"api","estimate":3}',
+      ),
+    ).rejects.toThrow(/dedupe key/);
 
     const schema = await cli("--cwd", root, "--mock", "task", "--workflow", "tracked", "schema");
     expect(JSON.parse(schema.text)).toMatchObject({

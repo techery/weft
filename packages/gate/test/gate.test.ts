@@ -796,6 +796,20 @@ describe("createWorkflowRegistry", () => {
     await expect(registry.list()).rejects.toThrow(/duplicate workflow id "shared-state"/);
   });
 
+  it("rejects duplicate callable workflow names even when their durable ids differ", async () => {
+    const dir = await tempDir();
+    await writeReview(dir, "review.ts", { id: "review-one", name: "shared-name" });
+    await write(
+      dir,
+      "ship.ts",
+      reviewSource({ id: "review-two", name: "shared-name", description: "Ship it" }),
+    );
+    const registry = createWorkflowRegistry({ dir });
+
+    await expect(registry.list()).rejects.toThrow(/duplicate workflow name "shared-name"/);
+    await expect(registry.load("shared-name")).rejects.toThrow(/duplicate workflow name "shared-name"/);
+  });
+
   it("caches by content hash and invalidates when the file changes", async () => {
     const dir = await tempDir();
     await writeReview(dir, "review.ts");

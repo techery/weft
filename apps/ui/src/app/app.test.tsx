@@ -107,6 +107,19 @@ describe("a run", () => {
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Approve/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Deny/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open attached report/ })).toHaveAttribute(
+      "href",
+      `/api/blobs/${"a".repeat(64)}?as=text`,
+    );
+  });
+
+  it("keeps the attached report when the gate falls back to run detail", async () => {
+    daemon.state.pending.pending = [];
+    renderApp("/runs/r-waiting?from=runs&tab=steps&step=gate:h1");
+    expect(await screen.findByRole("link", { name: /Open attached report/ })).toHaveAttribute(
+      "href",
+      `/api/blobs/${"a".repeat(64)}?as=text`,
+    );
   });
 
   it("answers the question and the run moves on", async () => {
@@ -172,12 +185,15 @@ describe("workflows", () => {
     expect(screen.queryByText(/\.weft\/workflows\/\.weft/)).not.toBeInTheDocument();
     expect(await screen.findByText("Verify release notes")).toBeInTheDocument();
     expect(screen.getByText("Every note links to source evidence")).toBeInTheDocument();
-    expect(screen.getByText(/Two commits still need issue links/)).toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "release" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Tasks · 1" })).toBeInTheDocument();
+    expect(screen.getByText("task schema")).toBeInTheDocument();
+    expect(screen.getByText("v1")).toBeInTheDocument();
+    expect(screen.getByText("Identity changelog|release-notes|missing-source-evidence")).toBeInTheDocument();
     expect(screen.getByLabelText("Every note links to source evidence: met")).toBeInTheDocument();
     await user.click(screen.getByText(/2 notes · latest by draft-agent/));
     expect(screen.getByText(/Initial source scan completed/)).toBeInTheDocument();
+    expect(screen.getByText(/Two commits still need issue links/)).toBeInTheDocument();
   });
 });
 

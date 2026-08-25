@@ -58,6 +58,7 @@ export function reopen(
     builder?: MockAgentBuilder;
     /** Stand in for a blob store whose files did not survive (a pruned cache, a partial restore). */
     blobs?: MemoryBlobStore;
+    taskTracker?: AgentTaskTrackerHost;
   } = {},
 ): TestEngine {
   const builder = opts.builder ?? mock();
@@ -71,6 +72,7 @@ export function reopen(
     providers,
     config: opts.config ?? {},
     ...(opts.registry ? { registry: opts.registry } : {}),
+    ...(opts.taskTracker ? { taskTracker: opts.taskTracker } : {}),
   });
   return { engine, journal: prev.journal, blobs, builder };
 }

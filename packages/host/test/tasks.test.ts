@@ -114,6 +114,179 @@ describe("TaskStore", () => {
     await expect(store.get("release", task.id)).rejects.toThrow(/workflowId does not match directory/);
   });
 
+  it("returns extension defaults and transforms from the active workflow schema", async () => {
+    const root = await tempRoot();
+    const writer = new TaskStore(join(root, ".weft", "tasks"));
+    await writer.create("release", {
+      title: "Legacy task",
+      description: "Persisted before the workflow added an extension default.",
+      extensions: {},
+    });
+    const reader = new TaskStore(join(root, ".weft", "tasks"), async () =>
+      z.object({ lane: z.string().default("api") }),
+    );
+
+    expect((await reader.list("release"))[0]?.extensions).toEqual({ lane: "api" });
+  });
+
+  it("binds each run to its exact extension schema even when another definition registers", async () => {
+    const root = await tempRoot();
+    const store = new TaskStore(join(root, ".weft", "tasks"));
+    const api = z.object({ lane: z.literal("api") });
+    const ui = z.object({ lane: z.literal("ui") });
+    const task = await store.create(
+      "release",
+      { title: "API", description: "Schema-bound task", extensions: { lane: "api" } },
+      api,
+    );
+    const apiBinding = await store.registerWorkflow(
+      { id: "release", name: "release" },
+      api,
+      z.toJSONSchema(api),
+    );
+    const uiBinding = await store.registerWorkflow(
+      { id: "release", name: "release" },
+      ui,
+      z.toJSONSchema(ui),
+    );
+
+    const apiSnapshot = (await store.snapshot("release", {}, apiBinding)) as {
+      tasks: Array<{ id: string; extensions: unknown }>;
+    };
+    expect(apiSnapshot.tasks).toEqual([
+      expect.objectContaining({ id: task.id, extensions: { lane: "api" } }),
+    ]);
+    await expect(store.snapshot("release", {}, uiBinding)).rejects.toThrow(/task extensions failed/);
+    expect(await store.schema("release", apiBinding)).toMatchObject({ type: "object" });
+  });
+
+  it("migrates older workflow extension values before validating and persists on update", async () => {
+    const root = await tempRoot();
+    const store = new TaskStore(join(root, ".weft", "tasks"));
+    const task = await store.create("release", {
+      title: "Legacy",
+      description: "Old extension shape",
+      extensions: { lane: "api" },
+    });
+    const current = z.object({ owner: z.string(), estimate: z.number().int() });
+    const binding = await store.registerWorkflow(
+      { id: "release", name: "release" },
+      current,
+      z.toJSONSchema(current),
+      {
+        schemaVersion: 2,
+        migrate: (value) => ({ owner: (value as { lane: string }).lane, estimate: 1 }),
+      },
+    );
+
+    const snapshot = (await store.snapshot("release", {}, binding)) as {
+      tasks: Array<{ extensionSchemaVersion: number; extensions: unknown }>;
+    };
+    expect(snapshot.tasks[0]).toMatchObject({ extensions: { owner: "api", estimate: 1 } });
+    const updated = await store.update("release", task.id, { status: "in_progress" }, current);
+    expect(updated).toMatchObject({
+      extensionSchemaVersion: 2,
+      extensions: { owner: "api", estimate: 1 },
+    });
+    const raw = JSON.parse(
+      await readFile(join(root, ".weft", "tasks", "release", `${task.id}.json`), "utf8"),
+    ) as { extensionSchemaVersion: number };
+    expect(raw.extensionSchemaVersion).toBe(2);
+  });
+
+  it("binds dry replay in memory and recovers a lost old-schema batch through migration", async () => {
+    const root = await tempRoot();
+    const taskRoot = join(root, ".weft", "tasks");
+    const oldStore = new TaskStore(taskRoot);
+    const oldSchema = z.object({ lane: z.string() });
+    const oldBinding = await oldStore.registerWorkflow(
+      { id: "review", name: "review" },
+      oldSchema,
+      z.toJSONSchema(oldSchema),
+      { identity: "definition-a" },
+    );
+    const oldContext = {
+      workflowId: "review",
+      workflowName: "review",
+      runId: "run-old",
+      step: "record",
+      provider: "workflow",
+      source: "workflow" as const,
+      schemaBinding: oldBinding,
+      schemaVersion: 1,
+    };
+    const operation = {
+      op: "create" as const,
+      title: "Migrate me",
+      description: "The old marker was lost",
+      extensions: { lane: "api" },
+    };
+    await oldStore.applyBatch(oldContext, "already-applied", [operation]);
+
+    const currentStore = new TaskStore(taskRoot);
+    const currentSchema = z.object({ owner: z.string(), estimate: z.number().int() });
+    await currentStore.registerWorkflow(
+      { id: "review", name: "review" },
+      currentSchema,
+      z.toJSONSchema(currentSchema),
+      {
+        schemaVersion: 2,
+        identity: "definition-b",
+        migrate: (value) => ({ owner: (value as { lane: string }).lane, estimate: 1 }),
+      },
+    );
+    await expect(
+      currentStore.applyBatch(oldContext, "already-applied", [operation]),
+    ).resolves.toBeUndefined();
+    await currentStore.applyBatch(oldContext, "lost-marker", [operation]);
+    expect(await currentStore.list("review")).toEqual([
+      expect.objectContaining({
+        extensionSchemaVersion: 2,
+        extensions: { owner: "api", estimate: 1 },
+      }),
+      expect.objectContaining({
+        extensionSchemaVersion: 2,
+        extensions: { owner: "api", estimate: 1 },
+      }),
+    ]);
+
+    const dryRoot = join(root, "dry");
+    const dryStore = new TaskStore(dryRoot);
+    await dryStore.registerWorkflow(
+      { id: "review", name: "review" },
+      currentSchema,
+      z.toJSONSchema(currentSchema),
+      { schemaVersion: 2, persist: false },
+    );
+    expect(await dryStore.namespace("review")).toBeUndefined();
+  });
+
+  it("preflights a whole batch before writing and limits agents to observed tasks", async () => {
+    const root = await tempRoot();
+    const store = new TaskStore(join(root, ".weft", "tasks"));
+    const visible = await store.create("review", { title: "Visible", description: "May change" });
+    const hidden = await store.create("review", { title: "Hidden", description: "Must not change" });
+    const context = {
+      workflowId: "review",
+      workflowName: "review",
+      runId: "run-1",
+      step: "review",
+      provider: "codex",
+      source: "agent" as const,
+      mode: "write" as const,
+      visibleTaskIds: [visible.id],
+    };
+
+    await expect(
+      store.applyBatch(context, "invalid-batch", [
+        { op: "note", id: visible.id, text: "would be partial" },
+        { op: "note", id: hidden.id, text: "not observed" },
+      ]),
+    ).rejects.toThrow(/not present in this step's observed task context/);
+    expect((await store.get("review", visible.id)).notes).toEqual([]);
+    expect((await store.get("review", hidden.id)).notes).toEqual([]);
+  });
+
   it("applies journaled batches exactly once, even when the marker is lost", async () => {
     const root = await tempRoot();
     const taskRoot = join(root, ".weft", "tasks");
@@ -149,6 +322,96 @@ describe("TaskStore", () => {
     const final = await store.get("release", created?.id ?? "");
     expect(final.notes.map((note) => note.text)).toEqual(["verified"]);
     expect(final.revision).toBe(2);
+
+    const optimisticBatch = "run-1:agent:9";
+    const optimistic = [
+      { op: "update" as const, id: final.id, status: "in_progress" as const, ifRevision: 2 },
+    ];
+    await store.applyBatch(context, optimisticBatch, optimistic);
+    await unlink(
+      join(taskRoot, "release", `.batch-${createHash("sha256").update(optimisticBatch).digest("hex")}.json`),
+    );
+    await expect(store.applyBatch(context, optimisticBatch, optimistic)).resolves.toBeUndefined();
+    expect(await store.get("release", final.id)).toMatchObject({ status: "in_progress", revision: 3 });
+  });
+
+  it("atomically upserts deduplicated work and filters journaled snapshots", async () => {
+    const root = await tempRoot();
+    const store = new TaskStore(join(root, ".weft", "tasks"));
+    const context = {
+      workflowId: "review",
+      workflowName: "review",
+      runId: "run-1",
+      step: "record:finding",
+      provider: "workflow",
+      source: "workflow" as const,
+    };
+    const operation = {
+      op: "upsert" as const,
+      dedupeKey: "src/state.ts|store|invalid-shape",
+      create: {
+        title: "Validate persisted state",
+        description: "Invalid JSON shapes crash derived state.",
+        tags: ["code-review", "correctness"],
+        relatedFiles: ["src/state.ts"],
+        acceptanceCriteria: ["Regression test passes"],
+      },
+      update: { priority: "high" as const },
+      note: "seen in run-1",
+    };
+    await store.applyBatch(context, "batch-1", [operation]);
+    await store.applyBatch({ ...context, runId: "run-2" }, "batch-2", [
+      { ...operation, note: "seen in run-2" },
+    ]);
+
+    const tasks = await store.list("review");
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({
+      dedupeKey: operation.dedupeKey,
+      priority: "high",
+      revision: 2,
+    });
+    expect(tasks[0]?.notes.map((note) => note.text)).toEqual(["seen in run-1", "seen in run-2"]);
+
+    const criterionId = tasks[0]?.acceptanceCriteria[0]?.id ?? "";
+    await store.setCriterion("review", tasks[0]?.id ?? "", criterionId, true, "verifier");
+    await store.applyBatch({ ...context, runId: "run-3" }, "batch-3", [
+      {
+        ...operation,
+        update: {
+          ...operation.update,
+          acceptanceCriteria: ["Regression test passes"],
+          resetAcceptance: true,
+        },
+        note: "reopened in run-3",
+      },
+    ]);
+    const reopened = await store.get("review", tasks[0]?.id ?? "");
+    expect(reopened).toMatchObject({ revision: 4 });
+    expect(reopened.acceptanceCriteria).toEqual([expect.objectContaining({ id: criterionId, met: false })]);
+    expect(reopened.notes.map((note) => note.text)).toEqual([
+      "seen in run-1",
+      "seen in run-2",
+      "reopened in run-3",
+    ]);
+
+    const matching = (await store.snapshot("review", {
+      tags: ["not-present", "code-review"],
+      relatedFiles: ["src/state.ts"],
+    })) as { tasks: Array<{ dedupeKey?: string }> };
+    expect(matching.tasks).toEqual([expect.objectContaining({ dedupeKey: operation.dedupeKey })]);
+    const missing = (await store.snapshot("review", { relatedFiles: ["src/other.ts"] })) as {
+      tasks: unknown[];
+    };
+    expect(missing.tasks).toEqual([]);
+
+    await expect(
+      store.create("review", {
+        dedupeKey: operation.dedupeKey,
+        title: "Duplicate",
+        description: "Must be rejected",
+      }),
+    ).rejects.toThrow(/dedupe key/);
   });
 
   it("does not steal an old live lock, recovers a dead lock, and removes orphan temps", async () => {

@@ -3,7 +3,17 @@
  * behind this interface. The engine owns validation, repair policy, budget, and
  * journaling; a provider owns one session with one vendor's agent.
  */
-import type { AnySchema, Effort, Risk, SchemaIssue, Usage, WriteScope } from "@techery/weft-sdk";
+import type {
+  AnySchema,
+  Effort,
+  Risk,
+  SchemaIssue,
+  Usage,
+  WorkflowTaskCreateInput,
+  WorkflowTaskSelector,
+  WorkflowTaskUpdateInput,
+  WriteScope,
+} from "@techery/weft-sdk";
 
 export interface ToolPolicy {
   /** When false every edit tool is denied (read-only step). */
@@ -51,11 +61,19 @@ export type AgentTaskOperation =
       dependencies?: string[];
       relatedFiles?: string[];
       acceptanceCriteria?: string[];
+      resetAcceptance?: boolean;
       extensions?: unknown;
       ifRevision?: number;
     }
   | { op: "note"; id: string; text: string; ifRevision?: number }
-  | { op: "criterion"; id: string; criterionId: string; met: boolean; ifRevision?: number };
+  | { op: "criterion"; id: string; criterionId: string; met: boolean; ifRevision?: number }
+  | {
+      op: "upsert";
+      dedupeKey: string;
+      create: WorkflowTaskCreateInput;
+      update?: WorkflowTaskUpdateInput;
+      note?: string;
+    };
 
 export interface AgentTaskContext {
   workflowId: string;
@@ -63,14 +81,36 @@ export interface AgentTaskContext {
   runId: string;
   step: string;
   provider: string;
+  source?: "agent" | "workflow";
+  mode?: "read" | "write";
+  selector?: WorkflowTaskSelector;
+  /** Stable fingerprint for the exact extension schema bound to this run. */
+  schemaBinding?: string;
+  schemaVersion?: number;
+  /** Exact records exposed by the journaled observation; mutation authority cannot exceed them. */
+  visibleTaskIds?: string[];
+  visibleDedupeKeys?: string[];
 }
 
 /** Engine-owned task boundary. Providers can request operations but never receive storage authority. */
 export interface AgentTaskTrackerHost {
   /** Bind the runtime definition before any snapshot or mutation (also covers path/stdin workflows). */
-  prepare?(workflow: { id: string; name: string }, extensionSchema: AnySchema | undefined): Promise<void>;
+  prepare?(
+    workflow: { id: string; name: string },
+    extensionSchema: AnySchema | undefined,
+    options?: {
+      schemaVersion?: number;
+      migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
+      /** Stable workflow-definition identity used when JSON Schema is lossy or unavailable. */
+      identity?: string;
+      /** Dry replay binds validators in memory but must not mutate the namespace. */
+      persist?: boolean;
+    },
+  ): Promise<string | undefined>;
   snapshot(context: AgentTaskContext): Promise<unknown>;
   schema(context: AgentTaskContext): Promise<unknown>;
+  /** Read-only semantic preflight used before an agent result is journaled as complete. */
+  validateBatch?(context: AgentTaskContext, operations: AgentTaskOperation[]): Promise<void>;
   applyBatch(context: AgentTaskContext, batchId: string, operations: AgentTaskOperation[]): Promise<void>;
 }
 
@@ -90,6 +130,12 @@ export interface AgentRequest {
   onMaxTurns?: "finalize" | "fail";
   /** Always populated by the engine; read-only steps get { allowEdits: false }. */
   tools: ToolPolicy;
+  /**
+   * Engine-issued workflow-task capability for this step. Providers use its
+   * presence to close side channels (for example an unrestricted shell); task
+   * mutations still flow only through the structured result envelope.
+   */
+  taskContext?: AgentTaskContext;
   writeScope?: Required<Pick<WriteScope, "paths" | "mode">> & Pick<WriteScope, "also">;
   hitl: ProviderHitl;
 }

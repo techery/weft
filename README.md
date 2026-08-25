@@ -209,23 +209,41 @@ Only `journal.jsonl` has to survive; every other file in that directory is rebui
 
 ## Workflow task context
 
-Every agent step receives a bounded task snapshot plus the exact workflow-bound CLI prefix:
+Every task-aware agent step receives a bounded task snapshot plus the workflow-bound CLI prefix for a human
+operator running at the repository root:
 
 ```bash
-weft --cwd /repo task --workflow review --json list
+weft task --workflow review --json list
 ```
 
 Providers return desired changes in the structured `taskOperations` result field; they never receive direct
-storage authority, so retries and replay cannot duplicate notes or creates. People use the same workflow-bound
-CLI (`schema`, `list`, `show`, `create`, `update`, `note`, `accept`, `unaccept`, and guarded `remove --yes`).
+storage authority and must not invoke the CLI themselves, so retries and replay cannot duplicate notes or
+creates. People use the same workflow-bound CLI (`schema`, filtered `list`, `show`, `create`, semantic `upsert`,
+`update`, `note`, `accept`, `unaccept`, and guarded `remove --yes`).
+
+Workflow authors control the context and authority per step. `tasks: false` removes task context,
+`tasks: { mode: "read", relatedFiles: [file], tags: ["code-review"] }` injects only relevant history and
+rejects mutations, and write mode allows validated operations. Workflow-owned `ctx.tasks.observe`, `upsert`,
+`update`, `note`, and `setCriterion` are journaled steps. Observations therefore remain replay-stable across a
+suspension, while mutations settle through the same idempotent engine boundary as agent-requested operations.
+`upsert` uses a workflow-scoped semantic `dedupeKey`, which is useful for recurring findings whose line numbers
+or wording can change between runs.
 
 Tasks carry a title, description, status (`todo`, `in_progress`, `blocked`, `done`, `cancelled`), priority,
 tags, dependencies, related files, stable-ID acceptance criteria, append-only notes, actor/timestamps, and a
 revision. Writes may use optimistic `--if-revision` guards. Mutations are serialized per workflow so parallel
-steps cannot lose notes or race dependency edits. Set `meta.id` once to keep the task namespace stable across
+steps cannot lose notes or race dependency edits. A batch is preflighted as a unit and each operation carries a
+durable idempotency key: a crash can expose an applied prefix, but replay skips that prefix and converges the
+remaining operations without duplicating them. Set `meta.id` once to keep the task namespace stable across
 file/name changes. A workflow may declare `tasks.extensions`; that Standard Schema validates workflow-specific
-context while the core fields remain stable. The workflow manager renders all tasks from
+context while the core fields remain stable. For an incompatible change, increment `tasks.schemaVersion` and
+provide `tasks.migrate(value, fromVersion)`; each run remains bound to its exact schema fingerprint, and migrated
+values are persisted on the next mutation. The workflow manager renders all tasks from
 `GET /api/workflows/:name/tasks`.
+
+See [`examples/08-task-backed-code-review`](./examples/08-task-backed-code-review) for the recommended review
+shape: typed same-run claims, a consolidation pass, independent refutation, human selection, then durable task
+upserts with first/last-seen provenance and occurrence notes.
 
 ## Packages
 

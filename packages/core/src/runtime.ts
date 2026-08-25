@@ -51,6 +51,7 @@ export interface PendingRequest {
   createdAt: number;
   deadline?: number;
   confirmToken?: string;
+  artifactRef?: BlobRefJson;
 }
 
 export interface ChildRunSpec {
@@ -215,6 +216,8 @@ export interface RunRuntimeOptions {
   runId: string;
   workflowName: string;
   workflowId: string;
+  taskSchemaBinding?: string;
+  taskSchemaVersion?: number;
   cwd: string;
   baseRef?: string;
   depth: number;
@@ -230,6 +233,8 @@ export class RunRuntime {
   readonly runId: string;
   readonly workflowName: string;
   readonly workflowId: string;
+  readonly taskSchemaBinding: string | undefined;
+  readonly taskSchemaVersion: number;
   readonly cwd: string;
   readonly baseRef: string | undefined;
   readonly depth: number;
@@ -284,6 +289,8 @@ export class RunRuntime {
     this.runId = opts.runId;
     this.workflowName = opts.workflowName;
     this.workflowId = opts.workflowId;
+    this.taskSchemaBinding = opts.taskSchemaBinding;
+    this.taskSchemaVersion = opts.taskSchemaVersion ?? 1;
     this.cwd = opts.cwd;
     this.baseRef = opts.baseRef;
     this.depth = opts.depth;
@@ -573,7 +580,15 @@ export class RunRuntime {
           await this.delivery.deliver(entry.order);
           const loaded = structuredClone(stored);
           const value = spec.revive ? await spec.revive(loaded, entry) : (loaded as T);
-          await spec.onSettle?.(value, { served: true, entry });
+          try {
+            await spec.onSettle?.(value, { served: true, entry });
+          } catch (err) {
+            const stepError = StepError.from(err, { ...ref, seq: entry.seq });
+            await this.append([
+              { type: "step.failed", seq: entry.seq, error: stepError.serialize(), attempts: 1 },
+            ]);
+            throw stepError;
+          }
           return value;
         }
       }

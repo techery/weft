@@ -1,6 +1,14 @@
 import type { AnySchema, InferIn, InferOut } from "./schema.ts";
 import type { Ctx, Effort, ProviderId } from "./types.ts";
 
+export interface WorkflowTaskSchemaConfig {
+  extensions?: AnySchema;
+  /** Increment when persisted extension values need an explicit migration. Defaults to 1. */
+  schemaVersion?: number;
+  /** Convert a stored older value to the current version before validation. */
+  migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
+}
+
 /**
  * Workflow metadata. `name` derives from the filename in module mode; override with
  * `name:` for inline scripts or explicit registration.
@@ -23,7 +31,7 @@ export interface WorkflowMeta<InS extends AnySchema, OutS extends AnySchema> {
    * lifecycle fields (status, dependencies, acceptance criteria, timestamps); this
    * schema lets a workflow add typed context without weakening those invariants.
    */
-  tasks?: { extensions?: AnySchema };
+  tasks?: WorkflowTaskSchemaConfig;
 }
 
 export interface WorkflowDefinition<In = any, Out = any> {
@@ -35,7 +43,7 @@ export interface WorkflowDefinition<In = any, Out = any> {
     input: AnySchema;
     output: AnySchema;
     defaults?: { provider?: ProviderId; model?: string; effort?: Effort };
-    tasks?: { extensions?: AnySchema };
+    tasks?: WorkflowTaskSchemaConfig;
   };
   readonly run: (ctx: Ctx, input: In) => Promise<Out>;
 }
@@ -59,6 +67,15 @@ export function defineWorkflow<InS extends AnySchema, OutS extends AnySchema>(
   }
   if (meta.id !== undefined) assertWorkflowId(meta.id, "meta.id");
   if (meta.name !== undefined) assertWorkflowId(meta.name, "meta.name");
+  if (
+    meta.tasks?.schemaVersion !== undefined &&
+    (!Number.isInteger(meta.tasks.schemaVersion) || meta.tasks.schemaVersion < 1)
+  ) {
+    throw new TypeError("defineWorkflow: tasks.schemaVersion must be a positive integer");
+  }
+  if (meta.tasks?.migrate !== undefined && typeof meta.tasks.migrate !== "function") {
+    throw new TypeError("defineWorkflow: tasks.migrate must be a function");
+  }
   if (typeof run !== "function") {
     throw new TypeError("defineWorkflow: run must be an async function (ctx, input) => output");
   }

@@ -23,6 +23,7 @@ interface ScopeOptions {
 interface CreateOptions {
   title: string;
   description: string;
+  dedupeKey?: string;
   status?: TaskStatus;
   priority?: TaskPriority;
   tag: string[];
@@ -49,6 +50,24 @@ interface UpdateOptions {
   clearAcceptance?: boolean;
 }
 
+interface UpsertOptions {
+  dedupeKey: string;
+  title: string;
+  description: string;
+  status?: TaskStatus;
+  priority?: TaskPriority;
+  tag?: string[];
+  dependsOn?: string[];
+  file?: string[];
+  acceptance?: string[];
+  extensions?: string;
+  note?: string;
+  clearTags?: boolean;
+  clearDependencies?: boolean;
+  clearFiles?: boolean;
+  clearAcceptance?: boolean;
+}
+
 export function taskCommand(io: CliIo): Command {
   const task = new Command("task")
     .description("manage durable tasks bound to one workflow")
@@ -61,11 +80,19 @@ export function taskCommand(io: CliIo): Command {
       .description("list every task in the workflow")
       .addOption(new Option("--status <status>", "filter by status").choices([...TASK_STATUSES]))
       .option("--tag <tag>", "filter by tag")
-      .action(async (opts: { status?: string; tag?: string }, cmd) => {
+      .option("--dedupe-key <key>", "filter by recurring-work identity")
+      .option("--file <path>", "filter by related file")
+      .action(async (opts: { status?: string; tag?: string; dedupeKey?: string; file?: string }, cmd) => {
         await withTasks(cmd, async (weft, workflowId) => {
           let tasks = await weft.tasks.list(workflowId);
           if (opts.status !== undefined) tasks = tasks.filter((task) => task.status === opts.status);
           if (opts.tag !== undefined) tasks = tasks.filter((task) => task.tags.includes(opts.tag as string));
+          if (opts.dedupeKey !== undefined) {
+            tasks = tasks.filter((task) => task.dedupeKey === opts.dedupeKey);
+          }
+          if (opts.file !== undefined) {
+            tasks = tasks.filter((task) => task.relatedFiles.includes(opts.file as string));
+          }
           printTasks(io, tasks, scopeOf(cmd).json === true);
         });
       }),
@@ -106,6 +133,7 @@ export function taskCommand(io: CliIo): Command {
     .description("create a task")
     .requiredOption("--title <title>")
     .requiredOption("--description <text>")
+    .option("--dedupe-key <key>", "workflow-scoped identity for idempotent recurring work")
     .addOption(new Option("--status <status>").choices([...TASK_STATUSES]))
     .addOption(new Option("--priority <priority>").choices([...TASK_PRIORITIES]))
     .option("--tag <tag>", "tag; repeat for more than one", collect, [])
@@ -121,6 +149,7 @@ export function taskCommand(io: CliIo): Command {
           {
             title: opts.title,
             description: opts.description,
+            ...(opts.dedupeKey !== undefined ? { dedupeKey: opts.dedupeKey } : {}),
             ...(opts.status !== undefined ? { status: opts.status } : {}),
             ...(opts.priority !== undefined ? { priority: opts.priority } : {}),
             tags: opts.tag,
@@ -136,6 +165,75 @@ export function taskCommand(io: CliIo): Command {
       });
     });
   task.addCommand(create);
+
+  const upsert = new Command("upsert")
+    .description("create or update a recurring task by workflow-scoped dedupe key")
+    .requiredOption("--dedupe-key <key>")
+    .requiredOption("--title <title>")
+    .requiredOption("--description <text>")
+    .addOption(new Option("--status <status>").choices([...TASK_STATUSES]))
+    .addOption(new Option("--priority <priority>").choices([...TASK_PRIORITIES]))
+    .option("--tag <tag>", "replacement tags; repeatable", collect)
+    .option("--depends-on <id>", "replacement dependencies; repeatable", collect)
+    .option("--file <path>", "replacement related files; repeatable", collect)
+    .option("--acceptance <text>", "replacement acceptance criteria; repeatable", collect)
+    .option("--extensions <json>", "replacement workflow-specific extension value")
+    .option("--note <text>", "append occurrence context atomically")
+    .option("--clear-tags", "replace tags with an empty list")
+    .option("--clear-dependencies", "replace dependencies with an empty list")
+    .option("--clear-files", "replace related files with an empty list")
+    .option("--clear-acceptance", "replace acceptance criteria with an empty list")
+    .action(async (opts: UpsertOptions, cmd) => {
+      await withTasks(cmd, async (weft, workflowId, def, namespace) => {
+        requireDefinitionForDeclaredExtensions(def, namespace, "upsert a task");
+        const create = {
+          title: opts.title,
+          description: opts.description,
+          ...(opts.status !== undefined ? { status: opts.status } : {}),
+          ...(opts.priority !== undefined ? { priority: opts.priority } : {}),
+          tags: opts.tag ?? [],
+          dependencies: opts.dependsOn ?? [],
+          relatedFiles: opts.file ?? [],
+          acceptanceCriteria: opts.acceptance ?? [],
+          ...(opts.extensions !== undefined ? { extensions: json(opts.extensions, "--extensions") } : {}),
+        };
+        const task = await weft.tasks.upsert(
+          workflowId,
+          opts.dedupeKey,
+          {
+            create,
+            update: {
+              title: opts.title,
+              description: opts.description,
+              ...(opts.status !== undefined ? { status: opts.status } : {}),
+              ...(opts.priority !== undefined ? { priority: opts.priority } : {}),
+              ...(opts.clearTags ? { tags: [] } : opts.tag !== undefined ? { tags: opts.tag } : {}),
+              ...(opts.clearDependencies
+                ? { dependencies: [] }
+                : opts.dependsOn !== undefined
+                  ? { dependencies: opts.dependsOn }
+                  : {}),
+              ...(opts.clearFiles
+                ? { relatedFiles: [] }
+                : opts.file !== undefined
+                  ? { relatedFiles: opts.file }
+                  : {}),
+              ...(opts.clearAcceptance
+                ? { acceptanceCriteria: [] }
+                : opts.acceptance !== undefined
+                  ? { acceptanceCriteria: opts.acceptance.map((text) => ({ text })) }
+                  : {}),
+              ...(opts.extensions !== undefined ? { extensions: json(opts.extensions, "--extensions") } : {}),
+            },
+            ...(opts.note !== undefined ? { note: opts.note } : {}),
+            actor: scopeOf(cmd).actor,
+          },
+          def?.meta.tasks?.extensions,
+        );
+        printOne(io, task, scopeOf(cmd).json === true);
+      });
+    });
+  task.addCommand(upsert);
 
   const update = new Command("update")
     .description("update task fields; repeatable lists replace their current value")
@@ -289,9 +387,7 @@ async function loadBoundWorkflow(
   try {
     const loaded = await weft.registry.load(workflowId);
     const id = loaded.def.meta.id ?? loaded.def.meta.name ?? workflowId;
-    const namespace =
-      (await weft.tasks.namespace(id)) ??
-      namespaceFromDefinition(id, loaded.def.meta.name ?? workflowId, loaded.def);
+    const namespace = await namespaceForDefinition(weft, id, loaded.def.meta.name ?? workflowId, loaded.def);
     return { workflowId: id, def: loaded.def, namespace };
   } catch (err) {
     directError = err;
@@ -301,8 +397,7 @@ async function loadBoundWorkflow(
     const candidate = await weft.registry.load(entry.name);
     if (candidate.def.meta.id === workflowId || candidate.def.meta.name === workflowId) {
       const id = candidate.def.meta.id ?? candidate.def.meta.name ?? workflowId;
-      const namespace =
-        (await weft.tasks.namespace(id)) ?? namespaceFromDefinition(id, entry.name, candidate.def);
+      const namespace = await namespaceForDefinition(weft, id, entry.name, candidate.def);
       return { workflowId: id, def: candidate.def, namespace };
     }
   }
@@ -311,14 +406,29 @@ async function loadBoundWorkflow(
   throw directError;
 }
 
-function namespaceFromDefinition(id: string, name: string, def: WorkflowDefinition): TaskWorkflowNamespace {
-  return {
-    schemaVersion: 1,
-    id,
-    name,
-    extensionSchemaDeclared: def.meta.tasks?.extensions !== undefined,
-    extensionSchema: null,
-  };
+async function namespaceForDefinition(
+  weft: Weft,
+  id: string,
+  name: string,
+  def: WorkflowDefinition,
+): Promise<TaskWorkflowNamespace> {
+  const extensionSchema = def.meta.tasks?.extensions;
+  let extensionJsonSchema: unknown | null = null;
+  if (extensionSchema) {
+    const { z } = await import("@techery/weft-sdk");
+    try {
+      extensionJsonSchema = z.toJSONSchema(extensionSchema as never, {
+        io: "input",
+        unrepresentable: "any",
+      });
+    } catch {
+      extensionJsonSchema = null;
+    }
+  }
+  await weft.tasks.registerWorkflow({ id, name }, extensionSchema, extensionJsonSchema, def.meta.tasks);
+  const namespace = await weft.tasks.namespace(id);
+  if (!namespace) throw new Error(`failed to register task namespace for workflow ${id}`);
+  return namespace;
 }
 
 function isRegistryMiss(err: unknown): boolean {
@@ -366,7 +476,7 @@ function positiveInt(value: string, label: string): number {
 
 function printTasks(io: CliIo, tasks: WorkflowTask[], asJson: boolean): void {
   if (asJson) {
-    io.out(JSON.stringify(tasks, null, 2));
+    io.out(JSON.stringify(tasks.map(publicTask), null, 2));
     return;
   }
   if (tasks.length === 0) {
@@ -382,12 +492,13 @@ function printTasks(io: CliIo, tasks: WorkflowTask[], asJson: boolean): void {
 
 function printOne(io: CliIo, task: WorkflowTask, asJson: boolean): void {
   if (asJson) {
-    io.out(JSON.stringify(task, null, 2));
+    io.out(JSON.stringify(publicTask(task), null, 2));
     return;
   }
   io.out(`${pc.bold(task.id)}  ${task.status}  ${task.priority}  r${task.revision}`);
   io.out(task.title);
   io.out(task.description);
+  if (task.dedupeKey) io.out(`dedupe key: ${task.dedupeKey}`);
   if (task.tags.length > 0) io.out(`tags: ${task.tags.join(", ")}`);
   if (task.dependencies.length > 0) io.out(`depends on: ${task.dependencies.join(", ")}`);
   if (task.relatedFiles.length > 0) io.out(`files: ${task.relatedFiles.join(", ")}`);
@@ -398,6 +509,11 @@ function printOne(io: CliIo, task: WorkflowTask, asJson: boolean): void {
   if (hasExtensionValue(task.extensions)) {
     io.out(`extensions: ${JSON.stringify(task.extensions)}`);
   }
+}
+
+function publicTask(task: WorkflowTask): Omit<WorkflowTask, "appliedOperations"> {
+  const { appliedOperations: _internal, ...record } = task;
+  return record;
 }
 
 function hasExtensionValue(value: unknown): boolean {

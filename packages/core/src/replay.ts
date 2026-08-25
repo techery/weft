@@ -171,6 +171,24 @@ export class ReplayIndex {
           break;
         }
         case "step.failed": {
+          // `onSettle` runs after step.completed so crash-recoverable external effects can
+          // be retried from the journal. If settlement itself fails, the later terminal
+          // failure wins: do not serve the completed value forever on every resume.
+          const completed = index.bySeq.get(ev.seq);
+          if (completed) {
+            index.bySeq.delete(ev.seq);
+            index.byHash.set(
+              completed.hash,
+              (index.byHash.get(completed.hash) ?? []).filter((entry) => entry !== completed),
+            );
+            if (completed.key !== undefined) {
+              index.byKey.set(
+                completed.key,
+                (index.byKey.get(completed.key) ?? []).filter((entry) => entry !== completed),
+              );
+            }
+            index.entryCount--;
+          }
           // A terminal failure's turns were charged live; the serialized error is
           // where that spend survives (attached by the repair loop).
           const usage = (ev.error.detail as { usage?: Usage } | undefined)?.usage;

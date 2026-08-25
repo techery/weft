@@ -1,8 +1,22 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
-import { link, mkdir, open, readdir, readFile, rename, stat, unlink, utimes } from "node:fs/promises";
+import {
+  link,
+  mkdir,
+  mkdtemp,
+  open,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  unlink,
+  utimes,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { type AgentTaskContext, type AgentTaskOperation, jsonUnsafeAt } from "@techery/weft-core";
-import type { AnySchema } from "@techery/weft-sdk";
+import type { AnySchema, WorkflowTaskSelector } from "@techery/weft-sdk";
 import { assertWorkflowId, validateSchema } from "@techery/weft-sdk";
 
 export const TASK_SCHEMA_VERSION = 1;
@@ -28,8 +42,11 @@ export interface TaskNote {
 /** Durable, workflow-scoped context shared by every step and run of that workflow. */
 export interface WorkflowTask {
   schemaVersion: typeof TASK_SCHEMA_VERSION;
+  extensionSchemaVersion: number;
   id: string;
   workflowId: string;
+  /** Workflow-scoped idempotent identity for recurring logical work. */
+  dedupeKey?: string;
   title: string;
   description: string;
   status: TaskStatus;
@@ -56,11 +73,13 @@ export interface TaskWorkflowNamespace {
   name: string;
   extensionSchemaDeclared: boolean;
   extensionSchema: unknown | null;
+  extensionSchemaVersion: number;
 }
 
 export interface CreateTaskInput {
   /** Internal deterministic id used by journal-replayed agent batches. */
   id?: string;
+  dedupeKey?: string;
   title: string;
   description: string;
   status?: TaskStatus;
@@ -72,6 +91,7 @@ export interface CreateTaskInput {
   extensions?: unknown;
   actor?: string;
   operationKey?: string;
+  initialNote?: string;
 }
 
 export interface UpdateTaskInput {
@@ -83,15 +103,39 @@ export interface UpdateTaskInput {
   dependencies?: string[];
   relatedFiles?: string[];
   acceptanceCriteria?: Array<{ id?: string; text: string; met?: boolean }>;
+  resetAcceptance?: boolean;
   extensions?: unknown;
   actor?: string;
   ifRevision?: number;
   operationKey?: string;
 }
 
+export interface UpsertTaskInput {
+  create: Omit<CreateTaskInput, "dedupeKey" | "actor" | "operationKey" | "initialNote">;
+  update?: UpdateTaskInput;
+  note?: string;
+  actor?: string;
+}
+
 /** One JSON file per task keeps unrelated parallel agent updates independent. */
 export class TaskStore {
   private readonly runtimeSchemas = new Map<string, AnySchema | undefined>();
+  private readonly runtimeJsonSchemas = new Map<string, unknown | null>();
+  private readonly runtimeMigrations = new Map<
+    string,
+    {
+      version: number;
+      migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
+    }
+  >();
+  private readonly latestBindings = new Map<string, string>();
+  private readonly schemaScope = new AsyncLocalStorage<{
+    workflowId: string;
+    binding: string;
+    schema: AnySchema | undefined;
+    version: number;
+    migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
+  }>();
 
   constructor(
     private readonly root: string,
@@ -102,16 +146,44 @@ export class TaskStore {
     workflow: { id: string; name: string },
     extensionSchema: AnySchema | undefined,
     extensionJsonSchema: unknown | null,
-  ): Promise<void> {
+    options: {
+      schemaVersion?: number;
+      migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
+      identity?: string;
+      persist?: boolean;
+    } = {},
+  ): Promise<string> {
     assertWorkflowId(workflow.id);
     assertWorkflowId(workflow.name);
-    this.runtimeSchemas.set(workflow.id, extensionSchema);
+    const version = options.schemaVersion ?? 1;
+    if (!Number.isInteger(version) || version < 1) {
+      throw new Error("task extension schema version must be a positive integer");
+    }
+    const schemaBinding = digest(
+      JSON.stringify({
+        declared: extensionSchema !== undefined,
+        schema: extensionJsonSchema,
+        version,
+        migrate: options.migrate ? String(options.migrate) : null,
+        identity: options.identity ?? null,
+      }),
+    );
+    const bindingKey = `${workflow.id}:${schemaBinding}`;
+    this.runtimeSchemas.set(bindingKey, extensionSchema);
+    this.runtimeJsonSchemas.set(bindingKey, extensionJsonSchema);
+    this.runtimeMigrations.set(bindingKey, {
+      version,
+      ...(options.migrate ? { migrate: options.migrate } : {}),
+    });
+    if (options.persist === false) return schemaBinding;
+    this.latestBindings.set(workflow.id, schemaBinding);
     const namespace: TaskWorkflowNamespace = {
       schemaVersion: TASK_NAMESPACE_SCHEMA_VERSION,
       id: workflow.id,
       name: workflow.name,
       extensionSchemaDeclared: extensionSchema !== undefined,
       extensionSchema: extensionJsonSchema,
+      extensionSchemaVersion: version,
     };
     await this.mutate(workflow.id, async () => {
       const file = this.namespaceFile(workflow.id);
@@ -122,6 +194,18 @@ export class TaskStore {
       const encoded = `${JSON.stringify(namespace)}\n`;
       if (current !== encoded) await this.writeAux(file, namespace);
     });
+    return schemaBinding;
+  }
+
+  async schema(workflowId: string, schemaBinding?: string): Promise<unknown | null> {
+    if (schemaBinding !== undefined) {
+      const key = `${workflowId}:${schemaBinding}`;
+      if (!this.runtimeJsonSchemas.has(key)) {
+        throw new Error(`task extension schema binding ${schemaBinding} is not registered for ${workflowId}`);
+      }
+      return this.runtimeJsonSchemas.get(key) ?? null;
+    }
+    return (await this.namespace(workflowId))?.extensionSchema ?? null;
   }
 
   async namespace(workflowId: string): Promise<TaskWorkflowNamespace | undefined> {
@@ -147,6 +231,10 @@ export class TaskStore {
       throw new Error(`invalid task namespace ${file}: identity or schema version mismatch`);
     }
     assertWorkflowId(namespace.name);
+    if (namespace.extensionSchemaVersion === undefined) namespace.extensionSchemaVersion = 1;
+    if (!Number.isInteger(namespace.extensionSchemaVersion) || Number(namespace.extensionSchemaVersion) < 1) {
+      throw new Error(`invalid task namespace ${file}: extension schema version must be positive`);
+    }
     return namespace as unknown as TaskWorkflowNamespace;
   }
 
@@ -202,12 +290,29 @@ export class TaskStore {
     assertWorkflowId(workflowId);
     const actor = cleanRequired(input.actor ?? "cli", "actor");
     const now = Date.now();
-    const id = input.id ?? `task-${randomUUID().slice(0, 8)}`;
+    const dedupeKey = input.dedupeKey !== undefined ? cleanDedupeKey(input.dedupeKey) : undefined;
+    const id =
+      input.id ??
+      (dedupeKey
+        ? `task-${digest(`dedupe:${workflowId}:${dedupeKey}`).slice(0, 8)}`
+        : `task-${randomUUID().slice(0, 8)}`);
     assertId(id);
+    const currentTasks = await this.list(workflowId, extensionSchema);
+    const duplicate = dedupeKey
+      ? currentTasks.find((candidate) => candidate.dedupeKey === dedupeKey)
+      : undefined;
+    if (duplicate) {
+      throw new Error(`dedupe key ${JSON.stringify(dedupeKey)} is already used by ${duplicate.id}`);
+    }
+    if (currentTasks.some((candidate) => candidate.id === id)) {
+      throw new Error(`task id ${id} already exists in workflow ${workflowId}`);
+    }
     const task: WorkflowTask = {
       schemaVersion: TASK_SCHEMA_VERSION,
+      extensionSchemaVersion: this.extensionConfig(workflowId).version,
       id,
       workflowId,
+      ...(dedupeKey ? { dedupeKey } : {}),
       title: cleanRequired(input.title, "title"),
       description: cleanRequired(input.description, "description"),
       status: statusOf(input.status ?? "todo"),
@@ -220,7 +325,7 @@ export class TaskStore {
         text,
         met: false,
       })),
-      notes: [],
+      notes: input.initialNote ? [{ text: cleanRequired(input.initialNote, "note"), at: now, actor }] : [],
       extensions: await extensionsOf(input.extensions, extensionSchema),
       createdAt: now,
       updatedAt: now,
@@ -257,9 +362,23 @@ export class TaskStore {
         `task ${id} changed (expected revision ${input.ifRevision}, found ${current.revision}) — read it again`,
       );
     }
+    const next = await this.updatedTask(current, input, extensionSchema);
+    await this.assertDependencies(workflowId, next, extensionSchema);
+    await this.write(next);
+    return next;
+  }
+
+  private async updatedTask(
+    current: WorkflowTask,
+    input: UpdateTaskInput,
+    extensionSchema?: AnySchema,
+    note?: string,
+  ): Promise<WorkflowTask> {
     const actor = cleanRequired(input.actor ?? "cli", "actor");
-    const next: WorkflowTask = {
+    const now = Date.now();
+    return {
       ...current,
+      extensionSchemaVersion: this.extensionConfig(current.workflowId).version,
       ...(input.title !== undefined ? { title: cleanRequired(input.title, "title") } : {}),
       ...(input.description !== undefined
         ? { description: cleanRequired(input.description, "description") }
@@ -271,22 +390,102 @@ export class TaskStore {
       ...(input.relatedFiles !== undefined ? { relatedFiles: strings(input.relatedFiles) } : {}),
       ...(input.acceptanceCriteria !== undefined
         ? {
-            acceptanceCriteria: criteria(input.acceptanceCriteria, current.acceptanceCriteria),
+            acceptanceCriteria: criteria(
+              input.acceptanceCriteria,
+              input.resetAcceptance ? [] : current.acceptanceCriteria,
+            ),
           }
         : {}),
       ...(input.extensions !== undefined
         ? { extensions: await extensionsOf(input.extensions, extensionSchema) }
         : {}),
-      updatedAt: Date.now(),
+      ...(note !== undefined
+        ? { notes: [...current.notes, { text: cleanRequired(note, "note"), at: now, actor }] }
+        : {}),
+      updatedAt: now,
       updatedBy: actor,
       revision: current.revision + 1,
       appliedOperations: input.operationKey
         ? [...current.appliedOperations, input.operationKey]
         : current.appliedOperations,
     };
+  }
+
+  private async upsertUnlocked(
+    workflowId: string,
+    dedupeKey: string,
+    input: {
+      create: Omit<CreateTaskInput, "dedupeKey" | "actor" | "operationKey" | "initialNote">;
+      update?: UpdateTaskInput;
+      note?: string;
+      actor: string;
+      operationKey: string;
+    },
+    extensionSchema?: AnySchema,
+  ): Promise<WorkflowTask> {
+    const cleanKey = cleanDedupeKey(dedupeKey);
+    const existing = (await this.list(workflowId, extensionSchema)).find(
+      (task) => task.dedupeKey === cleanKey,
+    );
+    if (!existing) {
+      return this.createUnlocked(
+        workflowId,
+        {
+          ...input.create,
+          dedupeKey: cleanKey,
+          actor: input.actor,
+          operationKey: input.operationKey,
+          ...(input.note !== undefined ? { initialNote: input.note } : {}),
+        },
+        extensionSchema,
+      );
+    }
+    if (existing.appliedOperations.includes(input.operationKey)) return existing;
+    if (input.update?.ifRevision !== undefined && input.update.ifRevision !== existing.revision) {
+      throw new Error(
+        `task ${existing.id} changed (expected revision ${input.update.ifRevision}, found ${existing.revision}) — read it again`,
+      );
+    }
+    const next = await this.updatedTask(
+      existing,
+      { ...(input.update ?? {}), actor: input.actor, operationKey: input.operationKey },
+      extensionSchema,
+      input.note,
+    );
     await this.assertDependencies(workflowId, next, extensionSchema);
     await this.write(next);
     return next;
+  }
+
+  /** Create or update one recurring logical task using its workflow-scoped identity. */
+  async upsert(
+    workflowId: string,
+    dedupeKey: string,
+    input: UpsertTaskInput,
+    extensionSchema?: AnySchema,
+  ): Promise<WorkflowTask> {
+    const schema = await this.extensionSchema(workflowId, extensionSchema);
+    return this.mutate(workflowId, async () => {
+      const operationKey = `direct:${randomUUID()}`;
+      const task = await this.upsertUnlocked(
+        workflowId,
+        dedupeKey,
+        {
+          create: input.create,
+          ...(input.update ? { update: input.update } : {}),
+          ...(input.note !== undefined ? { note: input.note } : {}),
+          actor: input.actor ?? "cli",
+          operationKey,
+        },
+        schema,
+      );
+      const cleaned = {
+        ...task,
+        appliedOperations: task.appliedOperations.filter((key) => key !== operationKey),
+      };
+      if (cleaned.appliedOperations.length !== task.appliedOperations.length) await this.write(cleaned);
+      return cleaned;
+    });
   }
 
   async addNote(
@@ -351,18 +550,44 @@ export class TaskStore {
   }
 
   /** Bounded context injected into an agent prompt; full history remains available through the CLI/UI. */
-  async snapshot(workflowId: string, limit = 50): Promise<unknown> {
+  async snapshot(
+    workflowId: string,
+    selector: WorkflowTaskSelector = {},
+    schemaBinding?: string,
+  ): Promise<unknown> {
+    const scoped = this.schemaScope.getStore();
+    if (
+      schemaBinding !== undefined &&
+      (scoped?.binding !== schemaBinding || scoped.workflowId !== workflowId)
+    ) {
+      return this.withSchemaBinding(workflowId, schemaBinding, () =>
+        this.snapshot(workflowId, selector, schemaBinding),
+      );
+    }
     const tasks = await this.list(workflowId);
-    const active = tasks.filter((task) => task.status !== "done" && task.status !== "cancelled");
-    const selected = (active.length > 0 ? active : tasks)
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-      .slice(0, limit);
+    const filtered = tasks.filter((task) => {
+      if (selector.ids && !selector.ids.includes(task.id)) return false;
+      if (selector.dedupeKeys && (!task.dedupeKey || !selector.dedupeKeys.includes(task.dedupeKey))) {
+        return false;
+      }
+      if (selector.statuses && !selector.statuses.includes(task.status)) return false;
+      if (selector.tags && !selector.tags.some((tag) => task.tags.includes(tag))) return false;
+      if (selector.relatedFiles && !selector.relatedFiles.some((file) => task.relatedFiles.includes(file))) {
+        return false;
+      }
+      return true;
+    });
+    const candidates = filtered;
+    const limit = Math.min(100, Math.max(1, selector.limit ?? 50));
+    const selected = candidates.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
     return {
       total: tasks.length,
-      truncated: selected.length < (active.length > 0 ? active.length : tasks.length),
+      truncated: selected.length < candidates.length,
       tasks: selected.map((task) => ({
         id: task.id,
         revision: task.revision,
+        extensionSchemaVersion: task.extensionSchemaVersion,
+        ...(task.dedupeKey ? { dedupeKey: task.dedupeKey } : {}),
         title: task.title,
         description: task.description,
         status: task.status,
@@ -379,18 +604,87 @@ export class TaskStore {
   }
 
   /** Apply one journaled agent batch. Replays are harmless, including after a partial crash. */
+  async validateBatch(context: AgentTaskContext, operations: AgentTaskOperation[]): Promise<void> {
+    if (
+      context.schemaBinding !== undefined &&
+      (this.schemaScope.getStore()?.binding !== context.schemaBinding ||
+        this.schemaScope.getStore()?.workflowId !== context.workflowId)
+    ) {
+      return this.withSchemaBinding(context.workflowId, context.schemaBinding, () =>
+        this.validateBatch(context, operations),
+      );
+    }
+    await this.mutate(context.workflowId, async () => {
+      const extensionSchema = await this.extensionSchema(
+        context.workflowId,
+        undefined,
+        context.schemaBinding,
+      );
+      await this.validateBatchUnlocked(context, operations, extensionSchema);
+    });
+  }
+
   async applyBatch(
     context: AgentTaskContext,
     batchId: string,
     operations: AgentTaskOperation[],
   ): Promise<void> {
+    // A completed batch is a no-op even if its old runtime validator is no longer
+    // registered after a process restart and workflow edit.
+    if (await fileExists(this.batchFile(context.workflowId, batchId))) return;
+    if (
+      context.schemaBinding !== undefined &&
+      !this.runtimeSchemas.has(`${context.workflowId}:${context.schemaBinding}`)
+    ) {
+      const recovered = await this.recoverOperations(context, operations);
+      return this.applyBatch(recovered.context, batchId, recovered.operations);
+    }
+    if (
+      context.schemaBinding !== undefined &&
+      (this.schemaScope.getStore()?.binding !== context.schemaBinding ||
+        this.schemaScope.getStore()?.workflowId !== context.workflowId)
+    ) {
+      return this.withSchemaBinding(context.workflowId, context.schemaBinding, () =>
+        this.applyBatch(context, batchId, operations),
+      );
+    }
     await this.mutate(context.workflowId, async () => {
+      const extensionSchema = await this.extensionSchema(
+        context.workflowId,
+        undefined,
+        context.schemaBinding,
+      );
       const marker = this.batchFile(context.workflowId, batchId);
       if (await fileExists(marker)) return;
-      const extensionSchema = await this.extensionSchema(context.workflowId);
-      const actor = `agent:${context.provider}:${context.runId}:${context.step}`;
+      const pendingOperations = await this.unappliedOperations(
+        context.workflowId,
+        batchId,
+        operations,
+        extensionSchema,
+      );
+      await this.validateBatchUnlocked(context, pendingOperations, extensionSchema);
+      const actor =
+        context.source === "workflow"
+          ? `workflow:${context.runId}:${context.step}`
+          : `agent:${context.provider}:${context.runId}:${context.step}`;
       for (const [index, operation] of operations.entries()) {
         const operationKey = `${batchId}:${index}`;
+        if (operation.op === "upsert") {
+          const update = operation.update ? agentUpdateInput(operation.update) : undefined;
+          await this.upsertUnlocked(
+            context.workflowId,
+            operation.dedupeKey,
+            {
+              create: operation.create,
+              ...(update ? { update } : {}),
+              ...(operation.note !== undefined ? { note: operation.note } : {}),
+              actor,
+              operationKey,
+            },
+            extensionSchema,
+          );
+          continue;
+        }
         if (operation.op === "create") {
           const id = `task-${digest(operationKey).slice(0, 8)}`;
           const existing = await this.get(context.workflowId, id, extensionSchema).catch((err: unknown) => {
@@ -470,6 +764,199 @@ export class TaskStore {
     });
   }
 
+  private async unappliedOperations(
+    workflowId: string,
+    batchId: string,
+    operations: AgentTaskOperation[],
+    extensionSchema?: AnySchema,
+  ): Promise<AgentTaskOperation[]> {
+    const tasks = await this.list(workflowId, extensionSchema);
+    const byId = new Map(tasks.map((task) => [task.id, task]));
+    const byDedupeKey = new Map(
+      tasks.flatMap((task) => (task.dedupeKey ? [[task.dedupeKey, task] as const] : [])),
+    );
+    return operations.filter((operation, index) => {
+      const operationKey = `${batchId}:${index}`;
+      if (operation.op === "create") {
+        const id = `task-${digest(operationKey).slice(0, 8)}`;
+        return !byId.get(id)?.appliedOperations.includes(operationKey);
+      }
+      if (operation.op === "upsert") {
+        return !byDedupeKey.get(operation.dedupeKey)?.appliedOperations.includes(operationKey);
+      }
+      return !byId.get(operation.id)?.appliedOperations.includes(operationKey);
+    });
+  }
+
+  private async recoverOperations(
+    context: AgentTaskContext,
+    operations: AgentTaskOperation[],
+  ): Promise<{ context: AgentTaskContext; operations: AgentTaskOperation[] }> {
+    const binding = this.latestBindings.get(context.workflowId);
+    if (!binding) {
+      throw new Error(
+        `cannot recover task batch: no current extension schema is registered for ${context.workflowId}`,
+      );
+    }
+    const config = this.runtimeMigrations.get(`${context.workflowId}:${binding}`) ?? { version: 1 };
+    const fromVersion = context.schemaVersion ?? 1;
+    if (fromVersion === config.version) {
+      throw new Error(
+        `cannot recover task batch created with unavailable schema binding ${context.schemaBinding}; ` +
+          "the batch marker was lost and no version migration can prove equivalence",
+      );
+    }
+    if (fromVersion > config.version || !config.migrate) {
+      throw new Error(
+        `cannot recover task batch from extension schema version ${fromVersion} to ${config.version}: ` +
+          "the current workflow must declare a forward migration",
+      );
+    }
+    const migrate = config.migrate;
+    const migrateCreate = async <T extends { extensions?: unknown }>(input: T): Promise<T> => ({
+      ...input,
+      extensions: await migrate(input.extensions ?? {}, fromVersion),
+    });
+    const migrated: AgentTaskOperation[] = [];
+    for (const operation of operations) {
+      if (operation.op === "create") {
+        migrated.push(await migrateCreate(operation));
+      } else if (operation.op === "update") {
+        migrated.push(
+          "extensions" in operation
+            ? { ...operation, extensions: await migrate(operation.extensions, fromVersion) }
+            : operation,
+        );
+      } else if (operation.op === "upsert") {
+        migrated.push({
+          ...operation,
+          create: await migrateCreate(operation.create),
+          ...(operation.update && "extensions" in operation.update
+            ? {
+                update: {
+                  ...operation.update,
+                  extensions: await migrate(operation.update.extensions, fromVersion),
+                },
+              }
+            : {}),
+        });
+      } else {
+        migrated.push(operation);
+      }
+    }
+    return {
+      context: { ...context, schemaBinding: binding, schemaVersion: config.version },
+      operations: migrated,
+    };
+  }
+
+  private async validateBatchUnlocked(
+    context: AgentTaskContext,
+    operations: AgentTaskOperation[],
+    extensionSchema?: AnySchema,
+  ): Promise<void> {
+    const current = await this.list(context.workflowId, extensionSchema);
+    if (context.source === "agent") {
+      if (context.mode === "read" && operations.length > 0) {
+        throw new Error("read-only task authority requires an empty batch");
+      }
+      const visibleIds = new Set(context.visibleTaskIds ?? []);
+      const visibleDedupeKeys = new Set(context.visibleDedupeKeys ?? []);
+      for (const operation of operations) {
+        if (
+          (operation.op === "update" || operation.op === "note" || operation.op === "criterion") &&
+          !visibleIds.has(operation.id)
+        ) {
+          throw new Error(`task ${operation.id} was not present in this step's observed task context`);
+        }
+        if (operation.op === "upsert") {
+          const existing = current.find((task) => task.dedupeKey === operation.dedupeKey);
+          if (existing && !visibleIds.has(existing.id) && !visibleDedupeKeys.has(operation.dedupeKey)) {
+            throw new Error(
+              `task ${existing.id} for dedupe key ${JSON.stringify(operation.dedupeKey)} was not present in this step's observed task context`,
+            );
+          }
+        }
+      }
+    }
+
+    const shadowRoot = await mkdtemp(join(tmpdir(), "weft-task-preflight-"));
+    try {
+      const shadow = new TaskStore(shadowRoot, async () => extensionSchema);
+      const config = this.extensionConfig(context.workflowId);
+      await shadow.registerWorkflow(
+        { id: context.workflowId, name: context.workflowName },
+        extensionSchema,
+        null,
+        {
+          schemaVersion: config.version,
+          ...(config.migrate ? { migrate: config.migrate } : {}),
+        },
+      );
+      for (const task of current) await shadow.write(task, true);
+      const actor = "preflight";
+      for (const [index, operation] of operations.entries()) {
+        const operationKey = `preflight:${index}`;
+        if (operation.op === "create") {
+          await shadow.create(context.workflowId, { ...operation, actor, operationKey }, extensionSchema);
+          continue;
+        }
+        if (operation.op === "update") {
+          const { acceptanceCriteria, op: _op, ...fields } = operation;
+          await shadow.update(
+            context.workflowId,
+            operation.id,
+            {
+              ...fields,
+              ...(acceptanceCriteria
+                ? { acceptanceCriteria: acceptanceCriteria.map((text) => ({ text })) }
+                : {}),
+              actor,
+              operationKey,
+            },
+            extensionSchema,
+          );
+          continue;
+        }
+        if (operation.op === "note") {
+          await shadow.addNote(context.workflowId, operation.id, operation.text, actor, {
+            ...(operation.ifRevision !== undefined ? { ifRevision: operation.ifRevision } : {}),
+            operationKey,
+          });
+          continue;
+        }
+        if (operation.op === "criterion") {
+          await shadow.setCriterion(
+            context.workflowId,
+            operation.id,
+            operation.criterionId,
+            operation.met,
+            actor,
+            operation.ifRevision,
+          );
+          continue;
+        }
+        const update = operation.update ? agentUpdateInput(operation.update) : undefined;
+        await shadow.mutate(context.workflowId, () =>
+          shadow.upsertUnlocked(
+            context.workflowId,
+            operation.dedupeKey,
+            {
+              create: operation.create,
+              ...(update ? { update } : {}),
+              ...(operation.note !== undefined ? { note: operation.note } : {}),
+              actor,
+              operationKey,
+            },
+            extensionSchema,
+          ),
+        );
+      }
+    } finally {
+      await rm(shadowRoot, { recursive: true, force: true });
+    }
+  }
+
   async remove(workflowId: string, id: string): Promise<void> {
     const extensionSchema = await this.extensionSchema(workflowId);
     await this.mutate(workflowId, async () => {
@@ -510,8 +997,23 @@ export class TaskStore {
       throw new Error(`invalid task file ${file}: ${(err as Error).message}`, { cause: err });
     }
     const task = decodeTask(value, file, expectedWorkflowId, expectedId);
-    await extensionsOf(task.extensions, extensionSchema);
-    return task;
+    const config = this.extensionConfig(expectedWorkflowId);
+    if (task.extensionSchemaVersion > config.version) {
+      throw new Error(
+        `task ${task.id} uses extension schema version ${task.extensionSchemaVersion}, newer than workflow version ${config.version}`,
+      );
+    }
+    let candidate = task.extensions;
+    if (task.extensionSchemaVersion < config.version) {
+      if (!config.migrate) {
+        throw new Error(
+          `task ${task.id} needs extension migration from version ${task.extensionSchemaVersion} to ${config.version}`,
+        );
+      }
+      candidate = await config.migrate(candidate, task.extensionSchemaVersion);
+    }
+    const extensions = await extensionsOf(candidate, extensionSchema);
+    return { ...task, extensionSchemaVersion: config.version, extensions };
   }
 
   private async write(task: WorkflowTask, createOnly = false): Promise<void> {
@@ -622,10 +1124,57 @@ export class TaskStore {
   }
 
   /** A configured workflow resolver is authoritative; explicit schemas are a standalone-store fallback. */
-  private async extensionSchema(workflowId: string, fallback?: AnySchema): Promise<AnySchema | undefined> {
-    if (this.runtimeSchemas.has(workflowId)) return this.runtimeSchemas.get(workflowId);
+  private async extensionSchema(
+    workflowId: string,
+    fallback?: AnySchema,
+    schemaBinding?: string,
+  ): Promise<AnySchema | undefined> {
+    const scoped = this.schemaScope.getStore();
+    if (scoped?.workflowId === workflowId) return scoped.schema;
+    if (schemaBinding !== undefined) {
+      const key = `${workflowId}:${schemaBinding}`;
+      if (!this.runtimeSchemas.has(key)) {
+        throw new Error(`task extension schema binding ${schemaBinding} is not registered for ${workflowId}`);
+      }
+      return this.runtimeSchemas.get(key);
+    }
     if (!this.schemaFor) return fallback;
     return this.schemaFor(workflowId);
+  }
+
+  private async withSchemaBinding<T>(
+    workflowId: string,
+    schemaBinding: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const key = `${workflowId}:${schemaBinding}`;
+    if (!this.runtimeSchemas.has(key)) {
+      throw new Error(`task extension schema binding ${schemaBinding} is not registered for ${workflowId}`);
+    }
+    const migration = this.runtimeMigrations.get(key) ?? { version: 1 };
+    return this.schemaScope.run(
+      {
+        workflowId,
+        binding: schemaBinding,
+        schema: this.runtimeSchemas.get(key),
+        version: migration.version,
+        ...(migration.migrate ? { migrate: migration.migrate } : {}),
+      },
+      fn,
+    );
+  }
+
+  private extensionConfig(workflowId: string): {
+    version: number;
+    migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
+  } {
+    const scoped = this.schemaScope.getStore();
+    if (scoped?.workflowId === workflowId) {
+      return { version: scoped.version, ...(scoped.migrate ? { migrate: scoped.migrate } : {}) };
+    }
+    const binding = this.latestBindings.get(workflowId);
+    if (!binding) return { version: 1 };
+    return this.runtimeMigrations.get(`${workflowId}:${binding}`) ?? { version: 1 };
   }
 }
 
@@ -714,8 +1263,10 @@ function decodeTask(
   const v = value as Record<string, unknown>;
   const allowed = new Set([
     "schemaVersion",
+    "extensionSchemaVersion",
     "id",
     "workflowId",
+    "dedupeKey",
     "title",
     "description",
     "status",
@@ -809,6 +1360,11 @@ function decodeTask(
   const priority = priorityOf(string("priority"));
   const revision = number("revision");
   if (!Number.isInteger(revision) || revision < 1) fail("revision must be a positive integer");
+  const extensionSchemaVersion =
+    v.extensionSchemaVersion === undefined ? 1 : number("extensionSchemaVersion");
+  if (!Number.isInteger(extensionSchemaVersion) || extensionSchemaVersion < 1) {
+    fail("extensionSchemaVersion must be a positive integer");
+  }
   const createdAt = number("createdAt");
   const updatedAt = number("updatedAt");
   if (!Number.isInteger(createdAt) || createdAt < 0) fail("createdAt must be a non-negative integer");
@@ -825,8 +1381,16 @@ function decodeTask(
   }
   return {
     schemaVersion: TASK_SCHEMA_VERSION,
+    extensionSchemaVersion,
     id: expectedId,
     workflowId: expectedWorkflowId,
+    ...(v.dedupeKey !== undefined
+      ? {
+          dedupeKey: cleanDedupeKey(
+            typeof v.dedupeKey === "string" ? v.dedupeKey : fail("dedupeKey must be a string"),
+          ),
+        }
+      : {}),
     title: string("title"),
     description: string("description"),
     status,
@@ -848,7 +1412,15 @@ function decodeTask(
 
 function validateTopology(tasks: WorkflowTask[], workflowId: string): void {
   const all = new Map(tasks.map((task) => [task.id, task]));
+  const dedupe = new Map<string, string>();
   for (const task of tasks) {
+    if (task.dedupeKey) {
+      const prior = dedupe.get(task.dedupeKey);
+      if (prior && prior !== task.id) {
+        throw new Error(`dedupe key ${JSON.stringify(task.dedupeKey)} is already used by ${prior}`);
+      }
+      dedupe.set(task.dedupeKey, task.id);
+    }
     if (task.dependencies.includes(task.id)) throw new Error(`task ${task.id} cannot depend on itself`);
     for (const dependency of task.dependencies) {
       if (!all.has(dependency)) {
@@ -867,6 +1439,29 @@ function validateTopology(tasks: WorkflowTask[], workflowId: string): void {
     visited.add(id);
   };
   for (const id of all.keys()) visit(id);
+}
+
+function agentUpdateInput(
+  input: NonNullable<Extract<AgentTaskOperation, { op: "upsert" }>["update"]>,
+): UpdateTaskInput {
+  const { acceptanceCriteria, ...fields } = input;
+  return {
+    ...fields,
+    ...(acceptanceCriteria !== undefined
+      ? {
+          acceptanceCriteria: acceptanceCriteria.map((text) => ({
+            text,
+            ...(input.resetAcceptance ? { met: false } : {}),
+          })),
+        }
+      : {}),
+  };
+}
+
+function cleanDedupeKey(value: string): string {
+  const clean = cleanRequired(value, "dedupe key");
+  if (clean.length > 512) throw new Error("dedupe key must be at most 512 characters");
+  return clean;
 }
 
 async function fileExists(file: string): Promise<boolean> {

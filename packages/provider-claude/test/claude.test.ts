@@ -435,6 +435,76 @@ describe("the tool gate", () => {
     });
   });
 
+  test("write agents cannot bypass engine-owned workflow task settlement", async () => {
+    const options = await gateContext(
+      request({
+        tools: { allowEdits: true },
+        writeScope: { paths: ["src/**"], mode: "warn" },
+        taskContext: {
+          workflowId: "review",
+          workflowName: "review",
+          runId: "run-1",
+          step: "review",
+          provider: "claude",
+          mode: "write",
+        },
+      }),
+    );
+
+    for (const command of [
+      "weft --cwd /work/repo task --workflow review update task-deadbeef --status done",
+      'w"e"ft task --workflow review update task-deadbeef --status done',
+      "node packages/cli/dist/index.js task --workflow review update task-deadbeef --status done",
+      "printf hacked > /work/repo/.weft/tasks/review/task-deadbeef.json",
+    ]) {
+      expect(await ask(options, "Bash", { command })).toMatchObject({
+        behavior: "deny",
+        message: expect.stringContaining("engine-owned"),
+      });
+    }
+    expect(await ask(options, "Bash", { command: "rg -n 'TODO' src" })).toEqual({ behavior: "allow" });
+    expect(
+      await ask(options, "Edit", { file_path: `${CWD}/.weft/tasks/review/task-deadbeef.json` }),
+    ).toMatchObject({ behavior: "deny", message: expect.stringContaining("engine-owned") });
+    expect(await ask(options, "Edit", { path: `${CWD}/src/unknown.ts` })).toMatchObject({
+      behavior: "deny",
+      message: expect.stringContaining("could not be verified"),
+    });
+  });
+
+  test("task-aware warn scopes deny edits through symlinks outside the worktree", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "weft-task-gate-"));
+    const outside = await mkdtemp(join(tmpdir(), "weft-task-store-"));
+    await mkdir(join(cwd, "src"));
+    await symlink(outside, join(cwd, "src", "task-link"), "dir");
+    try {
+      const options = await gateContext(
+        request({
+          cwd,
+          tools: { allowEdits: true },
+          writeScope: { paths: ["src/**"], mode: "warn" },
+          taskContext: {
+            workflowId: "review",
+            workflowName: "review",
+            runId: "run-1",
+            step: "review",
+            provider: "claude",
+            mode: "write",
+          },
+        }),
+      );
+      expect(
+        await ask(options, "Edit", { file_path: join(cwd, "src", "task-link", "review", "task.json") }),
+      ).toMatchObject({ behavior: "deny", message: expect.stringContaining("engine-owned") });
+      expect(await ask(options, "Edit", { file_path: join(cwd, "src", "ordinary.ts") })).toEqual({
+        behavior: "allow",
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await rm(outside, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
   test("strict write scope denies out-of-scope edits and allows scope plus also", async () => {
     const options = await gateContext(
       request({

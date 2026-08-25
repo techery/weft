@@ -139,7 +139,15 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
     if (EDIT_TOOLS.has(base)) {
       if (!allowEdits) return deny(READ_ONLY_MESSAGE);
       const target = editTargetPath(input);
+      if (target !== undefined && /(?:^|[/\\])\.weft[/\\]tasks(?:[/\\]|$)/.test(target)) {
+        return deny("workflow tasks are engine-owned; return taskOperations instead of editing the store");
+      }
       if (target === undefined) {
+        if (req.taskContext) {
+          return deny(
+            `${base}: workflow tasks are engine-owned and this tool's target path could not be verified`,
+          );
+        }
         // The tool's path argument is not one this screen recognises, so there is nothing
         // to check it against. Under a STRICT scope that has to be a denial: allowing it
         // meant the boundary stopped enforcing the moment an edit tool's input shape
@@ -153,6 +161,13 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
         return allow;
       }
       const path = workspacePath(req.cwd, target);
+      // A task-aware agent's edit capability is confined to the worktree even
+      // under a WARN scope. Otherwise a lexically in-scope path can traverse a
+      // committed symlink into the integration checkout's .weft/tasks store and
+      // bypass the engine-owned settlement channel.
+      if (req.taskContext && (await resolvesOutsideWorktree(req.cwd, target))) {
+        return deny(`${path} resolves outside the worktree; workflow tasks are engine-owned`);
+      }
       if (scope && !inScope(path)) {
         // "warn" lands the edit and lets the post-hoc patch capture flag it.
         if (scope.mode === "strict") return deny(`${path} is ${scopeMessage}`);
@@ -167,6 +182,18 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
 
     if (base === "Bash") {
       const command = typeof input.command === "string" ? input.command : "";
+      // A task-aware step must not get an alternative mutation channel around
+      // the engine's selector, revision, journaling, and provenance checks.
+      // Matching command spellings is not a boundary: shell concatenation
+      // (`w"e"ft`), an indirect Node entrypoint, or a computed path all evade a
+      // regex. Deny every shell command that is not proven read-only instead.
+      // Scoped code writes remain available through Edit/Write tools and are
+      // still captured by the worktree boundary.
+      if (req.taskContext && !isReadOnlyCommand(command)) {
+        return deny(
+          "workflow tasks are engine-owned; task-aware steps may only use read-only shell commands and must return taskOperations for tracker changes",
+        );
+      }
       // Repository config can attach EXECUTABLE diff/textconv drivers to a plain
       // `git diff`/`log`/`show`/`blame` through .gitattributes, so every git command
       // this gate permits runs wrapped. Applied to WRITE steps too: the wrapper only

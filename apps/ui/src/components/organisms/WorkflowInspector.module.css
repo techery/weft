@@ -73,6 +73,8 @@
   color: var(--color-neutral-600);
 }
 .task {
+  content-visibility: auto;
+  contain-intrinsic-size: 260px;
   display: flex;
   flex-direction: column;
   gap: 6px;

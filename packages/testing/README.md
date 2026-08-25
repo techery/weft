@@ -10,6 +10,12 @@ in TypeScript. This package is not usually installed on its own; see the
 npm i @techery/weft-testing
 ```
 
+`runWorkflow` wires the production task store for every definition, matching the normal host. This lets
+fixture-driven tests exercise filtered agent context, journaled `ctx.tasks` operations, extension-schema
+validation, and recurring upserts across runs that share a `cwd`, without calling a model.
+Pass `providers: { claude, codex }` to prove provider routing with independent fixtures; `provider` remains
+the convenient fallback for both ids.
+
 - Source: [`packages/testing`](https://github.com/techery/weft/tree/main/packages/testing)
 - Issues: https://github.com/techery/weft/issues
 - License: MIT

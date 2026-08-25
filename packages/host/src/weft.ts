@@ -136,7 +136,7 @@ export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
     // name, in a process that never saw the file.
     registry,
     taskTracker: {
-      prepare: async (workflow, extensionSchema) => {
+      prepare: async (workflow, extensionSchema, taskOptions) => {
         let jsonSchema: unknown | null = null;
         if (extensionSchema) {
           try {
@@ -148,12 +148,13 @@ export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
             jsonSchema = null;
           }
         }
-        await tasks.registerWorkflow(workflow, extensionSchema, jsonSchema);
+        return tasks.registerWorkflow(workflow, extensionSchema, jsonSchema, taskOptions);
       },
-      snapshot: (context) => tasks.snapshot(context.workflowId),
+      snapshot: (context) => tasks.snapshot(context.workflowId, context.selector, context.schemaBinding),
       // prepare() persisted this representation from the exact definition the
       // engine is executing, including path/stdin workflows the registry cannot find.
-      schema: async (context) => (await tasks.namespace(context.workflowId))?.extensionSchema ?? null,
+      schema: (context) => tasks.schema(context.workflowId, context.schemaBinding),
+      validateBatch: (context, operations) => tasks.validateBatch(context, operations),
       applyBatch: (context, batchId, operations) => tasks.applyBatch(context, batchId, operations),
     },
   });

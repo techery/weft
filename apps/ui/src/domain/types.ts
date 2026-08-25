@@ -184,6 +184,7 @@ export type Gate = {
   submitLabel: string;
   denyLabel: string;
   questions: GateQuestion[];
+  artifactRef?: { ref: string; size: number; preview?: string };
 };
 
 export type Run = {

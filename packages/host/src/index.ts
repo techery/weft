@@ -31,6 +31,7 @@ export type {
   TaskStatus,
   TaskWorkflowNamespace,
   UpdateTaskInput,
+  UpsertTaskInput,
   WorkflowTask,
 } from "./tasks.ts";
 export { TASK_PRIORITIES, TASK_STATUSES, TaskStore } from "./tasks.ts";

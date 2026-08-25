@@ -12,6 +12,7 @@ export type {
   InferWorkflowOutput,
   WorkflowDefinition,
   WorkflowMeta,
+  WorkflowTaskSchemaConfig,
 } from "./define.ts";
 export {
   assertWorkflowId,
@@ -44,6 +45,7 @@ export { failures, okValues } from "./settled.ts";
 export type {
   AgentFn,
   AgentOptions,
+  AgentTaskAccess,
   BashFn,
   BudgetView,
   CheckOptions,
@@ -91,5 +93,18 @@ export type {
   SubWorkflowOptions,
   Usage,
   WorkflowDefinitionLike,
+  WorkflowTaskCreateInput,
+  WorkflowTaskCriterion,
+  WorkflowTaskNote,
+  WorkflowTaskPriority,
+  WorkflowTaskRecord,
+  WorkflowTaskSelector,
+  WorkflowTaskSnapshot,
+  WorkflowTaskStatus,
+  WorkflowTaskStepOptions,
+  WorkflowTaskSummary,
+  WorkflowTasksApi,
+  WorkflowTaskUpdateInput,
+  WorkflowTaskUpsertInput,
   WriteScope,
 } from "./types.ts";

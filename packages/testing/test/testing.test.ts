@@ -108,7 +108,7 @@ describe("runWorkflow", () => {
     expect(gitStep?.label).toBe("git.changedSince");
     expect(gitStep?.output).toEqual({ files: [{ path: "a.ts", status: "M" }] });
     // Phases carry through to the view.
-    expect(journal.steps({ phase: "Refute" }).map((s) => s.key)).toEqual(["refute:a.ts:3"]);
+    expect(journal.steps({ kind: "agent", phase: "Refute" }).map((s) => s.key)).toEqual(["refute:a.ts:3"]);
     expect(journal.steps({ kind: "agent", phase: "Review" })).toHaveLength(1);
   });
 
@@ -128,6 +128,31 @@ describe("runWorkflow", () => {
     expect(output.confirmed).toHaveLength(1);
   });
 
+  test("binds task schemas independently for child workflows", async () => {
+    const child = defineWorkflow(
+      {
+        id: "child-tasks",
+        description: "observe child tasks",
+        input: z.object({}),
+        output: z.object({ count: z.number() }),
+        tasks: { extensions: z.object({ lane: z.literal("child") }) },
+      },
+      async (ctx) => ({ count: (await ctx.tasks.observe({}, { key: "child:tasks" })).tasks.length }),
+    );
+    const parent = defineWorkflow(
+      {
+        id: "parent-tasks",
+        description: "invoke child",
+        input: z.object({}),
+        output: z.object({ count: z.number() }),
+        tasks: { extensions: z.object({ lane: z.literal("parent") }) },
+      },
+      async (ctx) => (await ctx.workflow(child, {}, { key: "child" })) as { count: number },
+    );
+
+    await expect(runWorkflow(parent, { input: {} })).resolves.toMatchObject({ output: { count: 0 } });
+  });
+
   test("journal.step() throws and lists the known keys", async () => {
     const { journal } = await runWorkflow(review, {
       input: { base: "main" },
@@ -135,7 +160,7 @@ describe("runWorkflow", () => {
       git: changedSince,
     });
     expect(() => journal.step("nope")).toThrow(/no step with key "nope"/);
-    expect(() => journal.step("nope")).toThrow(/review:a\.ts, refute:a\.ts:3/);
+    expect(() => journal.step("nope")).toThrow(/review:a\.ts.*refute:a\.ts:3/);
   });
 
   test("journal.toJSON() is snapshot-stable across runs", async () => {

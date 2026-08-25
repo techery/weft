@@ -121,19 +121,21 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
     // broken file here is the one the caller asked for, so its error propagates — but a
     // file that simply is not a workflow (a `schemas.ts` next door) just does not match.
     const direct = path.join(dir, `${name}.ts`);
+    const matches: CacheEntry[] = [];
     if (await isFile(direct)) {
       const entry = await loadFile(direct).catch((err: unknown) => {
         if (isNotAWorkflow(err)) return undefined;
         throw err;
       });
-      if (entry?.name === name) return entry;
+      if (entry?.name === name) matches.push(entry);
     }
     for (const file of await candidates()) {
       if (file === direct) continue;
       const entry = await tolerantLoad(loadFile, file);
-      if (entry?.name === name) return entry;
+      if (entry?.name === name) matches.push(entry);
     }
-    return undefined;
+    assertUnique(matches, "name", name);
+    return matches[0];
   };
 
   return {
@@ -145,6 +147,7 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
           entries.push({ id: entry.id, name: entry.name, file: entry.file, description: entry.description });
       }
       const ids = new Map<string, string>();
+      const names = new Map<string, string>();
       for (const entry of entries) {
         const prior = ids.get(entry.id);
         if (prior) {
@@ -153,6 +156,13 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
           );
         }
         ids.set(entry.id, entry.file);
+        const named = names.get(entry.name);
+        if (named) {
+          throw new GateError(
+            `duplicate workflow name ${JSON.stringify(entry.name)} in ${named} and ${entry.file}`,
+          );
+        }
+        names.set(entry.name, entry.file);
       }
       return entries.sort((a, b) => a.name.localeCompare(b.name));
     },
@@ -174,6 +184,13 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
       return entry?.hash;
     },
   };
+}
+
+function assertUnique(entries: CacheEntry[], field: "name", value: string): void {
+  if (entries.length < 2) return;
+  throw new GateError(
+    `duplicate workflow ${field} ${JSON.stringify(value)} in ${entries.map((entry) => entry.file).join(" and ")}`,
+  );
 }
 
 async function isFile(file: string): Promise<boolean> {

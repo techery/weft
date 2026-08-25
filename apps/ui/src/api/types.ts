@@ -141,6 +141,7 @@ export interface PendingRequest {
   workflow: string;
   rootRunId: string;
   rootWorkflow: string;
+  artifactRef?: { $blob: string; size: number; preview?: string };
 }
 
 export interface PendingResponse {
@@ -165,6 +166,8 @@ export interface WorkflowDetail extends WorkflowRow {
   output: JsonSchema | null;
   /** JSON Schema for workflow-owned `task.extensions`, if declared. */
   taskExtensions: JsonSchema | null;
+  taskExtensionSchemaVersion: number;
+  tasksConfigured: boolean;
   defaults: { provider?: string; model?: string; effort?: string } | null;
 }
 
@@ -174,8 +177,10 @@ export type TaskPriority = "low" | "medium" | "high" | "critical";
 /** One entry of `GET /api/workflows/:name/tasks`. */
 export interface WorkflowTask {
   schemaVersion: number;
+  extensionSchemaVersion: number;
   id: string;
   workflowId: string;
+  dedupeKey?: string;
   title: string;
   description: string;
   status: TaskStatus;
@@ -191,7 +196,6 @@ export interface WorkflowTask {
   createdBy: string;
   updatedBy: string;
   revision: number;
-  appliedOperations: string[];
 }
 
 /** `GET /api/workflows/:name/stats` */

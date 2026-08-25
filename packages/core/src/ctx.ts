@@ -50,6 +50,10 @@ import {
   type Usage,
   validateSchema,
   type WorkflowDefinitionLike,
+  type WorkflowTaskSelector,
+  type WorkflowTaskSnapshot,
+  type WorkflowTaskUpdateInput,
+  type WorkflowTaskUpsertInput,
 } from "@techery/weft-sdk";
 import { execa } from "execa";
 import picomatch from "picomatch";
@@ -91,6 +95,7 @@ const AgentTaskOperationSchema = z.discriminatedUnion("op", [
       dependencies: z.array(z.string()).optional(),
       relatedFiles: z.array(z.string()).optional(),
       acceptanceCriteria: z.array(z.string()).optional(),
+      resetAcceptance: z.boolean().optional(),
       extensions: z.unknown().optional(),
       ifRevision: z.number().int().positive().optional(),
     })
@@ -112,6 +117,42 @@ const AgentTaskOperationSchema = z.discriminatedUnion("op", [
       ifRevision: z.number().int().positive().optional(),
     })
     .strict(),
+  z
+    .object({
+      op: z.literal("upsert"),
+      dedupeKey: z.string().min(1),
+      create: z
+        .object({
+          title: z.string().min(1),
+          description: z.string().min(1),
+          status: z.enum(["todo", "in_progress", "blocked", "done", "cancelled"]).optional(),
+          priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+          tags: z.array(z.string()).optional(),
+          dependencies: z.array(z.string()).optional(),
+          relatedFiles: z.array(z.string()).optional(),
+          acceptanceCriteria: z.array(z.string()).optional(),
+          extensions: z.unknown().optional(),
+        })
+        .strict(),
+      update: z
+        .object({
+          title: z.string().min(1).optional(),
+          description: z.string().min(1).optional(),
+          status: z.enum(["todo", "in_progress", "blocked", "done", "cancelled"]).optional(),
+          priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+          tags: z.array(z.string()).optional(),
+          dependencies: z.array(z.string()).optional(),
+          relatedFiles: z.array(z.string()).optional(),
+          acceptanceCriteria: z.array(z.string()).optional(),
+          resetAcceptance: z.boolean().optional(),
+          extensions: z.unknown().optional(),
+          ifRevision: z.number().int().positive().optional(),
+        })
+        .strict()
+        .optional(),
+      note: z.string().min(1).optional(),
+    })
+    .strict(),
 ]);
 
 const AgentTaskOperationsSchema = z.array(AgentTaskOperationSchema).max(50);
@@ -122,11 +163,9 @@ type AgentStepResult<T> = DetailedAgentResult<T> & {
   taskOperations?: AgentTaskOperation[];
 };
 
-function agentEnvelopeSchema(result: Record<string, unknown>): Record<string, unknown> {
-  const taskOperations = z.toJSONSchema(AgentTaskOperationsSchema, { reused: "inline" }) as Record<
-    string,
-    unknown
-  >;
+function agentEnvelopeSchema(result: Record<string, unknown>, canWrite = true): Record<string, unknown> {
+  const operationsSchema = canWrite ? AgentTaskOperationsSchema : z.array(AgentTaskOperationSchema).max(0);
+  const taskOperations = z.toJSONSchema(operationsSchema, { reused: "inline" }) as Record<string, unknown>;
   delete taskOperations.$schema;
   return {
     type: "object",
@@ -326,6 +365,36 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
   const resolveInCwd = (p: string): string => (isAbsolute(p) ? p : resolvePath(rt.cwd, p));
 
+  async function observeTasks(
+    context: AgentTaskContext,
+    key: string,
+  ): Promise<{ snapshot: unknown; schema: unknown }> {
+    if (!rt.host.taskTracker) {
+      throw new StepError("invalid_input", "this engine host has no workflow task tracker", {
+        step: { kind: "sideeffect", key },
+      });
+    }
+    return rt.runStep<{ snapshot: unknown; schema: unknown }>({
+      kind: "sideeffect",
+      key,
+      label: `tasks:${context.step}`,
+      payload: {
+        op: "task.observe",
+        workflowId: context.workflowId,
+        ...(context.schemaBinding ? { schemaBinding: context.schemaBinding } : {}),
+        mode: context.mode ?? "read",
+        selector: context.selector ?? {},
+      },
+      execute: async () => {
+        const [snapshot, schema] = await Promise.all([
+          rt.host.taskTracker!.snapshot(context),
+          rt.host.taskTracker!.schema(context),
+        ]);
+        return { value: { snapshot, schema } };
+      },
+    });
+  }
+
   // ---- agent --------------------------------------------------------------
 
   async function agentImpl<S extends AnySchema>(
@@ -361,6 +430,72 @@ export function buildCtx(rt: RunRuntime): Ctx {
           mode: opts.write.mode ?? ("warn" as const),
         }
       : undefined;
+    if (mode.writeInPlace && opts.tasks !== undefined && opts.tasks !== false) {
+      throw new StepError(
+        "invalid_input",
+        "ctx.agent.inPlace cannot receive workflow task authority; use an isolated agent or tasks: false",
+        { step: { kind: "agent", key: opts.key, label } },
+      );
+    }
+    // In-place providers write in the integration root, where executing the human CLI
+    // would bypass the journal boundary. Default task context is therefore isolated-only.
+    const taskAccess =
+      opts.tasks === false || !rt.host.taskTracker || mode.writeInPlace ? undefined : (opts.tasks ?? {});
+    const taskMode = taskAccess?.mode ?? "write";
+    const taskSelector: WorkflowTaskSelector | undefined = taskAccess
+      ? {
+          ...(taskAccess.ids ? { ids: taskAccess.ids } : {}),
+          ...(taskAccess.dedupeKeys ? { dedupeKeys: taskAccess.dedupeKeys } : {}),
+          ...(taskAccess.statuses
+            ? { statuses: taskAccess.statuses }
+            : taskAccess.ids || taskAccess.dedupeKeys
+              ? {}
+              : { statuses: ["todo", "in_progress", "blocked"] }),
+          ...(taskAccess.tags ? { tags: taskAccess.tags } : {}),
+          ...(taskAccess.relatedFiles ? { relatedFiles: taskAccess.relatedFiles } : {}),
+          ...(taskAccess.limit !== undefined ? { limit: taskAccess.limit } : {}),
+        }
+      : undefined;
+    const taskContextBase: AgentTaskContext | undefined = taskAccess
+      ? {
+          workflowId: rt.workflowId,
+          workflowName: rt.workflowName,
+          runId: rt.runId,
+          step: opts.key ?? label,
+          provider: providerId,
+          source: "agent",
+          mode: taskMode,
+          ...(rt.taskSchemaBinding ? { schemaBinding: rt.taskSchemaBinding } : {}),
+          schemaVersion: rt.taskSchemaVersion,
+          ...(taskSelector ? { selector: taskSelector } : {}),
+        }
+      : undefined;
+    const taskObservation = taskContextBase
+      ? await observeTasks(taskContextBase, `task-context:${opts.key ?? label}`)
+      : undefined;
+    const observedTasks =
+      taskObservation && typeof taskObservation.snapshot === "object" && taskObservation.snapshot !== null
+        ? ((taskObservation.snapshot as { tasks?: unknown }).tasks as unknown)
+        : undefined;
+    const visible = Array.isArray(observedTasks)
+      ? observedTasks.filter(
+          (task): task is { id: string; dedupeKey?: string } =>
+            typeof task === "object" &&
+            task !== null &&
+            typeof (task as { id?: unknown }).id === "string" &&
+            ((task as { dedupeKey?: unknown }).dedupeKey === undefined ||
+              typeof (task as { dedupeKey?: unknown }).dedupeKey === "string"),
+        )
+      : [];
+    const taskContext: AgentTaskContext | undefined = taskContextBase
+      ? {
+          ...taskContextBase,
+          visibleTaskIds: visible.map((task) => task.id),
+          visibleDedupeKeys: visible.flatMap((task) =>
+            task.dedupeKey === undefined ? [] : [task.dedupeKey],
+          ),
+        }
+      : undefined;
 
     const payload = {
       prompt,
@@ -371,6 +506,14 @@ export function buildCtx(rt: RunRuntime): Ctx {
       timeoutMs,
       isolation: useWorktree ? "worktree" : "none",
       write: scope ?? null,
+      taskContext: taskObservation
+        ? {
+            mode: taskMode,
+            selector: taskSelector ?? {},
+            snapshot: taskObservation.snapshot,
+            schema: taskObservation.schema,
+          }
+        : null,
     };
 
     const stepRef = { kind: "agent", key: opts.key, label, runId: rt.runId };
@@ -432,7 +575,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         ...(opts.key !== undefined ? { key: opts.key } : {}),
         label,
         payload,
-        schemaJson: rt.host.taskTracker ? agentEnvelopeSchema(wire.json) : wire.json,
+        schemaJson: taskContext ? agentEnvelopeSchema(wire.json, taskMode === "write") : wire.json,
         ...(opts.retry
           ? { retry: { attempts: opts.retry.attempts, backoffMs: toMs(opts.retry.backoff, 1_000) } }
           : {}),
@@ -455,6 +598,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
             });
           }
           if (
+            !rt.dry &&
             rt.host.taskTracker &&
             value.taskBatchId &&
             value.taskContext &&
@@ -545,32 +689,23 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 ignoredManifestBefore = walked.manifest;
               }
               let finalPrompt = prompt;
-              const taskContext: AgentTaskContext | undefined = rt.host.taskTracker
-                ? {
-                    workflowId: rt.workflowId,
-                    workflowName: rt.workflowName,
-                    runId: rt.runId,
-                    step: opts.key ?? label,
-                    provider: providerId,
-                  }
-                : undefined;
-              if (taskContext && rt.host.taskTracker) {
-                const [taskSnapshot, taskSchema] = await Promise.all([
-                  rt.host.taskTracker.snapshot(taskContext),
-                  rt.host.taskTracker.schema(taskContext),
-                ]);
-                const taskCommand = `weft --cwd ${shellArg(rt.cwd)} task --workflow ${shellArg(rt.workflowId)}`;
+              if (taskContext && taskObservation) {
+                const taskCommand = `weft task --workflow ${shellArg(rt.workflowId)}`;
                 finalPrompt +=
                   `\n\n## Workflow task tracker\n` +
                   `This step belongs to workflow ${JSON.stringify(rt.workflowName)} ` +
                   `(stable id ${JSON.stringify(rt.workflowId)}). The equivalent human CLI prefix is:\n` +
                   `\`${taskCommand}\`\n\n` +
-                  `Provider sandboxes must not execute tracker mutations directly. The engine supplied the bounded ` +
-                  `snapshot below. Return desired mutations in the required \`taskOperations\` array; the engine ` +
-                  `validates, journals, idempotently applies, and provenance-binds them after your result succeeds. ` +
+                  `Human operators run that prefix from the repository root. Provider sandboxes must never execute ` +
+                  `the tracker CLI; the engine supplied the bounded, ` +
+                  `journaled snapshot below. ` +
+                  (taskMode === "write"
+                    ? `Return desired mutations in the required \`taskOperations\` array; the engine validates, ` +
+                      `journals, idempotently applies, and provenance-binds them after your result succeeds. `
+                    : `This step has read-only task authority, so \`taskOperations\` must be an empty array. `) +
                   `Use an empty array when no tracker change is needed. Do not target another workflow.\n\n` +
-                  `Current task summary:\n\`\`\`json\n${JSON.stringify(taskSnapshot, null, 2)}\n\`\`\`\n` +
-                  `Workflow task extension schema:\n\`\`\`json\n${JSON.stringify(taskSchema, null, 2)}\n\`\`\``;
+                  `Current task summary:\n\`\`\`json\n${JSON.stringify(taskObservation.snapshot, null, 2)}\n\`\`\`\n` +
+                  `Workflow task extension schema:\n\`\`\`json\n${JSON.stringify(taskObservation.schema, null, 2)}\n\`\`\``;
               }
               if (scope) {
                 const also = scope.also?.length
@@ -602,7 +737,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
               const req: AgentRequest = {
                 prompt: finalPrompt,
                 cwd: workCwd,
-                schema: taskContext ? agentEnvelopeSchema(wire.json) : wire.json,
+                schema: taskContext ? agentEnvelopeSchema(wire.json, taskMode === "write") : wire.json,
                 label,
                 ...(opts.key !== undefined ? { key: opts.key } : {}),
                 ...(model !== undefined ? { model } : {}),
@@ -611,6 +746,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 timeoutMs,
                 onMaxTurns: opts.onMaxTurns ?? "finalize",
                 tools: { allowEdits: scope !== undefined || mode.writeInPlace === true },
+                ...(taskContext ? { taskContext } : {}),
                 ...(scope
                   ? {
                       writeScope: {
@@ -891,21 +1027,13 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 // Journal the RAW wire value; both live and replay paths validate from raw,
                 // so schema transforms apply exactly once.
                 const taskBatchId = result.taskOperations ? `${rt.runId}:agent:${io.seq}` : undefined;
-                const taskContext: AgentTaskContext | undefined = result.taskOperations
-                  ? {
-                      workflowId: rt.workflowId,
-                      workflowName: rt.workflowName,
-                      runId: rt.runId,
-                      step: opts.key ?? label,
-                      provider: providerId,
-                    }
-                  : undefined;
+                const journalTaskContext = result.taskOperations ? taskContext : undefined;
                 const journalOutput = {
                   value: result.raw,
                   files,
                   patch,
                   ...(taskBatchId ? { taskBatchId } : {}),
-                  ...(taskContext ? { taskContext } : {}),
+                  ...(journalTaskContext ? { taskContext: journalTaskContext } : {}),
                   ...(result.taskOperations ? { taskOperations: result.taskOperations } : {}),
                 };
                 const detailed: AgentStepResult<InferOut<S>> = {
@@ -916,7 +1044,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
                   attempts: result.attempts,
                   ...(result.result.sessionId !== undefined ? { sessionId: result.result.sessionId } : {}),
                   ...(taskBatchId ? { taskBatchId } : {}),
-                  ...(taskContext ? { taskContext } : {}),
+                  ...(journalTaskContext ? { taskContext: journalTaskContext } : {}),
                   ...(result.taskOperations ? { taskOperations: result.taskOperations } : {}),
                 };
                 return {
@@ -1000,7 +1128,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         let carrier = result.output;
         let taskOperations: AgentTaskOperation[] | undefined;
         const envelopeIssues: SchemaIssue[] = [];
-        if (rt.host.taskTracker) {
+        if (taskContext) {
           if (typeof carrier !== "object" || carrier === null || Array.isArray(carrier)) {
             envelopeIssues.push({ path: "", message: "expected { result, taskOperations }" });
           } else {
@@ -1014,6 +1142,11 @@ export function buildCtx(rt: RunRuntime): Ctx {
                   message: issue.message,
                 })),
               );
+            } else if (taskMode === "read" && operations.data.length > 0) {
+              envelopeIssues.push({
+                path: "taskOperations",
+                message: "read-only task authority requires an empty array",
+              });
             } else {
               taskOperations = operations.data as AgentTaskOperation[];
             }
@@ -1023,6 +1156,20 @@ export function buildCtx(rt: RunRuntime): Ctx {
         const value = unwrapWireValue(carrier, wire.wrapped);
         const check = await validateSchema(opts.schema, value);
         const issues = [...envelopeIssues, ...(check.ok ? [] : check.issues)];
+        if (
+          check.ok &&
+          issues.length === 0 &&
+          taskContext &&
+          taskOperations &&
+          taskOperations.length > 0 &&
+          rt.host.taskTracker?.validateBatch
+        ) {
+          try {
+            await rt.host.taskTracker.validateBatch(taskContext, taskOperations);
+          } catch (err) {
+            issues.push({ path: "taskOperations", message: (err as Error).message });
+          }
+        }
         if (check.ok && issues.length === 0) {
           return {
             result,
@@ -2547,6 +2694,97 @@ export function buildCtx(rt: RunRuntime): Ctx {
       })
       .then((r) => r.value);
 
+  const workflowTaskContext = (
+    step: string,
+    mode: "read" | "write",
+    selector?: WorkflowTaskSelector,
+  ): AgentTaskContext => ({
+    workflowId: rt.workflowId,
+    workflowName: rt.workflowName,
+    runId: rt.runId,
+    step,
+    provider: "workflow",
+    source: "workflow",
+    mode,
+    ...(rt.taskSchemaBinding ? { schemaBinding: rt.taskSchemaBinding } : {}),
+    schemaVersion: rt.taskSchemaVersion,
+    ...(selector ? { selector } : {}),
+  });
+
+  const applyWorkflowTaskOperation = async (key: string, operation: AgentTaskOperation): Promise<void> => {
+    if (!rt.host.taskTracker) {
+      throw new StepError("invalid_input", "this engine host has no workflow task tracker", {
+        step: { kind: "sideeffect", key },
+      });
+    }
+    const context = workflowTaskContext(key, "write");
+    await rt.runStep<{ context: AgentTaskContext; batchId: string; operations: AgentTaskOperation[] }>({
+      kind: "sideeffect",
+      key,
+      label: `task:${operation.op}`,
+      payload: { op: `task.${operation.op}`, operation },
+      execute: async (io) => ({
+        value: await (async () => {
+          await rt.host.taskTracker!.validateBatch?.(context, [operation]);
+          return {
+            context,
+            batchId: `${rt.runId}:workflow-task:${io.seq}`,
+            operations: [operation],
+          };
+        })(),
+      }),
+      onSettle: async (value) => {
+        if (!rt.dry) {
+          await rt.host.taskTracker!.applyBatch(value.context, value.batchId, value.operations);
+        }
+      },
+    });
+  };
+
+  const tasks: Ctx["tasks"] = {
+    observe: async <Extensions>(selector: WorkflowTaskSelector, opts: { key: string }) => {
+      const observed = await observeTasks(workflowTaskContext(opts.key, "read", selector), opts.key);
+      return observed.snapshot as WorkflowTaskSnapshot<Extensions>;
+    },
+    upsert: async <Extensions>(
+      dedupeKey: string,
+      input: WorkflowTaskUpsertInput<Extensions>,
+      opts: { key: string },
+    ) => {
+      await applyWorkflowTaskOperation(opts.key, {
+        op: "upsert",
+        dedupeKey,
+        create: input.create,
+        ...(input.update ? { update: input.update } : {}),
+        ...(input.note !== undefined ? { note: input.note } : {}),
+      });
+    },
+    update: async <Extensions>(
+      id: string,
+      input: WorkflowTaskUpdateInput<Extensions>,
+      opts: { key: string },
+    ) => {
+      await applyWorkflowTaskOperation(opts.key, { op: "update", id, ...input });
+    },
+    note: async (id, text, opts) => {
+      await applyWorkflowTaskOperation(opts.key, {
+        op: "note",
+        id,
+        text,
+        ...(opts.ifRevision !== undefined ? { ifRevision: opts.ifRevision } : {}),
+      });
+    },
+    setCriterion: async (id, criterionId, met, opts) => {
+      await applyWorkflowTaskOperation(opts.key, {
+        op: "criterion",
+        id,
+        criterionId,
+        met,
+        ...(opts.ifRevision !== undefined ? { ifRevision: opts.ifRevision } : {}),
+      });
+    },
+  };
+
   // ---- assemble -----------------------------------------------------------
 
   const ctx: Ctx = {
@@ -2568,6 +2806,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     integrate,
     discard,
     note,
+    tasks,
     signal: signalFn,
     sleep: sleepFn,
     now: nowFn,

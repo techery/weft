@@ -268,6 +268,7 @@ export class Engine implements EngineHost {
     }
     const name = def.meta.name ?? "workflow";
     const workflowId = def.meta.id ?? name;
+    const bodyHash = definitionHash(def);
     // The RAW input is what gets journaled, so it must survive the JSONL round
     // trip; the schema is reapplied to it on every execution (below and on each
     // resume), so a transform's output — a Date, a class — never needs to.
@@ -290,7 +291,11 @@ export class Engine implements EngineHost {
         { step: { kind: "workflow", runId } },
       );
     }
-    await this.taskTracker?.prepare?.({ id: workflowId, name }, def.meta.tasks?.extensions);
+    const taskSchemaBinding = await this.taskTracker?.prepare?.(
+      { id: workflowId, name },
+      def.meta.tasks?.extensions,
+      { ...def.meta.tasks, identity: opts.defHash ?? bodyHash },
+    );
     const shared: SharedRunResources = {
       budget: new Budget(opts.budget ?? {}),
       abort: new AbortController(),
@@ -302,6 +307,8 @@ export class Engine implements EngineHost {
       runId,
       workflowName: name,
       workflowId,
+      ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
+      taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
       cwd: opts.cwd,
       depth: 0,
       shared,
@@ -322,7 +329,9 @@ export class Engine implements EngineHost {
             id: workflowId,
             name,
             ...(opts.defHash !== undefined ? { defHash: opts.defHash } : {}),
-            bodyHash: definitionHash(def),
+            bodyHash,
+            ...(taskSchemaBinding && def.meta.tasks ? { taskSchemaBinding } : {}),
+            ...(def.meta.tasks ? { taskSchemaVersion: def.meta.tasks.schemaVersion ?? 1 } : {}),
           },
           // Raw, not inputCheck.value: a transformed value (string → Date) would
           // serialize lossily and hand a resumed execution a different input type.
@@ -467,15 +476,19 @@ export class Engine implements EngineHost {
         (restoreTokens > replay.totalUsage.tokens || restoreUsd > replay.totalUsage.usd ? 1 : 0),
     );
     const resumedWorkflowId = created.workflow.id ?? def.meta.id ?? created.workflow.name;
-    await this.taskTracker?.prepare?.(
+    const bodyHash = definitionHash(def);
+    const taskSchemaBinding = await this.taskTracker?.prepare?.(
       { id: resumedWorkflowId, name: created.workflow.name },
       def.meta.tasks?.extensions,
+      { ...def.meta.tasks, identity: opts.defHash ?? bodyHash },
     );
     const runtime = new RunRuntime({
       host: this,
       runId,
       workflowName: created.workflow.name,
       workflowId: resumedWorkflowId,
+      ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
+      taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
       cwd: created.cwd,
       depth: created.depth,
       shared,
@@ -1222,15 +1235,22 @@ export class Engine implements EngineHost {
 
     const childWorkflowName = def.meta.name ?? spec.name;
     const childWorkflowId = def.meta.id ?? childWorkflowName;
-    await this.taskTracker?.prepare?.(
+    const bodyHash = definitionHash(def);
+    const taskSchemaBinding = await this.taskTracker?.prepare?.(
       { id: childWorkflowId, name: childWorkflowName },
       def.meta.tasks?.extensions,
+      {
+        ...def.meta.tasks,
+        identity: `${parent.taskSchemaBinding ?? "unbound-parent"}:${childWorkflowId}:${bodyHash}`,
+      },
     );
     const runtime = new RunRuntime({
       host: this,
       runId: childId,
       workflowName: childWorkflowName,
       workflowId: childWorkflowId,
+      ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
+      taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
       cwd: parent.cwd,
       depth: parent.depth + 1,
       shared,
@@ -1252,7 +1272,9 @@ export class Engine implements EngineHost {
           workflow: {
             id: def.meta.id ?? def.meta.name ?? spec.name,
             name: def.meta.name ?? spec.name,
-            bodyHash: definitionHash(def),
+            bodyHash,
+            ...(taskSchemaBinding && def.meta.tasks ? { taskSchemaBinding } : {}),
+            ...(def.meta.tasks ? { taskSchemaVersion: def.meta.tasks.schemaVersion ?? 1 } : {}),
           },
           input: rawInput,
           cwd: parent.cwd,
@@ -1832,11 +1854,20 @@ export class Engine implements EngineHost {
     if (!def && this.registry) def = await this.registry.get(created.workflow.name);
     if (!def) throw new Error(`run ${runId}: no definition for "${created.workflow.name}"`);
 
+    const replayWorkflowId = created.workflow.id ?? def.meta.id ?? created.workflow.name;
+    const bodyHash = definitionHash(def);
+    const taskSchemaBinding = await this.taskTracker?.prepare?.(
+      { id: replayWorkflowId, name: created.workflow.name },
+      def.meta.tasks?.extensions,
+      { ...def.meta.tasks, identity: opts.defHash ?? bodyHash, persist: false },
+    );
     const runtime = new RunRuntime({
       host: this,
       runId,
       workflowName: created.workflow.name,
-      workflowId: created.workflow.id ?? def.meta.id ?? created.workflow.name,
+      workflowId: replayWorkflowId,
+      ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
+      taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
       cwd: created.cwd,
       depth: created.depth,
       shared: {

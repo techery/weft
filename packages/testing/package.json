@@ -63,6 +63,7 @@
   },
   "dependencies": {
     "@techery/weft-core": "workspace:*",
+    "@techery/weft-host": "workspace:*",
     "@techery/weft-sdk": "workspace:*",
     "@techery/weft-provider-mock": "workspace:*",
     "@techery/weft-store-fs": "workspace:*",
