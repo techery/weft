@@ -3,7 +3,7 @@
  * behind this interface. The engine owns validation, repair policy, budget, and
  * journaling; a provider owns one session with one vendor's agent.
  */
-import type { Effort, Risk, SchemaIssue, Usage, WriteScope } from "@techery/weft-sdk";
+import type { AnySchema, Effort, Risk, SchemaIssue, Usage, WriteScope } from "@techery/weft-sdk";
 
 export interface ToolPolicy {
   /** When false every edit tool is denied (read-only step). */
@@ -24,6 +24,54 @@ export type PermissionDecision = { behavior: "allow" } | { behavior: "deny"; mes
 export interface ProviderHitl {
   onPermission(req: PermissionRequest): Promise<PermissionDecision>;
   onAsk(question: string, schema?: unknown): Promise<unknown>;
+}
+
+/** Mutations an agent may request as part of its structured, journaled result. */
+export type AgentTaskOperation =
+  | {
+      op: "create";
+      title: string;
+      description: string;
+      status?: "todo" | "in_progress" | "blocked" | "done" | "cancelled";
+      priority?: "low" | "medium" | "high" | "critical";
+      tags?: string[];
+      dependencies?: string[];
+      relatedFiles?: string[];
+      acceptanceCriteria?: string[];
+      extensions?: unknown;
+    }
+  | {
+      op: "update";
+      id: string;
+      title?: string;
+      description?: string;
+      status?: "todo" | "in_progress" | "blocked" | "done" | "cancelled";
+      priority?: "low" | "medium" | "high" | "critical";
+      tags?: string[];
+      dependencies?: string[];
+      relatedFiles?: string[];
+      acceptanceCriteria?: string[];
+      extensions?: unknown;
+      ifRevision?: number;
+    }
+  | { op: "note"; id: string; text: string; ifRevision?: number }
+  | { op: "criterion"; id: string; criterionId: string; met: boolean; ifRevision?: number };
+
+export interface AgentTaskContext {
+  workflowId: string;
+  workflowName: string;
+  runId: string;
+  step: string;
+  provider: string;
+}
+
+/** Engine-owned task boundary. Providers can request operations but never receive storage authority. */
+export interface AgentTaskTrackerHost {
+  /** Bind the runtime definition before any snapshot or mutation (also covers path/stdin workflows). */
+  prepare?(workflow: { id: string; name: string }, extensionSchema: AnySchema | undefined): Promise<void>;
+  snapshot(context: AgentTaskContext): Promise<unknown>;
+  schema(context: AgentTaskContext): Promise<unknown>;
+  applyBatch(context: AgentTaskContext, batchId: string, operations: AgentTaskOperation[]): Promise<void>;
 }
 
 export interface AgentRequest {

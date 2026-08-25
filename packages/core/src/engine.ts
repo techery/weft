@@ -148,6 +148,7 @@ export interface EngineOptions {
   providers: ProviderRegistry;
   config?: EngineConfigInput;
   registry?: WorkflowRegistry;
+  taskTracker?: import("./provider.ts").AgentTaskTrackerHost;
   clock?: () => number;
   /** Test seams for @techery/weft-testing fixtures; never set in production hosts. */
   testHooks?: import("./hooks.ts").TestHooks;
@@ -222,6 +223,7 @@ export class Engine implements EngineHost {
   readonly providers: ProviderRegistry;
   readonly journal: JournalStore;
   readonly blobs: BlobStore;
+  readonly taskTracker?: import("./provider.ts").AgentTaskTrackerHost;
   readonly testHooks?: import("./hooks.ts").TestHooks;
   readonly globalLimiter: Semaphore;
   private readonly providerLimiters = new Map<string, Semaphore>();
@@ -235,6 +237,7 @@ export class Engine implements EngineHost {
     this.journal = opts.journal;
     this.blobs = opts.blobs;
     this.providers = opts.providers;
+    if (opts.taskTracker) this.taskTracker = opts.taskTracker;
     this.config = resolveConfig(opts.config);
     this.registry = opts.registry;
     this.clockFn = opts.clock ?? Date.now;
@@ -264,6 +267,7 @@ export class Engine implements EngineHost {
       throw new Error(`run ${runId} already exists — use resume()`);
     }
     const name = def.meta.name ?? "workflow";
+    const workflowId = def.meta.id ?? name;
     // The RAW input is what gets journaled, so it must survive the JSONL round
     // trip; the schema is reapplied to it on every execution (below and on each
     // resume), so a transform's output — a Date, a class — never needs to.
@@ -286,6 +290,7 @@ export class Engine implements EngineHost {
         { step: { kind: "workflow", runId } },
       );
     }
+    await this.taskTracker?.prepare?.({ id: workflowId, name }, def.meta.tasks?.extensions);
     const shared: SharedRunResources = {
       budget: new Budget(opts.budget ?? {}),
       abort: new AbortController(),
@@ -296,6 +301,7 @@ export class Engine implements EngineHost {
       host: this,
       runId,
       workflowName: name,
+      workflowId,
       cwd: opts.cwd,
       depth: 0,
       shared,
@@ -313,6 +319,7 @@ export class Engine implements EngineHost {
           type: "run.created",
           runId,
           workflow: {
+            id: workflowId,
             name,
             ...(opts.defHash !== undefined ? { defHash: opts.defHash } : {}),
             bodyHash: definitionHash(def),
@@ -459,10 +466,16 @@ export class Engine implements EngineHost {
         descendants.samples +
         (restoreTokens > replay.totalUsage.tokens || restoreUsd > replay.totalUsage.usd ? 1 : 0),
     );
+    const resumedWorkflowId = created.workflow.id ?? def.meta.id ?? created.workflow.name;
+    await this.taskTracker?.prepare?.(
+      { id: resumedWorkflowId, name: created.workflow.name },
+      def.meta.tasks?.extensions,
+    );
     const runtime = new RunRuntime({
       host: this,
       runId,
       workflowName: created.workflow.name,
+      workflowId: resumedWorkflowId,
       cwd: created.cwd,
       depth: created.depth,
       shared,
@@ -1207,10 +1220,17 @@ export class Engine implements EngineHost {
     }
     const input = check.value;
 
+    const childWorkflowName = def.meta.name ?? spec.name;
+    const childWorkflowId = def.meta.id ?? childWorkflowName;
+    await this.taskTracker?.prepare?.(
+      { id: childWorkflowId, name: childWorkflowName },
+      def.meta.tasks?.extensions,
+    );
     const runtime = new RunRuntime({
       host: this,
       runId: childId,
-      workflowName: def.meta.name ?? spec.name,
+      workflowName: childWorkflowName,
+      workflowId: childWorkflowId,
       cwd: parent.cwd,
       depth: parent.depth + 1,
       shared,
@@ -1229,7 +1249,11 @@ export class Engine implements EngineHost {
           // its own journal, its own replay, and its own call sites to move. No bundle
           // hash exists here — a child definition is a value in the parent's module, not
           // something a host resolved and hashed — so the body hash is the whole check.
-          workflow: { name: def.meta.name ?? spec.name, bodyHash: definitionHash(def) },
+          workflow: {
+            id: def.meta.id ?? def.meta.name ?? spec.name,
+            name: def.meta.name ?? spec.name,
+            bodyHash: definitionHash(def),
+          },
           input: rawInput,
           cwd: parent.cwd,
           depth: parent.depth + 1,
@@ -1812,6 +1836,7 @@ export class Engine implements EngineHost {
       host: this,
       runId,
       workflowName: created.workflow.name,
+      workflowId: created.workflow.id ?? def.meta.id ?? created.workflow.name,
       cwd: created.cwd,
       depth: created.depth,
       shared: {

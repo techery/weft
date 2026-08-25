@@ -4,6 +4,7 @@ dist/
 packages/daemon/web/
 *.tgz
 .weft/runs/
+.weft/tasks/
 *.log
 .DS_Store
 coverage/

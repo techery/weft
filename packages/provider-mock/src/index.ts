@@ -174,10 +174,26 @@ export class MockProvider implements AgentProvider {
       await fs.mkdir(dirname(target), { recursive: true });
       await fs.writeFile(target, content);
     }
-    const output =
+    const fixtureOutput =
       typeof rule.respond === "function"
         ? await (rule.respond as (r: MockRequest) => unknown)(mockReq)
         : rule.respond;
+    const schemaProperties =
+      typeof req.schema === "object" && req.schema !== null
+        ? (req.schema as { properties?: Record<string, unknown> }).properties
+        : undefined;
+    const alreadyEnveloped =
+      typeof fixtureOutput === "object" &&
+      fixtureOutput !== null &&
+      "result" in fixtureOutput &&
+      "taskOperations" in fixtureOutput;
+    // Host-backed engines use the same structured envelope real providers see.
+    // Existing fixtures describe the workflow result, so wrap them automatically;
+    // a fixture that explicitly returns an envelope can exercise task operations.
+    const output =
+      schemaProperties?.taskOperations !== undefined && !alreadyEnveloped
+        ? { result: fixtureOutput, taskOperations: [] }
+        : fixtureOutput;
     const sessionId = `mock-${this.id}-${++this.sessionCounter}`;
     this.sessions.set(sessionId, req);
     const filesTouched = rule.opts.filesTouched ?? Object.keys(rule.opts.writes ?? {});

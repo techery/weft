@@ -20,6 +20,7 @@ import type {
   WorkflowDetail,
   WorkflowRow,
   WorkflowStats,
+  WorkflowTask,
 } from "./types";
 
 export const keys = {
@@ -30,6 +31,7 @@ export const keys = {
   workflows: ["workflows"] as const,
   workflow: (name: string) => ["workflow", name] as const,
   workflowStats: (name: string) => ["workflow-stats", name] as const,
+  workflowTasks: (name: string) => ["workflow-tasks", name] as const,
   artifacts: (runId: string) => ["artifacts", runId] as const,
   patch: (runId: string) => ["patch", runId] as const,
   config: ["config"] as const,
@@ -89,6 +91,17 @@ export function useWorkflowStats(name: string): UseQueryResult<WorkflowStats> {
     queryFn: () => api.workflowStats(name),
     enabled: name !== "",
     staleTime: 10_000,
+  });
+}
+
+export function useWorkflowTasks(name: string): UseQueryResult<WorkflowTask[]> {
+  return useQuery({
+    queryKey: keys.workflowTasks(name),
+    queryFn: () => api.workflowTasks(name),
+    enabled: name !== "",
+    // Agents update tasks out of band through the CLI, so polling is the invalidation path.
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
   });
 }
 

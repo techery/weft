@@ -28,6 +28,8 @@ export interface WorkflowRegistry {
 }
 
 export interface WorkflowListEntry {
+  /** Stable durable-state identity; defaults to `name` for older definitions. */
+  id: string;
   name: string;
   /** Absolute path to the workflow file. */
   file: string;
@@ -58,6 +60,7 @@ interface CacheEntry {
   hash: string;
   def: WorkflowDefinition;
   name: string;
+  id: string;
   description: string;
 }
 
@@ -85,6 +88,7 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
       hash,
       def,
       name: def.meta.name ?? path.basename(file, path.extname(file)),
+      id: def.meta.id ?? def.meta.name ?? path.basename(file, path.extname(file)),
       description: def.meta.description,
     };
     cache.set(file, entry);
@@ -137,7 +141,18 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
       const entries: WorkflowListEntry[] = [];
       for (const file of await candidates()) {
         const entry = await tolerantLoad(loadFile, file);
-        if (entry) entries.push({ name: entry.name, file: entry.file, description: entry.description });
+        if (entry)
+          entries.push({ id: entry.id, name: entry.name, file: entry.file, description: entry.description });
+      }
+      const ids = new Map<string, string>();
+      for (const entry of entries) {
+        const prior = ids.get(entry.id);
+        if (prior) {
+          throw new GateError(
+            `duplicate workflow id ${JSON.stringify(entry.id)} in ${prior} and ${entry.file}`,
+          );
+        }
+        ids.set(entry.id, entry.file);
       }
       return entries.sort((a, b) => a.name.localeCompare(b.name));
     },

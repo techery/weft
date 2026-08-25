@@ -118,6 +118,52 @@ export default defineWorkflow(
     expect(await resumed.result).toEqual({ ok: true });
   });
 
+  it("binds path workflow task schemas into prompts and durable namespaces", async () => {
+    const { weft, root } = await mockWeft();
+    await write(
+      root,
+      "flows/tracked.ts",
+      `import { defineWorkflow, z } from "@techery/weft-sdk";
+export default defineWorkflow(
+  {
+    id: "path-tracked",
+    description: "path workflow with task extensions",
+    input: z.object({}),
+    output: z.object({ ok: z.boolean() }),
+    tasks: { extensions: z.object({ ownerTeam: z.string() }) },
+  },
+  async (ctx) => ctx.agent("Track this", { key: "path-task", schema: z.object({ ok: z.boolean() }) }),
+);
+`,
+    );
+    weft.mockBuilder?.on(
+      { key: "path-task" },
+      {
+        result: { ok: true },
+        taskOperations: [
+          {
+            op: "create",
+            title: "Path task",
+            description: "Persist outside the registry",
+            extensions: { ownerTeam: "runtime" },
+          },
+        ],
+      },
+    );
+    const { def } = await resolveWorkflow(weft, "./flows/tracked.ts");
+    const run = await weft.engine.start(def, { input: {}, cwd: weft.cwd });
+    await expect(run.result).resolves.toEqual({ ok: true });
+    expect(weft.mockBuilder?.calls[0]?.prompt).toContain('"ownerTeam"');
+    expect(await weft.tasks.namespace("path-tracked")).toMatchObject({
+      id: "path-tracked",
+      extensionSchemaDeclared: true,
+      extensionSchema: { type: "object", properties: { ownerTeam: { type: "string" } } },
+    });
+    expect(await weft.tasks.list("path-tracked")).toEqual([
+      expect.objectContaining({ extensions: { ownerTeam: "runtime" } }),
+    ]);
+  });
+
   it("a recorded path ref that no longer resolves SURFACES instead of silently falling back", async () => {
     const { weft } = await mockWeft();
     // The run recorded "./flows/moved.ts", and that file has since moved away.
@@ -189,6 +235,7 @@ export default defineWorkflow(
 
       export default defineWorkflow(
         {
+          id: "verdict-stable",
           description: "asks one agent for a verdict",
           input: z.object({}),
           output: z.object({ verdict: z.string() }),
@@ -200,12 +247,41 @@ export default defineWorkflow(
 
     // The default provider is "claude"; in mock mode the builder answers for it.
     expect(weft.engine.providers.ids().sort()).toEqual(["claude", "codex", "mock"]);
-    weft.mockBuilder?.on({ key: "verdict" }, { verdict: "fine" });
+    weft.mockBuilder?.on(
+      { key: "verdict" },
+      {
+        result: { verdict: "fine" },
+        taskOperations: [
+          {
+            op: "create",
+            title: "Record verdict",
+            description: "Carry the verdict into later workflow steps.",
+            acceptanceCriteria: ["verdict is journaled"],
+          },
+        ],
+      },
+    );
 
     const { def } = await resolveWorkflow(weft, "verdict");
     const run = await weft.engine.start(def, { input: {}, cwd: weft.cwd });
     await expect(run.result).resolves.toEqual({ verdict: "fine" });
     expect(weft.mockBuilder?.calls.map((c) => c.key)).toEqual(["verdict"]);
+    expect((await weft.tasks.list("verdict-stable")).map((task) => task.title)).toEqual(["Record verdict"]);
+    expect(await weft.tasks.namespace("verdict-stable")).toMatchObject({
+      id: "verdict-stable",
+      name: "verdict",
+      extensionSchemaDeclared: false,
+    });
+    expect(weft.mockBuilder?.calls[0]?.prompt).toContain("Current task summary");
+
+    // Replaying the completed step reapplies the journaled batch through onSettle;
+    // TaskStore's batch marker keeps the create exactly-once.
+    await weft.engine.shutdown();
+    const later = await createWeft({ cwd: root, providers: "mock" });
+    opened.push(later);
+    const resumed = await later.engine.resume(run.runId, { def });
+    await expect(resumed.result).resolves.toEqual({ verdict: "fine" });
+    expect(await later.tasks.list("verdict-stable")).toHaveLength(1);
   });
 
   it("gives the engine the registry, so sub-workflows resolve by name", async () => {

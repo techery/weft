@@ -31,7 +31,7 @@ import type {
 } from "./events.ts";
 import { jsonUnsafeAt, unwrapWireValue, wrapWireValue } from "./jsonschema.ts";
 import type { Semaphore } from "./limiter.ts";
-import type { ProviderRegistry } from "./provider.ts";
+import type { AgentTaskTrackerHost, ProviderRegistry } from "./provider.ts";
 import { type CompletedEntry, OrderedDelivery, type ReplayIndex, type ReuseMode } from "./replay.ts";
 import type { BlobStore, JournalStore } from "./stores.ts";
 import { isBlobBeyondRepair } from "./stores.ts";
@@ -75,6 +75,7 @@ export interface EngineHost {
   readonly providers: ProviderRegistry;
   readonly journal: JournalStore;
   readonly blobs: BlobStore;
+  readonly taskTracker?: AgentTaskTrackerHost;
   readonly testHooks?: import("./hooks.ts").TestHooks;
   readonly globalLimiter: Semaphore;
   providerLimiter(id: string): Semaphore;
@@ -213,6 +214,7 @@ export interface RunRuntimeOptions {
   host: EngineHost;
   runId: string;
   workflowName: string;
+  workflowId: string;
   cwd: string;
   baseRef?: string;
   depth: number;
@@ -227,6 +229,7 @@ export class RunRuntime {
   readonly host: EngineHost;
   readonly runId: string;
   readonly workflowName: string;
+  readonly workflowId: string;
   readonly cwd: string;
   readonly baseRef: string | undefined;
   readonly depth: number;
@@ -280,6 +283,7 @@ export class RunRuntime {
     this.host = opts.host;
     this.runId = opts.runId;
     this.workflowName = opts.workflowName;
+    this.workflowId = opts.workflowId;
     this.cwd = opts.cwd;
     this.baseRef = opts.baseRef;
     this.depth = opts.depth;

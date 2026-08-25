@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  type AgentTaskTrackerHost,
   Engine,
   type EngineConfigInput,
   MemoryBlobStore,
@@ -24,7 +25,12 @@ export interface TestEngine {
  * and "codex" (one shared rule set + call log).
  */
 export function testEngine(
-  opts: { config?: EngineConfigInput; registry?: WorkflowRegistry; builder?: MockAgentBuilder } = {},
+  opts: {
+    config?: EngineConfigInput;
+    registry?: WorkflowRegistry;
+    builder?: MockAgentBuilder;
+    taskTracker?: AgentTaskTrackerHost;
+  } = {},
 ): TestEngine {
   const journal = new MemoryJournalStore();
   const blobs = new MemoryBlobStore();
@@ -38,6 +44,7 @@ export function testEngine(
     providers,
     config: opts.config ?? {},
     ...(opts.registry ? { registry: opts.registry } : {}),
+    ...(opts.taskTracker ? { taskTracker: opts.taskTracker } : {}),
   });
   return { engine, journal, blobs, builder };
 }

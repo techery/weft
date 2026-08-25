@@ -13,7 +13,13 @@ export type {
   WorkflowDefinition,
   WorkflowMeta,
 } from "./define.ts";
-export { defineWorkflow, isWorkflowDefinition } from "./define.ts";
+export {
+  assertWorkflowId,
+  defineWorkflow,
+  isWorkflowDefinition,
+  isWorkflowId,
+  WORKFLOW_ID_PATTERN,
+} from "./define.ts";
 export type { Duration } from "./duration.ts";
 export { formatDuration, parseDuration } from "./duration.ts";
 export type { SerializedStepError, StepErrorCode, StepRef } from "./errors.ts";

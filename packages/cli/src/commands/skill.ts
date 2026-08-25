@@ -70,6 +70,7 @@ Two things break workflows more often than everything else combined. Read
   config.json              # optional; defaults, providers, limits, approvalPolicy, workflows.dir
   workflows/<name>.ts      # the registry — one workflow per file, name = filename
   workflows/schemas.ts     # shared schemas; relative imports are bundled and hashed with the script
+  tasks/<workflow>/<id>.json # durable context shared by a workflow's steps and runs
   runs/<id>/
     journal.jsonl          # the truth — every step, request, answer, patch (secrets redacted)
     script.ts              # what ran, bundled, with a source map back to your .ts lines
@@ -92,11 +93,13 @@ import { Finding } from "./schemas.ts";          // explicit .ts extension, alwa
 
 export default defineWorkflow(
   {
+    id: "review",                                           // stable durable task namespace
     // \`name\` derives from the filename — do not set meta.name in a registry file.
     description: "Review changed files; keep only findings that survive refutation",
     input: z.object({ base: z.string().default("main") }),   // becomes --base main
     output: z.object({ confirmed: z.array(Finding) }),       // validated on the way out
     defaults: { provider: "claude", effort: "high" },        // per-step opts still win
+    tasks: { extensions: z.object({ ownerTeam: z.string() }) }, // optional typed task fields
   },
   async (ctx, { base }) => {
     ctx.phase("Scope");                                      // phases group steps in the tree
@@ -323,6 +326,7 @@ answer, so it is for agent-less workflows and smoke tests).
 | \`weft diff <a> <b>\` | two runs' step outputs, matched by key — field-level, not prose |
 | \`weft check [name]\` | gate + \`tsc --noEmit\` over the workflow directory. \`--no-tsc\` |
 | \`weft new <name>\` | scaffold \`<name>.ts\` (+ \`schemas.ts\`); never overwrites |
+| \`weft task --workflow <id> …\` | durable task context: \`schema/list/show/create/update/note/accept/unaccept/remove\`; list fields have explicit \`--clear-*\` flags |
 | \`weft skill\` | print this document |
 | \`weft doctor\` | node, git, \`.weft\` layout, provider credentials, every workflow |
 | \`weft ui\` | serve the local web UI. \`--port\` (default 4781) |
@@ -331,6 +335,15 @@ answer, so it is for agent-less workflows and smoke tests).
 prints its output, a failed one exits 1 with the step key and the \`weft explain\` line, and
 a run that parks on a person prints the exact \`weft answer <run> <id> '<json>'\` command and
 exits. Parking is not losing — answer it, then \`weft resume <run>\`.
+
+Every agent step receives its workflow-bound task CLI prefix, a bounded current snapshot,
+and the extension JSON Schema in its instructions. Providers request changes through the
+required structured \`taskOperations\` field; the engine validates and journals those
+operations, then applies them idempotently after the step succeeds. Core fields cover
+title, description, status, priority, tags, dependencies, related files, stable-ID
+acceptance criteria, append-only notes, actors, timestamps, and revision. Set \`meta.id\`
+once so path, stdin, and renamed workflows keep one namespace. A workflow's
+\`tasks.extensions\` Standard Schema validates its additional context.
 
 The typical loop:
 

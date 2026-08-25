@@ -42,6 +42,7 @@ import {
   type Pipeline,
   parseDuration,
   type Risk,
+  type SchemaIssue,
   type SecretHandle,
   type Settled,
   StepError,
@@ -58,10 +59,82 @@ import { priceFor } from "./config.ts";
 import type { BlobRefJson } from "./events.ts";
 import { toWireSchema, unwrapWireValue } from "./jsonschema.ts";
 import { mapWithConcurrency } from "./limiter.ts";
-import type { AgentRequest, AgentResult } from "./provider.ts";
+import type { AgentRequest, AgentResult, AgentTaskContext, AgentTaskOperation } from "./provider.ts";
 import { MAX_TIMER_MS, type RunRuntime, type StepIO, sleep as sleepMs } from "./runtime.ts";
 
 const RISK_ORDER: Risk[] = ["low", "medium", "high", "irreversible"];
+
+const AgentTaskOperationSchema = z.discriminatedUnion("op", [
+  z
+    .object({
+      op: z.literal("create"),
+      title: z.string().min(1),
+      description: z.string().min(1),
+      status: z.enum(["todo", "in_progress", "blocked", "done", "cancelled"]).optional(),
+      priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+      tags: z.array(z.string()).optional(),
+      dependencies: z.array(z.string()).optional(),
+      relatedFiles: z.array(z.string()).optional(),
+      acceptanceCriteria: z.array(z.string()).optional(),
+      extensions: z.unknown().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      op: z.literal("update"),
+      id: z.string(),
+      title: z.string().min(1).optional(),
+      description: z.string().min(1).optional(),
+      status: z.enum(["todo", "in_progress", "blocked", "done", "cancelled"]).optional(),
+      priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+      tags: z.array(z.string()).optional(),
+      dependencies: z.array(z.string()).optional(),
+      relatedFiles: z.array(z.string()).optional(),
+      acceptanceCriteria: z.array(z.string()).optional(),
+      extensions: z.unknown().optional(),
+      ifRevision: z.number().int().positive().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      op: z.literal("note"),
+      id: z.string(),
+      text: z.string().min(1),
+      ifRevision: z.number().int().positive().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      op: z.literal("criterion"),
+      id: z.string(),
+      criterionId: z.string(),
+      met: z.boolean(),
+      ifRevision: z.number().int().positive().optional(),
+    })
+    .strict(),
+]);
+
+const AgentTaskOperationsSchema = z.array(AgentTaskOperationSchema).max(50);
+
+type AgentStepResult<T> = DetailedAgentResult<T> & {
+  taskBatchId?: string;
+  taskContext?: AgentTaskContext;
+  taskOperations?: AgentTaskOperation[];
+};
+
+function agentEnvelopeSchema(result: Record<string, unknown>): Record<string, unknown> {
+  const taskOperations = z.toJSONSchema(AgentTaskOperationsSchema, { reused: "inline" }) as Record<
+    string,
+    unknown
+  >;
+  delete taskOperations.$schema;
+  return {
+    type: "object",
+    properties: { result, taskOperations },
+    required: ["result", "taskOperations"],
+    additionalProperties: false,
+  };
+}
 
 function maxRisk(a: Risk, b: Risk | undefined): Risk {
   if (!b) return a;
@@ -321,7 +394,14 @@ export function buildCtx(rt: RunRuntime): Ctx {
           attempts: entry?.attempts ?? 1,
         } as unknown as DetailedAgentResult<InferOut<S>>;
       }
-      const out = journaled as { value: unknown; files: string[]; patch: PatchRef | null };
+      const out = journaled as {
+        value: unknown;
+        files: string[];
+        patch: PatchRef | null;
+        taskBatchId?: string;
+        taskContext?: AgentTaskContext;
+        taskOperations?: AgentTaskOperation[];
+      };
       const check = await validateSchema(opts.schema, out.value);
       if (!check.ok) {
         throw new StepError(
@@ -332,24 +412,27 @@ export function buildCtx(rt: RunRuntime): Ctx {
           },
         );
       }
-      const detailed: DetailedAgentResult<InferOut<S>> = {
+      const detailed: AgentStepResult<InferOut<S>> = {
         value: check.value,
         usage: entry?.usage ?? { input: 0, output: 0 },
         files: out.files ?? [],
         ...(out.patch ? { patch: out.patch } : {}),
         attempts: entry?.attempts ?? 1,
         ...(entry?.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
+        ...(out.taskBatchId !== undefined ? { taskBatchId: out.taskBatchId } : {}),
+        ...(out.taskContext !== undefined ? { taskContext: out.taskContext } : {}),
+        ...(out.taskOperations !== undefined ? { taskOperations: out.taskOperations } : {}),
       };
       return detailed;
     };
 
     const run = () =>
-      rt.runStep<DetailedAgentResult<InferOut<S>>>({
+      rt.runStep<AgentStepResult<InferOut<S>>>({
         kind: "agent",
         ...(opts.key !== undefined ? { key: opts.key } : {}),
         label,
         payload,
-        schemaJson: wire.json,
+        schemaJson: rt.host.taskTracker ? agentEnvelopeSchema(wire.json) : wire.json,
         ...(opts.retry
           ? { retry: { attempts: opts.retry.attempts, backoffMs: toMs(opts.retry.backoff, 1_000) } }
           : {}),
@@ -359,7 +442,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         route: { provider: providerId, ...(model ? { model } : {}), ...(effort ? { effort } : {}) },
         ...(scope ? { scope } : {}),
         revive: (journaled, entry) => reviveDetailed(journaled, entry),
-        onSettle: (value) => {
+        onSettle: async (value) => {
           if (value.patch) {
             rt.patches.set(value.patch.key, {
               key: value.patch.key,
@@ -370,6 +453,15 @@ export function buildCtx(rt: RunRuntime): Ctx {
               integrated: false,
               discarded: false,
             });
+          }
+          if (
+            rt.host.taskTracker &&
+            value.taskBatchId &&
+            value.taskContext &&
+            value.taskOperations &&
+            value.taskOperations.length > 0
+          ) {
+            await rt.host.taskTracker.applyBatch(value.taskContext, value.taskBatchId, value.taskOperations);
           }
         },
         // The concurrency permit is taken for the WHOLE lane, worktree included. Held
@@ -453,6 +545,33 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 ignoredManifestBefore = walked.manifest;
               }
               let finalPrompt = prompt;
+              const taskContext: AgentTaskContext | undefined = rt.host.taskTracker
+                ? {
+                    workflowId: rt.workflowId,
+                    workflowName: rt.workflowName,
+                    runId: rt.runId,
+                    step: opts.key ?? label,
+                    provider: providerId,
+                  }
+                : undefined;
+              if (taskContext && rt.host.taskTracker) {
+                const [taskSnapshot, taskSchema] = await Promise.all([
+                  rt.host.taskTracker.snapshot(taskContext),
+                  rt.host.taskTracker.schema(taskContext),
+                ]);
+                const taskCommand = `weft --cwd ${shellArg(rt.cwd)} task --workflow ${shellArg(rt.workflowId)}`;
+                finalPrompt +=
+                  `\n\n## Workflow task tracker\n` +
+                  `This step belongs to workflow ${JSON.stringify(rt.workflowName)} ` +
+                  `(stable id ${JSON.stringify(rt.workflowId)}). The equivalent human CLI prefix is:\n` +
+                  `\`${taskCommand}\`\n\n` +
+                  `Provider sandboxes must not execute tracker mutations directly. The engine supplied the bounded ` +
+                  `snapshot below. Return desired mutations in the required \`taskOperations\` array; the engine ` +
+                  `validates, journals, idempotently applies, and provenance-binds them after your result succeeds. ` +
+                  `Use an empty array when no tracker change is needed. Do not target another workflow.\n\n` +
+                  `Current task summary:\n\`\`\`json\n${JSON.stringify(taskSnapshot, null, 2)}\n\`\`\`\n` +
+                  `Workflow task extension schema:\n\`\`\`json\n${JSON.stringify(taskSchema, null, 2)}\n\`\`\``;
+              }
               if (scope) {
                 const also = scope.also?.length
                   ? `\nAlso allowed (incidental files): ${scope.also.join(", ")}`
@@ -483,7 +602,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
               const req: AgentRequest = {
                 prompt: finalPrompt,
                 cwd: workCwd,
-                schema: wire.json,
+                schema: taskContext ? agentEnvelopeSchema(wire.json) : wire.json,
                 label,
                 ...(opts.key !== undefined ? { key: opts.key } : {}),
                 ...(model !== undefined ? { model } : {}),
@@ -771,14 +890,34 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
                 // Journal the RAW wire value; both live and replay paths validate from raw,
                 // so schema transforms apply exactly once.
-                const journalOutput = { value: result.raw, files, patch };
-                const detailed: DetailedAgentResult<InferOut<S>> = {
+                const taskBatchId = result.taskOperations ? `${rt.runId}:agent:${io.seq}` : undefined;
+                const taskContext: AgentTaskContext | undefined = result.taskOperations
+                  ? {
+                      workflowId: rt.workflowId,
+                      workflowName: rt.workflowName,
+                      runId: rt.runId,
+                      step: opts.key ?? label,
+                      provider: providerId,
+                    }
+                  : undefined;
+                const journalOutput = {
+                  value: result.raw,
+                  files,
+                  patch,
+                  ...(taskBatchId ? { taskBatchId } : {}),
+                  ...(taskContext ? { taskContext } : {}),
+                  ...(result.taskOperations ? { taskOperations: result.taskOperations } : {}),
+                };
+                const detailed: AgentStepResult<InferOut<S>> = {
                   value: result.validated as InferOut<S>,
                   usage,
                   files,
                   ...(patch ? { patch } : {}),
                   attempts: result.attempts,
                   ...(result.result.sessionId !== undefined ? { sessionId: result.result.sessionId } : {}),
+                  ...(taskBatchId ? { taskBatchId } : {}),
+                  ...(taskContext ? { taskContext } : {}),
+                  ...(result.taskOperations ? { taskOperations: result.taskOperations } : {}),
                 };
                 return {
                   value: detailed,
@@ -814,7 +953,14 @@ export function buildCtx(rt: RunRuntime): Ctx {
       provider: ReturnType<typeof rt.host.providers.get>,
       req: AgentRequest,
       io: StepIO,
-    ): Promise<{ result: AgentResult; raw: unknown; validated: unknown; attempts: number; usage: Usage }> {
+    ): Promise<{
+      result: AgentResult;
+      raw: unknown;
+      validated: unknown;
+      taskOperations?: AgentTaskOperation[];
+      attempts: number;
+      usage: Usage;
+    }> {
       // Every provider turn costs real tokens — the initial call AND each repair —
       // so usage accumulates across turns, and turns preceding a failure are
       // charged too (the exhausted/error throws carry the spend for the caller).
@@ -851,13 +997,46 @@ export function buildCtx(rt: RunRuntime): Ctx {
       }
       addUsage(result.usage);
       for (;;) {
-        const value = unwrapWireValue(result.output, wire.wrapped);
+        let carrier = result.output;
+        let taskOperations: AgentTaskOperation[] | undefined;
+        const envelopeIssues: SchemaIssue[] = [];
+        if (rt.host.taskTracker) {
+          if (typeof carrier !== "object" || carrier === null || Array.isArray(carrier)) {
+            envelopeIssues.push({ path: "", message: "expected { result, taskOperations }" });
+          } else {
+            const envelope = carrier as { result?: unknown; taskOperations?: unknown };
+            if (!("result" in envelope)) envelopeIssues.push({ path: "result", message: "required" });
+            const operations = AgentTaskOperationsSchema.safeParse(envelope.taskOperations);
+            if (!operations.success) {
+              envelopeIssues.push(
+                ...operations.error.issues.map((issue) => ({
+                  path: ["taskOperations", ...issue.path].join("."),
+                  message: issue.message,
+                })),
+              );
+            } else {
+              taskOperations = operations.data as AgentTaskOperation[];
+            }
+            carrier = envelope.result;
+          }
+        }
+        const value = unwrapWireValue(carrier, wire.wrapped);
         const check = await validateSchema(opts.schema, value);
-        if (check.ok) return { result, raw: value, validated: check.value, attempts, usage: used };
+        const issues = [...envelopeIssues, ...(check.ok ? [] : check.issues)];
+        if (check.ok && issues.length === 0) {
+          return {
+            result,
+            raw: value,
+            validated: check.value,
+            ...(taskOperations ? { taskOperations } : {}),
+            attempts,
+            usage: used,
+          };
+        }
         if (attempts > repairMax) {
           throw new StepError(
             "schema_repair_exhausted",
-            `${label} — schema repair exhausted (${repairMax} attempts): ${check.issues
+            `${label} — schema repair exhausted (${repairMax} attempts): ${issues
               .map((i) => `${i.path}: ${i.message}`)
               .join("; ")}`,
             { step: stepRef, attempts, detail: { usage: used } },
@@ -866,7 +1045,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         attempts++;
         await io.appendAttempt(`schema repair ${attempts - 1}/${repairMax}`);
         try {
-          result = await provider.repair(result.sessionId, req, check.issues, { signal: io.signal });
+          result = await provider.repair(result.sessionId, req, issues, { signal: io.signal });
         } catch (err) {
           if (isCancellation(err) || err instanceof StepError) throw err;
           // The failing repair turn's own spend rides the error too.
@@ -2407,4 +2586,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
     },
   };
   return ctx;
+}
+
+/** POSIX-safe shell spelling for the command copied into agent instructions. */
+function shellArg(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }

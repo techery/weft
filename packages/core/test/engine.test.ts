@@ -15,7 +15,16 @@ async function records(journal: { read(runId: string): AsyncIterable<JournalReco
 
 describe("engine end to end", () => {
   test("runs a sequential workflow with typed agent steps and journals everything", async () => {
-    const t = testEngine();
+    const applied: unknown[] = [];
+    const t = testEngine({
+      taskTracker: {
+        snapshot: async () => ({ total: 0, tasks: [] }),
+        schema: async () => null,
+        applyBatch: async (_context, _batchId, operations) => {
+          applied.push(...operations);
+        },
+      },
+    });
     t.builder.on(
       { key: "plan" },
       { steps: ["a", "b"], risk: "low" },
@@ -53,10 +62,20 @@ describe("engine end to end", () => {
     expect(scheduled).toMatchObject({
       schema: {
         type: "object",
-        properties: { steps: { type: "array" }, risk: { type: "string" } },
+        properties: {
+          result: {
+            type: "object",
+            properties: { steps: { type: "array" }, risk: { type: "string" } },
+          },
+          taskOperations: { type: "array" },
+        },
       },
     });
     expect(t.builder.calls[0]!.prompt).toContain("Plan: migrate");
+    expect(t.builder.calls[0]!.prompt).toContain("## Workflow task tracker");
+    expect(t.builder.calls[0]!.prompt).toContain("task --workflow 'planner'");
+    expect(t.builder.calls[0]!.prompt).toContain("taskOperations");
+    expect(applied).toEqual([]);
     // read-only steps get the read-only instruction
     expect(t.builder.calls[0]!.prompt).toContain("read-only");
   });
@@ -159,6 +178,40 @@ describe("engine end to end", () => {
       code: "schema_repair_exhausted",
       message: expect.stringContaining("schema repair exhausted (2 attempts)"),
     });
+  });
+
+  test("does not apply task operations from a result that fails schema validation", async () => {
+    const applied: unknown[] = [];
+    const t = testEngine({
+      taskTracker: {
+        snapshot: async () => ({ total: 0, tasks: [] }),
+        schema: async () => null,
+        applyBatch: async (_context, _batchId, operations) => {
+          applied.push(...operations);
+        },
+      },
+    });
+    t.builder.on(
+      { key: "bad-task-result" },
+      {
+        result: { wrong: true },
+        taskOperations: [{ op: "create", title: "Must not exist", description: "Invalid result" }],
+      },
+    );
+    const def = defineWorkflow(
+      { id: "invalid-task-result", description: "invalid", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("invalid", {
+          schema: z.object({ real: z.boolean() }),
+          key: "bad-task-result",
+          repair: 0,
+        });
+        return {};
+      },
+    );
+    const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(handle.result).rejects.toMatchObject({ code: "schema_repair_exhausted" });
+    expect(applied).toEqual([]);
   });
 
   test("onError: 'null' resolves to null and records the drop", async () => {

@@ -387,6 +387,13 @@ describe("the tool gate", () => {
     };
     expect(await ask(options, "Read", { file_path: `${CWD}/src/a.ts` })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Bash", { command: "rg -n 'todo' src 2>&1" })).toEqual({ behavior: "allow" });
+    expect(
+      await ask(options, "Bash", {
+        command: "weft --cwd '/repo' task --workflow 'review' --json list",
+      }),
+    ).toMatchObject({ behavior: "deny" });
+    expect(await ask(options, "Bash", { command: "weft run review" })).toMatchObject({ behavior: "deny" });
+    expect(await ask(options, "Bash", { command: "weft task list" })).toMatchObject({ behavior: "deny" });
     await allowedGitRead("git log --oneline | head -5 && git diff");
     expect(await ask(options, "Bash", { command: "find src -name '*.ts'" })).toEqual({ behavior: "allow" });
     await allowedGitRead("git cat-file -p HEAD:README.md");

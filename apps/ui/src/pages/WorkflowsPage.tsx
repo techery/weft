@@ -1,6 +1,6 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useSetAtom } from "jotai";
-import { useRun, useWorkflow, useWorkflowStats, useWorkflows } from "~/api/queries";
+import { useRun, useWorkflow, useWorkflowStats, useWorkflows, useWorkflowTasks } from "~/api/queries";
 import type { RunDetail, RunStatus, WorkflowRow } from "~/api/types";
 import { useOpenRun } from "~/app/useOpenRun";
 import { EmptyNote } from "~/components/molecules/EmptyNote";
@@ -32,6 +32,7 @@ export function WorkflowsPage() {
 
   const detail = useWorkflow(name);
   const stats = useWorkflowStats(name);
+  const tasks = useWorkflowTasks(name);
   // Nothing declares a workflow's shape, so it is read off its newest run — one query for
   // the inspected workflow only, never for the table.
   const shapeRunId = stats.data?.recent[0]?.runId ?? "";
@@ -109,6 +110,9 @@ export function WorkflowsPage() {
           statsError={stats.error?.message}
           phasesPending={phasesPending}
           phasesError={phasesError}
+          tasks={tasks.data ?? []}
+          tasksPending={tasks.isPending}
+          tasksError={tasks.error?.message}
           onRun={() => openLauncherFor(selected.name)}
           onOpenRun={(runId) => openRun(runId, { from: "runs" })}
         />

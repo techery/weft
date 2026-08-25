@@ -66,3 +66,9 @@
   font-size: 12px;
   white-space: nowrap;
 }
+@media (max-width: 700px) {
+  .p50,
+  .cost {
+    display: none;
+  }
+}

@@ -57,8 +57,11 @@ const SCHEMAS = [
 ].join("\n");
 
 /** A clean workflow: relative import, everything time-like routed through ctx. */
-function reviewSource(opts: { name?: string; description?: string; note?: string } = {}): string {
+function reviewSource(
+  opts: { id?: string; name?: string; description?: string; note?: string } = {},
+): string {
   const meta = [
+    opts.id ? `    id: "${opts.id}",` : "",
     opts.name ? `    name: "${opts.name}",` : "",
     `    description: "${opts.description ?? "Review a target and report findings"}",`,
   ]
@@ -783,6 +786,14 @@ describe("createWorkflowRegistry", () => {
     expect(await registry.get("on-disk")).toBeUndefined();
     const loaded = await registry.load("review-pass");
     expect(loaded.file).toBe(path.join(dir, "on-disk.ts"));
+  });
+
+  it("rejects duplicate durable workflow ids", async () => {
+    const dir = await tempDir();
+    await writeReview(dir, "review.ts", { id: "shared-state" });
+    await write(dir, "ship.ts", reviewSource({ id: "shared-state", description: "Ship it" }));
+    const registry = createWorkflowRegistry({ dir });
+    await expect(registry.list()).rejects.toThrow(/duplicate workflow id "shared-state"/);
   });
 
   it("caches by content hash and invalidates when the file changes", async () => {

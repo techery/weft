@@ -114,6 +114,7 @@ export function registerWorkflowRoutes(app: Hono, weft: Weft): void {
       const entries = await listWorkflows();
       return c.json(
         entries.map((entry) => ({
+          id: entry.id,
           name: entry.name,
           file: relative(weft.cwd, entry.file),
           description: entry.description,
@@ -136,12 +137,14 @@ export function registerWorkflowRoutes(app: Hono, weft: Weft): void {
       });
       const meta = loaded.def.meta;
       return c.json({
+        id: meta.id ?? meta.name ?? name,
         name: meta.name ?? name,
         file: relative(weft.cwd, loaded.file),
         hash: loaded.hash,
         description: meta.description,
         input: jsonSchemaOf(loaded.def, "input"),
         output: jsonSchemaOf(loaded.def, "output"),
+        taskExtensions: taskSchemaOf(loaded.def),
         defaults: meta.defaults ?? null,
       });
     } catch (err) {
@@ -206,6 +209,18 @@ export function registerWorkflowRoutes(app: Hono, weft: Weft): void {
       return fail(c, err);
     }
   });
+
+  app.get("/api/workflows/:name/tasks", async (c) => {
+    const name = c.req.param("name");
+    try {
+      assertRegistryName(name);
+      const entry = (await listWorkflows()).find((candidate) => candidate.name === name);
+      if (!entry) throw new Error(`workflow ${name} not found`);
+      return c.json(await weft.tasks.list(entry.id));
+    } catch (err) {
+      return fail(c, err);
+    }
+  });
 }
 
 /**
@@ -249,6 +264,17 @@ function jsonSchemaOf(def: WorkflowDefinition, which: "input" | "output"): unkno
       io: which === "input" ? "input" : "output",
       unrepresentable: "any",
     });
+  } catch {
+    return null;
+  }
+}
+
+/** Workflow-specific task extensions use their input shape at the CLI boundary. */
+function taskSchemaOf(def: WorkflowDefinition): unknown {
+  const schema = def.meta.tasks?.extensions;
+  if (schema === undefined) return null;
+  try {
+    return z.toJSONSchema(schema as z.ZodType, { io: "input", unrepresentable: "any" });
   } catch {
     return null;
   }

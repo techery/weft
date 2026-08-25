@@ -105,6 +105,13 @@ describe("defineWorkflow", () => {
       defineWorkflow({ description: undefined as never, input: z.any(), output: z.any() }, async () => ({})),
     ).toThrow(/description/);
   });
+
+  test("rejects path-like durable ids and names", () => {
+    const base = { description: "test", input: z.object({}), output: z.object({}) };
+    expect(() => defineWorkflow({ ...base, id: "team/review" }, async () => ({}))).toThrow(/meta.id/);
+    expect(() => defineWorkflow({ ...base, name: "review.ts" }, async () => ({}))).toThrow(/meta.name/);
+    expect(() => defineWorkflow({ ...base, id: "stable-review" }, async () => ({}))).not.toThrow();
+  });
 });
 
 describe("settled helpers", () => {
