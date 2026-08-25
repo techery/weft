@@ -213,6 +213,43 @@ describe("TaskStore", () => {
     expect((await reopened.get("release", created.id)).extensions).toBeNull();
   });
 
+  it("uses durable namespace version and scalar semantics without a runtime definition", async () => {
+    const root = await tempRoot();
+    const taskRoot = join(root, ".weft", "tasks");
+    const schema = z.null();
+    const writer = new TaskStore(taskRoot, async () => schema);
+    await writer.registerWorkflow(
+      { id: "inline-review", name: "inline-review" },
+      schema,
+      { type: "null" },
+      { schemaVersion: 2 },
+    );
+    const created = await writer.create("inline-review", {
+      title: "Definition-independent lifecycle",
+      description: "Keep durable scalar context readable",
+      acceptanceCriteria: ["Lifecycle remains available"],
+      extensions: null,
+    });
+
+    // A later CLI process can have only .workflow.json and task files: no
+    // executable schema or migration is available in this store.
+    const reader = new TaskStore(taskRoot);
+    expect(await reader.list("inline-review")).toEqual([
+      expect.objectContaining({
+        id: created.id,
+        extensionSchemaVersion: 2,
+        extensions: null,
+      }),
+    ]);
+    expect((await reader.addNote("inline-review", created.id, "Still inspectable")).extensions).toBeNull();
+    expect(
+      (await reader.setCriterion("inline-review", created.id, 1, true)).acceptanceCriteria[0],
+    ).toMatchObject({ met: true });
+    expect((await reader.update("inline-review", created.id, { status: "done" })).extensions).toBeNull();
+    await reader.remove("inline-review", created.id);
+    expect(await reader.list("inline-review")).toEqual([]);
+  });
+
   it("rejects non-JSON extension outputs before exposing task context", async () => {
     const cases = [
       {

@@ -30,6 +30,11 @@ export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 /** Raw schema input retained across hydrated task mutations; JSON ignores symbols. */
 const STORED_EXTENSIONS = Symbol("weft.task.storedExtensions");
 type HydratedWorkflowTask = WorkflowTask & { [STORED_EXTENSIONS]?: unknown };
+interface TaskExtensionConfig {
+  version: number;
+  declared: boolean;
+  migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
+}
 
 export interface TaskCriterion {
   id: string;
@@ -245,6 +250,7 @@ export class TaskStore {
   async list(workflowId: string, extensionSchema?: AnySchema): Promise<WorkflowTask[]> {
     const dir = this.workflowDir(workflowId);
     const schema = await this.extensionSchema(workflowId, extensionSchema);
+    const config = await this.extensionConfig(workflowId);
     let files: string[];
     try {
       files = await readdir(dir);
@@ -257,7 +263,7 @@ export class TaskStore {
         .filter((file) => /^task-[a-f0-9]{8}\.json$/.test(file))
         .map((file) => {
           const id = file.slice(0, -5);
-          return this.readTask(join(dir, file), workflowId, id, schema);
+          return this.readTask(join(dir, file), workflowId, id, schema, config);
         }),
     );
     validateTopology(tasks, workflowId);
@@ -267,8 +273,9 @@ export class TaskStore {
   async get(workflowId: string, id: string, extensionSchema?: AnySchema): Promise<WorkflowTask> {
     assertId(id);
     const schema = await this.extensionSchema(workflowId, extensionSchema);
+    const config = await this.extensionConfig(workflowId);
     try {
-      return await this.readTask(this.taskFile(workflowId, id), workflowId, id, schema);
+      return await this.readTask(this.taskFile(workflowId, id), workflowId, id, schema, config);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         throw new Error(`task ${id} not found in workflow ${workflowId}`);
@@ -315,7 +322,7 @@ export class TaskStore {
     const task = withStoredExtensions<WorkflowTask>(
       {
         schemaVersion: TASK_SCHEMA_VERSION,
-        extensionSchemaVersion: this.extensionConfig(workflowId).version,
+        extensionSchemaVersion: (await this.extensionConfig(workflowId)).version,
         id,
         workflowId,
         ...(dedupeKey ? { dedupeKey } : {}),
@@ -388,7 +395,7 @@ export class TaskStore {
     return withStoredExtensions(
       {
         ...current,
-        extensionSchemaVersion: this.extensionConfig(current.workflowId).version,
+        extensionSchemaVersion: (await this.extensionConfig(current.workflowId)).version,
         ...(input.title !== undefined ? { title: cleanRequired(input.title, "title") } : {}),
         ...(input.description !== undefined
           ? { description: cleanRequired(input.description, "description") }
@@ -895,7 +902,7 @@ export class TaskStore {
     const shadowRoot = await mkdtemp(join(tmpdir(), "weft-task-preflight-"));
     try {
       const shadow = new TaskStore(shadowRoot, async () => extensionSchema);
-      const config = this.extensionConfig(context.workflowId);
+      const config = await this.extensionConfig(context.workflowId);
       await shadow.registerWorkflow(
         { id: context.workflowId, name: context.workflowName },
         extensionSchema,
@@ -999,7 +1006,8 @@ export class TaskStore {
     file: string,
     expectedWorkflowId: string,
     expectedId: string,
-    extensionSchema?: AnySchema,
+    extensionSchema: AnySchema | undefined,
+    config: TaskExtensionConfig,
   ): Promise<WorkflowTask> {
     let value: unknown;
     try {
@@ -1009,7 +1017,6 @@ export class TaskStore {
       throw new Error(`invalid task file ${file}: ${(err as Error).message}`, { cause: err });
     }
     const task = decodeTask(value, file, expectedWorkflowId, expectedId);
-    const config = this.extensionConfig(expectedWorkflowId);
     if (task.extensionSchemaVersion > config.version) {
       throw new Error(
         `task ${task.id} uses extension schema version ${task.extensionSchemaVersion}, newer than workflow version ${config.version}`,
@@ -1024,7 +1031,11 @@ export class TaskStore {
       }
       candidate = await config.migrate(candidate, task.extensionSchemaVersion);
     }
-    const extensions = await extensionsOf(candidate, extensionSchema);
+    const extensions = await extensionsOf(
+      candidate,
+      extensionSchema,
+      config.declared && extensionSchema === undefined,
+    );
     return withStoredExtensions(
       { ...task, extensionSchemaVersion: config.version, extensions },
       candidate === undefined ? {} : candidate,
@@ -1180,23 +1191,39 @@ export class TaskStore {
     );
   }
 
-  private extensionConfig(workflowId: string): {
-    version: number;
-    migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
-  } {
+  private async extensionConfig(workflowId: string): Promise<TaskExtensionConfig> {
     const scoped = this.schemaScope.getStore();
     if (scoped?.workflowId === workflowId) {
-      return { version: scoped.version, ...(scoped.migrate ? { migrate: scoped.migrate } : {}) };
+      return {
+        version: scoped.version,
+        declared: scoped.schema !== undefined,
+        ...(scoped.migrate ? { migrate: scoped.migrate } : {}),
+      };
     }
     const binding = this.latestBindings.get(workflowId);
-    if (!binding) return { version: 1 };
-    return this.runtimeMigrations.get(`${workflowId}:${binding}`) ?? { version: 1 };
+    if (binding) {
+      const migration = this.runtimeMigrations.get(`${workflowId}:${binding}`) ?? { version: 1 };
+      return {
+        ...migration,
+        declared: this.runtimeSchemas.get(`${workflowId}:${binding}`) !== undefined,
+      };
+    }
+    const namespace = await this.namespace(workflowId);
+    return {
+      version: namespace?.extensionSchemaVersion ?? 1,
+      declared: namespace?.extensionSchemaDeclared ?? false,
+    };
   }
 }
 
-async function extensionsOf(value: unknown, schema?: AnySchema): Promise<unknown> {
+async function extensionsOf(
+  value: unknown,
+  schema?: AnySchema,
+  preserveDeclaredJson = false,
+): Promise<unknown> {
   const candidate = value === undefined ? {} : value;
   if (schema === undefined) {
+    if (preserveDeclaredJson) return candidate;
     if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
       throw new Error("task extensions must be a JSON object when the workflow declares no extension schema");
     }
