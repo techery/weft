@@ -6,7 +6,7 @@ import type { Artifact, FileChange, Run } from "./types";
 /** Where a run was opened from, so its back button can say so. */
 export type RunOrigin = "queue" | "runs";
 
-export const RUN_TABS = ["steps", "notes", "artifacts", "changes", "journal"] as const;
+export const RUN_TABS = ["steps", "notes", "artifacts", "changes"] as const;
 export type RunTab = (typeof RUN_TABS)[number];
 
 export type RunTabDef = { key: RunTab; label: string; badge: string };
@@ -18,9 +18,8 @@ export function runTabs(run: Run, pendingGate: boolean): RunTabDef[] {
     { key: "notes", label: "Notes", badge: String(run.findings.length) },
     { key: "artifacts", label: "Artifacts", badge: String(run.artifacts.length) },
     { key: "changes", label: "Changes", badge: String(run.files.length) },
-    { key: "journal", label: "Journal", badge: "" },
   ];
-  return defs.filter((t) => !(t.key !== "steps" && t.key !== "journal" && t.badge === "0"));
+  return defs.filter((tab) => tab.key === "steps" || tab.badge !== "0");
 }
 
 export function isRunTab(value: string | undefined): value is RunTab {

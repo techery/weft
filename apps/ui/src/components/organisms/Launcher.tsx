@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStartRun, useWorkflow, useWorkflows } from "~/api/queries";
 import type { WorkflowRow } from "~/api/types";
 import { Button } from "~/components/atoms/Button";
-import { Kicker } from "~/components/atoms/Kicker";
 import { TextArea } from "~/components/atoms/TextArea";
 import { EmptyNote } from "~/components/molecules/EmptyNote";
 import { LauncherField } from "~/components/molecules/LauncherField";
@@ -261,41 +260,55 @@ export function Launcher() {
               <span className={styles.headMeta}>{route}</span>
             </div>
             <div className={styles.body}>
-              <div className={styles.inputsHead}>
-                <Kicker>Inputs</Kicker>
-                <span className={styles.inputsHint}>tab to move · ⏎ starts · step 2 of 2</span>
-              </div>
-              {detail.isPending ? <span className={styles.state}>reading the declaration…</span> : null}
-              {detail.error ? (
-                <span className={`${styles.state} ${styles.stateError}`}>{detail.error.message}</span>
-              ) : null}
-              {detail.data !== undefined && schema === null ? (
-                <>
-                  <span className={styles.state}>
-                    weft could not turn this workflow's input declaration into a schema — pass the input as
-                    JSON.
-                  </span>
-                  <TextArea
-                    rows={5}
-                    aria-label="Input as JSON"
-                    placeholder={'{ "who": "world" }'}
-                    value={typeof values[RAW_KEY] === "string" ? values[RAW_KEY] : ""}
-                    onChange={(e) => setInput(name, RAW_KEY, e.target.value)}
-                  />
-                </>
-              ) : null}
-              {detail.data !== undefined && schema !== null && questions.length === 0 ? (
-                <EmptyNote>This workflow declares no inputs.</EmptyNote>
-              ) : null}
-              {questions.map((question) => (
-                <LauncherField
-                  key={question.key}
-                  question={question}
-                  value={values[question.key]}
-                  onSet={(value) => setInput(name, question.key, value)}
-                  onToggleChip={(label) => toggleChip(name, question.key, label)}
-                />
-              ))}
+              <section className={styles.schemaPane} aria-label="Workflow input">
+                <div className={styles.schemaHead}>
+                  <span className={styles.schemaTitle}>workflow input</span>
+                  <span className={styles.schemaNote}>schema-driven</span>
+                  <span className={styles.spacer} />
+                  <span className={styles.schemaHint}>tab to move · ⏎ starts · step 2 of 2</span>
+                </div>
+                <div className={styles.schemaFields}>
+                  {detail.isPending ? (
+                    <span className={styles.schemaState}>reading the declaration…</span>
+                  ) : null}
+                  {detail.error ? (
+                    <span className={`${styles.schemaState} ${styles.stateError}`}>
+                      {detail.error.message}
+                    </span>
+                  ) : null}
+                  {detail.data !== undefined && schema === null ? (
+                    <div className={styles.rawInput}>
+                      <span className={styles.state}>
+                        weft could not turn this workflow's input declaration into a schema — pass the input
+                        as JSON.
+                      </span>
+                      <TextArea
+                        className={styles.rawTextArea}
+                        rows={5}
+                        aria-label="Input as JSON"
+                        placeholder={'{ "who": "world" }'}
+                        value={typeof values[RAW_KEY] === "string" ? values[RAW_KEY] : ""}
+                        onChange={(e) => setInput(name, RAW_KEY, e.target.value)}
+                      />
+                    </div>
+                  ) : null}
+                  {detail.data !== undefined && schema !== null && questions.length === 0 ? (
+                    <div className={styles.schemaState}>
+                      <EmptyNote>This workflow declares no inputs.</EmptyNote>
+                    </div>
+                  ) : null}
+                  {questions.map((question) => (
+                    <LauncherField
+                      key={question.key}
+                      question={question}
+                      schema={schema?.properties?.[question.key] ?? null}
+                      value={values[question.key]}
+                      onSet={(value) => setInput(name, question.key, value)}
+                      onToggleChip={(label) => toggleChip(name, question.key, label)}
+                    />
+                  ))}
+                </div>
+              </section>
               <div className={styles.foot}>
                 <span className={failure ? `${styles.footNote} ${styles.footError}` : styles.footNote}>
                   {failure || (start.isPending ? "starting…" : "")}

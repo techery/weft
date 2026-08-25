@@ -217,7 +217,7 @@ Only `journal.jsonl` has to survive; every other file in that directory is rebui
 | `@techery/weft-stdlib` | Typed patterns: `adversarialVerify`, `judgePanel`, `loopUntilDry`, `integrationLedger`, `finalReport`, … |
 | `@techery/weft-testing` | `runWorkflow` harness, mock fixtures, journal assertions, store conformance suites. |
 | `@techery/weft-host` | Engine assembly shared by the hosts: config loading, stores, providers, workflow registry. |
-| `@techery/weft`, `@techery/weft-mcp`, `@techery/weft-daemon` | Hosts. CLI: run, resume, ls, status, answer, cancel, report, replay, check, explain, diff, ui, doctor. MCP: `weft.run/wait/answer/resume/list/report/types`. Daemon: serves the web UI and wakes suspended runs. |
+| `@techery/weft`, `@techery/weft-mcp`, `@techery/weft-daemon` | Hosts. CLI: run, resume, ls, status, answer, cancel, report, replay, check, explain, diff, new, skill, ui, doctor. MCP: `weft.run/wait/answer/resume/list/report/types`. Daemon: serves the web UI and wakes suspended runs. |
 
 ## Apps
 

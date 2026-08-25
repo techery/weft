@@ -6,9 +6,9 @@
  * stream rather than a fetch. This hook is where those meet, so no component has to know
  * that the tabs it renders come from different requests that land at different times.
  *
- * The stream does double duty. It is the Journal tab's content, and it is the signal to
- * refetch the fold: a step that finishes appends a record, and that record is the cue. So
- * an open run updates itself without polling, and a finished one costs nothing.
+ * The stream signals when to refetch the fold and recovers completion-only transcript refs
+ * from raw records for older daemon projections. A step that finishes appends a record, and
+ * that record is the cue, so an open run updates itself without polling.
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
@@ -51,7 +51,7 @@ export function useRunView(runId: string): RunView {
     setRecords([]);
     const stream = streamJournal(runId, (record) => {
       // Ordered and de-duplicated by index: a reconnect resumes from Last-Event-ID, but a
-      // proxy replaying one frame must not double a line in the journal view.
+      // proxy replaying one frame must not double raw records used for transcript recovery.
       setRecords((current) => {
         if (current.some((seen) => seen.i === record.i)) return current;
         return [...current, record].sort((a, b) => a.i - b.i);
@@ -120,6 +120,7 @@ export function useRunView(runId: string): RunView {
 
   const run = adaptRun(detail.data, {
     journal: journalEntries(records),
+    agentSessions: agentSessionsOf(records),
     files,
     artifacts: adaptArtifacts(artifacts.data ?? []),
     ...(request ? { pending: request } : {}),
@@ -134,6 +135,35 @@ export function useRunView(runId: string): RunView {
     error: null,
     live,
   };
+}
+
+function agentSessionsOf(
+  records: JournalRecord[],
+): Record<string, { sessionId?: string; transcriptRef?: { $blob: string; size: number } }> {
+  const sessions: Record<string, { sessionId?: string; transcriptRef?: { $blob: string; size: number } }> =
+    {};
+  for (const { ev } of records) {
+    if (ev.type !== "step.completed" || typeof ev.seq !== "number") continue;
+    const sessionId = typeof ev.sessionId === "string" ? ev.sessionId : undefined;
+    const ref = ev.transcriptRef;
+    const transcriptRef =
+      typeof ref === "object" &&
+      ref !== null &&
+      typeof (ref as Record<string, unknown>).$blob === "string" &&
+      typeof (ref as Record<string, unknown>).size === "number"
+        ? {
+            $blob: (ref as Record<string, unknown>).$blob as string,
+            size: (ref as Record<string, unknown>).size as number,
+          }
+        : undefined;
+    if (sessionId !== undefined || transcriptRef !== undefined) {
+      sessions[String(ev.seq)] = {
+        ...(sessionId !== undefined ? { sessionId } : {}),
+        ...(transcriptRef !== undefined ? { transcriptRef } : {}),
+      };
+    }
+  }
+  return sessions;
 }
 
 function fileOf(

@@ -9,7 +9,7 @@ export function RunTabsBar({ tabs, active, onSelect }: Props) {
     <div className={styles.bar} role="tablist">
       {tabs.map((tab) => {
         const on = tab.key === active;
-        const showBadge = tab.badge !== "" && tab.key !== "journal";
+        const showBadge = tab.badge !== "";
         return (
           <button
             key={tab.key}

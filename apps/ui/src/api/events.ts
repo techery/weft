@@ -5,9 +5,9 @@
  * cursor as `Last-Event-ID` — so a dropped connection resumes rather than replaying the
  * whole journal into the page. That is the daemon's contract; this is just the subscriber.
  *
- * Two things the UI gets only from here: the journal itself (the projection is a fold, not
- * a transcript), and a signal to refetch the folded state. A step that finishes appends a
- * record; that record is the cue to invalidate, which is why live views need no polling.
+ * Two things the UI gets only from here: completion-only transcript references that may be
+ * absent from an older projection, and a signal to refetch folded state. A step that
+ * finishes appends a record; that record is the cue, so live views need no polling.
  */
 import type { JournalRecord } from "./types";
 

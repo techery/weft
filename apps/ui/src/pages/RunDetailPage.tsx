@@ -6,7 +6,6 @@ import { ArtifactsTab } from "~/components/organisms/ArtifactsTab";
 import { ChangesTab } from "~/components/organisms/ChangesTab";
 import { FindingsTab } from "~/components/organisms/FindingsTab";
 import { GatePane } from "~/components/organisms/GatePane";
-import { JournalTab } from "~/components/organisms/JournalTab";
 import { RunHeader } from "~/components/organisms/RunHeader";
 import { RunRail } from "~/components/organisms/RunRail";
 import { RunTabsBar } from "~/components/organisms/RunTabsBar";
@@ -20,7 +19,7 @@ export function RunDetailPage() {
   const search = useSearch({ from: "/runs/$runId" });
   const navigate = useNavigate();
   const cancel = useCancelRun();
-  const { run, gateSchema, diffs, isPending, error, live } = useRunView(runId);
+  const { run, gateSchema, diffs, isPending, error } = useRunView(runId);
 
   const patch = (next: Partial<typeof search>) =>
     void navigate({
@@ -110,8 +109,6 @@ export function RunDetailPage() {
             onSelect={(path) => patch({ file: path })}
           />
         ) : null}
-
-        {tab === "journal" ? <JournalTab run={run} live={live} /> : null}
       </div>
     </div>
   );
@@ -126,10 +123,15 @@ function fallbackStep(title: string) {
     action: "Copy gate id",
     cells: [],
     input: [],
+    inputValue: undefined,
+    inputSchema: null,
     outTitle: "answer",
     outNote: "",
+    outValue: undefined,
+    outSchema: null,
     out: [],
     streaming: false,
+    agentTranscript: null,
     tools: [],
     toolsTitle: "",
     next: null,

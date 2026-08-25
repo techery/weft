@@ -413,6 +413,35 @@ describe("weft new", () => {
   });
 });
 
+describe("weft skill", () => {
+  it("prints a SKILL.md, and one line for every command the program registers", async () => {
+    // No .weft/ here on purpose: the skill is what you read BEFORE there is one, so this
+    // command must never open the engine.
+    const root = await tempRoot();
+    const printed = await cli("--cwd", root, "skill");
+
+    expect(printed.exitCode).toBeUndefined();
+    expect(printed.lines[0]).toBe("---");
+    expect(printed.text).toContain("name: weft");
+
+    // The point of the assertion: a new command that nobody documented fails here.
+    const commands = buildProgram({ out: () => {} })
+      .commands.map((c) => c.name())
+      .sort();
+    expect(commands.length).toBeGreaterThan(10);
+    for (const name of commands) expect(printed.text).toContain(`weft ${name}`);
+  });
+
+  it("names the ctx replacement for every global the gate rejects", async () => {
+    const root = await tempRoot();
+    const printed = await cli("--cwd", root, "skill");
+
+    for (const replacement of ["ctx.now()", "ctx.random()", "ctx.sleep(", "ctx.env.get(", "ctx.secret("]) {
+      expect(printed.text).toContain(replacement);
+    }
+  });
+});
+
 describe("weft doctor", () => {
   it("prints a line per check", async () => {
     const root = await tempRoot();

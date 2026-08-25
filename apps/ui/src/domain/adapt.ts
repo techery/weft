@@ -41,7 +41,6 @@ import type {
   RailStep,
   Run,
   RunState,
-  ShapeCell,
   StepCell,
   StepDetail,
   StepInput,
@@ -150,6 +149,8 @@ export interface RunExtras {
   files?: Run["files"];
   /** The run's artifact inventory. */
   artifacts?: Run["artifacts"];
+  /** Completion-only fields recovered directly from journal records for older daemon projections. */
+  agentSessions?: Record<string, { sessionId?: string; transcriptRef?: { $blob: string; size: number } }>;
 }
 
 export function adaptRun(detail: RunDetail, extras: RunExtras = {}): Run {
@@ -193,7 +194,7 @@ export function adaptRun(detail: RunDetail, extras: RunExtras = {}): Run {
     branchNote: branchNoteOf(detail),
     journal: extras.journal ?? [],
     gate,
-    steps: stepsOf(detail, steps, pending),
+    steps: stepsOf(detail, steps, pending, extras.agentSessions),
   };
 }
 
@@ -358,12 +359,17 @@ function terminal(status: RunStatus): boolean {
 
 /* ── Steps ────────────────────────────────────────────────────────────────── */
 
-function stepsOf(detail: RunDetail, steps: StepState[], pending: HumanState[]): Record<string, StepDetail> {
+function stepsOf(
+  detail: RunDetail,
+  steps: StepState[],
+  pending: HumanState[],
+  sessions: RunExtras["agentSessions"] = {},
+): Record<string, StepDetail> {
   const out: Record<string, StepDetail> = {};
   const waitingIds = new Set(pending.map((human) => human.id));
 
   for (const step of steps) {
-    out[stepId(step.seq)] = machineStep(detail, step);
+    out[stepId(step.seq)] = machineStep(detail, step, sessions?.[String(step.seq)]);
   }
   for (const human of detail.humans) {
     out[gateStepId(human.id)] = humanStep(human, waitingIds.has(human.id));
@@ -371,7 +377,11 @@ function stepsOf(detail: RunDetail, steps: StepState[], pending: HumanState[]): 
   return out;
 }
 
-function machineStep(detail: RunDetail, step: StepState): StepDetail {
+function machineStep(
+  detail: RunDetail,
+  step: StepState,
+  session?: { sessionId?: string; transcriptRef?: { $blob: string; size: number } },
+): StepDetail {
   const cost = step.usage?.usd;
   const cells: StepCell[] = [
     { k: "kind", v: step.kind },
@@ -389,8 +399,10 @@ function machineStep(detail: RunDetail, step: StepState): StepDetail {
     ...(step.error ? [{ k: "error", v: step.error.code ?? "failed", color: "#b0483a" }] : []),
   ];
 
-  const output = step.output;
+  const output = visibleStepOutput(step);
+  const input = detail.inputs?.[String(step.seq)];
   const failed = step.status === "failed";
+  const transcript = step.transcriptRef ?? session?.transcriptRef;
   return {
     title: `${labelOf(step)} · step ${step.seq}`,
     pill: failed
@@ -401,17 +413,38 @@ function machineStep(detail: RunDetail, step: StepState): StepDetail {
     pillKind: failed ? "fail" : step.status === "ok" ? "done" : "run",
     action: "Copy step id",
     cells,
-    input: inputRows(detail.inputs?.[String(step.seq)]),
+    input: inputRows(input),
+    inputValue: input,
+    inputSchema: null,
     outTitle: failed ? "step error" : step.status === "ok" ? "step output" : "step output · running",
     outNote: failed ? "" : output === undefined ? "" : "schema-validated",
+    outValue: failed ? (step.error?.message ?? step.error?.code) : output,
+    outSchema: failed ? null : (step.schema ?? null),
     out: failed
       ? [step.error?.message ?? step.error?.code ?? "the step failed with no message"]
       : jsonLines(output),
     streaming: step.status === "running",
+    agentTranscript:
+      step.kind === "agent"
+        ? {
+            sessionId: step.sessionId ?? session?.sessionId ?? "",
+            transcriptRef: transcript?.$blob ?? "",
+            transcriptSize: transcript?.size ?? 0,
+          }
+        : null,
     tools: [],
     toolsTitle: "",
     next: failed && step.error?.message ? { k: "error", v: step.error.message, goToGate: false } : null,
   };
+}
+
+/** Agent journal entries carry execution metadata around the schema-validated value. */
+function visibleStepOutput(step: StepState): unknown {
+  const output = step.output;
+  if (step.kind !== "agent" || typeof output !== "object" || output === null || Array.isArray(output)) {
+    return output;
+  }
+  return "value" in output ? (output as Record<string, unknown>).value : output;
 }
 
 function humanStep(human: HumanState, waiting: boolean): StepDetail {
@@ -433,10 +466,18 @@ function humanStep(human: HumanState, waiting: boolean): StepDetail {
         ? [{ k: "detail", kind: "text" as const, ref: "", title: human.detail, sub: "", pills: [] }]
         : []),
     ],
+    inputValue: {
+      question: human.question,
+      ...(human.detail !== undefined ? { detail: human.detail } : {}),
+    },
+    inputSchema: null,
     outTitle: "answer",
     outNote: waiting ? "" : "journaled verbatim",
+    outValue: waiting ? undefined : human.answer,
+    outSchema: waiting ? null : (human.schema as JsonSchema),
     out: waiting ? ["pending — nothing moves until this is answered"] : jsonLines(human.answer),
     streaming: false,
+    agentTranscript: null,
     tools: [],
     toolsTitle: "",
     next: waiting ? { k: "needs you", v: "This question is holding the run.", goToGate: true } : null,
@@ -551,24 +592,25 @@ export function schemaQuestions(schema: JsonSchema | null): GateQuestion[] {
     return {
       key,
       label: property.title ?? key,
-      kind: controlOf(property, options),
+      kind: controlOf(key, property, options),
       options,
       required: required.has(key),
     };
   });
 }
 
-function controlOf(property: JsonSchema, options: GateOption[]): GateQuestionKind {
+function controlOf(key: string, property: JsonSchema, options: GateOption[]): GateQuestionKind {
   if (property.type === "boolean") return "toggle";
   if (options.length > 0) {
     if (options.some((option) => option.desc !== "")) return "cards";
     if (property.type === "array") return "chips";
     return options.length > 4 ? "select" : "choice";
   }
-  if (property.type === "array") return "chips";
+  if (property.type === "array") return "list";
   // A field described as prose, or named like one, gets room to write in.
   if (property.description !== undefined && property.description.length > 60) return "note";
-  return "note";
+  if (/note|detail|reason|message|description/i.test(key)) return "note";
+  return "text";
 }
 
 function optionsOf(property: JsonSchema): GateOption[] {
@@ -602,6 +644,19 @@ export function gateAnswer(schema: JsonSchema | null, values: Record<string, unk
       if (Number.isFinite(parsed)) out[key] = parsed;
       continue;
     }
+    if (property.type === "array" && typeof value === "string") {
+      const items = value
+        .split(/[\n,]/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .map((item) => {
+          if (property.items?.type !== "number" && property.items?.type !== "integer") return item;
+          const parsed = Number(item);
+          return Number.isFinite(parsed) ? parsed : item;
+        });
+      if (items.length > 0) out[key] = items;
+      continue;
+    }
     out[key] = value;
   }
   return out;
@@ -629,7 +684,6 @@ export function adaptWorkflow(row: WorkflowRow, extras: WorkflowExtras = {}): Wo
     ok: stats?.successRate ?? null,
     p50: stats?.p50Ms === null || stats?.p50Ms === undefined ? "—" : formatElapsed(stats.p50Ms),
     cost: costOf(stats),
-    shape: shapeOf(extras.shapeSource),
     labels: labelsOf(extras.shapeSource),
     // Newest-first from the API; the sparkline reads oldest-first.
     history: [...recent].reverse().map((run) => (run.status === "complete" ? 1 : 0)),
@@ -663,34 +717,31 @@ function workflowStateOf(recent: WorkflowStats["recent"]): Workflow["state"] {
   return running ? "running" : "idle";
 }
 
-/**
- * The shape strip, from what the newest run actually did. Nothing declares a workflow's
- * shape — the code decides it as it runs — so a workflow with no runs shows none.
- */
-function shapeOf(run: RunDetail | undefined): ShapeCell[] {
-  if (!run) return [];
-  const out: ShapeCell[] = [];
-  for (const phase of run.phases) {
-    const steps = phase.steps
-      .map((seq) => run.steps.find((step) => step.seq === seq))
-      .filter((step): step is StepState => step !== undefined);
-    if (steps.length === 0) continue;
-    const kind = stepBucket(steps[0]!.kind);
-    const glyph = kind === "agent" ? "A" : kind === "human" ? "H" : "T";
-    out.push({ kind, glyph: steps.length > 1 ? `${glyph}∥` : glyph });
-  }
-  return out;
-}
-
 function labelsOf(run: RunDetail | undefined): WorkflowLabel[] {
   if (!run) return [];
   return run.phases.map((phase) => {
     const steps = phase.steps
       .map((seq) => run.steps.find((step) => step.seq === seq))
       .filter((step): step is StepState => step !== undefined);
-    const kinds = [...new Set(steps.map((step) => step.kind))].join(" → ");
-    return { name: phase.name, meta: steps.length > 1 ? `${kinds} ×${steps.length}` : kinds };
+    const counts = new Map<StepKind, number>();
+    for (const step of steps) {
+      const kind = stepBucket(step.kind);
+      counts.set(kind, (counts.get(kind) ?? 0) + 1);
+    }
+    const summary = [...counts].map(([kind, count]) => `${kind}${count > 1 ? ` ×${count}` : ""}`);
+    if (hasOverlap(steps)) summary.push("parallel");
+    return { name: phase.name, meta: summary.join(" · ") };
   });
+}
+
+function hasOverlap(steps: StepState[]): boolean {
+  const ordered = [...steps].sort((a, b) => a.startedAt - b.startedAt);
+  let activeUntil = Number.NEGATIVE_INFINITY;
+  for (const step of ordered) {
+    if (step.startedAt < activeUntil) return true;
+    activeUntil = Math.max(activeUntil, step.endedAt ?? Number.POSITIVE_INFINITY);
+  }
+  return false;
 }
 
 function historyNoteOf(stats: WorkflowStats | undefined): string {

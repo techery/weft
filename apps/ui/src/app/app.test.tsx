@@ -76,9 +76,26 @@ describe("a run", () => {
   it("shows a step's input, which only ?detail=1 carries", async () => {
     renderApp("/runs/r-waiting?from=runs&tab=steps&step=step:1");
     expect(await screen.findByText("draft release notes · step 1")).toBeInTheDocument();
-    expect(screen.getByText("since")).toBeInTheDocument();
+    expect(screen.getByText("Since")).toBeInTheDocument();
     expect(screen.getByText("v0.8.4")).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Step overview" })).toBeInTheDocument();
+    expect(screen.getAllByRole("group", { name: "Data view" })).toHaveLength(2);
     expect(daemon.calls.some((call) => call.path === "/api/runs/r-waiting?detail=1")).toBe(true);
+  });
+
+  it("loads a recorded coding-session transcript inside its agent step", async () => {
+    const { user } = renderApp("/runs/r-waiting?from=runs&tab=steps&step=step:1");
+    const views = await screen.findByRole("tablist", { name: "Step views" });
+    expect(screen.queryByRole("region", { name: "Agent log" })).not.toBeInTheDocument();
+    await user.click(within(views).getByRole("tab", { name: "Agent log" }));
+    const agentLog = await screen.findByRole("region", { name: "Agent log" });
+    expect(within(agentLog).queryByRole("button", { name: /coding session/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Agent transcript" })).toBeInTheDocument();
+    expect(screen.getByText("exit 0")).toBeInTheDocument();
+    expect(await screen.findByText("git log --oneline v0.8.4..HEAD")).toBeInTheDocument();
+    expect(screen.getByText("Drafted six release-note sections.")).toBeInTheDocument();
+    expect(within(views).getByRole("tab", { name: "Agent log" })).toHaveAttribute("aria-selected", "true");
+    expect(daemon.calls.some((call) => call.path.endsWith("?as=text"))).toBe(true);
   });
 
   it("builds the gate's form from the schema the workflow declared", async () => {
@@ -127,7 +144,7 @@ describe("a run", () => {
     await screen.findAllByText("classify #815");
     expect(screen.queryByRole("tab", { name: /Changes/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: /Notes/ })).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /Journal/ })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /Journal/ })).not.toBeInTheDocument();
   });
 
   it("cancels a live run", async () => {
@@ -175,6 +192,9 @@ describe("the launcher", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "Run a workflow" });
     await user.click(within(dialog).getByText("triage"));
+    const inputPane = within(dialog).getByRole("region", { name: "Workflow input" });
+    expect(within(inputPane).getByText("schema-driven")).toBeInTheDocument();
+    expect(within(inputPane).getByText("string · optional")).toBeInTheDocument();
     // `triage` declares window as an enum, so the form offers its values as pills.
     expect(await within(dialog).findByRole("button", { name: "24h" })).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "24h" }));

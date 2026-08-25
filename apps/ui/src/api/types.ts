@@ -74,6 +74,10 @@ export interface StepState {
   attempts?: number;
   error?: { code?: string; message?: string };
   output?: unknown;
+  /** Output schema recorded when the step was scheduled; absent on older runs. */
+  schema?: JsonSchema;
+  sessionId?: string;
+  transcriptRef?: { $blob: string; size: number; preview?: string };
   patchRef?: string;
   childRunId?: string;
 }

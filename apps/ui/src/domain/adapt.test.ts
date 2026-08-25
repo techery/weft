@@ -108,9 +108,9 @@ describe("the steps rail", () => {
 });
 
 describe("tabs", () => {
-  it("hides a tab whose run produced nothing for it, and always keeps steps and journal", () => {
+  it("hides tabs whose run produced nothing and always keeps steps", () => {
     const bare = adaptRun(detail());
-    expect(runTabs(bare, false).map((t) => t.key)).toEqual(["steps", "journal"]);
+    expect(runTabs(bare, false).map((t) => t.key)).toEqual(["steps"]);
   });
 
   it("badges the steps tab only while a question is outstanding", () => {
@@ -119,6 +119,27 @@ describe("tabs", () => {
     expect(runTabs(run, false)[0]?.badge).toBe("");
     // The tab is labelled "Notes"; its key matches, so ?tab=notes resolves.
     expect(runTabs(run, false).map((t) => t.key)).toContain("notes");
+  });
+
+  it("attaches a recorded coding session to its agent step", () => {
+    const run = adaptRun(
+      detail({
+        steps: [
+          step({
+            seq: 1,
+            label: "review auth",
+            transcriptRef: { $blob: "d".repeat(64), size: 84 },
+            sessionId: "session-1",
+          }),
+        ],
+      }),
+    );
+    expect(run.steps["step:1"]?.agentTranscript).toMatchObject({
+      sessionId: "session-1",
+      transcriptRef: "d".repeat(64),
+      transcriptSize: 84,
+    });
+    expect(runTabs(run, false).map((tab) => tab.key)).toEqual(["steps"]);
   });
 });
 
@@ -159,6 +180,24 @@ describe("step input", () => {
   it("is empty when the run was fetched without detail", () => {
     const run = adaptRun(detail({ steps: [step({ seq: 4 })] }));
     expect(run.steps[stepId(4)]?.input).toEqual([]);
+  });
+});
+
+describe("step output", () => {
+  it("shows an agent's schema-validated value without its execution envelope", () => {
+    const run = adaptRun(
+      detail({
+        steps: [
+          step({
+            seq: 4,
+            output: { value: { findings: [{ severity: "major" }] }, files: [], patch: null },
+          }),
+        ],
+      }),
+    );
+
+    expect(run.steps[stepId(4)]?.outValue).toEqual({ findings: [{ severity: "major" }] });
+    expect(run.steps[stepId(4)]?.out).not.toContain('  "files": [],');
   });
 });
 
@@ -254,14 +293,28 @@ describe("a gate's form, from its declared schema", () => {
     expect(questions[0]?.options.map((o) => o.label)).toEqual(["#eng", "#ops"]);
   });
 
+  it("uses a line editor for a free-form array", () => {
+    const questions = schemaQuestions({
+      type: "object",
+      properties: { include: { type: "array", items: { type: "string" } } },
+    });
+    expect(questions[0]?.kind).toBe("list");
+  });
+
   it("builds the answer with the schema's own types, dropping what was left blank", () => {
     const schema = {
       type: "object",
-      properties: { approved: { type: "boolean" }, count: { type: "integer" }, note: { type: "string" } },
+      properties: {
+        approved: { type: "boolean" },
+        count: { type: "integer" },
+        note: { type: "string" },
+        files: { type: "array", items: { type: "string" } },
+      },
     };
-    expect(gateAnswer(schema, { approved: true, count: "7", note: "" })).toEqual({
+    expect(gateAnswer(schema, { approved: true, count: "7", note: "", files: "a.ts\nb.ts, c.ts" })).toEqual({
       approved: true,
       count: 7,
+      files: ["a.ts", "b.ts", "c.ts"],
     });
   });
 

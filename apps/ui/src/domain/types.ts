@@ -1,4 +1,6 @@
 /** Lifecycle of a whole run, as the journal records it. */
+import type { JsonSchema } from "~/api/types";
+
 export type RunState = "running" | "waiting" | "done" | "stopped" | "failed";
 
 /**
@@ -17,9 +19,6 @@ export type RiskTier = "read" | "write" | "network" | "destructive";
 export type PolicyMode = "auto" | "ask";
 
 export type WorkflowState = "running" | "waiting" | "idle";
-
-/** One glyph in a workflow's shape strip: T task, A agent, H human, ∥ parallel. */
-export type ShapeCell = { kind: StepKind; glyph: string };
 
 export type Labelled = { k: string; v: string };
 
@@ -48,7 +47,6 @@ export type Workflow = {
   ok: number | null;
   p50: string;
   cost: string;
-  shape: ShapeCell[];
   labels: WorkflowLabel[];
   /** 14 entries, 1 = succeeded, 0 = failed — oldest first. */
   history: number[];
@@ -113,6 +111,12 @@ export type FileChange = { path: string; adds: number; dels: number };
 
 export type JournalEntry = { time: string; tag: string; text: string };
 
+export type AgentTranscript = {
+  sessionId: string;
+  transcriptRef: string;
+  transcriptSize: number;
+};
+
 export type StepCell = { k: string; v: string; color?: string };
 
 export type StepInputKind = "record" | "file" | "text" | "pills";
@@ -137,17 +141,25 @@ export type StepDetail = {
   action: string;
   cells: StepCell[];
   input: StepInput[];
+  /** The exact scheduled payload, rendered through the same data surface as output. */
+  inputValue: unknown;
+  inputSchema: JsonSchema | null;
   outTitle: string;
   outNote: string;
+  /** The validated value and schema drive the structured output view. */
+  outValue: unknown;
+  outSchema: JsonSchema | null;
   out: string[];
   streaming: boolean;
+  /** The coding-session log belongs to this step, never to a run-level surface. */
+  agentTranscript: AgentTranscript | null;
   tools: ToolCall[];
   toolsTitle: string;
   /** The dashed strip under the output — an error, or what the step is waiting on. */
   next: { k: string; v: string; goToGate: boolean } | null;
 };
 
-export type GateQuestionKind = "cards" | "chips" | "choice" | "select" | "toggle" | "note";
+export type GateQuestionKind = "cards" | "chips" | "choice" | "select" | "toggle" | "text" | "list" | "note";
 
 export type GateOption = { label: string; meta: string; desc: string };
 

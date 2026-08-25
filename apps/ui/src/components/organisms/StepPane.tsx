@@ -1,12 +1,13 @@
+import { useId, useState } from "react";
 import { Button } from "~/components/atoms/Button";
 import { FactCell } from "~/components/atoms/FactCell";
 import { Kicker } from "~/components/atoms/Kicker";
 import { StatusPill } from "~/components/atoms/StatusPill";
 import { ActiveStepChip } from "~/components/molecules/ActiveStepChip";
+import { AgentTranscriptPane } from "~/components/molecules/AgentTranscriptPane";
 import { NextStrip } from "~/components/molecules/NextStrip";
-import { OutputPane } from "~/components/molecules/OutputPane";
+import { DataPane } from "~/components/molecules/OutputPane";
 import { SectionHeading } from "~/components/molecules/SectionHeading";
-import { StepInputRow } from "~/components/molecules/StepInputRow";
 import { ToolCallRow } from "~/components/molecules/ToolCallRow";
 import type { Run, StepDetail } from "~/domain/types";
 import styles from "./StepPane.module.css";
@@ -19,8 +20,20 @@ type Props = {
   onGoToGate: () => void;
 };
 
+type StepView = "step" | "agent-log";
+
 /** What one step was given, what it produced, and what followed from it. */
 export function StepPane({ run, step, stepId, onSelectStep, onGoToGate }: Props) {
+  const [selection, setSelection] = useState<{ stepId: string; view: StepView }>({
+    stepId,
+    view: "step",
+  });
+  const view = selection.stepId === stepId ? selection.view : "step";
+  const stepTabId = useId();
+  const logTabId = useId();
+  const stepPanelId = useId();
+  const logPanelId = useId();
+
   return (
     <div className={styles.pane}>
       <div className={styles.body}>
@@ -44,56 +57,108 @@ export function StepPane({ run, step, stepId, onSelectStep, onGoToGate }: Props)
           <span className={styles.spacer} />
         </div>
 
-        <SectionHeading>
-          <Kicker>Overview</Kicker>
-        </SectionHeading>
-        <div className={styles.cells}>
-          {step.cells.map((cell) => (
-            <FactCell
-              key={cell.k}
-              label={cell.k}
-              value={cell.v}
-              color={cell.color}
-              minWidth={cell.k === "kind" ? 96 : 104}
-            />
-          ))}
-        </div>
+        {step.agentTranscript ? (
+          <div className={styles.viewTabs} role="tablist" aria-label="Step views">
+            <button
+              id={stepTabId}
+              className={styles.viewTab}
+              type="button"
+              role="tab"
+              aria-selected={view === "step"}
+              aria-controls={stepPanelId}
+              tabIndex={view === "step" ? 0 : -1}
+              onClick={() => setSelection({ stepId, view: "step" })}
+            >
+              Step
+            </button>
+            <button
+              id={logTabId}
+              className={styles.viewTab}
+              type="button"
+              role="tab"
+              aria-selected={view === "agent-log"}
+              aria-controls={logPanelId}
+              tabIndex={view === "agent-log" ? 0 : -1}
+              onClick={() => setSelection({ stepId, view: "agent-log" })}
+            >
+              Agent log
+            </button>
+          </div>
+        ) : null}
 
-        {step.input.length > 0 ? (
-          <div className={styles.block}>
-            <SectionHeading note="as the step was scheduled">
-              <Kicker>Input</Kicker>
+        {view === "step" ? (
+          <div
+            className={styles.view}
+            {...(step.agentTranscript
+              ? { id: stepPanelId, role: "tabpanel", "aria-labelledby": stepTabId }
+              : {})}
+          >
+            <SectionHeading>
+              <Kicker>Overview</Kicker>
             </SectionHeading>
-            <div className={styles.inputBox}>
-              {step.input.map((input, index) => (
-                <StepInputRow key={input.k} input={input} divided={index > 0} />
+            <ul className={styles.cells} aria-label="Step overview">
+              {step.cells.map((cell) => (
+                <FactCell
+                  key={cell.k}
+                  label={cell.k}
+                  value={cell.v}
+                  color={cell.color}
+                  minWidth={cell.k === "kind" ? 96 : 104}
+                />
               ))}
-            </div>
-          </div>
-        ) : null}
+            </ul>
 
-        <SectionHeading>
-          <Kicker>Output</Kicker>
-        </SectionHeading>
-        <OutputPane title={step.outTitle} note={step.outNote} lines={step.out} streaming={step.streaming} />
+            {step.inputValue !== undefined ? (
+              <div className={styles.block}>
+                <SectionHeading>
+                  <Kicker>Input</Kicker>
+                </SectionHeading>
+                <DataPane
+                  title="step input"
+                  note="as scheduled"
+                  value={step.inputValue}
+                  schema={step.inputSchema}
+                  lines={[]}
+                  streaming={false}
+                />
+              </div>
+            ) : null}
 
-        {step.tools.length > 0 ? (
-          <div className={styles.tools}>
-            <SectionHeading note="sandboxed · fs read-only, no network">
-              <Kicker>{step.toolsTitle}</Kicker>
+            <SectionHeading>
+              <Kicker>Output</Kicker>
             </SectionHeading>
-            {step.tools.map((tool) => (
-              <ToolCallRow key={tool.cmd} tool={tool} />
-            ))}
-          </div>
-        ) : null}
+            <DataPane
+              title={step.outTitle}
+              note={step.outNote}
+              value={step.outValue}
+              schema={step.outSchema}
+              lines={step.out}
+              streaming={step.streaming}
+            />
 
-        {step.next ? (
-          <NextStrip
-            label={step.next.k}
-            detail={step.next.v}
-            onAnswerNow={step.next.goToGate ? onGoToGate : undefined}
-          />
+            {step.tools.length > 0 ? (
+              <div className={styles.tools}>
+                <SectionHeading note="sandboxed · fs read-only, no network">
+                  <Kicker>{step.toolsTitle}</Kicker>
+                </SectionHeading>
+                {step.tools.map((tool) => (
+                  <ToolCallRow key={tool.cmd} tool={tool} />
+                ))}
+              </div>
+            ) : null}
+
+            {step.next ? (
+              <NextStrip
+                label={step.next.k}
+                detail={step.next.v}
+                onAnswerNow={step.next.goToGate ? onGoToGate : undefined}
+              />
+            ) : null}
+          </div>
+        ) : step.agentTranscript ? (
+          <div id={logPanelId} className={styles.logView} role="tabpanel" aria-labelledby={logTabId}>
+            <AgentTranscriptPane transcript={step.agentTranscript} running={step.streaming} />
+          </div>
         ) : null}
       </div>
 

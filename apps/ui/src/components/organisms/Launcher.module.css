@@ -20,7 +20,7 @@
 }
 .panel {
   position: relative;
-  width: min(720px, 94vw);
+  width: min(960px, calc(100vw - 48px));
   background: var(--color-surface);
   border: 1px solid var(--color-divider);
   border-radius: var(--radius-md);
@@ -130,25 +130,72 @@
   background: var(--color-surface);
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 12px;
 }
-.inputsHead {
+.schemaPane {
+  overflow: clip;
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.schemaHead {
+  min-height: 38px;
+  padding: 7px 10px 7px 13px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
+  border-bottom: 1px solid var(--color-divider);
 }
-.inputsHint {
-  font-family: var(--font-mono);
-  font-size: 11px;
+.schemaTitle {
   color: var(--color-neutral-600);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.schemaNote,
+.schemaHint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-neutral-500);
+}
+.schemaHint {
+  white-space: nowrap;
+}
+.schemaFields {
+  padding: 4px 0;
+}
+.schemaState,
+.rawInput {
+  padding: 12px 13px;
+  display: block;
+}
+.rawInput {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rawTextArea {
+  max-width: none;
 }
 .foot {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding-top: 6px;
+  padding-top: 10px;
   border-top: 1px solid var(--color-neutral-300);
   margin-top: 4px;
+}
+
+@media (max-width: 720px) {
+  .schemaHead {
+    flex-wrap: wrap;
+  }
+  .schemaHint {
+    order: 3;
+    width: 100%;
+  }
 }
 .footNote {
   font-family: var(--font-mono);

@@ -1,6 +1,7 @@
 import { PillButton } from "~/components/atoms/PillButton";
 import { SelectField } from "~/components/atoms/SelectField";
 import { TextArea } from "~/components/atoms/TextArea";
+import { TextField } from "~/components/atoms/TextField";
 import { Toggle } from "~/components/atoms/Toggle";
 import type { GateAnswerValue, GateQuestion } from "~/domain/types";
 import styles from "./GateQuestionRow.module.css";
@@ -76,6 +77,25 @@ export function GateQuestionRow({ question, value, onSet, onToggleChip, onToggle
           // The caption is the field's own state, not a guess at what the flag means: the
           // schema gives a name and a type, never a pair of prose alternatives.
           <Toggle on={value === true} label={value === true ? "yes" : "no"} onToggle={onToggleFlag} />
+        ) : null}
+
+        {question.kind === "text" ? (
+          <TextField
+            aria-label={question.label}
+            value={typeof value === "string" ? value : ""}
+            placeholder={question.required ? "required" : "optional"}
+            onChange={(e) => onSet(e.target.value)}
+          />
+        ) : null}
+
+        {question.kind === "list" ? (
+          <TextArea
+            rows={3}
+            aria-label={question.label}
+            value={Array.isArray(value) ? value.join("\n") : typeof value === "string" ? value : ""}
+            placeholder="one item per line"
+            onChange={(e) => onSet(e.target.value)}
+          />
         ) : null}
 
         {question.kind === "note" ? (

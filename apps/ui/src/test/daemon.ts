@@ -44,6 +44,7 @@ export interface FakeDaemon {
 }
 
 const NOW = 1_700_000_000_000;
+const TRANSCRIPT_REF = "d".repeat(64);
 
 export function defaultState(): DaemonState {
   return {
@@ -121,6 +122,8 @@ export function defaultState(): DaemonState {
             endedAt: NOW - 420_000,
             route: { provider: "claude", model: "sonnet" },
             usage: { input: 8_000, output: 1_712, usd: 0.71 },
+            sessionId: "session-release-1",
+            transcriptRef: { $blob: TRANSCRIPT_REF, size: 144 },
             output: { sections: 6 },
           },
           {
@@ -372,7 +375,16 @@ export function defaultState(): DaemonState {
         providers: { claude: { concurrency: 4 } },
       },
     },
-    blobs: { ["a".repeat(64)]: "# Changelog\n## v0.9.0\n" },
+    blobs: {
+      ["a".repeat(64)]: "# Changelog\n## v0.9.0\n",
+      [TRANSCRIPT_REF]: [
+        "reasoning: Inspect the release history and current changelog.",
+        "exec (exit 0): git log --oneline v0.8.4..HEAD",
+        "files (completed): modify CHANGELOG.md",
+        "assistant: Drafted six release-note sections.",
+        "result: success",
+      ].join("\n"),
+    },
   };
 }
 

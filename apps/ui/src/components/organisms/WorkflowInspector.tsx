@@ -4,7 +4,6 @@ import type { HistoryBar } from "~/components/molecules/HistoryBars";
 import { HistoryBars } from "~/components/molecules/HistoryBars";
 import { PhaseRow } from "~/components/molecules/PhaseRow";
 import { RecentRunRow } from "~/components/molecules/RecentRunRow";
-import { ShapeStrip } from "~/components/molecules/ShapeStrip";
 import type { RunState, Workflow } from "~/domain/types";
 import styles from "./WorkflowInspector.module.css";
 
@@ -86,19 +85,7 @@ export function WorkflowInspector({
       </div>
 
       <div className={styles.labels}>
-        <Kicker className={styles.kickerSpaced}>Shape</Kicker>
-        {workflow.shape.length > 0 ? (
-          <span className={styles.shapeRow}>
-            <ShapeStrip shape={workflow.shape} />
-            <span className={styles.shapeLegend}>T task · A agent · H human · ∥ parallel</span>
-          </span>
-        ) : (
-          <span className={styles.recentEmpty}>no runs yet — the shape is read off the newest one</span>
-        )}
-      </div>
-
-      <div className={styles.labels}>
-        <Kicker className={styles.kickerSpaced}>Labels in code</Kicker>
+        <Kicker className={styles.kickerSpaced}>Latest run shape</Kicker>
         {workflow.labels.map((label, index) => (
           <PhaseRow key={label.name + label.meta} index={index + 1} label={label} />
         ))}

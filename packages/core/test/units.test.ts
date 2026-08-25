@@ -268,15 +268,32 @@ describe("reduceState check metadata", () => {
           hash: "h2",
           kind: "check",
           payload: { name: "types", required: false },
+          schema: { type: "object", properties: { status: { type: "string" } } },
         },
       },
-      { i: 4, at: 5, ev: { type: "step.completed", seq: 1, output: { status: "pass" } } },
+      {
+        i: 4,
+        at: 5,
+        ev: {
+          type: "step.completed",
+          seq: 1,
+          output: { status: "pass" },
+          sessionId: "session-1",
+          transcriptRef: { $blob: "a".repeat(64), size: 120 },
+        },
+      },
     ];
     const state = reduceState(recs);
     expect(state.checks).toEqual([
       { name: "lint", status: "fail", required: true },
       { name: "types", status: "pass", required: false },
     ]);
+    expect(state.steps.at(-1)?.schema).toEqual({
+      type: "object",
+      properties: { status: { type: "string" } },
+    });
+    expect(state.steps.at(-1)?.sessionId).toBe("session-1");
+    expect(state.steps.at(-1)?.transcriptRef).toEqual({ $blob: "a".repeat(64), size: 120 });
   });
 });
 

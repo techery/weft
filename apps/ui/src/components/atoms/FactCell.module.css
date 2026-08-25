@@ -17,6 +17,23 @@
   font-size: 12px;
   white-space: nowrap;
 }
+/* Step overview facts form one dense metadata strip. */
+.step {
+  min-height: 54px;
+  box-sizing: border-box;
+  justify-content: center;
+  gap: 4px;
+  padding: 9px 14px;
+}
+.step .key {
+  font-size: 9px;
+  font-weight: 600;
+}
+.step .value {
+  color: var(--color-neutral-900);
+  font-size: 12px;
+  font-weight: 500;
+}
 /* Queue cards use fixed-width cells. */
 .fixed {
   width: 172px;
