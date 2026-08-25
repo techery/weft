@@ -239,6 +239,14 @@ export function reduceState(records: JournalRecord[]): RunState {
         if (ev.attempts !== undefined) step.attempts = ev.attempts;
         break;
       }
+      case "step.settled": {
+        const step = stepsBySeq.get(ev.seq);
+        if (!step) break;
+        step.status = "ok";
+        step.endedAt = rec.at;
+        delete step.error;
+        break;
+      }
       case "human.requested": {
         const human: HumanState = {
           id: ev.id,

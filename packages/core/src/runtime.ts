@@ -586,10 +586,19 @@ export class RunRuntime {
           const value = spec.revive ? await spec.revive(loaded, entry) : (loaded as T);
           try {
             await spec.onSettle?.(value, { served: true, entry });
+            if (spec.onSettle && !entry.settled) {
+              await this.append([{ type: "step.settled", seq: entry.seq }]);
+            }
           } catch (err) {
             const stepError = StepError.from(err, { ...ref, seq: entry.seq });
             await this.append([
-              { type: "step.failed", seq: entry.seq, error: stepError.serialize(), attempts: 1 },
+              {
+                type: "step.failed",
+                seq: entry.seq,
+                error: stepError.serialize(),
+                attempts: 1,
+                phase: "settle",
+              },
             ]);
             throw stepError;
           }
@@ -691,6 +700,7 @@ export class RunRuntime {
       let attempt = 0;
       for (;;) {
         attempt++;
+        let completed = false;
         // Per-attempt abort: a step timeout aborts THIS attempt's signal so the
         // provider tears down its session; a retry gets a fresh controller.
         const stepAbort = new AbortController();
@@ -735,7 +745,9 @@ export class RunRuntime {
               attempts: outcome.attempts ?? attempt,
             },
           ]);
+          completed = true;
           await spec.onSettle?.(outcome.value, { served: false });
+          if (spec.onSettle) await this.append([{ type: "step.settled", seq }]);
           return outcome.value;
         } catch (err) {
           unmarkWaiting();
@@ -748,6 +760,7 @@ export class RunRuntime {
           // consumers (drops, durable suppression) can address the step.
           if (stepError.step.seq === undefined) (stepError.step as { seq?: number }).seq = seq;
           const retryable =
+            !completed &&
             !isCancellation(stepError) &&
             stepError.code !== "budget_exceeded" &&
             stepError.code !== "gate_denied" &&
@@ -755,7 +768,13 @@ export class RunRuntime {
             attempt < maxAttempts;
           if (!retryable) {
             await this.append([
-              { type: "step.failed", seq, error: stepError.serialize(), attempts: attempt },
+              {
+                type: "step.failed",
+                seq,
+                error: stepError.serialize(),
+                attempts: attempt,
+                phase: completed ? "settle" : "execute",
+              },
             ]);
             throw stepError;
           }

@@ -31,6 +31,8 @@ export interface CompletedEntry {
   /** Journal index of the completing event = completion order. */
   order: number;
   consumed: boolean;
+  /** False after a settlement failure, so a later successful replay can repair projections. */
+  settled: boolean;
 }
 
 export interface HumanEntry {
@@ -90,6 +92,7 @@ export class ReplayIndex {
   static fromRecords(records: JournalRecord[]): ReplayIndex {
     const index = new ReplayIndex();
     const scheduledBySeq = new Map<number, ScheduledEntry & { key?: string }>();
+    const latestScheduledOrderBySeq = new Map<number, number>();
     const signalNameBySeq = new Map<number, string>();
     const completedSignalNames: string[] = [];
     for (const rec of records) {
@@ -108,6 +111,7 @@ export class ReplayIndex {
             ...(ev.key ? { key: ev.key } : {}),
           };
           scheduledBySeq.set(ev.seq, entry);
+          latestScheduledOrderBySeq.set(ev.seq, rec.i);
           index.maxSeq = Math.max(index.maxSeq, ev.seq);
           const list = index.scheduledByHash.get(ev.hash) ?? [];
           list.push(entry);
@@ -133,6 +137,7 @@ export class ReplayIndex {
             output: ev.output,
             order: rec.i,
             consumed: false,
+            settled: false,
             ...(sched.key !== undefined ? { key: sched.key } : {}),
             ...(sched.childRunId !== undefined ? { childRunId: sched.childRunId } : {}),
             ...(ev.usage !== undefined ? { usage: ev.usage } : {}),
@@ -171,11 +176,19 @@ export class ReplayIndex {
           break;
         }
         case "step.failed": {
-          // `onSettle` runs after step.completed so crash-recoverable external effects can
-          // be retried from the journal. If settlement itself fails, the later terminal
-          // failure wins: do not serve the completed value forever on every resume.
           const completed = index.bySeq.get(ev.seq);
-          if (completed) {
+          // A settlement failure must retain the exact completed output: replaying it
+          // retries the journaled side effects without paying the provider again. Old
+          // journals predate `phase`; a completion newer than the latest schedule is
+          // the unambiguous completed -> failed settlement sequence.
+          const settlementFailure =
+            ev.phase === "settle" ||
+            (ev.phase === undefined &&
+              completed !== undefined &&
+              completed.order > (latestScheduledOrderBySeq.get(ev.seq) ?? -1));
+          if (completed && settlementFailure) {
+            completed.settled = false;
+          } else if (completed) {
             index.bySeq.delete(ev.seq);
             index.byHash.set(
               completed.hash,
@@ -197,6 +210,11 @@ export class ReplayIndex {
             index.totalUsage.usd += usage.usd ?? 0;
             index.totalUsage.samples += usage.samples ?? 1;
           }
+          break;
+        }
+        case "step.settled": {
+          const completed = index.bySeq.get(ev.seq);
+          if (completed) completed.settled = true;
           break;
         }
         case "human.requested": {

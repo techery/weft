@@ -1209,6 +1209,10 @@ async function extensionsOf(value: unknown, schema?: AnySchema): Promise<unknown
       `task extensions failed the workflow schema: ${checked.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`,
     );
   }
+  const unsafe = jsonUnsafeAt(checked.value);
+  if (unsafe !== undefined) {
+    throw new Error(`task extension schema output must be JSON-safe at ${unsafe}`);
+  }
   return checked.value;
 }
 

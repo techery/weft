@@ -190,16 +190,23 @@ describe("engine end to end", () => {
     expect(dryPreparedWithoutPersistence).toBe(true);
   });
 
-  test("a post-completion task conflict is durably failed and reruns instead of replaying forever", async () => {
+  test("a post-completion task conflict retries the journaled batch without rerunning the agent", async () => {
     let applyCalls = 0;
+    const appliedOperations: unknown[][] = [];
     const t = testEngine({
       taskTracker: {
         snapshot: async () => ({ total: 0, truncated: false, tasks: [] }),
         schema: async () => null,
         validateBatch: async () => undefined,
-        applyBatch: async () => {
+        applyBatch: async (_context, _batchId, operations) => {
           applyCalls++;
-          if (applyCalls === 1) throw new Error("task changed after preflight");
+          if (applyCalls === 1) {
+            // Model a host that durably applied the first operation before a
+            // later write failed. Resume must replay this exact batch.
+            appliedOperations.push(operations.slice(0, 1));
+            throw new Error("task changed after preflight");
+          }
+          appliedOperations.push(operations);
         },
       },
     });
@@ -226,21 +233,20 @@ describe("engine end to end", () => {
     const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
     await expect(handle.result).rejects.toThrow(/task changed after preflight/);
     const failedRecords = await records(t.journal, handle.runId);
-    expect(failedRecords.map((record) => record.ev.type)).toContain("step.failed");
+    expect(failedRecords).toContainEqual(
+      expect.objectContaining({ ev: expect.objectContaining({ type: "step.failed", phase: "settle" }) }),
+    );
 
     const resumed = reopen(t, { taskTracker: t.engine.taskTracker });
-    resumed.builder.on(
-      { key: "record" },
-      mockTaskEnvelope({ ok: true }, [{ op: "create", title: "Track", description: "Retry the intent" }]),
-    );
     const resumedHandle = await resumed.engine.resume(handle.runId, { def });
     expect(await resumedHandle.result).toEqual({});
     expect(applyCalls).toBe(2);
+    expect(appliedOperations[1]).toEqual(appliedOperations[0]);
     expect(t.builder.calls.filter((call) => call.key === "record")).toHaveLength(1);
-    expect(resumed.builder.calls.filter((call) => call.key === "record")).toHaveLength(1);
+    expect(resumed.builder.calls.filter((call) => call.key === "record")).toHaveLength(0);
   });
 
-  test("a replay-served task settlement failure is journaled and the next resume reruns the agent", async () => {
+  test("a replay-served task settlement failure keeps retrying the same completed output", async () => {
     let applyCalls = 0;
     const taskTracker = {
       snapshot: async () => ({ total: 0, truncated: false, tasks: [] }),
@@ -282,16 +288,22 @@ describe("engine end to end", () => {
     const failedRecords = await records(first.journal, handle.runId);
     expect(
       failedRecords.some(
-        (record) => record.ev.type === "step.failed" && record.ev.error.message.includes("settlement failed"),
+        (record) =>
+          record.ev.type === "step.failed" &&
+          record.ev.phase === "settle" &&
+          record.ev.error.message.includes("settlement failed"),
       ),
     ).toBe(true);
 
     const third = reopen(first, { taskTracker });
-    third.builder.on({ key: "record" }, response);
     const thirdHandle = await third.engine.resume(handle.runId, { def });
     expect(await thirdHandle.result).toEqual({});
-    expect(third.builder.calls.filter((call) => call.key === "record")).toHaveLength(1);
+    expect(third.builder.calls.filter((call) => call.key === "record")).toHaveLength(0);
     expect(applyCalls).toBe(3);
+    const recoveredRecords = await records(first.journal, handle.runId);
+    const failedAt = recoveredRecords.findLastIndex((record) => record.ev.type === "step.failed");
+    const settledAt = recoveredRecords.findLastIndex((record) => record.ev.type === "step.settled");
+    expect(settledAt).toBeGreaterThan(failedAt);
   });
 
   test("rejects task mutations from an agent with read-only task authority", async () => {

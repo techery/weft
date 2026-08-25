@@ -141,7 +141,16 @@ export type JournalEvent =
       patchRef?: string;
       attempts?: number;
     }
-  | { type: "step.failed"; seq: number; error: SerializedStepError; attempts?: number }
+  /** `settle` means execution completed and only its journal-backed side effects failed. */
+  | {
+      type: "step.failed";
+      seq: number;
+      error: SerializedStepError;
+      attempts?: number;
+      phase?: "execute" | "settle";
+    }
+  /** A previously completed step's `onSettle` hook has succeeded. */
+  | { type: "step.settled"; seq: number }
   // humans & external
   | HumanRequestEvent
   | HumanAnsweredEvent

@@ -158,6 +158,37 @@ describe("TaskStore", () => {
     expect(persisted.extensions).toEqual({ source: " API " });
   });
 
+  it("rejects non-JSON extension outputs before exposing task context", async () => {
+    const cases = [
+      {
+        name: "Date",
+        schema: z.object({ source: z.string() }).transform(({ source }) => ({ parsed: new Date(source) })),
+        source: "2026-08-25T00:00:00.000Z",
+      },
+      {
+        name: "bigint",
+        schema: z.object({ source: z.string() }).transform(({ source }) => ({ parsed: BigInt(source) })),
+        source: "42",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const root = await tempRoot();
+      const taskRoot = join(root, ".weft", "tasks");
+      const writer = new TaskStore(taskRoot);
+      await writer.create("release", {
+        title: `Unsafe ${testCase.name}`,
+        description: "Raw JSON remains durable",
+        extensions: { source: testCase.source },
+      });
+      const reader = new TaskStore(taskRoot, async () => testCase.schema);
+
+      await expect(reader.snapshot("release")).rejects.toThrow(
+        new RegExp(`task extension schema output must be JSON-safe.*${testCase.name}`),
+      );
+    }
+  });
+
   it("binds each run to its exact extension schema even when another definition registers", async () => {
     const root = await tempRoot();
     const store = new TaskStore(join(root, ".weft", "tasks"));
