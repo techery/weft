@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/dist", "!**/.weft/runs"]
+    "includes": ["**", "!**/dist", "!**/.weft/runs", "!weft-workflow-manager-prototype"]
   },
   "formatter": {
     "enabled": true,

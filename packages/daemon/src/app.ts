@@ -11,20 +11,27 @@
  *     journal as it is written rather than polling a projection.
  *   - `POST .../answer` and `POST .../signal` wake the run afterwards when nothing in
  *     this process is waiting on it — the daemon's wake-suspended-runs job.
+ *
+ * `/` serves the built workflow manager when one is bundled beside this package, and the
+ * built-in page otherwise; the built-in page keeps a fixed address at `/legacy` either
+ * way. Client-side routes fall through to the manager's document, so a deep link like
+ * `/runs/r-045` survives a page load.
  */
-import type {
-  JournalRecord,
-  PendingRequest,
-  RunListFilter,
-  RunState,
-  RunStatus,
-  RunSummary,
-  Weft,
-} from "@techery/weft-host";
-import { persistedDefOf, reduceState, renderReport, renderTree, resumeOptions } from "@techery/weft-host";
+import type { JournalRecord, RunListFilter, RunStatus, Weft } from "@techery/weft-host";
+import { persistedDefOf, renderReport, renderTree, resumeOptions } from "@techery/weft-host";
 import type { Context } from "hono";
 import { Hono } from "hono";
+import { registerArtifactRoutes } from "./api/artifacts.ts";
+import { registerBlobRoutes } from "./api/blobs.ts";
+import { registerConfigRoutes } from "./api/config.ts";
+import { registerMetaRoutes } from "./api/meta.ts";
+import { registerPendingRoutes } from "./api/pending.ts";
+import { registerStartRoutes } from "./api/starts.ts";
+import { registerWorkflowRoutes } from "./api/workflows.ts";
+import { fail, jsonBody, messageOf, page } from "./http.ts";
+import { pendingAcross, refreshProjections, repaired, stateOf } from "./state.ts";
 import { INDEX_HTML } from "./ui.ts";
+import { BUNDLED_WEB_ROOT, openWebBundle, type WebBundle } from "./web.ts";
 
 /** A comment line often enough that a proxy (or a sleeping laptop) never calls the stream dead. */
 const HEARTBEAT_MS = 15_000;
@@ -52,14 +59,24 @@ function isLoopbackName(value: string): boolean {
   }
 }
 
+export interface CreateAppOptions {
+  /**
+   * The built workflow manager to serve at `/`. Defaults to the bundle shipped beside
+   * this package; pass `null` to serve the built-in page there instead, or a bundle
+   * opened from somewhere else.
+   */
+  web?: WebBundle | null;
+}
+
 /**
  * Build the app over an assembled {@link Weft}. Kept separate from `startDaemon()` so
  * tests (and anything embedding the daemon) can drive every route through `app.request()`
  * with no socket in the way.
  */
-export function createApp(weft: Weft): Hono {
+export function createApp(weft: Weft, opts: CreateAppOptions = {}): Hono {
   const app = new Hono();
   const engine = weft.engine;
+  const web = opts.web === undefined ? openWebBundle(BUNDLED_WEB_ROOT) : (opts.web ?? undefined);
 
   // Loopback binding alone does not authenticate a BROWSER: a DNS-rebinding
   // page re-resolves its own hostname to 127.0.0.1 and reaches this API as if
@@ -79,12 +96,34 @@ export function createApp(weft: Weft): Hono {
     return next();
   });
 
-  app.get("/", (c) => c.body(INDEX_HTML, 200, { "content-type": "text/html; charset=utf-8" }));
+  app.get("/", (c) => page(c, web ? web.index : INDEX_HTML));
+
+  // The built-in page reads the live journal, so it stays reachable at one fixed address
+  // whether or not the manager is the thing on `/`.
+  app.get("/legacy", (c) => page(c, INDEX_HTML));
 
   app.get("/api/runs", async (c) => {
     try {
       const summaries = await engine.list(listFilter(c));
-      return c.json(await Promise.all(summaries.map((summary) => repaired(weft, summary))));
+      const rows = await Promise.all(summaries.map((summary) => repaired(weft, summary)));
+      // `?spend=1` folds each run's journal for its token and dollar totals. Off by
+      // default because the plain list has to stay one read per run however many there
+      // are; on when a caller is rendering a cost column and would otherwise do the
+      // same folds one request at a time.
+      if (c.req.query("spend") !== "1") return c.json(rows);
+      return c.json(
+        await Promise.all(
+          rows.map(async (row) => {
+            const state = await stateOf(weft, row.runId).catch(() => undefined);
+            return {
+              ...row,
+              spend: state ? state.budget : { tokens: 0, usd: 0 },
+              steps: state ? state.steps.length : 0,
+              running: state ? state.steps.filter((step) => step.status === "running").length : 0,
+            };
+          }),
+        ),
+      );
     } catch (err) {
       return fail(c, err);
     }
@@ -212,107 +251,38 @@ export function createApp(weft: Weft): Hono {
     }
   });
 
+  // Everything above is run-scoped and predates the workflow manager. These are the
+  // surfaces the manager needs and the API did not have: the registry, starting a run,
+  // the bytes behind a ref, the config file, and one cross-run view of what is waiting.
+  registerMetaRoutes(app, weft);
+  registerPendingRoutes(app, weft);
+  registerWorkflowRoutes(app, weft);
+  registerStartRoutes(app, weft);
+  registerBlobRoutes(app, weft);
+  registerArtifactRoutes(app, weft);
+  registerConfigRoutes(app, weft);
+
+  /*
+   * Last, so every route above wins first: the manager's own assets, then its
+   * client-side routes. An unmatched `/api/` path is a missing endpoint, not a page —
+   * answering it with HTML would turn a typo into a parse error somewhere else.
+   */
+  app.get("*", async (c) => {
+    const path = c.req.path;
+    if (path.startsWith("/api/") || web === undefined) {
+      return c.json({ error: `no route for GET ${path}` }, 404);
+    }
+    const asset = await web.read(path);
+    if (asset !== undefined) {
+      return c.body(asset.body, 200, {
+        "content-type": asset.contentType,
+        "cache-control": asset.immutable ? "public, max-age=31536000, immutable" : "no-cache",
+      });
+    }
+    return page(c, web.index);
+  });
+
   return app;
-}
-
-// ---------------------------------------------------------------------------
-// Projections
-// ---------------------------------------------------------------------------
-
-/**
- * Every read here folds the run's journal, because the journal is the only record that is
- * always complete (C4). The engine keeps its own projection for a run it is driving, and
- * that copy trails the journal by one append at every suspension — and, for a run this
- * process itself started, never sees `run.created` at all (see the package's frictions
- * note). Folding the journal costs one file read and cannot disagree with the event
- * stream the same page is rendering next to it.
- */
-async function stateOf(weft: Weft, runId: string): Promise<RunState> {
-  const records: JournalRecord[] = [];
-  for await (const record of weft.engine.journal.read(runId)) records.push(record);
-  if (records.length === 0) throw new Error(`run ${runId} not found`);
-  return reduceState(records);
-}
-
-/**
- * Pending requests across the run AND its live descendants: a child suspended
- * on a person suspends the whole tree, and its request lives only in the
- * child's journal. Each entry carries the OWNING run's id, and the engine
- * routes an answer submitted under the parent id to that owner either way.
- */
-async function pendingAcross(weft: Weft, state: RunState, seen: Set<string>): Promise<PendingRequest[]> {
-  const out = pendingOf(state);
-  for (const { childRunId } of state.children) {
-    if (seen.has(childRunId)) continue;
-    seen.add(childRunId);
-    // Only confirmed ABSENCE is skippable (a child scheduled but never
-    // journaled). An unreadable child journal must surface instead of /pending
-    // silently omitting the child's outstanding approval.
-    if (!(await weft.engine.exists(childRunId))) continue;
-    const child = await stateOf(weft, childRunId);
-    if (child.status === "complete" || child.status === "failed" || child.status === "cancelled") continue;
-    out.push(...(await pendingAcross(weft, child, seen)));
-  }
-  return out;
-}
-
-/** The same shape `engine.pending()` reports, derived from the same fold as the rest. */
-function pendingOf(state: RunState): PendingRequest[] {
-  return state.humans
-    .filter((human) => human.status === "pending")
-    .map((human) => ({
-      runId: state.runId,
-      id: human.id,
-      kind: human.kind as PendingRequest["kind"],
-      question: human.question,
-      schema: human.schema,
-      createdAt: human.requestedAt,
-      ...(human.detail !== undefined ? { detail: human.detail } : {}),
-      ...(human.risk !== undefined ? { risk: human.risk } : {}),
-      ...(human.deadline !== undefined ? { deadline: human.deadline } : {}),
-      ...(human.confirmToken !== undefined ? { confirmToken: human.confirmToken } : {}),
-    }));
-}
-
-/**
- * The runs list is the one read that has to stay cheap with hundreds of runs, so it takes
- * the store's `state.json`-backed summaries as they come. A summary with no workflow name
- * is one the engine wrote from an incomplete projection (the frictions note again); that
- * run is re-derived from its journal and the projection is rewritten, so the repair costs
- * one fold once rather than one fold per poll.
- */
-async function repaired(weft: Weft, summary: RunSummary): Promise<RunSummary> {
-  if (summary.workflow !== "") return summary;
-  const state = await refreshProjections(weft, summary.runId);
-  if (!state) return summary;
-  return {
-    ...summary,
-    workflow: state.workflow,
-    status: state.status,
-    createdAt: state.createdAt || summary.createdAt,
-  };
-}
-
-/**
- * Re-derive `state.json` / `tree.json` / `report.md` from the journal. Nothing else does
- * it for a run no process is driving, and the runs list reads the projection — so without
- * this an answered run would keep listing as "waiting_for_human" until someone resumed it.
- * Projections are derived data, safe to rewrite at any time (C9), which is also why a
- * failure here never fails the request that triggered it.
- */
-async function refreshProjections(weft: Weft, runId: string): Promise<RunState | undefined> {
-  try {
-    const state = await stateOf(weft, runId);
-    await weft.engine.journal.snapshot(runId, {
-      state,
-      tree: renderTree(state),
-      report: renderReport(state),
-    });
-    return state;
-  } catch {
-    // The mutation already landed in the journal; the projection catches up on the next write.
-    return undefined;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -485,32 +455,4 @@ function listFilter(c: Context): RunListFilter {
     ...(workflow ? { workflow } : {}),
     ...(Number.isFinite(limit) && limit > 0 ? { limit } : {}),
   };
-}
-
-async function jsonBody(c: Context): Promise<Record<string, unknown>> {
-  let parsed: unknown;
-  try {
-    parsed = await c.req.json();
-  } catch {
-    throw new Error("expected a JSON object body");
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("expected a JSON object body");
-  }
-  return parsed as Record<string, unknown>;
-}
-
-/**
- * A run id nobody has journaled is the only 404 this surface has. Everything else a
- * caller can cause — a malformed body, an answer the schema rejects, a resume with no
- * definition on disk — is a 400 carrying the engine's own message, which is the part
- * worth reading.
- */
-function fail(c: Context, err: unknown): Response {
-  const message = messageOf(err);
-  return c.json({ error: message }, /\bnot found\b/i.test(message) ? 404 : 400);
-}
-
-function messageOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

@@ -1,5 +1,7 @@
 node_modules/
 dist/
+# The workflow manager's build output: apps/ui compiles into the daemon that serves it.
+packages/daemon/web/
 *.tgz
 .weft/runs/
 *.log

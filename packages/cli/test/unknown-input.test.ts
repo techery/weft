@@ -4,9 +4,10 @@
  * schema — `.passthrough()`, `.loose()`, `.catchall(…)` — has a shape too, and rejecting
  * everything outside it would refuse the very fields such a workflow exists to receive.
  */
+
+import { rejectUnknownInput } from "@techery/weft-host";
 import { defineWorkflow, z } from "@techery/weft-sdk";
 import { describe, expect, it } from "vitest";
-import { rejectUnknownInput } from "../src/commands/run.ts";
 
 const wf = (input: z.ZodType) =>
   defineWorkflow({ name: "w", description: "w", input, output: z.object({}) }, async () => ({}));

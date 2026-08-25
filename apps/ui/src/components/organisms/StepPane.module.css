@@ -1,0 +1,78 @@
+.pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 22px 20px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+.activeRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  flex-wrap: wrap;
+}
+.title {
+  font-size: 20px;
+}
+.spacer {
+  flex: 1;
+}
+.cells {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 0;
+  padding: 11px 0 12px;
+  border-top: 1px solid var(--color-neutral-200);
+  border-bottom: 1px solid var(--color-neutral-200);
+}
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.inputBox {
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.tools {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.foot {
+  flex: none;
+  border-top: 1px solid var(--color-divider);
+  background: var(--color-surface);
+  padding: 10px 22px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.footId {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-600);
+  flex: 1;
+  min-width: 180px;
+}

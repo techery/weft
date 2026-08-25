@@ -13,6 +13,7 @@ import type { AddressInfo } from "node:net";
 import { type ServerType, serve } from "@hono/node-server";
 import { createWeft, type Weft } from "@techery/weft-host";
 import { createApp } from "./app.ts";
+import { BUNDLED_WEB_ROOT, openWebBundle } from "./web.ts";
 
 /** The design's default port; `weft ui` prints whatever it actually got. */
 export const DEFAULT_PORT = 4781;
@@ -39,6 +40,11 @@ export interface DaemonHandle {
   /** `http://127.0.0.1:<port>` — the real port, even when `port: 0` asked for any. */
   url: string;
   port: number;
+  /**
+   * What `/` is serving: `"manager"` when the built workflow manager was found beside
+   * this package, `"builtin"` when it was not and the daemon's own page is standing in.
+   */
+  surface: "manager" | "builtin";
   /** Stop listening (and drop open SSE streams). Idempotent. */
   close(): Promise<void>;
   /** The engine behind the routes — the same object the CLI and MCP server hold. */
@@ -54,7 +60,10 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<DaemonHandl
       ...(opts.providers !== undefined ? { providers: opts.providers } : {}),
     }));
 
-  const app = createApp(weft);
+  // Opened once here rather than inside createApp, so the handle can report which page
+  // callers are actually going to get.
+  const web = openWebBundle(BUNDLED_WEB_ROOT);
+  const app = createApp(weft, { web: web ?? null });
   let server: ServerType | undefined;
   let address: AddressInfo;
   try {
@@ -79,6 +88,7 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<DaemonHandl
   return {
     url: `http://${HOSTNAME}:${port}`,
     port,
+    surface: web ? "manager" : "builtin",
     weft,
     async close(): Promise<void> {
       if (closed) return;

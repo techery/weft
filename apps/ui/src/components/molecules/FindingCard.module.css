@@ -1,0 +1,69 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider);
+}
+.open {
+  border-color: var(--color-accent-400);
+}
+.head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-accent-700);
+  white-space: nowrap;
+}
+.msg {
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+}
+.sev {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  border-radius: var(--radius-pill);
+  padding: 2px 9px;
+  white-space: nowrap;
+  background: var(--color-accent-200);
+  color: var(--color-accent-800);
+}
+.loc {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-700);
+}
+.foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 7px;
+  border-top: 1px solid var(--color-neutral-200);
+  flex-wrap: wrap;
+}
+.footLabel {
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+}
+.step {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.spacer {
+  flex: 1;
+}

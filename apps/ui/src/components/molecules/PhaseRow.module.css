@@ -1,0 +1,29 @@
+.row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--color-neutral-200);
+}
+.num {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.name {
+  font-size: 13px;
+  font-weight: 500;
+  flex: 1;
+}
+.meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-600);
+}

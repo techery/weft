@@ -1,0 +1,42 @@
+.row {
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 20px;
+  text-align: left;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  border-left: 3px solid transparent;
+}
+.on {
+  background: var(--color-accent-200);
+  border-left-color: var(--color-accent);
+}
+.name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.file {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-accent-700);
+}
+.spacer {
+  flex: 1;
+}
+.meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-700);
+  white-space: nowrap;
+}
+.arrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+}

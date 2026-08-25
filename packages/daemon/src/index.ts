@@ -9,11 +9,30 @@
  * console.log(daemon.url); // http://127.0.0.1:4781
  * ```
  *
- * Routes: `GET /` (the page), `GET /api/runs`, `GET /api/runs/:id`, `.../report`,
- * `.../tree`, `.../pending`, `.../events` (SSE), and `POST .../answer`, `.../signal`,
- * `.../cancel`, `.../resume`.
+ * Pages: `GET /` (the workflow manager, or the built-in page when none is built) and
+ * `GET /legacy` (always the built-in page). Anything else that is not an `/api/` path is
+ * served the manager's document, so its client-side routes survive a reload.
+ *
+ * Runs: `GET /api/runs` (`?spend=1` adds token/dollar totals), `GET /api/runs/:id`,
+ * `.../report`, `.../tree`, `.../pending`, `.../artifacts`, `.../patch`, `.../events`
+ * (SSE); `POST /api/runs` starts one, and `POST .../answer`, `.../signal`, `.../cancel`,
+ * `.../resume` act on one.
+ *
+ * Everything else: `GET /api/meta`, `GET /api/pending` (across every run),
+ * `GET /api/workflows`, `/api/workflows/:name`, `/api/workflows/:name/stats`,
+ * `GET /api/blobs/:ref`, and `GET`/`PUT /api/config`.
  */
-export { createApp } from "./app.ts";
+export { type FileStat, parseDiffStats, registerArtifactRoutes } from "./api/artifacts.ts";
+export { registerBlobRoutes } from "./api/blobs.ts";
+export { registerConfigRoutes } from "./api/config.ts";
+export { registerMetaRoutes } from "./api/meta.ts";
+export { type PendingEntry, registerPendingRoutes } from "./api/pending.ts";
+export { registerStartRoutes } from "./api/starts.ts";
+export { registerWorkflowRoutes } from "./api/workflows.ts";
+export { type CreateAppOptions, createApp } from "./app.ts";
+export { fail, jsonBody, messageOf, page } from "./http.ts";
 export type { DaemonHandle, StartDaemonOptions } from "./server.ts";
 export { DEFAULT_PORT, startDaemon } from "./server.ts";
+export { pendingAcross, pendingOf, refreshProjections, repaired, stateOf } from "./state.ts";
 export { INDEX_HTML } from "./ui.ts";
+export { BUNDLED_WEB_ROOT, openWebBundle, type WebAsset, type WebBundle } from "./web.ts";

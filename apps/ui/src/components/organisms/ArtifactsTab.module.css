@@ -1,0 +1,135 @@
+.pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  min-height: 0;
+}
+.list {
+  width: 318px;
+  flex: none;
+  border-right: 1px solid var(--color-divider);
+  background: var(--color-surface);
+  padding: 14px 10px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  overflow-y: auto;
+}
+.listTitle {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-neutral-500);
+  font-weight: 600;
+  padding: 0 8px 4px;
+}
+.viewer {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--color-divider);
+  background: var(--color-surface);
+  flex-wrap: wrap;
+}
+.identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 180px;
+}
+.name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+.path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-600);
+}
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 22px 26px;
+  box-sizing: border-box;
+  background: var(--color-surface);
+}
+.content {
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.title {
+  font-size: 24px;
+}
+.para {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-neutral-800);
+}
+.code {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--color-term-bg);
+  overflow-x: auto;
+}
+.codeLine {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--color-term-text);
+  white-space: pre;
+}
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--color-neutral-100);
+}
+.row {
+  display: flex;
+  gap: 10px;
+  font-size: 13px;
+}
+.rowKey {
+  font-family: var(--font-mono);
+  color: var(--color-accent-700);
+  width: 96px;
+  flex: none;
+  white-space: nowrap;
+}
+.rowText {
+  flex: 1;
+}
+.rowValue {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-600);
+  flex: none;
+}
+.foot {
+  flex: none;
+  display: flex;
+  padding: 10px 20px;
+  border-top: 1px solid var(--color-divider);
+  background: var(--color-surface);
+  flex-wrap: wrap;
+}

@@ -1,0 +1,63 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 15px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider);
+}
+.needsYou {
+  border-color: var(--color-accent-400);
+}
+.top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.identity {
+  width: 176px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.sub {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-500);
+}
+.body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ask {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  font-weight: 500;
+}
+.detail {
+  font-size: 12px;
+  color: var(--color-neutral-700);
+  line-height: 1.45;
+}
+.facts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--color-neutral-200);
+}

@@ -1,0 +1,18 @@
+.quickStart {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.quickStartLabel {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-neutral-600);
+  font-weight: 600;
+}
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

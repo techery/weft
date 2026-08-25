@@ -1,0 +1,11 @@
+.bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 52px;
+}
+.bar {
+  flex: 1;
+  border-radius: var(--radius-pill);
+  min-height: 12px;
+}

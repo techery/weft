@@ -99,6 +99,23 @@ const ConfigSchema = z
   .loose();
 
 /**
+ * Validate a parsed JSON value as a config, or throw naming what is wrong with it. Split
+ * out of {@link loadConfig} so a host that WRITES the file can check a candidate before
+ * it lands — a config that only fails on the next process start is a config that took the
+ * daemon down.
+ */
+export function parseConfig(json: unknown, label = CONFIG_FILE): WeftConfig {
+  if (json === null || typeof json !== "object" || Array.isArray(json)) {
+    throw new Error(`${label} must contain a JSON object`);
+  }
+  const parsed = ConfigSchema.safeParse(json);
+  if (!parsed.success) {
+    throw new Error(`${label} is not a valid weft config:\n${formatIssues(parsed.error.issues)}`);
+  }
+  return parsed.data;
+}
+
+/**
  * Read `<cwd>/.weft/config.json`. Absent file → `{}`. Malformed JSON or a field of the
  * wrong shape → an Error naming the file, because a config a host silently ignores is
  * worse than one that refuses to load.
@@ -119,15 +136,7 @@ export async function loadConfig(cwd: string): Promise<WeftConfig> {
   } catch (err) {
     throw new Error(`${file} is not valid JSON: ${messageOf(err)}`, { cause: err });
   }
-  if (json === null || typeof json !== "object" || Array.isArray(json)) {
-    throw new Error(`${file} must contain a JSON object`);
-  }
-
-  const parsed = ConfigSchema.safeParse(json);
-  if (!parsed.success) {
-    throw new Error(`${file} is not a valid weft config:\n${formatIssues(parsed.error.issues)}`);
-  }
-  return parsed.data;
+  return parseConfig(json, file);
 }
 
 function isAbsent(err: unknown): boolean {

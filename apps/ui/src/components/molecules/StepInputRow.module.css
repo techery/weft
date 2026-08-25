@@ -1,0 +1,84 @@
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 7px 12px;
+}
+.divided {
+  border-top: 1px solid var(--color-neutral-200);
+}
+.key {
+  font-size: 11px;
+  color: var(--color-neutral-600);
+  width: 88px;
+  flex: none;
+  padding-top: 1px;
+}
+.value {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.record {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.ref {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-accent-700);
+}
+.recordTitle {
+  font-size: 13px;
+  font-weight: 600;
+}
+.sub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-neutral-500);
+}
+.file {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid var(--color-neutral-300);
+  border-radius: var(--radius-sm);
+  background: var(--color-field-bg);
+  padding: 5px 10px;
+  width: fit-content;
+  max-width: 100%;
+}
+.fileName {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.fileSub {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+}
+.text {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-neutral-800);
+}
+.pills {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.pill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  border-radius: var(--radius-pill);
+  padding: 2px 9px;
+  white-space: nowrap;
+  background: var(--color-neutral-200);
+  color: var(--color-neutral-800);
+}

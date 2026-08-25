@@ -1,0 +1,168 @@
+.pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  min-height: 0;
+}
+.tree {
+  width: 280px;
+  flex: none;
+  border-right: 1px solid var(--color-divider);
+  background: var(--color-surface);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.treeHead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--color-neutral-200);
+}
+.treeTitle {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-neutral-500);
+  font-weight: 600;
+}
+.spacer {
+  flex: 1;
+}
+.adds {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-accent-2-700);
+}
+.dels {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-accent-700);
+}
+.treeBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 0 10px;
+  display: flex;
+  flex-direction: column;
+}
+.root {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 8px;
+}
+.twisty {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-neutral-500);
+  width: 10px;
+}
+.rootName {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-neutral-800);
+}
+.rootCount {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-neutral-500);
+}
+.treeFoot {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--color-neutral-200);
+}
+.note {
+  font-size: 11px;
+  color: var(--color-neutral-700);
+  line-height: 1.45;
+}
+.branch {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-neutral-500);
+}
+.diff {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.diffHead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 20px;
+  border-bottom: 1px solid var(--color-divider);
+  background: var(--color-surface);
+}
+.path {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fileAdds {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-accent-2-700);
+}
+.fileDels {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-accent-700);
+}
+.hunks {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-600);
+  white-space: nowrap;
+}
+.diffBody {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--color-term-bg);
+  padding: 12px 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.8;
+}
+.hunkHead {
+  display: flex;
+  gap: 10px;
+  padding: 0 16px 8px;
+  color: var(--color-term-dim);
+  font-size: 11px;
+}
+.diffFoot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  border-top: 1px solid var(--color-divider);
+  background: var(--color-surface);
+  flex-wrap: wrap;
+}
+.footNote {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-600);
+  flex: 1;
+  min-width: 180px;
+}

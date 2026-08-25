@@ -1,0 +1,29 @@
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--color-neutral-200);
+  padding-top: 9px;
+}
+.id {
+  width: 74px;
+  font-weight: 600;
+  font-size: 13px;
+}
+.model {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-neutral-700);
+}
+/* The design-system `tag tag-accent-2`, kept local to this component. */
+.status {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent-2-100);
+  color: var(--color-accent-2-800);
+}

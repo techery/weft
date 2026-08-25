@@ -1,0 +1,11 @@
+.pane {
+  flex: 1;
+  min-width: 0;
+  background: var(--color-term-bg);
+  padding: 14px 18px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}

@@ -7,6 +7,7 @@
  * daemon exists for: a journal on disk, a question nobody has answered, and no process
  * holding it.
  */
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -22,7 +23,15 @@ import {
 } from "@techery/weft-host";
 import type { Hono } from "hono";
 import { afterAll, describe, expect, it } from "vitest";
-import { createApp, DEFAULT_PORT, startDaemon } from "../src/index.ts";
+import {
+  BUNDLED_WEB_ROOT,
+  type CreateAppOptions,
+  createApp,
+  DEFAULT_PORT,
+  openWebBundle,
+  startDaemon,
+  type WebBundle,
+} from "../src/index.ts";
 
 /** No agent, no shell: one journaled clock read, then a question only a person can answer. */
 const GATED = `import { defineWorkflow, z } from "@techery/weft-sdk";
@@ -76,6 +85,32 @@ interface Harness {
   cwd: string;
 }
 
+/**
+ * A stand-in for what `apps/ui` builds: a document plus one hashed script and stylesheet.
+ * It sits in a `web/` subdirectory of a temp root, so the traversal tests have a readable
+ * file outside the bundle to try to reach.
+ */
+async function bundle(): Promise<WebBundle> {
+  const root = await mkdtemp(path.join(tmpdir(), "weft-web-"));
+  roots.push(root);
+  const web = path.join(root, "web");
+  await mkdir(path.join(web, "assets"), { recursive: true });
+  await writeFile(
+    path.join(web, "index.html"),
+    '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
+      "<title>weft workflow manager</title>" +
+      '<link rel="stylesheet" href="/assets/index-abc123.css"></head>' +
+      '<body><div id="root"></div>' +
+      '<script type="module" src="/assets/index-abc123.js"></script></body></html>',
+    "utf8",
+  );
+  await writeFile(path.join(web, "assets", "index-abc123.js"), 'console.log("manager");', "utf8");
+  await writeFile(path.join(web, "assets", "index-abc123.css"), ".queue { display: flex; }", "utf8");
+  const opened = openWebBundle(web);
+  if (opened === undefined) throw new Error("the fixture bundle did not open");
+  return opened;
+}
+
 /** A throwaway repo with `gated` registered, so a second process can resume its runs. */
 async function repo(): Promise<string> {
   const cwd = await mkdtemp(path.join(tmpdir(), "weft-daemon-"));
@@ -85,10 +120,10 @@ async function repo(): Promise<string> {
   return cwd;
 }
 
-async function open(cwd: string): Promise<Harness> {
+async function open(cwd: string, appOpts: CreateAppOptions = { web: null }): Promise<Harness> {
   const weft = await createWeft({ cwd, providers: "mock" });
   opened.push(weft);
-  return { weft, app: createApp(weft), cwd };
+  return { weft, app: createApp(weft, appOpts), cwd };
 }
 
 /** Start `gated` and return once its journal shows it parked on the approval request. */
@@ -432,8 +467,8 @@ describe("the event stream", () => {
   });
 });
 
-describe("the web UI", () => {
-  it("serves one self-contained page at /", async () => {
+describe("the built-in page", () => {
+  it("serves one self-contained page when nothing is built", async () => {
     const h = await open(await repo());
     const res = await h.app.request("/");
     expect(res.status).toBe(200);
@@ -449,6 +484,123 @@ describe("the web UI", () => {
     expect(html).not.toContain("<script src=");
     expect(html).not.toContain('<link rel="stylesheet"');
   });
+
+  it("keeps a fixed address at /legacy even when the manager is on /", async () => {
+    const h = await open(await repo(), { web: await bundle() });
+    const root = await (await h.app.request("/")).text();
+    const legacy = await (await h.app.request("/legacy")).text();
+    expect(root).toContain("weft workflow manager");
+    expect(legacy).toContain('id="run-list"');
+  });
+});
+
+describe("the workflow manager", () => {
+  it("serves the built document at /", async () => {
+    const h = await open(await repo(), { web: await bundle() });
+    const res = await h.app.request("/");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(res.headers.get("cache-control")).toBe("no-cache");
+    expect(await res.text()).toContain("weft workflow manager");
+  });
+
+  it("serves its hashed assets, and lets them be cached forever", async () => {
+    const h = await open(await repo(), { web: await bundle() });
+    const js = await h.app.request("/assets/index-abc123.js");
+    expect(js.status).toBe(200);
+    expect(js.headers.get("content-type")).toContain("text/javascript");
+    expect(js.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    expect(await js.text()).toContain("console.log");
+
+    const css = await h.app.request("/assets/index-abc123.css");
+    expect(css.headers.get("content-type")).toContain("text/css");
+    expect(await css.text()).toContain(".queue");
+  });
+
+  it("serves the document for its own client-side routes", async () => {
+    const h = await open(await repo(), { web: await bundle() });
+    for (const route of ["/queue", "/runs", "/runs/r-045", "/workflows", "/settings"]) {
+      const res = await h.app.request(route);
+      expect(res.status, route).toBe(200);
+      expect(res.headers.get("content-type"), route).toContain("text/html");
+      expect(await res.text()).toContain("weft workflow manager");
+    }
+  });
+
+  it("answers an unknown /api/ path with JSON, never with the document", async () => {
+    const h = await open(await repo(), { web: await bundle() });
+    const res = await h.app.request("/api/nope");
+    expect(res.status).toBe(404);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect((await res.json()) as { error: string }).toMatchObject({
+      error: "no route for GET /api/nope",
+    });
+  });
+
+  it("404s every path when no manager is built", async () => {
+    const h = await open(await repo());
+    for (const route of ["/queue", "/assets/index-abc123.js", "/api/nope"]) {
+      expect((await h.app.request(route)).status, route).toBe(404);
+    }
+  });
+
+  it("never serves a file from outside the bundle", async () => {
+    const web = await bundle();
+    // A readable file one level up from the bundle: escaping would return this.
+    const outside = path.join(path.dirname(web.root), "secret.txt");
+    await writeFile(outside, "do not serve me", "utf8");
+    const h = await open(await repo(), { web });
+
+    for (const attack of [
+      "/../secret.txt",
+      "/assets/../../secret.txt",
+      "/%2e%2e%2fsecret.txt",
+      "/..%2Fsecret.txt",
+      "/%2e%2e/secret.txt",
+    ]) {
+      const res = await h.app.request(attack);
+      const body = await res.text();
+      expect(body, attack).not.toContain("do not serve me");
+      // Anything that is not a file in the bundle is one of the manager's own routes.
+      expect(body, attack).toContain("weft workflow manager");
+    }
+  });
+
+  it("reads a directory, a missing file and an odd extension as not-a-file", async () => {
+    const web = await bundle();
+    await writeFile(path.join(web.root, "weird.xyz"), "opaque", "utf8");
+    expect(await web.read("/assets")).toBeUndefined();
+    expect(await web.read("/assets/")).toBeUndefined();
+    expect(await web.read("/")).toBeUndefined();
+    expect(await web.read("/nope.js")).toBeUndefined();
+    expect((await web.read("/weird.xyz"))?.contentType).toBe("application/octet-stream");
+  });
+
+  it("is not a bundle without an index.html", async () => {
+    const empty = await mkdtemp(path.join(tmpdir(), "weft-web-empty-"));
+    roots.push(empty);
+    expect(openWebBundle(empty)).toBeUndefined();
+    expect(openWebBundle(path.join(empty, "does-not-exist"))).toBeUndefined();
+  });
+
+  // CI builds before it tests, so this runs against the artifact `weft ui` will serve.
+  it.skipIf(!existsSync(path.join(BUNDLED_WEB_ROOT, "index.html")))(
+    "is what the shipped bundle actually contains",
+    async () => {
+      const web = openWebBundle(BUNDLED_WEB_ROOT);
+      expect(web).toBeDefined();
+      const h = await open(await repo(), { web: web ?? null });
+      const html = await (await h.app.request("/")).text();
+      expect(html).toContain("weft");
+
+      // Every asset the document asks for has to be one this app can serve.
+      const refs = [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1] ?? "");
+      expect(refs.length).toBeGreaterThan(0);
+      for (const ref of refs) {
+        expect((await h.app.request(ref)).status, ref).toBe(200);
+      }
+    },
+  );
 });
 
 describe("the loopback guard", () => {
@@ -489,6 +641,12 @@ describe("startDaemon", () => {
       const res = await fetch(`${daemon.url}/api/runs`);
       expect(res.status).toBe(200);
       expect(await res.json()).toEqual([]);
+
+      // Which page `/` is serving is what `weft ui` prints, so the handle has to say.
+      const built = existsSync(path.join(BUNDLED_WEB_ROOT, "index.html"));
+      expect(daemon.surface).toBe(built ? "manager" : "builtin");
+      expect((await fetch(`${daemon.url}/`)).status).toBe(200);
+      expect((await fetch(`${daemon.url}/legacy`)).status).toBe(200);
     } finally {
       await daemon.close();
       await daemon.close(); // idempotent: a second stop is not an error

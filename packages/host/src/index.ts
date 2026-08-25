@@ -21,7 +21,8 @@
 export type { ParsedBudget } from "./budget.ts";
 export { parseBudget } from "./budget.ts";
 export type { WeftConfig } from "./config.ts";
-export { CONFIG_FILE, configPath, loadConfig, WEFT_DIR } from "./config.ts";
+export { CONFIG_FILE, configPath, loadConfig, parseConfig, WEFT_DIR } from "./config.ts";
+export { rejectUnknownInput } from "./input.ts";
 export type { CreateWeftOptions, PersistedDef, ResolvedWorkflow, Weft } from "./weft.ts";
 export {
   createWeft,

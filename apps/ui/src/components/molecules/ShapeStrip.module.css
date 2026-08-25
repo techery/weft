@@ -1,0 +1,12 @@
+.strip {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.cell {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  padding: 2px 5px;
+}

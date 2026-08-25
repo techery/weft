@@ -1,0 +1,68 @@
+.card {
+  cursor: pointer;
+  font: inherit;
+  flex: 1;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  text-align: left;
+  background: var(--color-field-bg);
+  border: 1px solid var(--color-neutral-300);
+}
+.on {
+  background: var(--color-accent-200);
+  border-color: var(--color-accent);
+}
+/* The real radio drives selection and focus; the card is its visible form. */
+.input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.card:has(.input:focus-visible) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.dot {
+  width: 11px;
+  height: 11px;
+  border-radius: var(--radius-pill);
+  flex: none;
+  border: 1.5px solid var(--color-neutral-400);
+}
+.dotOn {
+  border: 3px solid var(--color-accent);
+  background: var(--color-surface);
+}
+.label {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.spacer {
+  flex: 1;
+}
+.meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-accent-800);
+  white-space: nowrap;
+}
+.desc {
+  font-size: 11px;
+  color: var(--color-neutral-700);
+  line-height: 1.4;
+  text-align: left;
+}

@@ -1,0 +1,37 @@
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.headRun {
+  width: 196px;
+  flex: none;
+}
+.headWhere {
+  flex: 1;
+  min-width: 0;
+}
+.headState {
+  width: 104px;
+  flex: none;
+}
+.headStarted {
+  width: 110px;
+  flex: none;
+}
+.headElapsed {
+  width: 64px;
+  flex: none;
+  text-align: right;
+}
+.headCost {
+  width: 56px;
+  flex: none;
+  text-align: right;
+}
+.footnote {
+  margin: 0 2px;
+  font-size: 12px;
+  color: var(--color-neutral-600);
+}

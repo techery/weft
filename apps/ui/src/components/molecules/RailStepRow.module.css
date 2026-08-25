@@ -1,0 +1,65 @@
+.row {
+  appearance: none;
+  border: 0;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 9px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background: transparent;
+}
+.row:hover {
+  background: var(--color-neutral-100);
+}
+.fail {
+  background: var(--color-danger-bg);
+}
+.waiting {
+  background: var(--color-accent-100);
+}
+.run {
+  background: var(--color-accent-2-100);
+}
+.selected {
+  background: var(--color-accent-200);
+}
+.selected:hover {
+  background: var(--color-accent-200);
+}
+.kind {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-neutral-500);
+  width: 44px;
+  flex: none;
+}
+.label {
+  flex: 1 0 auto;
+  min-width: 0;
+  font-size: 13px;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.emphasis {
+  font-weight: 600;
+}
+.meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  flex: none;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--color-neutral-600);
+}
+.metaFail {
+  color: var(--color-danger);
+}
+.metaWaiting {
+  color: var(--color-accent-700);
+}

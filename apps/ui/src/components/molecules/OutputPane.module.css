@@ -1,0 +1,37 @@
+.pane {
+  min-height: 130px;
+  border-radius: var(--radius-md);
+  background: var(--color-term-bg);
+  padding: 12px 14px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-bottom: 5px;
+}
+.title {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-term-dim);
+  font-weight: 600;
+}
+.spacer {
+  flex: 1;
+}
+.note {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-term-dim);
+}
+.line {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.75;
+  color: var(--color-term-text);
+}

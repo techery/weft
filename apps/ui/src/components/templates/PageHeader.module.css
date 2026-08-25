@@ -1,0 +1,13 @@
+.header {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.summary {
+  font-size: 13px;
+  color: var(--color-neutral-700);
+}
+.spacer {
+  flex: 1;
+}

@@ -1,0 +1,38 @@
+.chip {
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider);
+}
+.on {
+  background: var(--color-accent-200);
+  border-color: var(--color-accent-400);
+}
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent);
+  flex: none;
+}
+.label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-accent-800);
+}
+.name {
+  font-size: 12px;
+  font-weight: 500;
+}
+.meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-neutral-600);
+}
