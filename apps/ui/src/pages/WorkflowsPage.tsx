@@ -74,31 +74,29 @@ export function WorkflowsPage() {
           <EmptyNote>No workflows here yet — add a file to .weft/workflows/.</EmptyNote>
         ) : null}
         {rows.length > 0 ? (
-          <>
-            <ListTable
-              head={
-                <>
-                  <span className={styles.headWorkflow}>Workflow</span>
-                  <span className={styles.headLast}>Last</span>
-                  <span className={styles.headSuccess}>Success</span>
-                  <span className={styles.headP50}>p50</span>
-                  <span className={styles.headCost}>Cost</span>
-                </>
-              }
-            >
-              {rows.map((row) => (
-                <RegistryRow
-                  key={row.name}
-                  row={row}
-                  selected={row.name === selectedRow?.name}
-                  // Only the inspected workflow's newest run is read, so it is the only row
-                  // that can carry a shape — every other one would cost a run read.
-                  shapeSource={row.name === selectedRow?.name ? shapeSource.data : undefined}
-                  onSelect={() => void navigate({ to: "/workflows", search: { wf: row.name } })}
-                />
-              ))}
-            </ListTable>
-          </>
+          <ListTable
+            head={
+              <>
+                <span className={styles.headWorkflow}>Workflow</span>
+                <span className={styles.headLast}>Last</span>
+                <span className={styles.headSuccess}>Success</span>
+                <span className={styles.headP50}>p50</span>
+                <span className={styles.headCost}>Cost</span>
+              </>
+            }
+          >
+            {rows.map((row) => (
+              <RegistryRow
+                key={row.name}
+                row={row}
+                selected={row.name === selectedRow?.name}
+                // Only the inspected workflow's newest run is read, so it is the only row
+                // that can carry a shape — every other one would cost a run read.
+                shapeSource={row.name === selectedRow?.name ? shapeSource.data : undefined}
+                onSelect={() => void navigate({ to: "/workflows", search: { wf: row.name } })}
+              />
+            ))}
+          </ListTable>
         ) : null}
       </div>
 

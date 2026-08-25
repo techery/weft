@@ -25,10 +25,7 @@ export function FactCell({ label, value, color, minWidth, variant = "step", firs
     .filter(Boolean)
     .join(" ");
   return (
-    <Tag
-      className={classes}
-      style={minWidth ? { minWidth } : undefined}
-    >
+    <Tag className={classes} style={minWidth ? { minWidth } : undefined}>
       <span className={styles.key}>{label}</span>
       <span className={styles.value} style={color ? { color } : undefined}>
         {value}
