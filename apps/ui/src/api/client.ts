@@ -38,7 +38,25 @@ export class ApiError extends Error {
   get missing(): boolean {
     return this.status === 404;
   }
+
+  /** True when nothing answered — the daemon is down, or a proxy could not reach it. */
+  get unreachable(): boolean {
+    return this.status === 0 || GATEWAY.has(this.status);
+  }
 }
+
+/**
+ * Statuses that mean "no one answered", not "your request was wrong".
+ *
+ * The daemon serves this page itself in production, so it never emits these — they come
+ * from whatever is in front of it. In dev that is the Vite proxy, which returns a bare
+ * `502 Bad Gateway` in `text/plain` when the daemon is not running. Parsing that as the
+ * daemon's own error shape yields nothing, and the UI would show the literal words
+ * "502 Bad Gateway" — a status where the actionable fact belongs.
+ */
+const GATEWAY = new Set([502, 503, 504]);
+
+const UNREACHABLE = "cannot reach the daemon — is `weft ui` still running?";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
@@ -54,9 +72,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   } catch (err) {
     // A dead socket is the daemon being gone, which is worth saying plainly: every other
     // failure here arrives as a status code with a message attached.
-    throw new ApiError(0, `cannot reach the daemon — is \`weft ui\` still running? (${String(err)})`);
+    throw new ApiError(0, `${UNREACHABLE} (${String(err)})`);
   }
   if (!res.ok) {
+    if (GATEWAY.has(res.status)) throw new ApiError(res.status, UNREACHABLE);
     const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
     const message = typeof body?.error === "string" ? body.error : `${res.status} ${res.statusText}`;
     throw new ApiError(res.status, message);
@@ -121,6 +140,7 @@ export const api = {
 
   blobText: (ref: string) =>
     fetch(`/api/blobs/${encodeURIComponent(ref)}?as=text`).then((res) => {
+      if (GATEWAY.has(res.status)) throw new ApiError(res.status, UNREACHABLE);
       if (!res.ok) throw new ApiError(res.status, `blob ${ref} is not readable`);
       return res.text();
     }),

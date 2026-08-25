@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { api } from "~/api/client";
 import type { PendingRequest, RunDetail, RunRow, StepState } from "~/api/types";
 import { adaptRun, adaptRunRows, ago, gateAnswer, gateStepId, schemaQuestions, stepId } from "./adapt";
 import { splitDiff } from "./diff";
@@ -351,5 +352,43 @@ describe("ago", () => {
     expect(ago(now - 7_200_000, now)).toBe("2 h");
     expect(ago(now - 86_400_000, now)).toBe("yesterday");
     expect(ago(null, now)).toBe("");
+  });
+});
+
+describe("what the client says when nothing answers", () => {
+  it("reads a proxy's gateway error as the daemon being down, not as a status", async () => {
+    const original = globalThis.fetch;
+    // Exactly what the Vite dev proxy returns with no daemon behind it.
+    vi.stubGlobal("fetch", async () => new Response("Bad Gateway", { status: 502 }));
+    try {
+      await expect(api.meta()).rejects.toMatchObject({
+        status: 502,
+        message: "cannot reach the daemon — is `weft ui` still running?",
+        unreachable: true,
+      });
+    } finally {
+      vi.stubGlobal("fetch", original);
+    }
+  });
+
+  it("keeps the daemon's own message when the daemon is the one refusing", async () => {
+    const original = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      async () =>
+        new Response(JSON.stringify({ error: 'workflow "nope" not found' }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    try {
+      await expect(api.workflow("nope")).rejects.toMatchObject({
+        status: 404,
+        message: 'workflow "nope" not found',
+        unreachable: false,
+      });
+    } finally {
+      vi.stubGlobal("fetch", original);
+    }
   });
 });
