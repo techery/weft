@@ -1,7 +1,8 @@
 # Weft — coding-workflow landscape, competitive comparison, and what to build next
 
-**Written:** 2026-08-24, revised 2026-08-25 to correct a framing error (see [Method](#method-and-a-correction)).
-**Against:** `da85488` on `main`. **Measured baseline, this checkout:** `pnpm install` ✓ · `pnpm test` ✓ **694 passed (694), 41 files, 48.8 s** · 16 packages, 140 source files, ~37.0k lines.
+**Written:** 2026-08-24. Revised 2026-08-25 to correct a framing error (see [Method](#method-and-a-correction)), and again against `7d500a7` after the workflow manager landed.
+**Against:** `7d500a7` on `main` — *Add the workflow manager, serve it from `weft ui`, and the API it needs* (#4).
+**Measured baseline, this checkout:** `pnpm install` ✓ · `pnpm test` **800 passed, 1 failed, 1 skipped (802) across 46 files** — the one failure is environment-dependent, not a product bug ([Appendix C](#appendix-c--what-has-closed-and-what-7d500a7-changed)) · 16 packages plus `apps/ui`, ~48.5k lines.
 **Scope:** everything weft ships, compared against the open-source tools that do the same *job* — help a team run repeatable, reviewable multi-agent work on a repository — on 19 dimensions, followed by a ranked build list.
 **Companion:** [DX and Architecture Review](./2026-08-dx-and-architecture.md), which audits *quality*. This document is about *surface*.
 
@@ -19,15 +20,15 @@ The three-line version:
 2. **The write model is the other half, and it is genuinely unmatched.** Declared `write:` scopes enforced live, patches captured rather than applied, and `ctx.integrate()` as a journaled merge gate with a conflict policy and a ledger. Worktree isolation is now table stakes — Claude Code, Codex CLI, container-use, claude-squad, Crystal, Conductor, uzi and Vibe Kanban all have it. *Scoped patches that land only where you said they could* is weft's alone.
 3. **It loses on interop, on evidence, and on distribution.** It reads no `AGENTS.md`, so a write step starts stripped of the conventions every other runner ingests by default — free interop, declined. Its stdlib review patterns have never been measured, while CodeRabbit and Qodo publish F1 numbers. And it is competing for a developer's attention with GitHub Spec Kit at **131.2k stars** and Claude Code's skills-and-plugins ecosystem at **142.9k**, having published nothing.
 
-**A note on posture.** Weft is designed to run on a developer's own machine — no server, no account, no code leaving the laptop, using the credentials already in the shell. That is the same bet Claude Code, Codex CLI, opencode, goose and Aider make, and this report treats it as a design choice rather than a gap. The bill for it is local-tool basics that are still unpaid: no repo-root discovery, no blob GC, and no repo-level mutex, so two runs sharing a working tree is undefined behaviour. The security story matters *more* under this posture, not less — model-generated code runs unsandboxed against your real checkout and your real credentials, and `ctx.fetch` allows every host by default.
+**A note on posture.** Weft is designed to run on a developer's own machine — no server, no account, no code leaving the laptop, using the credentials already in the shell. That is the same bet Claude Code, Codex CLI, opencode, goose and Aider make, and this report treats it as a design choice rather than a gap. The bill for it is local-tool basics that are still unpaid: no repo-root discovery, no blob GC, and no repo-level mutex, so two runs sharing a working tree is undefined behaviour. The security story matters *more* under this posture, not less — model-generated code runs unsandboxed against your real checkout and your real credentials, `ctx.fetch` allows every host by default, and as of `7d500a7` the local HTTP surface can start runs and rewrite the approval policy (see [Part 5](#part-5--what-is-genuinely-wefts-own-and-what-is-missing)).
 
 **The honest positioning:** weft is the only tool here that treats a coding workflow as a *program you test* and an agent's diff as a *patch you gate*. That is a real and unoccupied position. What it lacks is the evidence that its patterns are better and the small courtesies that make a local tool feel finished.
 
-**If only three things get built:** ingest `AGENTS.md`/`CLAUDE.md` into agent steps; measure the stdlib review patterns against a real benchmark; and make the CLI compose with a developer's own tooling (`--json`, exit codes, `weft cat <run> <step> --patch | git apply`). Those three move weft from "correct" to "usable by someone else." Full list in [Part 6](#part-6--what-to-build).
+**If only three things get built:** ingest `AGENTS.md`/`CLAUDE.md` into agent steps; measure the stdlib review patterns against a real benchmark; and make the CLI compose with a developer's own tooling (`--json`, exit codes, `weft cat <run> <step> --patch | git apply`) — which the HTTP API now does and the CLI still does not. Those three move weft from "correct" to "usable by someone else." Full list in [Part 6](#part-6--what-to-build).
 
 ## Method, and a correction
 
-**The correction.** The first draft of this report compared weft against durable-execution engines — Temporal, Restate, DBOS, Inngest, Vercel Workflow DevKit — and rated it on durability dimensions. That was wrong. Durability is an *instrument* weft uses so an overnight audit or a gate waiting on a person survives the session; it is not what weft is for, and a task queue is not a competitor to a code-review workflow. Those engines have been demoted to [Appendix B](#appendix-b--where-the-durability-machinery-came-from), as prior art for the machinery. The comparison in Part 3 is rebuilt on coding-workflow dimensions, and durability appears once, as dimension 15, framed as what it is.
+**The correction.** The first draft of this report compared weft against durable-execution engines — Temporal, Restate, DBOS, Inngest, Vercel Workflow DevKit — and rated it on durability dimensions. That was wrong. Durability is an *instrument* weft uses so an overnight audit or a gate waiting on a person survives the session; it is not what weft is for, and a task queue is not a competitor to a code-review workflow. Those engines have been demoted to [Appendix B](#appendix-b--where-the-durability-machinery-came-from), as prior art for the machinery. The comparison in Part 3 is rebuilt on coding-workflow dimensions, and durability appears once, as dimension 14, framed as what it is.
 
 | Layer | How it was produced | Confidence |
 | --- | --- | --- |
@@ -86,9 +87,10 @@ One `Engine` class; three thin shells over it.
 
 | Host | Surface |
 | --- | --- |
-| **CLI** (`@techery/weft`) | 14 verbs: `run` `resume` `ls` `status` `answer` `cancel` `replay` `report` `explain` `diff` `check` `new` `doctor` `ui`. Input fields become flags automatically, and an unrecognised flag is now **refused** (each candidate key is probed against the schema twice — removed, and replaced with a value nothing accepts). |
+| **CLI** (`@techery/weft`) | 15 verbs: `run` `resume` `ls` `status` `answer` `cancel` `replay` `report` `explain` `diff` `check` `new` `skill` `doctor` `ui`. Input fields become flags automatically, and an unrecognised flag is **refused** (each candidate key is probed against the schema twice — removed, and replaced with a value nothing accepts). `weft skill` prints a `SKILL.md` — frontmatter and all — for redirecting into `.claude/skills/weft/`, so an agent reads the authoring surface before it writes a workflow. |
 | **MCP** (`@techery/weft-mcp`) | 7 tools: `weft_run` `weft_wait` `weft_answer` `weft_resume` `weft_list` `weft_report` `weft_types`. `weft_wait` long-polls and returns on the next reportable change, including "a person must answer" with the request's schema. |
-| **Daemon** (`@techery/weft-daemon`) | Hono app: `GET /api/runs`, `/:id`, `/report`, `/tree`, `/pending`, SSE `/events`; `POST /:id/answer`, `/signal`, `/cancel`, `/resume`. Single self-contained HTML page, loopback + DNS-rebinding guard. |
+| **Daemon** (`@techery/weft-daemon`) | ~22 routes. Reads: `/api/meta`, `/api/pending` (every question across every run, plus any journal it could not read), `/api/workflows` + `/:name` (input/output as JSON Schema) + `/:name/stats`, `/api/runs` (`?spend=1` adds tokens and dollars), `/api/runs/:id` + `/report` `/tree` `/pending` `/artifacts` `/patch`, SSE `/events`, `/api/blobs/:ref`. Writes: `POST /api/runs` (registry names only — a path is refused), `/answer` `/signal` `/cancel` `/resume`, and `GET`+`PUT /api/config`. Binds 127.0.0.1, plus a Host/Origin guard against DNS rebinding and cross-site POSTs. |
+| **Manager** (`apps/ui`) | A React SPA — Queue, Runs, Run detail (steps rail, gate form, findings, artifacts, staged changes, journal), Workflows, Settings, ⌘K launcher. 92 files, ~8k TS + 3.5k CSS, with `domain/` free of React so the pure logic is tested without rendering. It reads the live journal, not fixtures, and the gate form is built from the JSON Schema the workflow declared for its answer. Builds into `packages/daemon/web/`; the old single-file page keeps a fixed address at `/legacy`. |
 
 The **determinism gate** (`@techery/weft-gate`) is two-layered by design. Eleven AST rules parsed with the TypeScript compiler API, applied through an esbuild `onLoad` plugin to every module the bundle pulls in — `no-date-now`, `no-argless-date`, `no-math-random`, `no-timers`, `no-global-fetch`, `no-process-env`, `no-require`, `no-gc-globals`, `no-locale`, `no-intl`, `no-bare-import` — each with a `ctx`-naming fix-it and real source positions through the bundle. Then a `node:vm` context with replaced globals catches the computed form (`globalThis["Da"+"te"]`) the AST layer deliberately cannot see. The README is explicit that this is **a determinism fence, not a security boundary**.
 
@@ -103,7 +105,7 @@ The **determinism gate** (`@techery/weft-gate`) is two-layered by design. Eleven
 - **One OTel span per run** — a single `tracer.startSpan` at `engine.ts:789` is the whole implementation.
 - **Step outputs are journaled verbatim.** Redaction covers only `SecretHandle` env maps and fetch headers; `exec`/`bash` stdout+stderr, fetch bodies, agent prompts and `ctx.env.get` values all land unredacted.
 - **No fork, no per-step re-run, no rewind.** Three verbs over the journal, all recovery-only.
-- **No journal format version.** No `schemaVersion`/`journalVersion` field anywhere.
+- **No journal format version.** No `schemaVersion`/`journalVersion` field anywhere. `7d500a7` added a field to `step.scheduled` and handled it additively — the projection guards on `!== undefined` and the comment reads "absent on legacy journal records" — the right instinct, and exactly the case a version field exists to make routine rather than careful.
 - **No blob GC.** `BlobStore` is `put`/`get`/`getText`/`has`; transcripts and patches accumulate forever.
 - **No repo-root discovery.** Running from a subdirectory silently targets a different, empty `.weft`.
 - **No `AgentProvider` conformance suite**, despite the README's package table claiming one.
@@ -240,7 +242,7 @@ The interop weft is largely declining. `AGENTS.md` in particular is free, univer
 
 #### 1. What a workflow *is*
 
-**Weft.** A checked-in TypeScript program with a typed `input`/`output` schema. `await` is a sequential edge, `ctx.parallel` fans out, `ctx.pipeline` runs lanes, `if` on a typed field is a conditional edge. No DSL, no YAML, no graph builder — and no separate artifact to keep in sync with the program.
+**Weft.** A checked-in TypeScript program with a typed `input`/`output` schema. `await` is a sequential edge, `ctx.parallel` fans out, `ctx.pipeline` runs lanes, `if` on a typed field is a conditional edge. No DSL, no YAML, no graph builder — and no separate artifact to keep in sync with the program. Since `7d500a7` the registry is introspectable over HTTP — `GET /api/workflows/:name` returns the declared input and output as JSON Schema, and the manager renders a launch form from it — though `weft run <name> --help` still does not list the flags the workflow takes.
 
 | | Project | How they do it |
 | --- | --- | --- |
@@ -461,7 +463,7 @@ The interop weft is largely declining. `AGENTS.md` in particular is free, univer
 
 #### 16. Audit trail of what the agent actually did
 
-**Weft.** The journal plus two generated records: `report.md` (Outcome / Changes / Checks / Ledger / Failures & drops / Remaining risk / Next step) and the live tree. `weft explain <run> <step>` shows one step's route, prompt, output, usage and attempts; `weft diff <a> <b>` compares two runs by keyed step output.
+**Weft.** The journal plus two generated records: `report.md` (Outcome / Changes / Checks / Ledger / Failures & drops / Remaining risk / Next step) and the live tree. `weft explain <run> <step>` shows one step's route, prompt, output, usage and attempts; `weft diff <a> <b>` compares two runs by keyed step output. As of `7d500a7` the record is finally *legible*: the manager renders the steps rail, findings, artifacts, staged changes and the raw journal, with `GET /api/runs/:id/patch` returning the unified diff with per-file `+/−` counts and `GET /api/blobs/:ref` the bytes behind any journaled ref. `step.scheduled` now carries the step's JSON Schema, and `reduceState` keeps `sessionId` and `transcriptRef` — so a step pane can show what a step promised to return as well as what it did. Still one OpenTelemetry span per run.
 
 | | Project | How they do it |
 | --- | --- | --- |
@@ -487,7 +489,7 @@ The interop weft is largely declining. `AGENTS.md` in particular is free, univer
 
 #### 18. Where it runs — and what that posture costs
 
-**Weft.** **Local, on a developer's own machine, by design.** A CLI plus an MCP server so a Claude Code or Codex session can drive it, plus a loopback-only daemon serving a single-page UI. No server, no database, no account, no code leaving the machine, and the credentials used are the ones already sitting in the developer's shell. State is `<cwd>/.weft`. The costs are real and mostly unpaid: no repo-root discovery (running from a subdirectory silently targets a different, empty `.weft`), no blob GC, and no repo-level mutex, so two runs sharing a working tree is undefined behaviour.
+**Weft.** **Local, on a developer's own machine, by design.** A CLI plus an MCP server so a Claude Code or Codex session can drive it, plus a loopback-only daemon that since `7d500a7` serves a real React workflow manager — queue, runs, gate answering, staged changes, settings — reading the live journal. No server, no database, no account, no code leaving the machine, and the credentials used are the ones already sitting in the developer's shell. State is `<cwd>/.weft`. The costs are real and mostly unpaid: no repo-root discovery (running from a subdirectory silently targets a different, empty `.weft`), no blob GC, and no repo-level mutex, so two runs sharing a working tree is undefined behaviour.
 
 | | Project | How they do it |
 | --- | --- | --- |
@@ -501,7 +503,7 @@ The interop weft is largely declining. `AGENTS.md` in particular is free, univer
 
 #### 19. Distribution and practice adoption
 
-**Weft.** Design preview. Not on npm. Zero users. The engineering around it is real — 16 packages versioned together, a tag-driven release pipeline with `verify:packing` and `verify:install`, CI on node 22 and 24 — but nothing has shipped.
+**Weft.** Design preview. Not on npm. Zero users. The engineering around it is real — 16 packages versioned together, a tag-driven release pipeline with `verify:packing` and `verify:install`, CI on node 22 and 24 — but nothing has shipped. One genuine distribution move landed in `7d500a7`: `weft skill` prints a `SKILL.md` for `.claude/skills/weft/`, which is weft adopting Anthropic's Agent Skills standard so the agents it depends on can learn to drive it. That is the right shape for a tool whose users already live inside Claude Code or Codex.
 
 | | Project | How they do it |
 | --- | --- | --- |
@@ -621,9 +623,26 @@ Each is paired with who else has it, because most "unique" features in this cate
 
 > *Done better by:* Codex CLI (uniform OS-level sandbox inherited by every subagent), OpenHands via the Agent Client Protocol (one protocol contract per agent rather than per-vendor adapters), and — on the honesty axis — anyone not claiming a suite they have not written.
 
-🟠 `HIGH` — **The CLI does not compose with a developer's own tooling.** All 14 verbs emit ANSI-painted prose; `grep` for `--json` across `packages/cli/src` returns nothing. There is no way to pipe a captured patch to `git apply`, no `weft signal` though the daemon has the route, no `search`/`reindex` though `@techery/weft-index-sqlite` implements `search()` and **is reachable from no host at all**, and no `--version`. For a local tool whose whole point is fitting into an existing workflow, this is the wrong end to be unfinished.
+🟠 `HIGH` — **The CLI does not compose with a developer's own tooling.** All 15 verbs emit ANSI-painted prose; `grep` for `--json` across `packages/cli/src` still returns nothing — and `7d500a7` made this an odd asymmetry, because the daemon now answers ~22 routes in clean JSON while the CLI beside it answers in ANSI. There is no way to pipe a captured patch to `git apply`, no `weft signal` though the daemon has the route, no `search`/`reindex` though `@techery/weft-index-sqlite` implements `search()` and **is reachable from no host at all**, and no `--version`. For a local tool whose whole point is fitting into an existing workflow, this is the wrong end to be unfinished.
 
 > *Done better by:* essentially everything a developer already has in their shell. Qodo PR-Agent runs as a CLI, a Docker image, an Action and a webhook from one codebase.
+
+🟠 `HIGH` — **The local API now writes, and nothing authenticates a local caller.** The loopback bind plus Host/Origin guard is correctly aimed at the browser threat and works — verified: a `POST /api/runs` carrying `Origin: https://evil.example` is refused with `forbidden: cross-site request`. What it does not do, and does not claim to, is authenticate a *process*. That was tolerable when the surface was a viewer. As of `7d500a7` it starts runs and rewrites `.weft/config.json`. Verified against a scratch repo with `weft ui` running:
+
+```console
+$ curl -X PUT localhost:4899/api/config -d '{"approvalPolicy":{"tiers":{"irreversible":"auto","high":"auto"}}}'
+{"ok":true,"restartRequired":true}
+
+$ cat .weft/config.json
+{ "approvalPolicy": { "tiers": { "irreversible": "auto", "high": "auto" } } }
+
+$ curl -X POST localhost:4899/api/runs -d '{"workflow":"noop","input":{"label":"from-curl"}}'
+{"ok":true,"runId":"54ed7f5e","workflow":"noop"}
+```
+
+`restartRequired: true` is honest — the running daemon keeps the config it resolved at startup — but the *next* `weft` process of any kind reads the new file. So any other process on the machine can arrange for the next agent run to auto-approve the `irreversible` tier: `git push --force`, `reset --hard`, `branch.delete`, `clean`. The write path itself is careful (validated with the same parser `loadConfig` uses, atomic temp-and-rename, per-request exclusive temp name); the question is who is allowed to call it. A minor related nit: the guard rejects only a *present* non-loopback header, so an HTTP/1.0 request with no `Host` at all passes — verified `200 OK` — which matters little, since such a caller already has the port.
+
+> *Done better by:* Trigger.dev and Windmill issue signed, scoped, expiring tokens for exactly this. A local answer is smaller: a per-daemon token written to `.weft/daemon.token` at `0600` and required on mutating routes, with `weft ui` printing the URL that carries it — the shape `jupyter notebook` has used for a decade.
 
 🟡 `MEDIUM` — **Local-tool basics are unpaid.** No repo-root discovery: running any command from a subdirectory silently targets a different, empty `.weft` instead of erroring — a bug every git-adjacent tool solved by walking upward. No blob GC: transcripts, patches and every >64KB step output accumulate forever under `.weft/blobs`. No repo-level mutex: `ctx.integrate()` and `integrationBaseCommit()` both mutate the real tree at `rt.cwd` while the ownership lease is per-*run*, so two concurrent runs in one checkout is undefined behaviour — and running several agents at once is the thing this category exists for.
 
@@ -747,7 +766,7 @@ declare module "@techery/weft-sdk" {
 
 #### 5 — Make the CLI compose with a developer's own tooling · **S · high**
 
-**Problem.** All 14 verbs emit ANSI-painted prose; `grep` for `--json` returns nothing. No way to pipe a captured patch to `git apply`. No `weft signal` though the daemon has the route. No `search`/`reindex` though `@techery/weft-index-sqlite` implements `search()` and is reachable from no host at all. No `--version`. For a local tool whose value is fitting into a workflow that already exists, this is the wrong end to leave unfinished.
+**Problem.** All 15 verbs emit ANSI-painted prose; `grep` for `--json` returns nothing. No way to pipe a captured patch to `git apply`. No `weft signal` though the daemon has the route. No `search`/`reindex` though `@techery/weft-index-sqlite` implements `search()` and is reachable from no host at all. No `--version`. For a local tool whose value is fitting into a workflow that already exists, this is the wrong end to leave unfinished.
 
 **Proposal.** One JSON view module shared by the CLI and the daemon's REST responses. `--json` on `ls`, `status`, `report`, `explain`, `diff`, `replay --dry`, `check`, `doctor`. Four verbs: `weft signal`, `weft search`/`reindex`, `weft cat <run> <step> [--patch|--transcript|--output]`, `--version`. Exit codes as a contract — `0` success, `1` failure, `2` suspended-on-human, `3` budget-exceeded — so a Makefile or a git hook can branch on "needs a human" without parsing anything.
 
@@ -767,13 +786,29 @@ $ weft run review --json; case $? in 2) echo "needs me" ;; 3) echo "budget" ;; e
 
 It converts a README falsehood into a red build, and forces either the fix or the honest documentation of the asymmetry.
 
-#### 7 — Local-tool basics · **S · medium**
+#### 7 — Authenticate the local API now that it writes · **S · high**
+
+**Problem.** The daemon's guard is correctly aimed at the browser and works — a cross-site `POST` carrying a foreign `Origin` is refused. It is not, and does not claim to be, authentication of a local process. That was fine when the surface was a viewer. As of `7d500a7` it starts runs and rewrites `.weft/config.json`, and the approval policy lives in that file:
+
+```console
+$ curl -X PUT localhost:4781/api/config \
+    -d '{"approvalPolicy":{"tiers":{"irreversible":"auto"}}}'
+{"ok":true,"restartRequired":true}
+```
+
+The running daemon keeps its resolved config, but the next `weft` process reads the new file — so any other process on the machine can arrange for the next agent run to auto-approve `git push --force`, `reset --hard`, `branch.delete` and `clean`. On a developer's machine that is a plausible reach for a malicious postinstall script, not an exotic threat.
+
+**Proposal.** A per-daemon token, the shape `jupyter notebook` has used for a decade. Generate on start, write to `.weft/daemon.token` at `0600`, require it on every mutating route (`POST /api/runs`, `PUT /api/config`, `/answer`, `/signal`, `/cancel`, `/resume`), and have `weft ui` print the URL that already carries it so the workflow does not change. Reads can stay open or take the same token; the asymmetry is defensible either way, and saying which is chosen is the point.
+
+Two cheap companions: reject a request with **no** `Host` header rather than only a non-loopback one (an HTTP/1.0 request currently passes — verified `200 OK`), and treat `approvalPolicy` as privileged even behind the token, since it is the one setting whose whole job is to make a human look.
+
+#### 8 — Local-tool basics · **S · medium**
 
 **Problem.** Three things that make weft feel like a preview rather than a tool. Running any command from a subdirectory silently targets a different, empty `.weft` instead of erroring. Blobs accumulate forever — `BlobStore` is `put`/`get`/`getText`/`has` with no prune verb and no retention. And `ctx.integrate()` mutates the real tree at `rt.cwd` while the ownership lease is per-*run*, so two concurrent runs in one checkout is undefined behaviour — in a category that exists for running several agents at once.
 
 **Proposal.** Walk upward for `.weft` like every git-adjacent tool. `weft prune` doing mark-and-sweep over journals to collect `$outputBlob` / patch / transcript refs and delete the remainder, plus compaction by age. A `.weft/repo.lock` acquired with the same CAS + TTL + steal protocol as `owner.lock`, held for the duration of `integrate()` and `integrationBaseCommit()`, keyed on the resolved repo root; a run that cannot acquire it marks itself waiting (reusing `markWaiting`, so it reports as suspended rather than hung).
 
-#### 8 — Schema-aligned coercion before spending a repair turn · **S · high**
+#### 9 — Schema-aligned coercion before spending a repair turn · **S · high**
 
 **Problem.** `runProviderWithRepair` goes straight from a failed `validateSchema` to `provider.repair(...)` — a full extra model turn, charged to the budget, and on exhaustion the whole paid step dies with `schema_repair_exhausted`. A large share of real failures are fences, prose wrappers and near-miss scalars.
 
@@ -781,7 +816,7 @@ It converts a README falsehood into a red build, and forces either the fix or th
 
 **Prior art.** BAML's Schema-Aligned Parsing is exactly this: a schema-aware least-edit-distance coercion in Rust, claimed sub-10 ms, with published benchmark numbers. The cheapest quality-per-line item on the list.
 
-#### 9 — `weft fork <run> --from <step>` · **M · medium**
+#### 10 — `weft fork <run> --from <step>` · **M · medium**
 
 **Problem.** Weft built content-addressed step identity, three-tier salvage and a version stamp, then exposed three verbs over the journal, all recovery-only. When a 40-step run produces a bad plan at step 3, the options are resume (which serves the bad plan) or start over. Claude Code's `/workflows` panel can restart a single agent in place today, with far less information available to it.
 
@@ -789,15 +824,15 @@ It converts a README falsehood into a red build, and forces either the fix or th
 
 **Prior art.** DBOS `forkWorkflow(id, startStep, …)`, LangGraph's fork-by-`checkpoint_id`, Burr's `fork_from_sequence_id`.
 
-#### 10 — Tell the developer who walked away · **S–M · medium**
+#### 11 — Tell the developer who walked away · **S–M · medium**
 
-**Problem.** A `human.requested` event lands in the journal and the run parks durably. There is no notification code anywhere in `packages/*/src`, so the only ways to discover a pending gate are `weft status`, the loopback daemon page, or an MCP long-poll. Durability solves waiting; it does nothing about noticing. On a dev machine that is a smaller problem than it sounds — the person is usually nearby — but "start the audit, go to lunch, come back to a run that has been parked for 40 minutes" is exactly the workflow weft's gates exist for.
+**Problem.** A `human.requested` event lands in the journal and the run parks durably. There is still no notification code anywhere in `packages/*/src`. `7d500a7` closed half of this: `GET /api/pending` folds every waiting question across every run — walking the runs that *own* requests, so a child parked on a person is not lost behind a failed root — and the manager's Queue screen is the answer to "what is waiting on me?". What remains is the part that reaches someone who is not looking at the screen. Durability solves waiting; it does nothing about noticing. On a dev machine that is a smaller problem than it sounds — the person is usually nearby — but "start the audit, go to lunch, come back to a run that has been parked for 40 minutes" is exactly the workflow weft's gates exist for.
 
-**Proposal.** Small and local first: a desktop notification and a `command` channel that shells out, plus `weft inbox` answering the only question a person actually has — *what is waiting on me?* — as one queue across every run in `.weft`, sorted by deadline, each row carrying the exact `weft answer` command. A webhook and Slack channel are a natural third step for teams that want them, not the starting point. `human.answered` already carries `channel?: string` and `Engine.answer` already accepts `{ channel }`, so provenance comes for free. The engine does not change.
+**Proposal.** Now smaller than it was. A desktop notification and a `command` channel that shells out, fed by the `/api/pending` fold that already exists, plus `weft inbox` as its CLI face so the answer is reachable without a browser. A webhook and Slack channel are a natural third step for teams that want them, not the starting point. `human.answered` already carries `channel?: string` and `Engine.answer` already accepts `{ channel }`, so provenance comes for free. The engine does not change.
 
 **Prior art.** HumanLayer's contact-channel objects with escalation ladders, Windmill's signed approval links and native Slack/Teams approvals, Trigger.dev's tokens with webhook URLs — all built for the remote-team case, which is the version to grow into rather than start from.
 
-#### 11 — `reads:` scopes and a world-hash in step identity · **L · transformative**
+#### 12 — `reads:` scopes and a world-hash in step identity · **L · transformative**
 
 **Problem.** Step identity is `sha256(canonicalJson{kind, payload, schema, key})`. **The working tree an agent greps is not in it** — the README's own deviation #5 says so. A resume after the repo changed happily serves an answer computed against a repo that no longer exists.
 
@@ -1008,7 +1043,7 @@ The list is a ranking, not a plan. Grouped into what can ship together.
 
 ### Sprint 1 — make it fit the machine it runs on (≈2 weeks, all S/M, no engine hot-path changes)
 
-`AGENTS.md`/`CLAUDE.md` ingestion · default-deny egress · the typed registry declaration and the externals-in-the-hash fix (composition parts 1 and 2) · `--json` on every read verb, documented exit codes, `weft cat`, `weft signal`, `weft search`/`reindex`, `--version` · `AgentProvider` conformance suite · repo-root discovery · `weft prune` · schema-aligned coercion · the journal format version (`v: 1` on `run.created` plus a tolerant reader — ~50 lines, and a prerequisite for a third of everything below).
+`AGENTS.md`/`CLAUDE.md` ingestion · default-deny egress · a daemon token on the mutating routes · the typed registry declaration and the externals-in-the-hash fix (composition parts 1 and 2) · `--json` on every read verb, documented exit codes, `weft cat`, `weft signal`, `weft search`/`reindex`, `--version` · `AgentProvider` conformance suite · repo-root discovery · `weft prune` · schema-aligned coercion · the journal format version (`v: 1` on `run.created` plus a tolerant reader — ~50 lines, and a prerequisite for a third of everything below).
 
 The credibility items belong here too, because they cost hours and they are the first things a careful reader checks: the two-line fix to `audit-and-fix.ts`'s panel, the dead `IntegrateOptions.order` field, the two `StepErrorCode`s nothing produces, and the README's claim about a conformance suite that does not exist.
 
@@ -1065,7 +1100,7 @@ The complete 140-capability inventory with `file:line` evidence, the 71 proven l
 | Storage & ownership | 9 | Locked fsynced JSONL with torn-tail recovery, absence-vs-fault discipline, leases + fencing, content-addressed blobs, self-healing SQLite index |
 | Providers | 13 | Frozen contract; Claude terminating-tool structured output + live `canUseTool` gate + Bash screening; Codex native structured output + sandbox; mock fixtures |
 | Git | 4 | 25 typed operations, fixed risk tiers, CLI hardening, gc-safe `snapshot()` |
-| CLI / MCP / daemon | 30 | 14 verbs, 7 MCP tools, HTTP + SSE API, live tree renderer, dual-shape `bin/weft.js` |
+| CLI / MCP / daemon / manager | 30+ | 15 CLI verbs, 7 MCP tools, ~22 HTTP routes + SSE, the React workflow manager, live tree renderer, dual-shape `bin/weft.js` |
 | Gate & sandbox | 6 | 11 AST rules with fix-its, esbuild bundling with in-build gating, content hash, `node:vm` global replacement |
 | Testing | 5 | `runWorkflow`, mock builder, side-effect fixtures, journal assertions, store conformance suites |
 | stdlib | 6 | `adversarialVerify`, `judgePanel`, `loopUntilDry`, `completenessCritic`, `multiModalSweep`, `finalReport` |
@@ -1091,9 +1126,29 @@ The general-purpose agent frameworks — LangGraph, Mastra, CrewAI, AutoGen, Goo
 
 ---
 
-## Appendix C — Read against the last review
+## Appendix C — What has closed, and what `7d500a7` changed
 
-The [DX and Architecture Review](./2026-08-dx-and-architecture.md) audited *quality* at `ad5ecae`/`c0e5e50`. Since then `da85488` landed. Checked against the current tree while writing this report.
+### Since this report's first draft (`da85488` → `7d500a7`)
+
+One commit landed: *Add the workflow manager, serve it from `weft ui`, and the API it needs* (#4). 224 files and ~29.7k insertions, of which ~3.4k is shipped engine/host/CLI/daemon code, ~11.5k is the new `apps/ui`, and the remainder is a `weft-workflow-manager-prototype/` directory of design-canvas HTML that ships nothing.
+
+| Finding in this report | Status after `7d500a7` |
+| --- | --- |
+| The web UI is one hand-written HTML file | ✅ Replaced by a React SPA (`apps/ui`, 92 files, ~8k TS + 3.5k CSS) reading the live journal, with the old page kept at `/legacy`. **README deviation #3 still says otherwise** — the same README now documents the Vite + React app it claims not to have |
+| The browser surface cannot start a run | ✅ `POST /api/runs` — registry names only; a path, an unknown input field and a misspelled budget axis are all refused |
+| No cross-run "what is waiting on me?" | ✅ `GET /api/pending`, folding the runs that *own* requests so a child parked on a person is not lost behind a failed root, and naming journals it could not read rather than returning an empty list |
+| No way to view a captured patch or transcript | ✅ `GET /api/runs/:id/patch` (unified diff with per-file `+/−`), `/artifacts`, and `GET /api/blobs/:ref` |
+| Workflows are undiscoverable | ⚠️ Half: `GET /api/workflows/:name` returns input/output as JSON Schema and the manager renders a launch form from it — but `weft run <name> --help` still lists no workflow flags |
+| No `--json` on any CLI verb | ❌ Unchanged, and now asymmetric: ~22 HTTP routes answer in JSON, the CLI beside them in ANSI |
+| The daemon is unauthenticated | ⚠️ Worse in effect. The Host/Origin guard works against the browser (verified), but the surface it guards now starts runs and rewrites `.weft/config.json` — including the approval tiers (verified) |
+| No journal format version | ❌ Unchanged. This commit added a field to `step.scheduled` and handled it additively, which is the right instinct and exactly the case a version field would make routine |
+| No `AGENTS.md` ingestion, no sandbox, no measured review patterns | ❌ Unchanged — still the three at the top of the build list |
+
+**Test baseline moved from 694/694 green to 800 passed, 1 failed, 1 skipped across 46 files** (the run now includes `apps/ui`'s jsdom suite as a second vitest project). The single failure is `packages/daemon/test/api.test.ts:906`, and it is environment-dependent rather than a product bug: the test `chmod`s a journal to `0o000` and asserts the fold reports `EACCES`, which **root bypasses**, so the "broken" run reads fine and lands in `pending`. GitHub's `ubuntu-latest` runner is non-root, so CI is green; anyone running the suite in a root container — the default in most Docker images — sees it red. Worth a `process.getuid() === 0` skip.
+
+### Since the previous review (`ad5ecae`/`c0e5e50` → now)
+
+The [DX and Architecture Review](./2026-08-dx-and-architecture.md) audited *quality*. Checked against the current tree while writing this report.
 
 | Then | Now |
 | --- | --- |
@@ -1104,7 +1159,7 @@ The [DX and Architecture Review](./2026-08-dx-and-architecture.md) audited *qual
 | A salvage cache hit could lie | ✅ Guarded — a workflow-body hash gates position trust; an ambiguous keyless step re-runs |
 | Replayer used a wall-clock watchdog | ✅ Fixed — the stall test counts drained event-loop turns |
 | `weft run <name> --help` does not show the workflow's flags | ❌ Still open — verified: `--base` is not listed |
-| No `--json` on any verb | ❌ Still open (idea 4) |
-| `audit-and-fix` panel is not actually cross-vendor | ❌ Still open — `PANEL = ["claude", "codex", "claude"]`, `>= 2` (idea 3) |
-| No corpus replay assertion in `@techery/weft-testing` | ❌ Still open (idea 3's companion) |
-| Declared `reads:` inputs | ❌ Still open (idea 10) |
+| No `--json` on any verb | ❌ Still open (idea 5) |
+| `audit-and-fix` panel is not actually cross-vendor | ❌ Still open — `PANEL = ["claude", "codex", "claude"]`, `>= 2` (idea 4) |
+| No corpus replay assertion in `@techery/weft-testing` | ❌ Still open (idea 4's companion) |
+| Declared `reads:` inputs | ❌ Still open (idea 12) |

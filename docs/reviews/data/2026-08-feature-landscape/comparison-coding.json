@@ -1,5 +1,5 @@
 {
-  "note": "Coding-workflow comparison (revision 3, 2026-08-25): adds dimension 11, composing workflows out of workflows. Supersedes comparison.json, which carried the first draft's durable-execution framing.",
+  "note": "Coding-workflow comparison (revision 4, 2026-08-25): re-checked against 7d500a7, which added the workflow manager and the daemon API. Supersedes comparison.json, which carried the first draft's durable-execution framing.",
   "standing": [
     {
       "dimension": "What a workflow *is*",
@@ -100,7 +100,7 @@
   "dimensions": [
     {
       "dimension": "What a workflow *is*",
-      "weft": "A checked-in TypeScript program with a typed `input`/`output` schema. `await` is a sequential edge, `ctx.parallel` fans out, `ctx.pipeline` runs lanes, `if` on a typed field is a conditional edge. No DSL, no YAML, no graph builder \u2014 and no separate artifact to keep in sync with the program.",
+      "weft": "A checked-in TypeScript program with a typed `input`/`output` schema. `await` is a sequential edge, `ctx.parallel` fans out, `ctx.pipeline` runs lanes, `if` on a typed field is a conditional edge. No DSL, no YAML, no graph builder \u2014 and no separate artifact to keep in sync with the program. Since `7d500a7` the registry is introspectable over HTTP \u2014 `GET /api/workflows/:name` returns the declared input and output as JSON Schema, and the manager renders a launch form from it \u2014 though `weft run <name> --help` still does not list the flags the workflow takes.",
       "others": [
         {
           "project": "GitHub Spec Kit",
@@ -770,7 +770,7 @@
     },
     {
       "dimension": "Audit trail of what the agent actually did",
-      "weft": "The journal plus two generated records: `report.md` (Outcome / Changes / Checks / Ledger / Failures & drops / Remaining risk / Next step) and the live tree. `weft explain <run> <step>` shows one step's route, prompt, output, usage and attempts; `weft diff <a> <b>` compares two runs by keyed step output.",
+      "weft": "The journal plus two generated records: `report.md` (Outcome / Changes / Checks / Ledger / Failures & drops / Remaining risk / Next step) and the live tree. `weft explain <run> <step>` shows one step's route, prompt, output, usage and attempts; `weft diff <a> <b>` compares two runs by keyed step output. As of `7d500a7` the record is finally *legible*: the manager renders the steps rail, findings, artifacts, staged changes and the raw journal, with `GET /api/runs/:id/patch` returning the unified diff with per-file `+/\u2212` counts and `GET /api/blobs/:ref` the bytes behind any journaled ref. `step.scheduled` now carries the step's JSON Schema, and `reduceState` keeps `sessionId` and `transcriptRef` \u2014 so a step pane can show what a step promised to return as well as what it did. Still one OpenTelemetry span per run.",
       "others": [
         {
           "project": "Aider",
@@ -842,7 +842,7 @@
     },
     {
       "dimension": "Where it runs \u2014 and what that posture costs",
-      "weft": "**Local, on a developer's own machine, by design.** A CLI plus an MCP server so a Claude Code or Codex session can drive it, plus a loopback-only daemon serving a single-page UI. No server, no database, no account, no code leaving the machine, and the credentials used are the ones already sitting in the developer's shell. State is `<cwd>/.weft`. The costs are real and mostly unpaid: no repo-root discovery (running from a subdirectory silently targets a different, empty `.weft`), no blob GC, and no repo-level mutex, so two runs sharing a working tree is undefined behaviour.",
+      "weft": "**Local, on a developer's own machine, by design.** A CLI plus an MCP server so a Claude Code or Codex session can drive it, plus a loopback-only daemon that since `7d500a7` serves a real React workflow manager \u2014 queue, runs, gate answering, staged changes, settings \u2014 reading the live journal. No server, no database, no account, no code leaving the machine, and the credentials used are the ones already sitting in the developer's shell. State is `<cwd>/.weft`. The costs are real and mostly unpaid: no repo-root discovery (running from a subdirectory silently targets a different, empty `.weft`), no blob GC, and no repo-level mutex, so two runs sharing a working tree is undefined behaviour.",
       "others": [
         {
           "project": "Claude Code / Codex CLI / opencode / goose / Aider",
@@ -883,7 +883,7 @@
     },
     {
       "dimension": "Distribution and practice adoption",
-      "weft": "Design preview. Not on npm. Zero users. The engineering around it is real \u2014 16 packages versioned together, a tag-driven release pipeline with `verify:packing` and `verify:install`, CI on node 22 and 24 \u2014 but nothing has shipped.",
+      "weft": "Design preview. Not on npm. Zero users. The engineering around it is real \u2014 16 packages versioned together, a tag-driven release pipeline with `verify:packing` and `verify:install`, CI on node 22 and 24 \u2014 but nothing has shipped. One genuine distribution move landed in `7d500a7`: `weft skill` prints a `SKILL.md` for `.claude/skills/weft/`, which is weft adopting Anthropic's Agent Skills standard so the agents it depends on can learn to drive it. That is the right shape for a tool whose users already live inside Claude Code or Codex.",
       "others": [
         {
           "project": "GitHub Spec Kit",
