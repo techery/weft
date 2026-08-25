@@ -178,14 +178,18 @@ export class TaskStore {
       }),
     );
     const bindingKey = `${workflow.id}:${schemaBinding}`;
-    this.runtimeSchemas.set(bindingKey, extensionSchema);
-    this.runtimeJsonSchemas.set(bindingKey, extensionJsonSchema);
-    this.runtimeMigrations.set(bindingKey, {
-      version,
-      ...(options.migrate ? { migrate: options.migrate } : {}),
-    });
-    if (options.persist === false) return schemaBinding;
-    this.latestBindings.set(workflow.id, schemaBinding);
+    const bindRuntime = () => {
+      this.runtimeSchemas.set(bindingKey, extensionSchema);
+      this.runtimeJsonSchemas.set(bindingKey, extensionJsonSchema);
+      this.runtimeMigrations.set(bindingKey, {
+        version,
+        ...(options.migrate ? { migrate: options.migrate } : {}),
+      });
+    };
+    if (options.persist === false) {
+      bindRuntime();
+      return schemaBinding;
+    }
     const namespace: TaskWorkflowNamespace = {
       schemaVersion: TASK_NAMESPACE_SCHEMA_VERSION,
       id: workflow.id,
@@ -195,6 +199,12 @@ export class TaskStore {
       extensionSchemaVersion: version,
     };
     await this.mutate(workflow.id, async () => {
+      const existing = await this.namespace(workflow.id);
+      if (existing && existing.extensionSchemaVersion > version) {
+        throw new Error(
+          `workflow ${workflow.id} task extension schema downgrade from version ${existing.extensionSchemaVersion} to ${version} is not allowed`,
+        );
+      }
       const file = this.namespaceFile(workflow.id);
       const current = await readFile(file, "utf8").catch((err: unknown) => {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
@@ -203,6 +213,8 @@ export class TaskStore {
       const encoded = `${JSON.stringify(namespace)}\n`;
       if (current !== encoded) await this.writeAux(file, namespace);
     });
+    bindRuntime();
+    this.latestBindings.set(workflow.id, schemaBinding);
     return schemaBinding;
   }
 

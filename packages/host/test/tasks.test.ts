@@ -346,6 +346,45 @@ describe("TaskStore", () => {
     expect(raw.extensionSchemaVersion).toBe(2);
   });
 
+  it("rejects late schema downgrades without replacing the durable namespace or runtime binding", async () => {
+    const root = await tempRoot();
+    const taskRoot = join(root, ".weft", "tasks");
+    const store = new TaskStore(taskRoot);
+    const current = z.object({ owner: z.string() });
+    await store.registerWorkflow({ id: "review", name: "review" }, current, z.toJSONSchema(current), {
+      schemaVersion: 2,
+    });
+    const first = await store.create("review", {
+      title: "Current task",
+      description: "Uses the upgraded schema",
+      extensions: { owner: "api" },
+    });
+
+    const stale = z.object({ lane: z.string() });
+    await expect(
+      store.registerWorkflow({ id: "review", name: "review" }, stale, z.toJSONSchema(stale), {
+        schemaVersion: 1,
+      }),
+    ).rejects.toThrow(/schema downgrade from version 2 to 1/);
+
+    expect(await store.namespace("review")).toMatchObject({
+      extensionSchemaVersion: 2,
+      extensionSchema: expect.objectContaining({
+        properties: expect.objectContaining({ owner: expect.anything() }),
+      }),
+    });
+    const second = await store.create("review", {
+      title: "Still current",
+      description: "A rejected registration cannot replace the in-memory binding",
+      extensions: { owner: "ui" },
+    });
+    const reader = new TaskStore(taskRoot);
+    expect(await reader.list("review")).toEqual([
+      expect.objectContaining({ id: first.id, extensionSchemaVersion: 2, extensions: { owner: "api" } }),
+      expect.objectContaining({ id: second.id, extensionSchemaVersion: 2, extensions: { owner: "ui" } }),
+    ]);
+  });
+
   it("binds dry replay in memory and recovers a lost old-schema batch through migration", async () => {
     const root = await tempRoot();
     const taskRoot = join(root, ".weft", "tasks");
