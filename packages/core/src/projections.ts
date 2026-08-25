@@ -20,6 +20,11 @@ export interface StepState {
   attempts?: number;
   error?: SerializedStepError;
   output?: unknown;
+  /** JSON Schema that validated `output`; absent on legacy journal records. */
+  schema?: unknown;
+  /** Provider session identity and the recorded coding transcript for agent steps. */
+  sessionId?: string;
+  transcriptRef?: BlobRefJson;
   patchRef?: string;
   childRunId?: string;
 }
@@ -175,6 +180,7 @@ export function reduceState(records: JournalRecord[]): RunState {
           ...(ev.phase !== undefined ? { phase: ev.phase } : {}),
           ...(ev.parentSeq !== undefined ? { parentSeq: ev.parentSeq } : {}),
           ...(ev.route !== undefined ? { route: ev.route } : {}),
+          ...(ev.schema !== undefined ? { schema: ev.schema } : {}),
           ...(ev.childRunId !== undefined ? { childRunId: ev.childRunId } : {}),
         };
         allSteps.push(step);
@@ -206,6 +212,8 @@ export function reduceState(records: JournalRecord[]): RunState {
         step.output = ev.output;
         if (ev.usage !== undefined) step.usage = ev.usage;
         if (ev.attempts !== undefined) step.attempts = ev.attempts;
+        if (ev.sessionId !== undefined) step.sessionId = ev.sessionId;
+        if (ev.transcriptRef !== undefined) step.transcriptRef = ev.transcriptRef;
         if (ev.patchRef !== undefined) step.patchRef = ev.patchRef;
         if (step.kind === "check") {
           const out = ev.output as { status?: CheckState["status"]; evidence?: string } | null;

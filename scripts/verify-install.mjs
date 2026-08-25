@@ -97,6 +97,32 @@ try {
         }),
       (out) => out.includes('"serverInfo"'),
     ],
+    // `weft ui` serves the workflow manager out of the daemon's own `web/`, found by a
+    // path relative to the module. That lookup runs from `dist/` in a real install and
+    // from `src/` in the repo, so it is worth proving out of the install rather than only
+    // where the source tree happens to sit.
+    [
+      "daemon finds the bundled workflow manager",
+      () =>
+        run(
+          "node",
+          [
+            "--input-type=module",
+            "-e",
+            [
+              'import { BUNDLED_WEB_ROOT, openWebBundle } from "@techery/weft-daemon";',
+              "const web = openWebBundle(BUNDLED_WEB_ROOT);",
+              'if (!web) throw new Error("no bundle at " + BUNDLED_WEB_ROOT);',
+              'if (!web.index.includes("<div id=\\"root\\">")) throw new Error("not the manager document");',
+              'const asset = await web.read((web.index.match(/src="(\\/assets\\/[^"]+)"/) ?? [])[1] ?? "");',
+              'if (!asset) throw new Error("the document asks for an asset the bundle does not have");',
+              'console.log("manager ok");',
+            ].join(""),
+          ],
+          { cwd: dir },
+        ),
+      (out) => out.includes("manager ok"),
+    ],
   ];
 
   let failed = 0;

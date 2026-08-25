@@ -1,0 +1,68 @@
+.row {
+  appearance: none;
+  border: 0;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--color-neutral-200);
+  cursor: pointer;
+  background: transparent;
+}
+.row:hover {
+  background: var(--color-neutral-100);
+}
+.on {
+  background: var(--color-accent-200);
+}
+.on:hover {
+  background: var(--color-accent-200);
+}
+.name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  overflow: hidden;
+}
+.nameText {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+.last {
+  width: 62px;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-neutral-700);
+  white-space: nowrap;
+}
+.success {
+  width: 88px;
+  flex: none;
+}
+.p50 {
+  width: 52px;
+  flex: none;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.cost {
+  width: 54px;
+  flex: none;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}

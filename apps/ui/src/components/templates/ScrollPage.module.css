@@ -1,0 +1,12 @@
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.inner {
+  margin: 0 auto;
+  padding: 26px 26px 40px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}

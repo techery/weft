@@ -1,0 +1,64 @@
+.row {
+  appearance: none;
+  border: 0;
+  width: 100%;
+  font: inherit;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  padding-right: 10px;
+  background: transparent;
+  cursor: pointer;
+}
+.dir {
+  cursor: default;
+}
+.on {
+  background: var(--color-accent-200);
+}
+.twisty {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-neutral-500);
+  width: 10px;
+  flex: none;
+  text-align: center;
+}
+.icon {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  border-radius: var(--radius-sm);
+  padding: 1px 4px;
+  flex: none;
+  background: var(--color-neutral-200);
+}
+.name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 400;
+}
+.dirName {
+  font-weight: 500;
+  color: var(--color-neutral-700);
+}
+.selectedName {
+  font-weight: 600;
+}
+.stat {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  flex: none;
+  color: var(--color-neutral-500);
+}
+.statOn {
+  color: var(--color-accent-800);
+}

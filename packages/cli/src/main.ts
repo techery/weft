@@ -24,6 +24,7 @@ import { replayCommand } from "./commands/replay.ts";
 import { reportCommand } from "./commands/report.ts";
 import { resumeCommand } from "./commands/resume.ts";
 import { runCommand } from "./commands/run.ts";
+import { skillCommand } from "./commands/skill.ts";
 import { statusCommand } from "./commands/status.ts";
 import { uiCommand } from "./commands/ui.ts";
 import { type CliIo, warn } from "./io.ts";
@@ -67,6 +68,7 @@ export function buildProgram(io: CliIo = consoleIo): Command {
     diffCommand,
     checkCommand,
     newCommand,
+    skillCommand,
     doctorCommand,
     uiCommand,
   ]) {

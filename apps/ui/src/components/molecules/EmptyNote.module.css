@@ -1,0 +1,7 @@
+.note {
+  font-size: 13px;
+  color: var(--color-neutral-600);
+  padding: 14px 15px;
+  border: 1px dashed var(--color-divider);
+  border-radius: var(--radius-md);
+}

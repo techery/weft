@@ -217,19 +217,65 @@ Only `journal.jsonl` has to survive; every other file in that directory is rebui
 | `@techery/weft-stdlib` | Typed patterns: `adversarialVerify`, `judgePanel`, `loopUntilDry`, `integrationLedger`, `finalReport`, … |
 | `@techery/weft-testing` | `runWorkflow` harness, mock fixtures, journal assertions, store conformance suites. |
 | `@techery/weft-host` | Engine assembly shared by the hosts: config loading, stores, providers, workflow registry. |
-| `@techery/weft`, `@techery/weft-mcp`, `@techery/weft-daemon` | Hosts. CLI: run, resume, ls, status, answer, cancel, report, replay, check, explain, diff, ui, doctor. MCP: `weft.run/wait/answer/resume/list/report/types`. Daemon: serves the web UI and wakes suspended runs. |
+| `@techery/weft`, `@techery/weft-mcp`, `@techery/weft-daemon` | Hosts. CLI: run, resume, ls, status, answer, cancel, report, replay, check, explain, diff, new, skill, ui, doctor. MCP: `weft.run/wait/answer/resume/list/report/types`. Daemon: serves the web UI and wakes suspended runs. |
+
+## Apps
+
+| App | Owns |
+| --- | --- |
+| `@techery/weft-ui` (`apps/ui`) | The workflow manager: queue, runs, run detail, workflows, settings, and a ⌘K launcher — reading and writing the live journal through the API below. React + Vite + TanStack Router + Query + Jotai, laid out atomically. See [apps/ui/README.md](./apps/ui/README.md). |
+
+`weft ui` serves it. The manager builds into `packages/daemon/web/`, and the daemon that
+`weft ui` starts serves that directory at `/` — so `pnpm build && weft ui` opens the
+manager, and its client-side routes (`/runs/r-045?tab=changes`) survive a reload.
+
+The daemon's HTTP surface is what it reads from:
+
+| | |
+| --- | --- |
+| `GET /api/meta` | repo, version, resolved defaults, limits, approval tiers, wired providers |
+| `GET /api/pending` | every question waiting on a person, across every run, oldest first — plus any journal it could not read, rather than an empty list |
+| `GET /api/workflows` · `/:name` · `/:name/stats` | the registry; a workflow's input/output as JSON Schema; its 30-day success rate, percentiles and recent runs |
+| `POST /api/runs` | start a registry workflow — name, input, `budget`, `reuse` |
+| `GET /api/runs` | the journal index; `?spend=1` adds tokens, dollars and step counts |
+| `GET /api/runs/:id` · `/report` · `/tree` · `/pending` · `/events` | one run: state, report, tree, its questions, and the journal as SSE |
+| `GET /api/runs/:id/artifacts` · `/patch` | what a run wrote; the unified diff with per-file `+/−` counts |
+| `POST /api/runs` refuses | a path (registry names only), an input field the schema would drop, and a budget with a misspelled axis |
+| `GET /api/blobs/:ref` | the bytes behind a journaled ref, cached immutably |
+| `GET` · `PUT /api/config` | `.weft/config.json`, validated before it is written |
+| `POST /api/runs/:id/answer` · `/signal` · `/cancel` · `/resume` | act on a run |
+
+```bash
+pnpm build && node packages/cli/bin/weft.js ui   # or `weft ui` with weft on your PATH
+```
+
+To work on the UI itself, run both: the daemon does the work, and Vite serves the page
+and proxies its API calls there — so a component can be edited while a run is mid-flight.
+
+```bash
+weft ui        # terminal 1 — a daemon on :4781
+pnpm dev:ui    # terminal 2 — the UI on :4782, hot-reloading against it
+```
+
+Open **http://localhost:4782** (Vite binds `[::1]`, the daemon binds `127.0.0.1`; the
+proxy bridges them). `WEFT_DAEMON=http://127.0.0.1:4790 pnpm dev:ui` points it elsewhere.
+
+A checkout that has not built the manager still gets a working UI: the daemon falls back
+to its own built-in page, and `weft ui` says which one you are looking at. That page reads
+the live journal and keeps a fixed address at `/legacy` either way.
 
 ## Development
 
 ```bash
 pnpm install
-pnpm typecheck        # tsc -p tsconfig.json --noEmit, over every package plus examples/ and .weft/
-pnpm test             # vitest run
+pnpm typecheck        # tsc over every package plus examples/ and .weft/, then apps/ui
+pnpm test             # vitest run, then the apps/ui suite
 pnpm test:watch
+pnpm dev:ui           # the workflow manager on :4782
 pnpm lint             # biome check .
 pnpm lint:fix         # biome check --write .
 pnpm format           # biome format --write .
-pnpm build            # tsc per package, src/ -> dist/, in dependency order
+pnpm build            # tsc per package, src/ -> dist/, in dependency order; apps/ui via vite
 pnpm clean            # drop every dist/
 pnpm verify:packing   # pack every package and check the tarballs are installable
 pnpm verify:install   # install those tarballs for real and run the CLI out of them

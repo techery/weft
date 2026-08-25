@@ -1,0 +1,24 @@
+.strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 13px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  border: 1px dashed var(--color-accent-400);
+  flex-wrap: wrap;
+}
+.key {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-accent-700);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.value {
+  font-size: 13px;
+  color: var(--color-neutral-800);
+  flex: 1;
+  min-width: 200px;
+}

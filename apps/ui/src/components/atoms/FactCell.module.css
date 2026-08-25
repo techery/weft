@@ -1,0 +1,59 @@
+/* Key-over-value cells, divided by a hairline on their left edge. */
+.cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 13px;
+  border-left: 1px solid var(--color-neutral-200);
+}
+.key {
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-neutral-500);
+}
+.value {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+/* Step overview facts form one dense metadata strip. */
+.step {
+  min-height: 54px;
+  box-sizing: border-box;
+  justify-content: center;
+  gap: 4px;
+  padding: 9px 14px;
+}
+.step .key {
+  font-size: 9px;
+  font-weight: 600;
+}
+.step .value {
+  color: var(--color-neutral-900);
+  font-size: 12px;
+  font-weight: 500;
+}
+/* Queue cards use fixed-width cells. */
+.fixed {
+  width: 172px;
+  flex: none;
+  padding: 0 12px;
+}
+.small .value {
+  font-size: 11px;
+}
+/* Artifact footer cells sit a little wider apart. */
+.wide {
+  min-width: 120px;
+  padding: 0 14px;
+}
+.wide .value {
+  font-size: 11px;
+}
+/* The leading cell in a row has nothing to divide it from. Declared last so it
+   wins over whichever variant set the horizontal padding above. */
+.first {
+  border-left: 0;
+  padding-left: 0;
+}

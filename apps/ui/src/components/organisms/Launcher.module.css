@@ -1,0 +1,220 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 20, 19, 0.28);
+  z-index: 60;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 80px;
+  border: 0;
+}
+.scrim {
+  position: absolute;
+  inset: 0;
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: default;
+}
+.panel {
+  position: relative;
+  width: min(960px, calc(100vw - 48px));
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+}
+
+/* — step 1: pick — */
+.search {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--color-divider);
+}
+.searchLabel {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  color: var(--color-accent-700);
+}
+.searchInput {
+  flex: 1;
+  appearance: none;
+  border: 0;
+  background: none;
+  outline: none;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  color: var(--color-text);
+  padding: 0;
+}
+.matchCount {
+  font-size: 12px;
+  color: var(--color-neutral-500);
+  white-space: nowrap;
+}
+.list {
+  max-height: 300px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.hints {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 9px 20px;
+  border-top: 1px solid var(--color-divider);
+  background: var(--color-neutral-100);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-600);
+}
+.spacer {
+  flex: 1;
+}
+
+/* — step 2: inputs — */
+.head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--color-divider);
+}
+.headMain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.headTitle {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.headName {
+  font-size: 15px;
+  font-weight: 600;
+}
+.headFile {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-accent-700);
+}
+.headShape {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-600);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.headMeta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-600);
+  white-space: nowrap;
+}
+.body {
+  padding: 14px 20px 16px;
+  background: var(--color-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.schemaPane {
+  overflow: clip;
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.schemaHead {
+  min-height: 38px;
+  padding: 7px 10px 7px 13px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid var(--color-divider);
+}
+.schemaTitle {
+  color: var(--color-neutral-600);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.schemaNote,
+.schemaHint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-neutral-500);
+}
+.schemaHint {
+  white-space: nowrap;
+}
+.schemaFields {
+  padding: 4px 0;
+}
+.schemaState,
+.rawInput {
+  padding: 12px 13px;
+  display: block;
+}
+.rawInput {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rawTextArea {
+  max-width: none;
+}
+.foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-neutral-300);
+  margin-top: 4px;
+}
+
+@media (max-width: 720px) {
+  .schemaHead {
+    flex-wrap: wrap;
+  }
+  .schemaHint {
+    order: 3;
+    width: 100%;
+  }
+}
+.footNote {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-600);
+  flex: 1;
+  min-width: 0;
+}
+
+/* — remote states — */
+.listState {
+  padding: 12px 20px;
+}
+.state {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-600);
+}
+.stateError,
+.footError {
+  color: var(--color-danger);
+}

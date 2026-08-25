@@ -650,6 +650,7 @@ export class RunRuntime {
           ...(spec.route !== undefined ? { route: spec.route } : {}),
           ...(spec.scope !== undefined ? { scope: spec.scope } : {}),
           ...(spec.payload !== undefined ? { payload: spec.payload } : {}),
+          ...(spec.schemaJson !== undefined ? { schema: spec.schemaJson } : {}),
           ...(childRunId !== undefined ? { childRunId } : {}),
         },
       ]);

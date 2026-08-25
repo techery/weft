@@ -1,7 +1,7 @@
 {
   "name": "@techery/weft",
   "version": "0.1.0",
-  "description": "weft CLI: run, resume, answer, check, explain, report, diff, ui, doctor.",
+  "description": "weft CLI: run, resume, answer, check, explain, report, diff, skill, ui, doctor.",
   "keywords": [
     "weft",
     "workflow",

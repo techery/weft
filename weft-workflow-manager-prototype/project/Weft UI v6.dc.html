@@ -1,0 +1,1728 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="_ds/organic-f31772e2-eef1-43a3-aacb-3f9319af0042/styles.css">
+  <script src="_ds/organic-f31772e2-eef1-43a3-aacb-3f9319af0042/_ds_bundle.js"></script>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <style>
+    :root {
+      --color-bg: #f2ede3; --color-surface: #faf9f5; --color-text: #141413;
+      --color-accent: #cc785c; --color-accent-2: #5db8a6; --color-divider: #e2dbd1;
+      --color-neutral-100: #f5f0e8; --color-neutral-200: #efe9de; --color-neutral-300: #e6dfd8;
+      --color-neutral-400: #c4bdb2; --color-neutral-500: #8e8b82; --color-neutral-600: #6c6a64;
+      --color-neutral-700: #55534d; --color-neutral-800: #3d3d3a; --color-neutral-900: #181715;
+      --color-accent-100: #fbf1ec; --color-accent-200: #f6e2d8; --color-accent-300: #eac6b4;
+      --color-accent-400: #dd9b80; --color-accent-500: #cc785c; --color-accent-600: #b8664c;
+      --color-accent-700: #a9583e; --color-accent-800: #8a4630; --color-accent-900: #5e2f20;
+      --color-accent-2-100: #eaf6f3; --color-accent-2-200: #d7ece7; --color-accent-2-300: #a9dbd0;
+      --color-accent-2-400: #7fc9b9; --color-accent-2-500: #5db8a6; --color-accent-2-600: #489a8a;
+      --color-accent-2-700: #35786b; --color-accent-2-800: #275a51; --color-accent-2-900: #1a3c36;
+      --shadow-sm: 0 1px 3px rgba(20,20,19,.08); --shadow-md: 0 4px 14px rgba(20,20,19,.10);
+      --shadow-lg: 0 18px 44px rgba(20,20,19,.18);
+    }
+    body { margin: 0; background: #f2ede3; }
+    #dc-root { font-family: "Inter", -apple-system, system-ui, sans-serif; color: #141413; }
+    #dc-root input, #dc-root button, #dc-root label, #dc-root select, #dc-root textarea { font-family: inherit; }
+    h1, h2, h3 { font-family: "Source Serif 4", Georgia, serif; font-weight: 400; letter-spacing: -.02em; margin: 0; }
+    #dc-root .tag { border-radius: 999px !important; padding: 2px 10px !important; }
+    #dc-root .btn { letter-spacing: 0; font-weight: 500; }
+    #dc-root .input { background: #fffefb; border-color: #e6dfd8; }
+    #dc-root .input:focus { outline: none; border-color: #cc785c; box-shadow: 0 0 0 3px rgba(204,120,92,.15); }
+    a { color: #a9583e; } a:hover { color: #cc785c; }
+    ::selection { background: rgba(204,120,92,.22); }
+    #dc-root button:focus-visible, #dc-root input:focus-visible, #dc-root select:focus-visible, #dc-root textarea:focus-visible { outline: 2px solid #cc785c; outline-offset: 2px; }
+    #dc-root button:focus:not(:focus-visible) { outline: none; }
+    @keyframes weft-pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+  </style>
+</helmet>
+<div style="height:100vh;display:flex;flex-direction:column;overflow:hidden;font-size:13px;background:#f2ede3">
+
+  <div style="flex:none;display:flex;align-items:center;gap:12px;padding:0 14px;height:44px;border-bottom:1px solid #e2dbd1;background:#faf9f5">
+    <div style="display:flex;align-items:center;gap:9px">
+      <span style="width:22px;height:22px;border-radius:8px;background:#cc785c;color:#faf9f5;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex:none">w</span>
+      <span style="font-weight:600;font-size:13px">weft</span>
+      <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;border:1px solid #e2dbd1;border-radius:999px;padding:2px 9px;white-space:nowrap">acme/treel</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:2px;margin-left:8px">
+      <sc-for list="{{ nav }}" as="n" hint-placeholder-count="4">
+        <button onClick="{{ n.go }}" style="{{ n.style }}">{{ n.label }}<span style="{{ n.badgeStyle }}">{{ n.badge }}</span></button>
+      </sc-for>
+    </div>
+    <span style="flex:1"></span>
+    <button onClick="{{ openLauncher }}" class="btn btn-primary" style="padding:6px 14px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Run a workflow ⌘K</button>
+    <span style="display:flex;align-items:center;gap:7px;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;white-space:nowrap">
+      <span style="width:7px;height:7px;border-radius:999px;background:#5db8a6"></span>daemon · localhost:4781
+    </span>
+  </div>
+
+  <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+
+  <sc-if value="{{ isQueue }}" hint-placeholder-val="{{ true }}">
+    <div data-screen-label="Queue" style="flex:1;min-height:0;overflow-y:auto">
+      <div style="max-width:1180px;margin:0 auto;padding:26px 26px 40px;box-sizing:border-box;display:flex;flex-direction:column;gap:18px">
+        <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+          <h1 style="font-size:34px">Queue</h1>
+          <span style="font-size:13px;color:#55534d">{{ queueSummary }}</span>
+          <span style="flex:1"></span>
+          <span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6c6a64;font-weight:600">quick start</span>
+            <sc-for list="{{ pinned }}" as="p" hint-placeholder-count="4">
+              <button onClick="{{ p.run }}" class="btn btn-secondary" style="padding:5px 13px;font-size:12px;border-radius:999px;min-height:0;white-space:nowrap">{{ p.name }}</button>
+            </sc-for>
+          </span>
+        </div>
+        <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="{{ g.labelStyle }}">{{ g.label }}</span>
+              <span style="flex:1;height:1px;background:#e2dbd1"></span>
+              <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#8e8b82">{{ g.note }}</span>
+            </div>
+            <sc-for list="{{ g.items }}" as="i" hint-placeholder-count="3">
+              <div style="{{ i.cardStyle }}">
+                <div style="display:flex;align-items:center;gap:16px">
+                  <span style="width:176px;flex:none;display:flex;flex-direction:column;gap:2px">
+                    <span style="display:flex;align-items:center;gap:8px">
+                      <span style="{{ i.dotStyle }}"></span>
+                      <span style="font-size:15px;font-weight:600">{{ i.wf }}</span>
+                    </span>
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#8e8b82">{{ i.sub }}</span>
+                  </span>
+                  <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+                    <span style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+                      <span style="font-size:13px;font-weight:500">{{ i.ask }}</span>
+                      <sc-if value="{{ i.hasRisk }}" hint-placeholder-val="{{ false }}">
+                        <span style="{{ i.riskStyle }}">{{ i.risk }}</span>
+                      </sc-if>
+                    </span>
+                    <span style="font-size:12px;color:#55534d;line-height:1.45">{{ i.detail }}</span>
+                  </span>
+                  <button onClick="{{ i.open }}" class="{{ i.btnCls }}" style="padding:6px 14px;font-size:12px;border-radius:8px;min-height:0;flex:none;white-space:nowrap">{{ i.action }}</button>
+                </div>
+                <div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;padding:8px 0 0;border-top:1px solid #efe9de">
+                  <sc-for list="{{ i.facts }}" as="f" hint-placeholder-count="4">
+                    <span style="{{ f.cellStyle }}">
+                      <span style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:#8e8b82">{{ f.k }}</span>
+                      <span style="{{ f.vStyle }}">{{ f.v }}</span>
+                    </span>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+            <sc-if value="{{ g.isEmpty }}" hint-placeholder-val="{{ false }}">
+              <span style="font-size:13px;color:#6c6a64;padding:14px 15px;border:1px dashed #e2dbd1;border-radius:12px">{{ g.emptyL }}</span>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isRuns }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Runs" style="flex:1;min-height:0;overflow-y:auto">
+      <div style="max-width:1180px;margin:0 auto;padding:26px 26px 40px;box-sizing:border-box;display:flex;flex-direction:column;gap:16px">
+        <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+          <h1 style="font-size:34px">Runs</h1>
+          <span style="font-size:13px;color:#55534d">{{ runsSummary }}</span>
+          <span style="flex:1"></span>
+          <span style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+            <sc-for list="{{ runFilters }}" as="f" hint-placeholder-count="4">
+              <button onClick="{{ f.pick }}" style="{{ f.style }}">{{ f.label }}</button>
+            </sc-for>
+          </span>
+        </div>
+        <sc-if value="{{ hasStarted }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:12px;padding:11px 15px;border-radius:12px;background:#faf9f5;border:1px dashed #dd9b80">
+            <span style="width:7px;height:7px;border-radius:999px;background:#cc785c;flex:none;animation:weft-pulse 1.2s infinite"></span>
+            <span style="font-size:13px;font-weight:600">{{ startedRow.wf }}</span>
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#a9583e">{{ startedRow.file }}</span>
+            <span style="flex:1"></span>
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64">queued just now · the daemon opens step 1 in a moment</span>
+          </div>
+        </sc-if>
+        <div style="border:1px solid #e2dbd1;border-radius:12px;background:#faf9f5;overflow:hidden">
+          <div style="display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid #e2dbd1;background:#f5f0e8;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6c6a64;font-weight:600">
+            <span style="width:196px;flex:none">Run</span>
+            <span style="flex:1;min-width:0">Where it stands</span>
+            <span style="width:104px;flex:none">State</span>
+            <span style="width:110px;flex:none">Started</span>
+            <span style="width:64px;flex:none;text-align:right">Elapsed</span>
+            <span style="width:56px;flex:none;text-align:right">Cost</span>
+          </div>
+          <sc-for list="{{ runRows }}" as="r" hint-placeholder-count="5">
+            <button onClick="{{ r.open }}" style="{{ r.rowStyle }}" style-hover="background:#f5f0e8">
+              <span style="width:196px;flex:none;display:flex;align-items:center;gap:9px;min-width:0">
+                <span style="{{ r.dotStyle }}"></span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;font-weight:600;white-space:nowrap;flex:none">{{ r.id }}</span>
+                <span style="font-size:12px;color:#55534d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">{{ r.wf }}</span>
+              </span>
+              <span style="flex:1;min-width:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.outcome }}</span>
+              <span style="{{ r.stateStyle }}">{{ r.stateL }}</span>
+              <span style="width:110px;flex:none;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;white-space:nowrap">{{ r.started }}</span>
+              <span style="width:64px;flex:none;text-align:right;font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px">{{ r.dur }}</span>
+              <span style="width:56px;flex:none;text-align:right;font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px">{{ r.cost }}</span>
+            </button>
+          </sc-for>
+        </div>
+        <p style="margin:0 2px;font-size:12px;color:#6c6a64">Every run keeps its journal, artifacts and staged changes for 30 days — open one to read what happened, even after it finished.</p>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isWorkflows }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Workflows" style="flex:1;min-height:0;display:flex">
+      <div style="flex:1;min-width:0;overflow-y:auto;padding:24px 26px 40px;box-sizing:border-box;display:flex;flex-direction:column;gap:16px">
+        <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+          <h1 style="font-size:34px">Workflows</h1>
+          <span style="flex:1"></span>
+          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64">.weft/workflows/ · 342 runs · 30d</span>
+        </div>
+        <div style="border:1px solid #e2dbd1;border-radius:12px;background:#faf9f5;overflow:hidden">
+          <div style="display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid #e2dbd1;background:#f5f0e8;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6c6a64;font-weight:600">
+            <span style="flex:1;min-width:0;white-space:nowrap">Workflow</span>
+            <span style="width:96px;flex:none;white-space:nowrap">Shape</span>
+            <span style="width:62px;flex:none;white-space:nowrap">Last</span>
+            <span style="width:88px;flex:none;white-space:nowrap">Success</span>
+            <span style="width:52px;flex:none;text-align:right">p50</span>
+            <span style="width:54px;flex:none;text-align:right">Cost</span>
+          </div>
+          <sc-for list="{{ wfRows }}" as="w" hint-placeholder-count="6">
+            <button onClick="{{ w.select }}" style="{{ w.rowStyle }}" style-hover="background:#f5f0e8">
+              <span style="flex:1;min-width:0;display:flex;align-items:center;gap:9px;overflow:hidden">
+                <span style="{{ w.dotStyle }}"></span>
+                <span style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0">{{ w.name }}</span>
+              </span>
+              <span style="width:96px;flex:none;display:flex;align-items:center;gap:3px">
+                <sc-for list="{{ w.shape }}" as="c" hint-placeholder-count="4">
+                  <span style="{{ c.style }}">{{ c.ch }}</span>
+                </sc-for>
+              </span>
+              <span style="width:62px;flex:none;font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;color:#55534d;white-space:nowrap">{{ w.lastL }}</span>
+              <span style="width:88px;flex:none;display:flex;align-items:center;gap:8px">
+                <span style="flex:1;height:5px;border-radius:999px;background:#e6dfd8;overflow:hidden"><span style="{{ w.barStyle }}"></span></span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px">{{ w.ok }}</span>
+              </span>
+              <span style="width:52px;flex:none;text-align:right;font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;white-space:nowrap">{{ w.p50 }}</span>
+              <span style="width:54px;flex:none;text-align:right;font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;white-space:nowrap">{{ w.cost }}</span>
+            </button>
+          </sc-for>
+        </div>
+        <p style="margin:0 2px;font-size:12px;color:#6c6a64">Shape: <span style="font-family:JetBrains Mono,ui-monospace,monospace">T</span> task · <span style="font-family:JetBrains Mono,ui-monospace,monospace">A</span> agent · <span style="font-family:JetBrains Mono,ui-monospace,monospace">H</span> human gate · <span style="font-family:JetBrains Mono,ui-monospace,monospace">∥</span> parallel.</p>
+      </div>
+      <div style="width:352px;flex:none;border-left:1px solid #e2dbd1;background:#faf9f5;padding:22px 20px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px;overflow-y:auto">
+        <div style="display:flex;flex-direction:column;gap:5px">
+          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#a9583e">.weft/workflows/{{ wfSel.file }}</span>
+          <h2 style="font-size:24px">{{ wfSel.name }}</h2>
+          <span style="font-size:13px;color:#55534d;line-height:1.5">{{ wfSel.desc }}</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button onClick="{{ runSelected }}" class="btn btn-primary" style="padding:6px 14px;font-size:12px;border-radius:8px;min-height:0">Run…</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:7px">
+          <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Last 14 runs</span>
+          <span style="display:flex;align-items:flex-end;gap:3px;height:52px">
+            <sc-for list="{{ wfSel.history }}" as="h" hint-placeholder-count="14">
+              <span style="{{ h.style }}"></span>
+            </sc-for>
+          </span>
+          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64">{{ wfSel.historyNote }}</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2px">
+          <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600;margin-bottom:6px">Recent runs</span>
+          <sc-for list="{{ wfSel.recent }}" as="r" hint-placeholder-count="2">
+            <button onClick="{{ r.open }}" style="{{ r.rowStyle }}" style-hover="background:#f5f0e8">
+              <span style="{{ r.dotStyle }}"></span>
+              <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;font-weight:600">{{ r.id }}</span>
+              <span style="font-size:12px;color:#55534d;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ r.outcome }}</span>
+              <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64">{{ r.ago }}</span>
+            </button>
+          </sc-for>
+          <sc-if value="{{ wfSel.noRecent }}" hint-placeholder-val="{{ false }}">
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#8e8b82;padding:4px 0">no runs in the last 30 days</span>
+          </sc-if>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1px">
+          <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600;margin-bottom:6px">Labels in code</span>
+          <sc-for list="{{ wfSel.phases }}" as="p" hint-placeholder-count="4">
+            <span style="display:flex;align-items:center;gap:9px;padding:6px 0;border-bottom:1px solid #efe9de">
+              <span style="{{ p.numStyle }}">{{ p.n }}</span>
+              <span style="font-size:13px;font-weight:500;flex:1">{{ p.name }}</span>
+              <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64">{{ p.meta }}</span>
+            </span>
+          </sc-for>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;margin-top:auto">
+          <sc-for list="{{ wfSel.facts }}" as="f" hint-placeholder-count="4">
+            <span style="display:flex;gap:10px;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;padding:4px 0;border-top:1px solid #efe9de">
+              <span style="flex:1;color:#6c6a64">{{ f.k }}</span><span>{{ f.v }}</span>
+            </span>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Settings" style="flex:1;min-height:0;overflow-y:auto">
+      <div style="max-width:760px;margin:0 auto;padding:26px 26px 40px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px">
+        <h1 style="font-size:34px">Settings</h1>
+        <div style="border:1px solid #e2dbd1;border-radius:12px;background:#faf9f5;padding:16px 18px;display:flex;flex-direction:column;gap:10px">
+          <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Approval policy</span>
+          <p style="margin:0;font-size:13px;color:#3d3d3a;line-height:1.5">A workflow may raise a tier, never lower it. Auto-approvals are journaled as <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px">answered_by: "policy"</span>.</p>
+          <sc-for list="{{ policyRows }}" as="t" hint-placeholder-count="4">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-top:1px solid #efe9de;padding-top:9px">
+              <span style="font-size:13px;font-weight:600;width:88px;flex:none">{{ t.tier }}</span>
+              <span style="flex:1;min-width:180px;font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;color:#55534d">{{ t.ops }}</span>
+              <span style="display:flex;gap:4px">
+                <button onClick="{{ t.setAuto }}" style="{{ t.autoStyle }}">auto</button>
+                <button onClick="{{ t.setAsk }}" style="{{ t.askStyle }}">ask</button>
+              </span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="border:1px solid #e2dbd1;border-radius:12px;background:#faf9f5;padding:16px 18px;display:flex;flex-direction:column;gap:12px">
+          <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Budget &amp; limits</span>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <label style="display:flex;flex-direction:column;gap:6px">
+              <span style="font-size:11px;color:#55534d">Default run budget</span>
+              <input class="input" style="border-radius:8px;min-height:34px;font-size:13px;font-family:JetBrains Mono,ui-monospace,monospace" value="{{ budget }}" onChange="{{ setBudget }}">
+            </label>
+            <label style="display:flex;flex-direction:column;gap:6px">
+              <span style="font-size:11px;color:#55534d">Agent concurrency · {{ concL }}</span>
+              <span style="display:flex;align-items:center;gap:9px;min-height:34px">
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64">2</span>
+                <input type="range" min="2" max="24" value="{{ conc }}" onChange="{{ setConc }}" style="accent-color:#cc785c;flex:1">
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64">24</span>
+              </span>
+            </label>
+          </div>
+          <p style="margin:0;font-size:12px;color:#55534d;line-height:1.5">Budget exhaustion throws inside the next step; the pool is shared with child workflows. Per step: maxTurns 50 · 20 min wall clock.</p>
+        </div>
+        <div style="border:1px solid #e2dbd1;border-radius:12px;background:#faf9f5;padding:16px 18px;display:flex;flex-direction:column;gap:10px">
+          <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Providers</span>
+          <sc-for list="{{ providers }}" as="p" hint-placeholder-count="2">
+            <div style="display:flex;align-items:center;gap:12px;border-top:1px solid #efe9de;padding-top:9px">
+              <span style="width:74px;font-weight:600;font-size:13px">{{ p.id }}</span>
+              <span style="flex:1;font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;color:#55534d">{{ p.model }}</span>
+              <span class="tag tag-accent-2" style="font-size:11px">{{ p.status }}</span>
+            </div>
+          </sc-for>
+          <p style="margin:0;font-size:12px;color:#55534d">Credentials come from your Claude Code / Codex logins. Sandbox fetch allow-list: api.github.com · registry.npmjs.org.</p>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isRun }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Run detail" style="flex:1;min-height:0;display:flex;flex-direction:column">
+      <div style="flex:none;padding:12px 22px;background:#faf9f5;border-bottom:1px solid #e2dbd1;display:flex;flex-direction:column;gap:0">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <button onClick="{{ back }}" class="btn btn-ghost" style="padding:4px 9px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">{{ backLabel }}</button>
+          <h2 style="font-size:24px">{{ run.wf }}</h2>
+          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;border:1px solid #e2dbd1;border-radius:999px;padding:2px 9px;white-space:nowrap">{{ run.id }}</span>
+          <span style="{{ run.pillStyle }}">{{ run.pill }}</span>
+          <button onClick="{{ openWorkflow }}" style="appearance:none;border:0;background:none;padding:0;cursor:pointer;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#a9583e;white-space:nowrap;text-decoration:underline;text-underline-offset:2px">{{ run.file }}</button>
+          <span style="flex:1"></span>
+          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;white-space:nowrap">{{ run.chrome }}</span>
+          <sc-if value="{{ canCancel }}" hint-placeholder-val="{{ true }}">
+            <button class="btn btn-secondary" style="padding:5px 13px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Cancel run</button>
+          </sc-if>
+        </div>
+      </div>
+      <div style="flex:none;display:flex;align-items:stretch;gap:2px;padding:0 18px;background:#faf9f5;border-bottom:1px solid #e2dbd1">
+        <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="5">
+          <button onClick="{{ t.go }}" style="{{ t.style }}">{{ t.label }}<span style="{{ t.badgeStyle }}">{{ t.badge }}</span></button>
+        </sc-for>
+      </div>
+      <div style="flex:1;min-height:0;display:flex">
+        <sc-if value="{{ showRail }}" hint-placeholder-val="{{ true }}">
+          <div style="width:352px;flex:none;border-right:1px solid #e2dbd1;background:#faf9f5;padding:12px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:2px;overflow-y:auto">
+            <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#8e8b82;font-weight:600;padding:0 9px 6px">{{ run.railTitle }}</span>
+            <sc-for list="{{ run.rail }}" as="g" hint-placeholder-count="4">
+              <div style="display:flex;flex-direction:column;gap:1px">
+                <span style="display:flex;align-items:baseline;gap:7px;padding:9px 9px 4px">
+                  <span style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#55534d;font-weight:600">{{ g.name }}</span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82">{{ g.meta }}</span>
+                </span>
+                <sc-for list="{{ g.steps }}" as="st" hint-placeholder-count="3">
+                  <button onClick="{{ st.select }}" style="{{ st.rowStyle }}" style-hover="background:#f5f0e8">
+                    <span style="{{ st.dotStyle }}"></span>
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#8e8b82;width:44px;flex:none">{{ st.kind }}</span>
+                    <span style="{{ st.labelStyle }}">{{ st.label }}</span>
+                    <sc-if value="{{ st.hasArt }}" hint-placeholder-val="{{ false }}">
+                      <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;border-radius:999px;padding:1px 6px;background:#d7ece7;color:#275a51;flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ st.art }}</span>
+                    </sc-if>
+                    <span style="{{ st.metaStyle }}">{{ st.meta }}</span>
+                  </button>
+                </sc-for>
+              </div>
+            </sc-for>
+            <span style="margin-top:auto;font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82;padding:9px 9px 0;border-top:1px solid #efe9de;line-height:1.5">One linear list, appended as steps start. Several steps can be active at once under different labels.</span>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ tabSteps }}" hint-placeholder-val="{{ true }}">
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0">
+            <div style="flex:1;min-height:0;overflow-y:auto;padding:16px 22px 20px;box-sizing:border-box;display:flex;flex-direction:column;gap:13px">
+            <sc-if value="{{ run.hasActive }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:#8e8b82;white-space:nowrap">active now</span>
+              <sc-for list="{{ run.active }}" as="a" hint-placeholder-count="3">
+                <button onClick="{{ a.select }}" style="{{ a.style }}">
+                  <span style="width:6px;height:6px;border-radius:999px;background:#cc785c;flex:none"></span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8a4630">{{ a.label }}</span>
+                  <span style="font-size:12px;font-weight:500">{{ a.name }}</span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#6c6a64">{{ a.meta }}</span>
+                </button>
+              </sc-for>
+            </div>
+            </sc-if>
+            <div style="display:flex;align-items:center;gap:11px;flex-wrap:wrap">
+              <h2 style="font-size:20px">{{ step.title }}</h2>
+              <span style="{{ step.pillStyle }}">{{ step.pill }}</span>
+              <span style="flex:1"></span>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px">
+              <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Overview</span>
+              <span style="flex:1;height:1px;background:#e2dbd1"></span>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px 0;padding:11px 0 12px;border-top:1px solid #efe9de;border-bottom:1px solid #efe9de">
+              <sc-for list="{{ step.cells }}" as="c" hint-placeholder-count="5">
+                <span style="{{ c.style }}">
+                  <span style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:#8e8b82">{{ c.k }}</span>
+                  <span style="{{ c.vStyle }}">{{ c.v }}</span>
+                </span>
+              </sc-for>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <div style="display:flex;align-items:center;gap:9px">
+                <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Input</span>
+                <span style="flex:1;height:1px;background:#e2dbd1"></span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82">raw JSON</span>
+              </div>
+              <div style="border:1px solid #e2dbd1;border-radius:12px;background:#faf9f5;overflow:hidden;display:flex;flex-direction:column">
+                <sc-for list="{{ step.input }}" as="f" hint-placeholder-count="4">
+                  <div style="{{ f.rowStyle }}">
+                    <span style="font-size:11px;color:#6c6a64;width:88px;flex:none;padding-top:1px">{{ f.k }}</span>
+                    <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:5px">
+                      <sc-if value="{{ f.isRecord }}" hint-placeholder-val="{{ false }}">
+                        <span style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;color:#a9583e">{{ f.ref }}</span>
+                          <span style="font-size:13px;font-weight:600">{{ f.title }}</span>
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82">{{ f.sub }}</span>
+                        </span>
+                      </sc-if>
+                      <sc-if value="{{ f.isFile }}" hint-placeholder-val="{{ false }}">
+                        <span style="display:flex;align-items:center;gap:9px;border:1px solid #e6dfd8;border-radius:8px;background:#fffefb;padding:5px 10px;width:fit-content;max-width:100%">
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;white-space:nowrap">{{ f.title }}</span>
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82;white-space:nowrap">{{ f.sub }}</span>
+                        </span>
+                      </sc-if>
+                      <sc-if value="{{ f.isText }}" hint-placeholder-val="{{ true }}">
+                        <span style="{{ f.textStyle }}">{{ f.title }}</span>
+                      </sc-if>
+                      <sc-if value="{{ f.hasPills }}" hint-placeholder-val="{{ false }}">
+                        <span style="display:flex;gap:5px;flex-wrap:wrap">
+                          <sc-for list="{{ f.pills }}" as="p" hint-placeholder-count="3">
+                            <span style="{{ p.style }}">{{ p.t }}</span>
+                          </sc-for>
+                        </span>
+                      </sc-if>
+                    </span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px">
+              <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Output</span>
+              <span style="flex:1;height:1px;background:#e2dbd1"></span>
+            </div>
+            <div style="min-height:130px;border-radius:12px;background:#181715;padding:12px 14px;box-sizing:border-box;display:flex;flex-direction:column;gap:3px">
+              <span style="display:flex;align-items:center;gap:9px;padding-bottom:5px">
+                <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a09d96;font-weight:600">{{ step.outTitle }}</span>
+                <span style="flex:1"></span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#a09d96">{{ step.outNote }}</span>
+              </span>
+              <sc-for list="{{ step.out }}" as="o" hint-placeholder-count="3">
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;line-height:1.75;color:#efe9de">{{ o.t }}</span>
+              </sc-for>
+              <sc-if value="{{ step.streaming }}" hint-placeholder-val="{{ false }}">
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;color:#dd9b80;animation:weft-pulse 1.2s infinite">▋</span>
+              </sc-if>
+            </div>
+            <sc-if value="{{ step.hasTools }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:5px">
+                <div style="display:flex;align-items:center;gap:9px">
+                  <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">{{ step.toolsTitle }}</span>
+                  <span style="flex:1;height:1px;background:#e2dbd1"></span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82">sandboxed · fs read-only, no network</span>
+                </div>
+                <sc-for list="{{ step.tools }}" as="t" hint-placeholder-count="3">
+                  <span style="{{ t.rowStyle }}">
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;text-transform:uppercase;color:#8e8b82;width:38px;flex:none">tool</span>
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ t.cmd }}</span>
+                    <span style="{{ t.metaStyle }}">{{ t.meta }}</span>
+                  </span>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ step.hasNext }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 13px;border-radius:12px;background:#faf9f5;border:1px dashed #dd9b80;flex-wrap:wrap">
+                <span style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#a9583e;font-weight:600;white-space:nowrap">{{ step.nextK }}</span>
+                <span style="font-size:13px;color:#3d3d3a;flex:1;min-width:200px">{{ step.nextV }}</span>
+                <sc-if value="{{ step.nextGoQ }}" hint-placeholder-val="{{ false }}">
+                  <button onClick="{{ goQuestion }}" class="btn btn-primary" style="padding:5px 13px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Answer now</button>
+                </sc-if>
+              </div>
+            </sc-if>
+            </div>
+            <div style="flex:none;border-top:1px solid #e2dbd1;background:#faf9f5;padding:10px 22px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+              <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;flex:1;min-width:180px">{{ step.idL }}</span>
+              <button class="btn btn-secondary" style="padding:6px 14px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">{{ step.action }}</button>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ showGatePane }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0">
+            <div style="flex:1;min-height:0;overflow-y:auto;padding:16px 22px 20px;box-sizing:border-box;display:flex;flex-direction:column;gap:13px">
+              <div style="display:flex;align-items:center;gap:11px;flex-wrap:wrap">
+                <h2 style="font-size:20px">{{ step.title }}</h2>
+                <span style="{{ step.pillStyle }}">{{ step.pill }}</span>
+                <span style="flex:1"></span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82;white-space:nowrap">{{ step.idL }}</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:7px;padding-top:11px;border-top:1px solid #efe9de">
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#a9583e;white-space:nowrap">human.requested · {{ gate.id }}</span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;border-radius:999px;padding:2px 9px;background:#f6e2d8;color:#8a4630;white-space:nowrap">risk: {{ gate.risk }}</span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64">{{ gate.blocks }}</span>
+                </div>
+                <h3 style="font-size:20px">{{ gate.title }}</h3>
+                <span style="font-size:13px;color:#3d3d3a;line-height:1.5;max-width:660px;text-wrap:pretty">{{ gate.detail }}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:9px;padding-top:2px">
+                <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Answers</span>
+                <span style="flex:1;height:1px;background:#e2dbd1"></span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82;white-space:nowrap">journaled verbatim · passed to the next step</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:9px">
+                <sc-for list="{{ gate.questions }}" as="q" hint-placeholder-count="5">
+                  <div style="display:flex;align-items:flex-start;gap:12px">
+                    <span style="width:104px;flex:none;padding-top:6px;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#55534d;white-space:nowrap">{{ q.k }}<span style="color:#cc785c">{{ q.req }}</span></span>
+                    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:5px">
+                      <sc-if value="{{ q.isCards }}" hint-placeholder-val="{{ false }}">
+                        <span style="display:flex;gap:8px;flex-wrap:wrap">
+                          <sc-for list="{{ q.opts }}" as="o" hint-placeholder-count="3">
+                            <button onClick="{{ o.pick }}" style="{{ o.cardStyle }}">
+                              <span style="display:flex;align-items:center;gap:7px">
+                                <span style="{{ o.dotStyle }}"></span>
+                                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;font-weight:600;white-space:nowrap">{{ o.label }}</span>
+                                <span style="flex:1"></span>
+                                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8a4630;white-space:nowrap">{{ o.meta }}</span>
+                              </span>
+                              <span style="font-size:11px;color:#55534d;line-height:1.4;text-align:left">{{ o.desc }}</span>
+                            </button>
+                          </sc-for>
+                        </span>
+                      </sc-if>
+                      <sc-if value="{{ q.isChoice }}" hint-placeholder-val="{{ false }}">
+                        <span style="display:flex;gap:5px;flex-wrap:wrap">
+                          <sc-for list="{{ q.opts }}" as="o" hint-placeholder-count="3">
+                            <button onClick="{{ o.pick }}" style="{{ o.pillStyle }}">{{ o.tick }}{{ o.label }}</button>
+                          </sc-for>
+                        </span>
+                      </sc-if>
+                      <sc-if value="{{ q.isSelect }}" hint-placeholder-val="{{ false }}">
+                        <select class="input" style="border-radius:8px;min-height:32px;font-size:12px;font-family:JetBrains Mono,ui-monospace,monospace;width:fit-content;min-width:210px" value="{{ q.val }}" onChange="{{ q.set }}">
+                          <sc-for list="{{ q.opts }}" as="o" hint-placeholder-count="4">
+                            <option value="{{ o.label }}">{{ o.label }}</option>
+                          </sc-for>
+                        </select>
+                      </sc-if>
+                      <sc-if value="{{ q.isToggle }}" hint-placeholder-val="{{ false }}">
+                        <button onClick="{{ q.toggle }}" style="appearance:none;border:0;background:none;padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:9px;width:fit-content">
+                          <span style="{{ q.trackStyle }}"><span style="width:13px;height:13px;border-radius:999px;background:#faf9f5;display:block"></span></span>
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#55534d">{{ q.valL }}</span>
+                        </button>
+                      </sc-if>
+                      <sc-if value="{{ q.isNote }}" hint-placeholder-val="{{ false }}">
+                        <textarea class="input" rows="2" style="border-radius:8px;font-size:12px;resize:vertical;width:100%;max-width:520px;box-sizing:border-box" value="{{ q.val }}" onChange="{{ q.set }}" placeholder="optional context for the report agent — journaled verbatim"></textarea>
+                      </sc-if>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="flex:none;border-top:1px solid #e2dbd1;background:#faf9f5;padding:10px 22px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+              <span style="display:flex;flex-direction:column;gap:1px;flex:1;min-width:220px">
+                <span style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#a9583e;font-weight:600">payload → next step</span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#55534d;line-height:1.5;overflow-wrap:anywhere">{{ gate.payload }}</span>
+              </span>
+              <button onClick="{{ denyGate }}" class="btn btn-secondary" style="padding:6px 14px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">{{ gate.denyL }}</button>
+              <button onClick="{{ submitGate }}" class="btn btn-primary" style="padding:6px 16px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">{{ gate.submitL }}</button>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ tabFindings }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1;min-width:0;overflow-y:auto;padding:18px 22px 24px;box-sizing:border-box;display:flex;flex-direction:column;gap:12px">
+            <div style="display:flex;align-items:center;gap:9px">
+              <h2 style="font-size:20px">Findings</h2>
+              <span style="flex:1;height:1px;background:#e2dbd1"></span>
+              <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82">each finding opened one step — the code decided how many and when</span>
+            </div>
+            <sc-for list="{{ run.findings }}" as="f" hint-placeholder-count="2">
+              <div style="{{ f.cardStyle }}">
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#a9583e;white-space:nowrap">{{ f.id }}</span>
+                  <span style="font-size:13px;font-weight:600;flex:1;min-width:0">{{ f.msg }}</span>
+                  <span style="{{ f.sevStyle }}">{{ f.sev }}</span>
+                </div>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#55534d">{{ f.loc }}</span>
+                <div style="display:flex;align-items:center;gap:10px;padding-top:7px;border-top:1px solid #efe9de;flex-wrap:wrap">
+                  <span style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:#8e8b82;white-space:nowrap">opened step</span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;white-space:nowrap">{{ f.stepL }}</span>
+                  <span style="{{ f.chipStyle }}">{{ f.chip }}</span>
+                  <span style="flex:1"></span>
+                  <button onClick="{{ f.open }}" class="btn btn-secondary" style="padding:4px 11px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Open step</button>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ tabArtifacts }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1;min-width:0;display:flex;min-height:0">
+            <div style="width:318px;flex:none;border-right:1px solid #e2dbd1;background:#faf9f5;padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:5px;overflow-y:auto">
+              <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#8e8b82;font-weight:600;padding:0 8px 4px">{{ run.artTitle }}</span>
+              <sc-for list="{{ run.artifacts }}" as="a" hint-placeholder-count="6">
+                <button onClick="{{ a.select }}" style="{{ a.rowStyle }}">
+                  <span style="{{ a.typeStyle }}">{{ a.t }}</span>
+                  <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;text-align:left">
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ a.f }}</span>
+                    <span style="font-size:11px;color:#6c6a64;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">from {{ a.step }} · {{ a.ago }}</span>
+                  </span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#8e8b82;flex:none">{{ a.sz }}</span>
+                </button>
+              </sc-for>
+            </div>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0">
+              <div style="flex:none;display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid #e2dbd1;background:#faf9f5;flex-wrap:wrap">
+                <span style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:180px">
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:13px;font-weight:600">{{ art.f }}</span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64">{{ art.path }}</span>
+                </span>
+                <button class="btn btn-ghost" style="padding:5px 11px;font-size:12px;border-radius:8px;min-height:0">Raw</button>
+                <button class="btn btn-secondary" style="padding:5px 11px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Diff vs previous</button>
+                <button class="btn btn-primary" style="padding:5px 13px;font-size:12px;border-radius:8px;min-height:0">Download</button>
+              </div>
+              <div style="flex:1;min-height:0;overflow-y:auto;padding:22px 26px;box-sizing:border-box;background:#faf9f5">
+                <div style="max-width:640px;display:flex;flex-direction:column;gap:12px">
+                  <h2 style="font-size:24px">{{ art.title }}</h2>
+                  <sc-for list="{{ art.body }}" as="b" hint-placeholder-count="3">
+                    <span style="{{ b.style }}">{{ b.t }}</span>
+                  </sc-for>
+                  <sc-if value="{{ art.isCode }}" hint-placeholder-val="{{ false }}">
+                    <span style="display:flex;flex-direction:column;gap:2px;padding:14px 16px;border-radius:12px;background:#181715;overflow-x:auto">
+                      <sc-for list="{{ art.code }}" as="c" hint-placeholder-count="5">
+                        <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;line-height:1.7;color:#efe9de;white-space:pre">{{ c.t }}</span>
+                      </sc-for>
+                    </span>
+                  </sc-if>
+                  <sc-if value="{{ art.hasRows }}" hint-placeholder-val="{{ false }}">
+                    <span style="display:flex;flex-direction:column;gap:6px;padding:14px 16px;border-radius:12px;background:#f5f0e8">
+                      <sc-for list="{{ art.rows }}" as="r" hint-placeholder-count="4">
+                        <span style="display:flex;gap:10px;font-size:13px">
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;color:#a9583e;width:96px;flex:none;white-space:nowrap">{{ r.k }}</span>
+                          <span style="flex:1">{{ r.t }}</span>
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;flex:none">{{ r.v }}</span>
+                        </span>
+                      </sc-for>
+                    </span>
+                  </sc-if>
+                </div>
+              </div>
+              <div style="flex:none;display:flex;gap:0;padding:10px 20px;border-top:1px solid #e2dbd1;background:#faf9f5;flex-wrap:wrap">
+                <sc-for list="{{ art.meta }}" as="m" hint-placeholder-count="4">
+                  <span style="{{ m.style }}">
+                    <span style="font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:#8e8b82">{{ m.k }}</span>
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;white-space:nowrap">{{ m.v }}</span>
+                  </span>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ tabChanges }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1;min-width:0;display:flex;min-height:0">
+            <div style="width:280px;flex:none;border-right:1px solid #e2dbd1;background:#faf9f5;display:flex;flex-direction:column;min-height:0">
+              <div style="flex:none;display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid #efe9de">
+                <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#8e8b82;font-weight:600">Changes</span>
+                <span style="flex:1"></span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#35786b">{{ run.adds }}</span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#a9583e">{{ run.dels }}</span>
+              </div>
+              <div style="flex:1;min-height:0;overflow-y:auto;padding:6px 0 10px;display:flex;flex-direction:column;gap:0">
+                <span style="display:flex;align-items:center;gap:6px;padding:4px 10px 4px 8px">
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82;width:10px">▾</span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;font-weight:500;color:#3d3d3a">weft/{{ run.id }}</span>
+                  <span style="flex:1"></span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82">{{ run.fileCount }}</span>
+                </span>
+                <sc-for list="{{ run.tree }}" as="n" hint-placeholder-count="7">
+                  <button onClick="{{ n.select }}" style="{{ n.rowStyle }}">
+                    <span style="{{ n.twistyStyle }}">{{ n.twisty }}</span>
+                    <span style="{{ n.iconStyle }}">{{ n.icon }}</span>
+                    <span style="{{ n.nameStyle }}">{{ n.name }}</span>
+                    <sc-if value="{{ n.isFile }}" hint-placeholder-val="{{ false }}">
+                      <span style="{{ n.statStyle }}">{{ n.stat }}</span>
+                    </sc-if>
+                  </button>
+                </sc-for>
+              </div>
+              <div style="flex:none;display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-top:1px solid #efe9de">
+                <span style="font-size:11px;color:#55534d;line-height:1.45">{{ run.changesNote }}</span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82">{{ run.branchNote }}</span>
+              </div>
+            </div>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0">
+              <div style="flex:none;display:flex;align-items:center;gap:12px;padding:11px 20px;border-bottom:1px solid #e2dbd1;background:#faf9f5">
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:13px;font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ file.p }}</span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#35786b">{{ file.a }}</span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#a9583e">{{ file.d }}</span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;white-space:nowrap">unified · 1 hunk</span>
+              </div>
+              <div style="flex:1;min-height:0;overflow:auto;background:#181715;padding:12px 0;font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;line-height:1.8">
+                <span style="display:flex;gap:10px;padding:0 16px 8px;color:#a09d96;font-size:11px">{{ file.hunk }}</span>
+                <sc-for list="{{ file.lines }}" as="l" hint-placeholder-count="14">
+                  <span style="{{ l.rowStyle }}">
+                    <span style="width:40px;flex:none;text-align:right;color:#5c584f;padding-right:10px">{{ l.ln }}</span>
+                    <span style="width:40px;flex:none;text-align:right;color:#5c584f;padding-right:14px">{{ l.rn }}</span>
+                    <span style="{{ l.textStyle }}">{{ l.t }}</span>
+                  </span>
+                </sc-for>
+              </div>
+              <div style="flex:none;display:flex;align-items:center;gap:12px;padding:10px 20px;border-top:1px solid #e2dbd1;background:#faf9f5;flex-wrap:wrap">
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;flex:1;min-width:180px">{{ run.branchNote }}</span>
+                <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Open in editor</button>
+                <sc-if value="{{ run.open }}" hint-placeholder-val="{{ true }}">
+                  <button class="btn btn-secondary" style="padding:6px 14px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Request changes</button>
+                </sc-if>
+                <sc-if value="{{ run.open }}" hint-placeholder-val="{{ true }}">
+                  <button onClick="{{ goQuestion }}" class="btn btn-primary" style="padding:6px 16px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Go to commit gate</button>
+                </sc-if>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ tabJournal }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1;min-width:0;background:#181715;padding:14px 18px;box-sizing:border-box;overflow-y:auto;display:flex;flex-direction:column;gap:2px">
+            <sc-for list="{{ run.journal }}" as="l" hint-placeholder-count="10">
+              <span style="display:flex;gap:12px;font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;line-height:1.75">
+                <span style="color:#5c584f;flex:none">{{ l.t }}</span>
+                <span style="{{ l.tagStyle }}">{{ l.tag }}</span>
+                <span style="color:#efe9de;min-width:0">{{ l.text }}</span>
+              </span>
+            </sc-for>
+            <sc-if value="{{ run.live }}" hint-placeholder-val="{{ true }}">
+              <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;color:#dd9b80;animation:weft-pulse 1.2s infinite">▋</span>
+            </sc-if>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </sc-if>
+
+  </div>
+
+  <div style="flex:none;height:28px;display:flex;align-items:center;gap:16px;padding:0 14px;border-top:1px solid #e2dbd1;background:#faf9f5;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64">
+    <span style="color:#35786b">● daemon ok</span>
+    <span>pool {{ concL }}</span>
+    <span>default budget {{ budget }}</span>
+    <span>journal .weft/runs/ · append-only jsonl</span>
+    <span style="flex:1"></span>
+    <span>weft v0.9.0</span>
+  </div>
+
+  <sc-if value="{{ launcherOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeLauncher }}" style="position:fixed;inset:0;background:rgba(20,20,19,.28);z-index:60;display:flex;justify-content:center;align-items:flex-start;padding-top:80px">
+      <div onClick="{{ stop }}" style="width:min(720px,94vw);background:#faf9f5;border:1px solid #e2dbd1;border-radius:12px;box-shadow:0 18px 44px rgba(20,20,19,.18);overflow:hidden;display:flex;flex-direction:column">
+        <sc-if value="{{ lstep1 }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid #e2dbd1">
+          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:15px;color:#a9583e">run</span>
+          <input autoFocus="{{ true }}" value="{{ query }}" onChange="{{ setQuery }}" placeholder="type to filter…" style="flex:1;appearance:none;border:0;background:none;outline:none;font-family:JetBrains Mono,ui-monospace,monospace;font-size:15px;color:#141413">
+          <span style="font-size:12px;color:#8e8b82;white-space:nowrap">{{ matchL }}</span>
+        </div>
+        <div style="max-height:300px;overflow-y:auto;display:flex;flex-direction:column">
+        <sc-for list="{{ matches }}" as="m" hint-placeholder-count="4">
+          <button onClick="{{ m.pick }}" style="{{ m.rowStyle }}">
+            <span style="{{ m.dotStyle }}"></span>
+            <span style="font-weight:600;font-size:13px">{{ m.name }}</span>
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#a9583e">{{ m.file }}</span>
+            <span style="flex:1"></span>
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#55534d;white-space:nowrap">{{ m.meta }}</span>
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82;white-space:nowrap">→</span>
+          </button>
+        </sc-for>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;padding:9px 20px;border-top:1px solid #e2dbd1;background:#f5f0e8;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64">
+          <span>↑↓ move</span><span>⏎ select</span><span>esc close</span>
+          <span style="flex:1"></span>
+          <span>step 1 of 2 · pick a workflow</span>
+        </div>
+        </sc-if>
+        <sc-if value="{{ lstep2 }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid #e2dbd1">
+          <button onClick="{{ backToPick }}" class="btn btn-ghost" style="padding:4px 9px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">←</button>
+          <span style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:0">
+            <span style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
+              <span style="font-size:15px;font-weight:600">{{ lwfName }}</span>
+              <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#a9583e">{{ lwfFile }}</span>
+            </span>
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ launcherShape }}</span>
+          </span>
+          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;white-space:nowrap">{{ lwfMeta }}</span>
+        </div>
+        <div style="padding:14px 20px 16px;background:#faf9f5;display:flex;flex-direction:column;gap:7px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Inputs</span>
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64">tab to move · ⏎ starts · step 2 of 2</span>
+          </div>
+          <sc-for list="{{ launcherFields }}" as="f" hint-placeholder-count="5">
+            <div style="display:flex;align-items:flex-start;gap:10px;padding:2px 0">
+              <span style="width:72px;flex:none;padding-top:6px;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#55534d;white-space:nowrap">{{ f.k }}<span style="color:#cc785c">{{ f.req }}</span></span>
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">
+                <sc-if value="{{ f.isText }}" hint-placeholder-val="{{ true }}">
+                  <input class="input" style="border-radius:8px;min-height:32px;font-size:12px;font-family:JetBrains Mono,ui-monospace,monospace;width:100%;box-sizing:border-box" value="{{ f.v }}" onChange="{{ f.set }}">
+                </sc-if>
+                <sc-if value="{{ f.isSeg }}" hint-placeholder-val="{{ false }}">
+                  <span style="display:flex;gap:4px">
+                    <sc-for list="{{ f.opts }}" as="o" hint-placeholder-count="3">
+                      <button onClick="{{ o.pick }}" style="{{ o.style }}">{{ o.label }}</button>
+                    </sc-for>
+                  </span>
+                </sc-if>
+                <sc-if value="{{ f.isChips }}" hint-placeholder-val="{{ false }}">
+                  <span style="display:flex;flex-wrap:wrap;gap:5px">
+                    <sc-for list="{{ f.opts }}" as="o" hint-placeholder-count="4">
+                      <button onClick="{{ o.pick }}" style="{{ o.style }}">{{ o.tick }}{{ o.label }}</button>
+                    </sc-for>
+                  </span>
+                </sc-if>
+                <sc-if value="{{ f.isFile }}" hint-placeholder-val="{{ false }}">
+                  <span style="display:flex;align-items:center;gap:9px;border:1px dashed #dd9b80;border-radius:8px;background:#fbf1ec;padding:6px 10px">
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;flex:1;min-width:0">{{ f.v }}</span>
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#a9583e;white-space:nowrap">drop or ⌘O</span>
+                  </span>
+                </sc-if>
+                <sc-if value="{{ f.isFlag }}" hint-placeholder-val="{{ false }}">
+                  <button onClick="{{ f.toggle }}" style="appearance:none;border:0;background:none;padding:3px 0 0;cursor:pointer;display:inline-flex;align-items:center;gap:9px;width:fit-content">
+                    <span style="{{ f.trackStyle }}"><span style="width:13px;height:13px;border-radius:999px;background:#faf9f5;display:block"></span></span>
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#55534d">{{ f.v }}</span>
+                  </button>
+                </sc-if>
+              </div>
+            </div>
+          </sc-for>
+          <div style="display:flex;align-items:center;gap:12px;padding-top:6px;border-top:1px solid #e6dfd8;margin-top:4px">
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;flex:1;min-width:0">{{ launcherBudget }}</span>
+            <button onClick="{{ startRun }}" class="btn btn-primary" style="padding:6px 16px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Start run ⏎</button>
+          </div>
+        </div>
+        </sc-if>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1440, &quot;height&quot;: 900}}">
+const MONO = "font-family:JetBrains Mono,ui-monospace,monospace";
+const SC = { running: '#5db8a6', run: '#5db8a6', waiting: '#cc785c', done: '#c4bdb2', idle: '#c4bdb2', wait: '#e6dfd8', fail: '#b0483a', stopped: '#8e8b82' };
+const LI = {
+  'triage.ts': { repo: 'acme/treel', window: '24h', labels: ['bug', 'docs'], rules: 'triage-rules.md · 2.4 KB', dry: false },
+  'release-notes.ts': { tag: 'v0.9.0', since: 'v0.8.4', sections: ['features', 'fixes'], draft: true },
+  'deps-audit.ts': { severity: 'high', scope: 'runtime', maxprs: '1', lockfile: true },
+  'docs-hero.ts': { page: 'docs/index.html', variants: '2', shot: true },
+  'flaky-sweep.ts': { suite: 'test:e2e', reruns: '6', quarantine: true },
+  'digest.ts': { window: '7d', channel: '#eng-weekly', send: true }
+};
+
+class Component extends DCLogic {
+  state = {
+    view: 'queue', from: 'queue', runId: 'r-045', tab: 'steps', stepId: 'verify-1', runFilter: 'All',
+    wfSel: 'deps-audit.ts', artSel: 'report.md', fileSel: 'src/net/fetchWithRetry.ts',
+    launcher: false, query: '', lwf: 'triage.ts', lstep: 1, lsel: 0, started: null,
+    li: JSON.parse(JSON.stringify(LI)),
+    ans: {
+      'gate-5': { action: 'open a PR', notify: ['#eng-alerts'], wait: true, note: '' },
+      'gate-3': { scope: 'publish now', announce: '#releases', note: '' },
+      'gate-4': { variant: 'variant A', shot: true, note: '' }
+    },
+    answered: {}, denied: {}, policy: { read: 'auto', write: 'ask', network: 'ask', destructive: 'ask' },
+    budget: '$8.00', conc: 8
+  };
+
+  componentDidMount() {
+    this._key = e => {
+      const st = this.state;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); this.setState({ launcher: true, lstep: 1, query: '', lsel: 0 }); return; }
+      if (!st.launcher) return;
+      if (e.key === 'Escape') { this.setState({ launcher: false }); return; }
+      const list = this._matches || [];
+      if (st.lstep === 1) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); this.setState(s => ({ lsel: Math.min(s.lsel + 1, list.length - 1) })); }
+        if (e.key === 'ArrowUp') { e.preventDefault(); this.setState(s => ({ lsel: Math.max(s.lsel - 1, 0) })); }
+        if (e.key === 'Enter') { e.preventDefault(); const f = list[Math.min(st.lsel, list.length - 1)]; if (f) this.setState({ lwf: f, lstep: 2 }); }
+      } else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (this._start) this._start(); }
+    };
+    window.addEventListener('keydown', this._key);
+  }
+  componentWillUnmount() { window.removeEventListener('keydown', this._key); }
+
+  WF() {
+    return [
+      { file: 'triage.ts', name: 'Issue triage', desc: 'Fetch new issues, classify each with a parallel agent fan-out, apply labels behind a write gate, then summarize.', state: 'running', lastL: 'just now', ok: 96, p50: '4m 02s', cost: '$1.92',
+        shape: [['task', 'T'], ['agent', 'A∥'], ['human', 'H'], ['agent', 'A']],
+        labels: [['gather', 'task'], ['classify', 'agent ×4 ∥'], ['apply', 'human → task'], ['report', 'agent']],
+        history: [1,1,1,1,1,1,1,0,1,1,1,1,1,1], historyNote: '1 failed · rate limit at classify',
+        facts: [['schedule', 'on issue open'], ['gate policy', 'write → ask'], ['owner', 'platform'], ['p95 cost', '$2.60']],
+        recent: [['r-049', 'running · 2 agents', 'now']],
+        inputs: [['repo', 'repo', 'text', [], true], ['window', 'window', 'seg', ['24h', '7d', '30d'], true],
+          ['labels', 'labels', 'chips', ['bug', 'docs', 'feature', 'security'], false],
+          ['rules', 'rules', 'file', [], false],
+          ['dry', 'dryRun', 'flag', ['plan only — no writes', 'writes allowed at gates'], false]] },
+      { file: 'release-notes.ts', name: 'Release notes', desc: 'Collect commits since the last tag, draft grouped notes with one agent, hold for review, publish to GitHub.', state: 'waiting', lastL: '25 min', ok: 100, p50: '3m 10s', cost: '$0.71',
+        shape: [['task', 'T'], ['agent', 'A'], ['human', 'H'], ['task', 'T']],
+        labels: [['collect', 'task'], ['draft', 'agent'], ['review', 'human'], ['publish', 'task']],
+        history: [1,1,1,1,1,1,1,1,1,1,1,1,1,1], historyNote: 'no failures in 30d',
+        facts: [['schedule', 'on tag'], ['gate policy', 'network → ask'], ['owner', 'release'], ['p95 cost', '$0.90']],
+        recent: [['r-046', 'waiting on you', '25 min'], ['r-044', 'done · v0.8.4', 'yesterday']],
+        inputs: [['tag', 'tag', 'text', [], true], ['since', 'since', 'text', [], false],
+          ['sections', 'sections', 'chips', ['features', 'fixes', 'docs', 'deps'], false],
+          ['draft', 'draft', 'flag', ['create as a draft release', 'publish on approval'], false]] },
+      { file: 'deps-audit.ts', name: 'Dependency audit', desc: 'Scan advisories, assess each with an agent, open one fix PR behind a write gate, verify with the test suite.', state: 'waiting', lastL: '40 min', ok: 86, p50: '6m 44s', cost: '$2.40',
+        shape: [['task', 'T'], ['agent', 'A∥'], ['human', 'H'], ['task', 'T']],
+        labels: [['scan', 'task'], ['assess', 'agent ×3 ∥'], ['fix', 'human → task'], ['verify', 'task, may repeat']],
+        history: [1,1,1,0,1,1,1,1,1,1,0,1,1,1], historyNote: '2 failed · both at verify · flaky e2e suite',
+        facts: [['schedule', 'daily 02:00 UTC'], ['gate policy', 'write → ask'], ['owner', 'platform'], ['p95 cost', '$3.80']],
+        recent: [['r-045', 'waiting on you', '40 min']],
+        inputs: [['severity', 'severity', 'seg', ['low', 'moderate', 'high', 'critical'], true],
+          ['scope', 'scope', 'seg', ['runtime', 'all deps'], true],
+          ['maxprs', 'max PRs', 'text', [], false],
+          ['lockfile', 'lockfile', 'flag', ['update the lockfile too', 'leave the lockfile alone'], false]] },
+      { file: 'docs-hero.ts', name: 'Docs hero refresh', desc: 'Two agents draft hero designs in parallel; a human picks one, a task applies it and screenshots the result.', state: 'waiting', lastL: '2 min', ok: 83, p50: '5m 20s', cost: '$0.29',
+        shape: [['task', 'T'], ['agent', 'A∥'], ['human', 'H'], ['task', 'T']],
+        labels: [['read', 'task'], ['design', 'agent ×2 ∥'], ['pick', 'human'], ['apply', 'task']],
+        history: [1,1,0,1,1,1,0,1,1,1,1,0,1,1], historyNote: '3 failed · screenshot timeouts',
+        facts: [['schedule', 'manual'], ['gate policy', 'write → ask'], ['owner', 'design'], ['p95 cost', '$0.44']],
+        recent: [['r-048', 'waiting on you', '2 min']],
+        inputs: [['page', 'page', 'text', [], true], ['variants', 'variants', 'seg', ['2', '3', '4'], true],
+          ['shot', 'screenshot', 'flag', ['screenshot after apply', 'skip screenshots'], false]] },
+      { file: 'flaky-sweep.ts', name: 'Flaky test sweep', desc: 'Collect failures, re-run each suspect six times, classify with an agent, quarantine behind a gate.', state: 'idle', lastL: '3 h', ok: 89, p50: '9m 12s', cost: '$1.10',
+        shape: [['task', 'T'], ['task', 'T∥'], ['agent', 'A'], ['human', 'H']],
+        labels: [['collect', 'task'], ['rerun', 'task ×6 ∥'], ['classify', 'agent'], ['quarantine', 'human → task']],
+        history: [1,1,1,1,0,1,1,1,1,1,1,1,0,1], historyNote: '2 failed · runner OOM',
+        facts: [['schedule', 'nightly'], ['gate policy', 'write → ask'], ['owner', 'qa'], ['p95 cost', '$1.60']],
+        recent: [],
+        inputs: [['suite', 'suite', 'text', [], true], ['reruns', 're-runs', 'seg', ['3', '6', '10'], true],
+          ['quarantine', 'quarantine', 'flag', ['quarantine what fails', 'report only'], false]] },
+      { file: 'digest.ts', name: 'Weekly digest', desc: 'Pull the week of runs, write the digest with one agent, send it to the team channel.', state: 'idle', lastL: 'yesterday', ok: 100, p50: '1m 40s', cost: '$0.34',
+        shape: [['task', 'T'], ['agent', 'A'], ['task', 'T']],
+        labels: [['pull', 'task'], ['write', 'agent'], ['send', 'task']],
+        history: [1,1,1,1,1,1,1,1,1,1,1,1,1,1], historyNote: 'no failures in 30d',
+        facts: [['schedule', 'Mon 09:00'], ['gate policy', 'network → auto'], ['owner', 'ops'], ['p95 cost', '$0.40']],
+        recent: [],
+        inputs: [['window', 'window', 'seg', ['7d', '14d'], true], ['channel', 'channel', 'text', [], true],
+          ['send', 'send', 'flag', ['send to the channel', 'write but do not send'], false]] }
+    ];
+  }
+
+  RUNS() {
+    const A = id => !!this.state.answered[id] && !this.state.denied[id];
+    const D = id => !!this.state.denied[id];
+    const a45 = A('r-045'), d45 = D('r-045'), a46 = A('r-046'), d46 = D('r-046'), a48 = A('r-048'), d48 = D('r-048');
+    const pills = ['CVE-2026-1183', 'CVE-2026-0994', 'GHSA-77x2'];
+
+    return {
+      'r-045': {
+        id: 'r-045', wf: 'Dependency audit', file: 'deps-audit.ts',
+        state: d45 ? 'stopped' : a45 ? 'running' : 'waiting',
+        chrome: '11 steps · ' + (d45 ? 'stopped at 08:42' : '08:41') + ' · $2.40 / $6.00',
+        pill: d45 ? 'stopped by you' : a45 ? '4 steps active' : 'waiting on you · 40 min',
+        gateStep: 'gate-5',
+        railTitle: 'Run tree · appended as steps start',
+        rail: [
+          ['scan', 'task · 1.4s', [['task', 'scan-advisories', '1.4s', 'done', '', 'scan-1']]],
+          ['assess', 'agent ×3 ∥', [
+            ['agent', 'assess CVE-1183', '4.1k tok', 'done', '', 'as-1'],
+            ['agent', 'assess CVE-0994', '3.8k tok', 'done', '', 'as-2'],
+            ['agent', 'assess GHSA-77x2', '4.2k tok', 'done', '', 'as-3']]],
+          ['fix', 'answered 07:02', [
+            ['human', 'gate: fix strategy', 'approved · you', 'done', '', 'gate-1'],
+            ['task', 'apply-fix', '+42 −7', 'done', 'fix.patch', 'apply-1']]],
+          ['verify', 'task', [['task', 'verify', 'failed · 2 findings', 'fail', '', 'verify-1']]],
+          ['fix', 'again · from findings', [
+            ['task', 'bump lockfile', '0.9s', 'done', '', 'fix-f1'],
+            ['agent', 'patch call site', d45 ? 'cancelled' : 'codex · 34s', d45 ? 'idle' : 'run', '', 'fix-f2']]],
+          ['verify', 'again', [['task', 'verify (lockfile only)', d45 ? 'cancelled' : '12s', d45 ? 'idle' : 'run', '', 'verify-2']]],
+          ['report', 'agent', [['agent', 'draft audit summary', d45 ? 'cancelled' : '1.8k tok', d45 ? 'idle' : 'run', '', 'report-1']]],
+          ['commit', 'gated write', [
+            ['human', 'gate: commit the fix', d45 ? 'denied · you' : a45 ? 'approved · you' : 'waiting on you', d45 ? 'idle' : a45 ? 'done' : 'waiting', '', 'gate-5'],
+            ['task', 'push branch', d45 ? 'not run' : a45 ? 'running · 4s' : 'not started', d45 ? 'wait' : a45 ? 'run' : 'wait', '', 'push-1']]]
+        ],
+        active: d45 ? [] : (a45
+          ? [['fix', 'patch call site', '34s', 'fix-f2'], ['verify', 'verify (lockfile only)', '12s', 'verify-2'], ['report', 'draft audit summary', '1.8k tok', 'report-1'], ['commit', 'push branch', '4s', 'push-1']]
+          : [['fix', 'patch call site', '34s', 'fix-f2'], ['verify', 'verify (lockfile only)', '12s', 'verify-2'], ['report', 'draft audit summary', '1.8k tok', 'report-1']]),
+        findings: [
+          ['f-1', 'Lockfile still pins the vulnerable transitive dep', 'package-lock.json · 8,204 · CVE-2026-1183', 'blocking', '8 · bump lockfile', 'done · 0.9s', true, 'fix-f1'],
+          ['f-2', 'Patched call site drops the retry guard', 'src/net/fetchWithRetry.ts:118 · 2 tests failing', 'blocking', '9 · patch call site', d45 ? 'cancelled' : 'running · 34s', false, 'fix-f2']],
+        artifacts: [
+          ['advisories.json', 'json', '18 KB', 'scan-advisories', '8 min', { kind: 'code', lines: ['[', '  { "id": "CVE-2026-1183", "pkg": "undici", "severity": "high", "path": "runtime" },', '  { "id": "CVE-2026-0994", "pkg": "undici", "severity": "high", "path": "runtime" },', '  { "id": "GHSA-77x2", "pkg": "esbuild", "severity": "moderate", "path": "dev" }', ']'] }],
+          ['fix.patch', 'patch', '3.1 KB', 'apply-fix', '5 min', { kind: 'code', lines: ['--- a/src/net/fetchWithRetry.ts', '+++ b/src/net/fetchWithRetry.ts', '@@ -12,4 +12,9 @@', '-  return await fetch(req);', '+  return await retryGuard(backoff, async () => {', '+    const res = await fetch(req);', '+    return res;', '+  });'] }],
+          ['verify.log', 'log', '44 KB', 'verify', '3 min', { kind: 'code', lines: ['FAIL src/net/fetchWithRetry.test.ts', '  ✗ keeps the retry guard (2 cases)', 'FAIL audit', '  ✗ package-lock.json still pins undici 6.11.1', '', '214 tests · 212 passed · 2 failed · 2m 18s', 'exit 1'] }],
+          ['report.md', 'md', '1.4 KB', 'draft audit summary', 'live', { kind: 'md', title: 'Dependency audit — 3 advisories',
+            paras: ['Two of three advisories are actionable in this repo. One fix is staged on branch weft/r-045; verify is re-running after two findings.'],
+            rows: [['CVE-1183', 'Vulnerable transitive dep still pinned in the lockfile', 'blocking'], ['CVE-0994', 'Patched call site drops the retry guard', 'blocking'], ['GHSA-77x2', 'Dev-only dependency — no runtime path', 'ignored']] }]],
+        files: [['src/net/fetchWithRetry.ts', 42, 7], ['package-lock.json', 8, 2], ['docs/security.md', 92, 29]],
+        committed: false,
+        changesNote: d45 ? 'Denied — the branch was left in place and nothing was committed.' : 'Staged behind the commit gate. Nothing is committed until you approve.',
+        branchNote: 'branch weft/r-045 · not pushed',
+        journal: [
+          ['06:12', 'run', 'run.started · deps-audit · inputs { severity: "high", scope: "runtime" }'],
+          ['06:14', 'task', 'scan-advisories ok · 3 advisories · 1.4s'],
+          ['06:41', 'agent', 'assess CVE-1183 done · actionable · 4,102 tok'],
+          ['07:02', 'human', 'human.answered gate-1 · patch + test · answered_by: you'],
+          ['07:44', 'task', 'apply-fix ok · +42 −7 across 3 files'],
+          ['08:02', 'task', 'verify failed · exit 1 · 2 findings recorded'],
+          ['08:07', 'task', 'bump lockfile ok · 0.9s · opened by finding f-1'],
+          ['08:12', 'agent', 'patch call site started · codex/gpt-5 · opened by f-2'],
+          ['08:29', 'task', 'verify (lockfile only) started · 214 tests'],
+          ['08:31', 'human', 'human.requested gate-5 · risk write · blocks push branch']
+        ].concat(d45 ? [['08:42', 'human', 'human.answered gate-5 · discard · run.stopped by you']] : a45 ? [['08:42', 'human', 'human.answered gate-5 · ' + this.state.ans['gate-5'].action + ' · answered_by: you'], ['08:42', 'task', 'push branch started · weft/r-045']] : []),
+        gate: {
+          id: 'gate-5', risk: 'write', blocks: 'blocks step 11 · push branch', title: 'Commit the staged fix',
+          detail: 'The branch holds +42 −7 across 3 files. Verify is still re-running after two findings — your answer is journaled and passed to the push step.',
+          submitL: 'Approve & resume', denyL: 'Discard & stop',
+          questions: [
+            ['action', 'commit as', 'cards', [
+              ['open a PR', 'agent pick', 'Push the branch and open one PR against main.'],
+              ['commit only', '', 'Push the branch. No PR — someone opens it later.']], true],
+            ['notify', 'notify', 'chips', [['#eng-alerts'], ['#on-call'], ['#product']], false],
+            ['wait', 'verify', 'toggle', [], false],
+            ['note', 'note', 'note', [], false]]
+        },
+        steps: {
+          'verify-1': {
+            title: 'verify · step 7', pill: 'failed · opened 3 steps', pillKind: 'fail', action: 'Re-run verify',
+            cells: [['kind', 'task · deno'], ['exit', 'code 1', '#b0483a'], ['suite', '214 tests · 2 failed'], ['duration', '2m 18s'], ['findings', '2 · both actionable'], ['opened', 'steps 8, 9, 10', '#a9583e']],
+            input: [['patch', 'record', 'fix.patch', '3 files changed', '+42 −7 · staged', []], ['suite', 'text', 'deno task test:e2e', '', '', []], ['env', 'pills', '', '', '', ['CI=1', 'RETRIES=0', 'SHARD=1/1']]],
+            outTitle: 'step output · exit 1', outNote: '2 findings recorded',
+            out: [['FAIL src/net/fetchWithRetry.test.ts — retry guard missing (2 cases)'], ['FAIL audit — package-lock.json still pins vulnerable dep'], ['214 tests · 212 passed · 2 failed · 2m 18s']],
+            hasTools: false, streaming: false, hasNext: true, nextK: 'what weft did', nextV: 'Nothing was scheduled: after this step returned findings, the code opened steps 8–10. weft recorded the order and the links.'
+          },
+          'fix-f2': {
+            title: 'patch call site · step 9', pill: d45 ? 'cancelled' : 'running · 34s', pillKind: d45 ? 'done' : 'run', action: d45 ? 'Copy step id' : 'Skip step',
+            cells: [['kind', 'agent'], ['provider', 'codex/gpt-5'], ['started', '08:12'], ['elapsed', d45 ? '34s · cancelled' : '34s of ~90s'], ['tokens', '6,240'], ['opened by', 'step 7 · f-2', '#a9583e']],
+            input: [['finding', 'record', 'f-2', 'Patched call site drops the retry guard', 'blocking · from step 7', []],
+              ['file', 'file', 'src/net/fetchWithRetry.ts', '4.2 KB · 118 lines', '', []],
+              ['tests', 'pills', '', '', '', ['retry guard missing', 'backoff cap']]],
+            outTitle: d45 ? 'step output · cancelled' : 'step output · streaming', outNote: 'parsed against FixPatch',
+            out: [['Restoring the retry guard around the awaited fetch and keeping the'], ['backoff cap the bump removed; adding one regression case for both.']],
+            hasTools: true, toolsTitle: 'Tool calls · 3', streaming: !d45,
+            tools: [['read-file src/net/fetchWithRetry.ts', '4.2 KB · 0.2s', false], ['grep "retryGuard" src/**', '4 matches · 0.3s', false], ['write-file src/net/fetchWithRetry.ts', d45 ? 'cancelled' : 'running · 2s', !d45]],
+            hasNext: false
+          },
+          'gate-1': {
+            title: 'gate: fix strategy · step 4', pill: 'approved · you', pillKind: 'done', action: 'Copy gate id',
+            cells: [['kind', 'human'], ['risk', 'write', '#a9583e'], ['asked', '07:01'], ['answered', '07:02'], ['policy', 'write → ask']],
+            input: [['action', 'text', 'Patch both call sites and add a regression test', '', '', []], ['advisories', 'pills', '', '', '', pills]],
+            outTitle: 'answer', outNote: 'journaled verbatim',
+            out: [['{ answer: "patch + test", answered_by: "you", at: "07:02" }']],
+            hasTools: false, streaming: false, hasNext: true, nextK: 'resumed', nextV: 'next → step 5 · apply-fix, started at 07:02'
+          },
+          'gate-5': {
+            title: 'gate: commit the fix · step 10',
+            pill: d45 ? 'denied · you' : a45 ? 'approved · you' : 'waiting on you',
+            pillKind: d45 ? 'fail' : a45 ? 'done' : 'human',
+            action: a45 || d45 ? 'Copy gate id' : 'Copy gate id',
+            cells: [['kind', 'human'], ['risk', 'write', '#a9583e'], ['asked', '08:31'], ['policy', 'write → ask'], ['blocks', 'step 11 · push branch']],
+            input: [['branch', 'text', 'weft/r-045', '', '', []], ['staged', 'record', '+42 −7', '3 files changed', 'verify still running', []], ['advisories', 'pills', '', '', '', pills]],
+            outTitle: 'answer', outNote: 'journaled verbatim',
+            out: [[d45 ? '{ answer: "discard", answered_by: "you", at: "08:42" } — run stopped' : a45 ? '{ answer: "' + this.state.ans['gate-5'].action + '", answered_by: "you", at: "08:42" }' : 'pending — nothing is committed until this gate is answered']],
+            hasTools: false, streaming: false, hasNext: true,
+            nextK: d45 ? 'stopped' : a45 ? 'resumed' : 'needs you',
+            nextV: d45 ? 'run.stopped — the branch was left in place and no further steps were opened.' : a45 ? 'next → step 11 · push branch, started at 08:42' : 'The commit gate holds the branch. Machine steps keep running; nothing lands until you answer.',
+            nextGoQ: !a45 && !d45
+          }
+        }
+      },
+
+      'r-049': {
+        id: 'r-049', wf: 'Issue triage', file: 'triage.ts', state: 'running',
+        chrome: '9 steps · 01:04 · $0.09 / $8.00 · pool 4/8', pill: '2 steps active', gateStep: null,
+        railTitle: 'Run tree · appended as steps start',
+        rail: [
+          ['gather', 'task · 1.2s', [['task', 'fetch-issues', 'deno · 1.2s', 'done', 'issues.json', 'fetch-1']]],
+          ['classify', 'agent ×4 ∥', [
+            ['agent', 'classify #812', 'sonnet · 2,988 tok', 'done', '', 'cl-812'],
+            ['agent', 'classify #814', 'sonnet · 3,412 tok', 'done', '', 'cl-814'],
+            ['agent', 'classify #815', 'codex · 21s', 'run', '', 'cl-815'],
+            ['agent', 'classify #816', 'sonnet · 8s', 'run', '', 'cl-816']]],
+          ['apply', 'gated write', [
+            ['human', 'gate: apply labels', 'not started', 'wait', '', 'gate-2'],
+            ['task', 'apply-labels', 'not started', 'wait', '', 'apply-2']]],
+          ['report', 'agent', [['agent', 'summarize', 'not started', 'wait', '', 'sum-1']]]
+        ],
+        active: [['classify', 'classify #815', '21s', 'cl-815'], ['classify', 'classify #816', '8s', 'cl-816']],
+        findings: [],
+        artifacts: [['issues.json', 'json', '24 KB', 'fetch-issues', '1 min', { kind: 'code', lines: ['[', '  { "n": 812, "title": "Export ignores locale", "state": "open" },', '  { "n": 814, "title": "Sort order flips on refresh", "state": "open" },', '  { "n": 815, "title": "Crash in scheduler loop", "state": "open" },', '  { "n": 816, "title": "Typo in CLI docs", "state": "open" }', ']'] }]],
+        files: [], committed: false, changesNote: '', branchNote: '',
+        journal: [
+          ['00:00', 'run', 'run.started · triage · inputs { repo: "acme/treel", window: "24h" }'],
+          ['00:01', 'task', 'fetch-issues started · runtime deno · net: api.github.com'],
+          ['00:02', 'task', 'fetch-issues ok · 4 open issues · 1.2s → Issue[4]'],
+          ['00:03', 'agent', 'classify #812 · claude/sonnet · started'],
+          ['00:38', 'agent', 'classify #812 done · { label: "feature-request" } · 2,988 tok'],
+          ['00:44', 'agent', 'classify #814 done · { label: "bug", severity: "P2" } · 3,412 tok'],
+          ['00:51', 'tool', '#815 grep "scheduler loop" · 6 matches in 3 files'],
+          ['00:58', 'agent', '#815 streaming · severity judgement in progress'],
+          ['01:02', 'pool', 'slot freed · #816 dequeued']],
+        gate: null,
+        steps: {
+          'cl-815': {
+            title: 'classify #815 · step 5', pill: 'running · 21s', pillKind: 'run', action: 'Skip step',
+            cells: [['kind', 'agent'], ['provider', 'codex/gpt-5'], ['started', '00:44'], ['elapsed', '21s of ~50s'], ['tokens', '4,120'], ['cost', '$0.03']],
+            input: [['issue', 'record', '#815', 'Crash in scheduler loop', 'open · 2 h ago · dima', ['needs-triage', 'reported by 3 users']],
+              ['stack trace', 'file', 'stacktrace-815.txt', '8.1 KB · 214 frames', '', []],
+              ['call sites', 'pills', '', '', '', ['src/scheduler.ts:118', 'src/scheduler.ts:204', 'src/pool.ts:44', '+3 more']],
+              ['model', 'text', 'gpt-5-codex', '', '', []]],
+            outTitle: 'step output · streaming', outNote: 'parsed against Classification',
+            out: [['The stack terminates in scheduler.tick(), the same frame as #802.'], ['Six call sites reach that loop; two skip the mutex added in 0.8.2, so'], ['the regression window is 0.8.2 → HEAD. Severity: P1, related: ["#802"]']],
+            hasTools: true, toolsTitle: 'Tool calls · 3', streaming: true,
+            tools: [['read-file src/scheduler.ts', '8,420 B · 0.2s', false], ['grep "scheduler loop" src/**', '6 matches · 0.4s', false], ['git log -S "mutex" --since v0.8.2', 'running · 3s', true]],
+            hasNext: true, nextK: 'next', nextV: 'gate: apply labels — it will ask you before writing 4 labels (policy: write → ask)'
+          },
+          'fetch-1': {
+            title: 'fetch-issues · step 1', pill: 'done · 1.2s', pillKind: 'done', action: 'Re-run step',
+            cells: [['kind', 'task · deno'], ['duration', '1.2s'], ['net', 'api.github.com'], ['result', 'Issue[4]'], ['artifact', 'issues.json']],
+            input: [['repo', 'text', 'acme/treel', '', '', []], ['window', 'text', '24h', '', '', []], ['state', 'pills', '', '', '', ['open', 'not draft']]],
+            outTitle: 'step output', outNote: 'parsed · Issue[4]',
+            out: [['#812 Export ignores locale · #814 Sort order flips on refresh'], ['#815 Crash in scheduler loop · #816 Typo in CLI docs']],
+            hasTools: false, streaming: false, hasNext: false
+          }
+        }
+      },
+
+      'r-046': {
+        id: 'r-046', wf: 'Release notes', file: 'release-notes.ts',
+        state: d46 ? 'stopped' : a46 ? 'running' : 'waiting',
+        chrome: '3 steps · ' + (d46 ? 'stopped at 25:40' : '25:10') + ' · $0.71 / $4.00',
+        pill: d46 ? 'stopped by you' : a46 ? 'publishing' : 'waiting on you · 25 min',
+        gateStep: 'gate-3', railTitle: 'Run tree · appended as steps start',
+        rail: [
+          ['collect', 'task · 2.1s', [['task', 'collect-commits', '37 commits', 'done', 'commits.json', 'col-1']]],
+          ['draft', 'agent', [['agent', 'draft release notes', '9.7k tok', 'done', 'notes.md', 'draft-1']]],
+          ['review', 'gated network', [['human', 'gate: approve publish', d46 ? 'denied · you' : a46 ? 'approved · you' : 'waiting on you', d46 ? 'idle' : a46 ? 'done' : 'waiting', '', 'gate-3']]],
+          ['publish', 'task', [['task', 'publish-release', d46 ? 'not run' : a46 ? 'running · 2s' : 'not started', d46 ? 'wait' : a46 ? 'run' : 'wait', '', 'pub-1']]]
+        ],
+        active: a46 ? [['publish', 'publish-release', '2s', 'pub-1']] : [],
+        findings: [],
+        artifacts: [
+          ['commits.json', 'json', '11 KB', 'collect-commits', '25 min', { kind: 'code', lines: ['{ "since": "v0.8.4", "head": "9f2c1ab", "count": 37,', '  "groups": { "features": 9, "fixes": 14, "docs": 6, "deps": 8 } }'] }],
+          ['notes.md', 'md', '4.2 KB', 'draft release notes', '25 min', { kind: 'md', title: 'v0.9.0 — release notes',
+            paras: ['37 commits since v0.8.4, grouped into six sections. Nothing is published until the review gate is answered.'],
+            rows: [['features', 'Run tree, commit gates, per-workflow inputs', '9'], ['fixes', 'Scheduler mutex, retry guard, digest timezone', '14'], ['docs', 'Gate policy page rewritten', '6'], ['deps', 'undici 6.21.2, esbuild 0.24', '8']] }]],
+        files: [], committed: false, changesNote: '', branchNote: '',
+        journal: [
+          ['00:00', 'run', 'run.started · release-notes · inputs { tag: "v0.9.0", since: "v0.8.4" }'],
+          ['00:02', 'task', 'collect-commits ok · 37 commits · 2.1s → Commit[37]'],
+          ['02:48', 'agent', 'draft release notes done · 6 sections · 9,712 tok'],
+          ['02:50', 'human', 'human.requested gate-3 · risk network · blocks publish-release']
+        ].concat(d46 ? [['25:40', 'human', 'human.answered gate-3 · hold · run.stopped by you']] : a46 ? [['25:40', 'human', 'human.answered gate-3 · ' + this.state.ans['gate-3'].scope + ' · answered_by: you'], ['25:41', 'task', 'publish-release started · github.com/acme/treel']] : []),
+        gate: {
+          id: 'gate-3', risk: 'network', blocks: 'blocks step 4 · publish-release', title: 'Approve the v0.9.0 release',
+          detail: 'The draft covers 37 commits in six sections. Publishing creates a public GitHub release — weft cannot undo it.',
+          submitL: 'Approve & publish', denyL: 'Hold & stop',
+          questions: [
+            ['scope', 'publish', 'cards', [
+              ['publish now', 'agent pick', 'Create the public release from the draft as written.'],
+              ['draft only', '', 'Create it as a GitHub draft for someone to publish by hand.']], true],
+            ['announce', 'announce in', 'select', [['#releases'], ['#eng'], ['no announcement']], false],
+            ['note', 'note', 'note', [], false]]
+        },
+        steps: {
+          'draft-1': {
+            title: 'draft release notes · step 2', pill: 'done · 2m 46s', pillKind: 'done', action: 'Re-run step',
+            cells: [['kind', 'agent'], ['provider', 'claude/sonnet'], ['duration', '2m 46s'], ['tokens', '9,712'], ['cost', '$0.71'], ['artifact', 'notes.md']],
+            input: [['commits', 'record', 'Commit[37]', 'since v0.8.4', 'from step 1', []], ['template', 'file', 'release-notes.md.tpl', '1.1 KB', '', []], ['sections', 'pills', '', '', '', ['features', 'fixes', 'docs', 'deps']]],
+            outTitle: 'step output', outNote: 'parsed against ReleaseNotes',
+            out: [['Six sections written; deps grouped by advisory rather than by package.'], ['Two commits had no linked issue and were listed under fixes verbatim.']],
+            hasTools: false, streaming: false, hasNext: true, nextK: 'next', nextV: 'gate: approve publish — risk network, so it asks even though the draft is ready'
+          },
+          'gate-3': {
+            title: 'gate: approve publish · step 3',
+            pill: d46 ? 'denied · you' : a46 ? 'approved · you' : 'waiting on you',
+            pillKind: d46 ? 'fail' : a46 ? 'done' : 'human', action: 'Copy gate id',
+            cells: [['kind', 'human'], ['risk', 'network', '#a9583e'], ['asked', '02:50'], ['policy', 'network → ask'], ['blocks', 'step 4 · publish-release']],
+            input: [['draft', 'record', 'notes.md', 'v0.9.0 — release notes', '4.2 KB · 6 sections', []], ['target', 'text', 'github.com/acme/treel/releases', '', '', []]],
+            outTitle: 'answer', outNote: 'journaled verbatim',
+            out: [[d46 ? '{ answer: "hold", answered_by: "you" } — run stopped' : a46 ? '{ answer: "' + this.state.ans['gate-3'].scope + '", answered_by: "you", at: "25:40" }' : 'pending — no release is created until this gate is answered']],
+            hasTools: false, streaming: false, hasNext: true,
+            nextK: d46 ? 'stopped' : a46 ? 'resumed' : 'needs you',
+            nextV: d46 ? 'run.stopped — notes.md is kept as an artifact.' : a46 ? 'next → step 4 · publish-release' : 'The run is stopped at this step until you answer.',
+            nextGoQ: !a46 && !d46
+          }
+        }
+      },
+
+      'r-048': {
+        id: 'r-048', wf: 'Docs hero refresh', file: 'docs-hero.ts',
+        state: d48 ? 'stopped' : a48 ? 'running' : 'waiting',
+        chrome: '4 steps · ' + (d48 ? 'stopped at 02:40' : '02:12') + ' · $0.29 / $4.00',
+        pill: d48 ? 'stopped by you' : a48 ? 'applying pick' : 'waiting on you · 2 min',
+        gateStep: 'gate-4', railTitle: 'Run tree · appended as steps start',
+        rail: [
+          ['read', 'task · 0.8s', [['task', 'read-current-hero', '0.8s', 'done', '', 'read-1']]],
+          ['design', 'agent ×2 ∥', [
+            ['agent', 'draft variant A', '2.1k tok', 'done', 'hero-a.html', 'des-a'],
+            ['agent', 'draft variant B', '2.4k tok', 'done', 'hero-b.html', 'des-b']]],
+          ['pick', 'human', [['human', 'gate: pick a hero', d48 ? 'denied · you' : a48 ? 'answered · you' : 'waiting on you', d48 ? 'idle' : a48 ? 'done' : 'waiting', '', 'gate-4']]],
+          ['apply', 'gated write', [['task', 'apply + screenshot', d48 ? 'not run' : a48 ? 'running · 3s' : 'not started', d48 ? 'wait' : a48 ? 'run' : 'wait', '', 'apply-4']]]
+        ],
+        active: a48 ? [['apply', 'apply + screenshot', '3s', 'apply-4']] : [],
+        findings: [],
+        artifacts: [
+          ['hero-a.html', 'html', '6.4 KB', 'draft variant A', '2 min', { kind: 'code', lines: ['<section class="hero hero--a">', '  <h1>Ship workflows, not scripts</h1>', '  <p>weft runs your code and asks you when it matters.</p>', '  <a class="btn btn-primary" href="/start">Start a run</a>', '</section>'] }],
+          ['hero-b.html', 'html', '7.1 KB', 'draft variant B', '2 min', { kind: 'code', lines: ['<section class="hero hero--b">', '  <h1>Your workflows, with a human in the loop</h1>', '  <p>Gates, journals and artifacts — one file per workflow.</p>', '  <a class="btn btn-primary" href="/start">Read the guide</a>', '</section>'] }]],
+        files: [['docs/index.html', 62, 24], ['docs/hero.css', 24, 14]],
+        committed: false,
+        changesNote: d48 ? 'Denied — both variants were left staged and nothing was applied.' : 'Both variants are staged. The one you pick is applied; the other is dropped.',
+        branchNote: 'branch weft/r-048 · not pushed',
+        journal: [
+          ['00:00', 'run', 'run.started · docs-hero · inputs { page: "docs/index.html", variants: 2 }'],
+          ['00:01', 'task', 'read-current-hero ok · 0.8s · 3.4 KB'],
+          ['01:44', 'agent', 'draft variant A done · 2,108 tok · hero-a.html'],
+          ['01:58', 'agent', 'draft variant B done · 2,402 tok · hero-b.html'],
+          ['02:00', 'human', 'human.requested gate-4 · risk write · blocks apply + screenshot']
+        ].concat(d48 ? [['02:40', 'human', 'human.answered gate-4 · keep current · run.stopped by you']] : a48 ? [['02:40', 'human', 'human.answered gate-4 · ' + this.state.ans['gate-4'].variant + ' · answered_by: you']] : []),
+        gate: {
+          id: 'gate-4', risk: 'write', blocks: 'blocks step 4 · apply + screenshot', title: 'Pick a hero design',
+          detail: 'Two agents drafted variants in parallel from the same brief. Both are staged; the one you pick is applied to docs/index.html and screenshotted.',
+          submitL: 'Apply pick & resume', denyL: 'Keep current & stop',
+          questions: [
+            ['variant', 'apply', 'cards', [
+              ['variant A', 'agent pick', 'Tighter headline, single call to action. +62 −24 in index.html.'],
+              ['variant B', '', 'Longer subhead, links to the guide instead. +71 −24.']], true],
+            ['shot', 'screenshot', 'toggle', [], false],
+            ['note', 'note', 'note', [], false]]
+        },
+        steps: {
+          'des-a': {
+            title: 'draft variant A · step 2', pill: 'done · 1m 43s', pillKind: 'done', action: 'Re-run step',
+            cells: [['kind', 'agent'], ['provider', 'claude/sonnet'], ['duration', '1m 43s'], ['tokens', '2,108'], ['cost', '$0.14'], ['artifact', 'hero-a.html']],
+            input: [['page', 'file', 'docs/index.html', '3.4 KB · current hero', '', []], ['brief', 'text', 'Shorter headline, one call to action', '', '', []], ['tokens', 'pills', '', '', '', ['brand voice', 'no new colors']]],
+            outTitle: 'step output', outNote: 'parsed against HeroDraft',
+            out: [['Headline cut to five words; the secondary link was dropped so the'], ['primary action stands alone. Type scale and colors unchanged.']],
+            hasTools: true, toolsTitle: 'Tool calls · 2', streaming: false,
+            tools: [['read-file docs/index.html', '3.4 KB · 0.2s', false], ['write-file .weft/runs/r-048/hero-a.html', '6.4 KB · 0.3s', false]],
+            hasNext: true, nextK: 'next', nextV: 'gate: pick a hero — two variants are staged and both are shown to you'
+          },
+          'gate-4': {
+            title: 'gate: pick a hero · step 3',
+            pill: d48 ? 'denied · you' : a48 ? 'answered · you' : 'waiting on you',
+            pillKind: d48 ? 'fail' : a48 ? 'done' : 'human', action: 'Copy gate id',
+            cells: [['kind', 'human'], ['risk', 'write', '#a9583e'], ['asked', '02:00'], ['policy', 'write → ask'], ['blocks', 'step 4 · apply']],
+            input: [['variants', 'record', '2 staged', 'hero-a.html · hero-b.html', 'from steps 2 and 3', []], ['page', 'file', 'docs/index.html', '3.4 KB', '', []]],
+            outTitle: 'answer', outNote: 'journaled verbatim',
+            out: [[d48 ? '{ answer: "keep current", answered_by: "you" } — run stopped' : a48 ? '{ answer: "' + this.state.ans['gate-4'].variant + '", answered_by: "you", at: "02:40" }' : 'pending — nothing is applied until this gate is answered']],
+            hasTools: false, streaming: false, hasNext: true,
+            nextK: d48 ? 'stopped' : a48 ? 'resumed' : 'needs you',
+            nextV: d48 ? 'run.stopped — both variants stay as artifacts.' : a48 ? 'next → step 4 · apply + screenshot' : 'The run is stopped at this step until you answer.',
+            nextGoQ: !a48 && !d48
+          }
+        }
+      },
+
+      'r-044': {
+        id: 'r-044', wf: 'Release notes', file: 'release-notes.ts', state: 'done',
+        chrome: '4 steps · 3m 04s · $0.68 / $4.00', pill: 'done · yesterday 18:22', gateStep: null,
+        railTitle: 'Run tree · 4 steps recorded',
+        rail: [
+          ['collect', 'task · 1.9s', [['task', 'collect-commits', '22 commits', 'done', 'commits.json', 'col-0']]],
+          ['draft', 'agent', [['agent', 'draft release notes', '8.9k tok', 'done', 'notes.md', 'draft-0']]],
+          ['review', 'answered 18:19', [['human', 'gate: approve publish', 'approved · you', 'done', '', 'gate-0']]],
+          ['publish', 'task', [['task', 'publish-release', 'v0.8.4 released', 'done', 'release.json', 'pub-0']]]
+        ],
+        active: [], findings: [],
+        artifacts: [
+          ['notes.md', 'md', '3.6 KB', 'draft release notes', 'yesterday', { kind: 'md', title: 'v0.8.4 — release notes',
+            paras: ['22 commits since v0.8.3. Published to GitHub at 18:22 after the review gate was approved.'],
+            rows: [['fixes', 'Scheduler mutex, pool starvation', '12'], ['docs', 'Gate policy, first run', '4'], ['deps', 'undici 6.11.1', '6']] }],
+          ['release.json', 'json', '2.2 KB', 'publish-release', 'yesterday', { kind: 'code', lines: ['{ "tag": "v0.8.4", "url": "github.com/acme/treel/releases/v0.8.4",', '  "draft": false, "published_at": "18:22", "assets": 0 }'] }]],
+        files: [['CHANGELOG.md', 37, 0]], committed: true,
+        changesNote: 'Committed and pushed. This run is closed.',
+        branchNote: 'merged into main · 9f2c1ab',
+        journal: [
+          ['00:00', 'run', 'run.started · release-notes · inputs { tag: "v0.8.4" }'],
+          ['00:02', 'task', 'collect-commits ok · 22 commits · 1.9s'],
+          ['02:41', 'agent', 'draft release notes done · 5 sections · 8,912 tok'],
+          ['02:43', 'human', 'human.requested gate-0 · risk network'],
+          ['02:58', 'human', 'human.answered gate-0 · publish now · answered_by: you'],
+          ['03:04', 'task', 'publish-release ok · v0.8.4 · run.finished']],
+        gate: null,
+        steps: {
+          'pub-0': {
+            title: 'publish-release · step 4', pill: 'done · 6.1s', pillKind: 'done', action: 'Re-run step',
+            cells: [['kind', 'task · deno'], ['duration', '6.1s'], ['net', 'api.github.com'], ['result', 'Release'], ['artifact', 'release.json']],
+            input: [['notes', 'record', 'notes.md', 'v0.8.4 — release notes', '3.6 KB · approved at 02:58', []], ['tag', 'text', 'v0.8.4', '', '', []], ['flags', 'pills', '', '', '', ['draft=false', 'latest=true']]],
+            outTitle: 'step output', outNote: 'parsed · Release',
+            out: [['Created github.com/acme/treel/releases/v0.8.4 · 22 commits · 0 assets.'], ['run.finished · 4 steps · 3m 04s · $0.68']],
+            hasTools: false, streaming: false, hasNext: false
+          },
+          'gate-0': {
+            title: 'gate: approve publish · step 3', pill: 'approved · you', pillKind: 'done', action: 'Copy gate id',
+            cells: [['kind', 'human'], ['risk', 'network', '#a9583e'], ['asked', '02:43'], ['answered', '02:58'], ['policy', 'network → ask']],
+            input: [['draft', 'record', 'notes.md', 'v0.8.4 — release notes', '3.6 KB · 5 sections', []], ['target', 'text', 'github.com/acme/treel/releases', '', '', []]],
+            outTitle: 'answer', outNote: 'journaled verbatim',
+            out: [['{ answer: "publish now", answered_by: "you", at: "02:58" }']],
+            hasTools: false, streaming: false, hasNext: true, nextK: 'resumed', nextV: 'next → step 4 · publish-release, started at 02:58'
+          }
+        }
+      }
+    };
+  }
+
+  RUNLIST() {
+    return [
+      ['r-049', 'Issue triage', 'triage.ts', 'running', '2 steps active', 'today 09:41', '01:04', '$0.09'],
+      ['r-048', 'Docs hero refresh', 'docs-hero.ts', 'waiting', 'gate: pick a hero', 'today 09:39', '02:12', '$0.29'],
+      ['r-046', 'Release notes', 'release-notes.ts', 'waiting', 'gate: approve publish', 'today 09:16', '25:10', '$0.71'],
+      ['r-045', 'Dependency audit', 'deps-audit.ts', 'waiting', 'gate: commit the fix', 'today 06:12', '08:41', '$2.40'],
+      ['r-044', 'Release notes', 'release-notes.ts', 'done', 'v0.8.4 released', 'yesterday 18:19', '03:04', '$0.68']
+    ];
+  }
+
+  cell(k, v, c, w) {
+    return { k: k, v: v, vStyle: MONO + ';font-size:12px;white-space:nowrap;color:' + (c || '#141413'),
+      style: 'display:flex;flex-direction:column;gap:2px;min-width:' + (w || 100) + 'px;padding:0 13px;border-left:1px solid #efe9de' };
+  }
+
+  renderVals() {
+    const st = this.state, self = this;
+    const set = o => this.setState(o);
+    const runs = this.RUNS();
+    const wfs = this.WF();
+    const run = runs[st.runId] || runs['r-045'];
+    const wf = wfs.find(w => w.file === st.wfSel) || wfs[2];
+    const order = ['r-049', 'r-048', 'r-046', 'r-045', 'r-044'];
+    const DEF_STEP = { 'r-045': 'verify-1', 'r-049': 'cl-815', 'r-046': 'draft-1', 'r-048': 'des-a', 'r-044': 'pub-0' };
+    const RUNMAP = { 'triage.ts': 'r-049', 'deps-audit.ts': 'r-045', 'release-notes.ts': 'r-046', 'docs-hero.ts': 'r-048' };
+
+    const openRun = (id, which, from) => () => set({
+      view: 'run', from: from || 'queue', runId: id, tab: 'steps',
+      stepId: which === 'gate' ? (runs[id].gateStep || DEF_STEP[id]) : DEF_STEP[id]
+    });
+
+    const navBtn = (v, label, badge) => {
+      const on = st.view === v || (v === 'runs' && st.view === 'run');
+      return { label: label, badge: badge || '', go: () => set({ view: v }),
+        style: 'appearance:none;border:0;cursor:pointer;font:inherit;display:flex;align-items:center;gap:7px;padding:6px 12px;border-radius:8px;font-size:13px;font-weight:' + (on ? '600' : '500') + ';background:' + (on ? '#f6e2d8' : 'transparent') + ';color:' + (on ? '#8a4630' : '#55534d'),
+        badgeStyle: badge ? MONO + ';font-size:10px;border-radius:999px;padding:1px 6px;background:' + (on ? '#cc785c' : '#efe9de') + ';color:' + (on ? '#faf9f5' : '#6c6a64') : 'display:none' };
+    };
+
+    /* ---- queue ---- */
+    const CARD = {
+      'r-045': { risk: 'write', wait: '40 min',
+        facts: [['blocks', 'step 11 · push'], ['waiting', '40 min'], ['spent', '$2.40 / $6.00']],
+        runAsk: 'fix approved — 4 steps active', runDetail: 'push branch started; verify and the report agent are still working.',
+        runFacts: [['active', '4 steps'], ['elapsed', '08:41'], ['spent', '$2.40 / $6.00']] },
+      'r-046': { risk: 'network', wait: '25 min',
+        facts: [['blocks', 'step 4 · publish'], ['waiting', '25 min'], ['spent', '$0.71 / $4.00']],
+        runAsk: 'publishing v0.9.0', runDetail: 'Approved — the release is being created on GitHub.',
+        runFacts: [['active', '1 step'], ['elapsed', '25:41'], ['spent', '$0.71 / $4.00']] },
+      'r-048': { risk: 'write', wait: '2 min',
+        facts: [['blocks', 'step 4 · apply'], ['waiting', '2 min'], ['spent', '$0.29 / $4.00']],
+        runAsk: 'applying your pick', runDetail: 'The chosen variant is being written and screenshotted.',
+        runFacts: [['active', '1 step'], ['elapsed', '02:40'], ['spent', '$0.29 / $4.00']] },
+      'r-049': { risk: '',
+        runAsk: 'classify — 2 of 4 agents still working', runDetail: 'Next stop is the apply gate; it will ask you before writing labels.',
+        runFacts: [['active', '2 of 4 agents'], ['elapsed', '01:04'], ['spent', '$0.09 / $8.00']] }
+    };
+
+    const factCells = arr => arr.map(f => ({ k: f[0], v: f[1],
+      cellStyle: 'display:flex;flex-direction:column;gap:2px;width:172px;flex:none;' + (arr.indexOf(f) ? 'padding:0 12px;border-left:1px solid #efe9de' : 'padding-right:12px'),
+      vStyle: MONO + ';font-size:11px;white-space:nowrap;color:#141413' }));
+
+    const qCard = (r, kind) => {
+      const c = CARD[r.id] || {};
+      const needs = kind === 'a';
+      return {
+        wf: r.wf, sub: r.id + ' · ' + (needs ? 'waiting · ' + c.wait : 'running · ' + r.chrome.split(' · ')[1]),
+        ask: needs ? r.gate.title : c.runAsk,
+        detail: needs ? r.gate.detail : c.runDetail,
+        hasRisk: needs && !!c.risk, risk: 'risk: ' + c.risk,
+        action: needs ? 'Answer →' : 'Open',
+        open: openRun(r.id, needs ? 'gate' : 'default', 'queue'),
+        dotStyle: 'width:7px;height:7px;border-radius:999px;flex:none;background:' + (needs ? '#cc785c' : '#5db8a6'),
+        btnCls: needs ? 'btn btn-primary' : 'btn btn-secondary',
+        riskStyle: MONO + ';font-size:10px;border-radius:999px;padding:2px 9px;white-space:nowrap;background:#f6e2d8;color:#8a4630',
+        cardStyle: 'display:flex;flex-direction:column;gap:8px;padding:12px 15px;border-radius:12px;background:#faf9f5;border:1px solid ' + (needs ? '#dd9b80' : '#e2dbd1'),
+        facts: factCells(needs ? c.facts : c.runFacts)
+      };
+    };
+
+    const live = order.map(id => runs[id]);
+    const waiting = live.filter(r => r.state === 'waiting').map(r => qCard(r, 'a'));
+    const running = live.filter(r => r.state === 'running').map(r => qCard(r, 'b'));
+
+    /* ---- runs list ---- */
+    const filters = ['All', 'Needs you', 'Running', 'Finished'];
+    const stateL = { waiting: 'needs you', running: 'running', done: 'done', stopped: 'stopped by you' };
+    const rowsAll = this.RUNLIST().map(r => {
+      const live2 = runs[r[0]];
+      const state = live2 ? live2.state : r[3];
+      const outcome = state === 'stopped' ? 'stopped at the gate' : state === 'running' && live2 && live2.state !== r[3] ? live2.pill : r[4];
+      return { id: r[0], wf: r[1], file: r[2], state: state, outcome: outcome, started: r[5], dur: r[6], cost: r[7] };
+    });
+    const passes = r => st.runFilter === 'All' || (st.runFilter === 'Needs you' && r.state === 'waiting')
+      || (st.runFilter === 'Running' && r.state === 'running') || (st.runFilter === 'Finished' && (r.state === 'done' || r.state === 'stopped'));
+    const rows = rowsAll.filter(passes);
+
+    /* ---- run detail ---- */
+    const stepKeys = Object.keys(run.steps);
+    const pendingGate = !!(run.gate && !st.answered[run.id]);
+    const stepId = run.steps[st.stepId] ? st.stepId : (pendingGate ? run.gateStep : stepKeys[0]);
+    const step = run.steps[stepId];
+    const pillStyle = kind => MONO + ';font-size:10px;text-transform:uppercase;letter-spacing:.07em;border-radius:999px;padding:2px 9px;white-space:nowrap;background:' + (kind === 'fail' ? '#f7e4e1' : kind === 'human' ? '#f6e2d8' : kind === 'run' ? '#d7ece7' : '#efe9de') + ';color:' + (kind === 'fail' ? '#b0483a' : kind === 'human' ? '#8a4630' : kind === 'run' ? '#275a51' : '#3d3d3a');
+    const runPillKind = run.state === 'waiting' ? 'human' : run.state === 'running' ? 'run' : run.state === 'stopped' ? 'fail' : 'done';
+
+    const tabDef = [['steps', 'Steps', pendingGate ? '1' : ''], ['findings', 'Findings', String(run.findings.length)], ['artifacts', 'Artifacts', String(run.artifacts.length)], ['changes', 'Changes', String(run.files.length)], ['journal', 'Journal', '']]
+      .filter(t => !((t[0] === 'findings' || t[0] === 'changes') && t[2] === '0'));
+    const tab = tabDef.some(t => t[0] === st.tab) ? st.tab : 'steps';
+
+    const art = (run.artifacts.find(a => a[0] === st.artSel) || run.artifacts[0]);
+    const view = art[5];
+
+    const DIFFS = {
+      'src/net/fetchWithRetry.ts': { hunk: '@@ -12,4 +12,9 @@ fetchWithRetry()', lines: [
+        ['12', '12', ' export async function fetchWithRetry(req: Request) {', ''],
+        ['13', '13', '   const backoff = capped(retryPolicy);', ''],
+        ['14', '', '-  return await fetch(req);', '-'],
+        ['', '14', '+  return await retryGuard(backoff, async () => {', '+'],
+        ['', '15', '+    const res = await fetch(req);', '+'],
+        ['', '16', '+    if (!res.ok && retryable(res.status)) throw new Retry(res);', '+'],
+        ['', '17', '+    return res;', '+'],
+        ['', '18', '+  });', '+'],
+        ['15', '19', ' }', '']] },
+      'package-lock.json': { hunk: '@@ -1204,7 +1204,7 @@ node_modules/undici', lines: [
+        ['1204', '1204', '     "node_modules/undici": {', ''],
+        ['1205', '', '-      "version": "6.11.1",', '-'],
+        ['1206', '', '-      "integrity": "sha512-2Rk1Xw…",', '-'],
+        ['', '1205', '+      "version": "6.21.2",', '+'],
+        ['', '1206', '+      "integrity": "sha512-9fBc1Q…",', '+'],
+        ['1207', '1207', '       "license": "MIT"', ''],
+        ['1208', '1208', '     },', '']] },
+      'docs/security.md': { hunk: '@@ -18,6 +18,14 @@ Advisory handling', lines: [
+        ['18', '18', ' ## Advisory handling', ''],
+        ['19', '19', '', ''],
+        ['', '20', '+Advisories are triaged nightly by deps-audit.ts. Every fix is staged on a', '+'],
+        ['', '21', '+branch and held at a commit gate — nothing lands without a human answer.', '+'],
+        ['', '22', '+', '+'],
+        ['', '23', '+### Retry guard', '+'],
+        ['', '24', '+fetchWithRetry must keep its backoff cap; verify fails the run without it.', '+'],
+        ['20', '25', ' See the runbook for the escalation path.', '']] },
+      'docs/index.html': { hunk: '@@ -8,10 +8,12 @@ hero', lines: [
+        ['8', '8', ' <main>', ''],
+        ['9', '', '-  <section class="hero">', '-'],
+        ['10', '', '-    <h1>weft — workflows that ask</h1>', '-'],
+        ['', '9', '+  <section class="hero hero--a">', '+'],
+        ['', '10', '+    <h1>Ship workflows, not scripts</h1>', '+'],
+        ['', '11', '+    <p>weft runs your code and asks you when it matters.</p>', '+'],
+        ['11', '12', '   </section>', ''],
+        ['12', '13', ' </main>', '']] },
+      'docs/hero.css': { hunk: '@@ -1,6 +1,14 @@ .hero', lines: [
+        ['1', '1', ' .hero { padding: var(--space-6) 0; }', ''],
+        ['', '2', '+.hero--a { display: grid; gap: var(--space-3); }', '+'],
+        ['', '3', '+.hero--a h1 { font-family: var(--font-heading); max-width: 18ch; }', '+'],
+        ['2', '4', ' .hero p { color: var(--color-neutral-700); }', '']] },
+      'CHANGELOG.md': { hunk: '@@ -1,4 +1,41 @@ Changelog', lines: [
+        ['1', '1', ' # Changelog', ''],
+        ['', '2', '+## v0.8.4', '+'],
+        ['', '3', '+- Scheduler holds the pool mutex across tick boundaries', '+'],
+        ['', '4', '+- Digest respects the workspace timezone', '+'],
+        ['2', '5', ' ## v0.8.3', '']] }
+    };
+    const file = run.files.find(f => f[0] === st.fileSel) || run.files[0] || ['', 0, 0];
+    const diff = DIFFS[file[0]] || { hunk: '', lines: [] };
+
+    /* ---- gate ---- */
+    const g = run.gate;
+    const gAns = (g && st.ans[g.id]) || {};
+    const gate = g ? {
+      id: g.id, risk: g.risk, blocks: g.blocks, title: g.title, detail: g.detail, submitL: g.submitL, denyL: g.denyL,
+      payload: '{ ' + g.questions.map(q => {
+        const v = gAns[q[0]];
+        return q[0] + ': ' + (Array.isArray(v) ? '[' + v.map(x => '"' + x + '"').join(', ') + ']' : typeof v === 'boolean' ? String(v) : '"' + (v || '') + '"');
+      }).join(', ') + ' }',
+      questions: g.questions.map(q => {
+        const key = q[0], kind = q[2], opts = q[3] || [];
+        const cur = gAns[key];
+        return {
+          k: q[1], req: q[4] ? ' *' : '',
+          isCards: kind === 'cards', isChoice: kind === 'choice' || kind === 'chips', isSelect: kind === 'select',
+          isToggle: kind === 'toggle', isNote: kind === 'note',
+          val: cur, valL: kind === 'toggle' ? (cur ? 'wait for verify to pass' : 'commit without waiting') : '',
+          set: e => { const v = e && e.target ? e.target.value : e; self.setState(s2 => ({ ans: Object.assign({}, s2.ans, { [g.id]: Object.assign({}, s2.ans[g.id], { [key]: v }) }) })); },
+          toggle: () => self.setState(s2 => ({ ans: Object.assign({}, s2.ans, { [g.id]: Object.assign({}, s2.ans[g.id], { [key]: !s2.ans[g.id][key] }) }) })),
+          trackStyle: 'width:30px;height:17px;border-radius:999px;flex:none;display:inline-flex;align-items:center;padding:0 2px;justify-content:' + (cur ? 'flex-end' : 'flex-start') + ';background:' + (cur ? '#cc785c' : '#e6dfd8'),
+          opts: opts.map(o => {
+            const label = o[0];
+            const on = kind === 'chips' ? (cur || []).indexOf(label) > -1 : cur === label;
+            return {
+              label: label, meta: o[1] || '', desc: o[2] || '', tick: kind === 'chips' && on ? '✓ ' : '',
+              pick: () => self.setState(s2 => {
+                const cg = s2.ans[g.id];
+                let nv;
+                if (kind === 'chips') { const l2 = (cg[key] || []).slice(); const ix = l2.indexOf(label); if (ix > -1) l2.splice(ix, 1); else l2.push(label); nv = l2; }
+                else nv = label;
+                return { ans: Object.assign({}, s2.ans, { [g.id]: Object.assign({}, cg, { [key]: nv }) }) };
+              }),
+              dotStyle: 'width:11px;height:11px;border-radius:999px;flex:none;' + (on ? 'border:3px solid #cc785c;background:#faf9f5' : 'border:1.5px solid #c4bdb2'),
+              cardStyle: 'appearance:none;cursor:pointer;font:inherit;flex:1;min-width:190px;display:flex;flex-direction:column;gap:5px;padding:10px 12px;border-radius:12px;text-align:left;background:' + (on ? '#f6e2d8' : '#fffefb') + ';border:1px solid ' + (on ? '#cc785c' : '#e6dfd8'),
+              pillStyle: 'appearance:none;cursor:pointer;' + MONO + ';font-size:11px;border-radius:999px;padding:4px 11px;white-space:nowrap;background:' + (on ? '#f6e2d8' : '#fffefb') + ';border:1px solid ' + (on ? '#cc785c' : '#e6dfd8') + ';color:' + (on ? '#8a4630' : '#55534d')
+            };
+          })
+        };
+      })
+    } : { questions: [] };
+
+    /* ---- launcher ---- */
+    const lwf = wfs.find(w => w.file === st.lwf) || wfs[0];
+    const q = st.query.toLowerCase();
+    const matches = wfs.filter(w => !q || w.name.toLowerCase().indexOf(q) > -1 || w.file.indexOf(q) > -1);
+    const lsel = Math.min(st.lsel, Math.max(matches.length - 1, 0));
+    const lpill = on => MONO + ';font-size:11px;border-radius:999px;padding:4px 11px;white-space:nowrap;appearance:none;cursor:pointer;background:' + (on ? '#f6e2d8' : '#fffefb') + ';border:1px solid ' + (on ? '#cc785c' : '#e6dfd8') + ';color:' + (on ? '#8a4630' : '#55534d');
+    const li = st.li[lwf.file] || {};
+    const setLi = (k, v) => self.setState(s2 => ({ li: Object.assign({}, s2.li, { [lwf.file]: Object.assign({}, s2.li[lwf.file], { [k]: v }) }) }));
+    const startRun = () => {
+      const id = RUNMAP[lwf.file];
+      if (id) set({ launcher: false, lstep: 1, view: 'run', from: 'runs', runId: id, tab: 'steps', stepId: DEF_STEP[id] });
+      else set({ launcher: false, lstep: 1, view: 'runs', runFilter: 'All', started: { wf: lwf.name, file: lwf.file } });
+    };
+    this._start = startRun;
+    this._matches = matches.map(w => w.file);
+
+    return {
+      nav: [navBtn('queue', 'Queue', String(waiting.length)), navBtn('runs', 'Runs'), navBtn('workflows', 'Workflows'), navBtn('settings', 'Settings')],
+      isQueue: st.view === 'queue', isRuns: st.view === 'runs', isWorkflows: st.view === 'workflows', isSettings: st.view === 'settings', isRun: st.view === 'run',
+
+      queueSummary: waiting.length + ' waiting on you · ' + running.length + ' running',
+      pinned: wfs.slice(0, 4).map(w => ({ name: w.name, run: () => set({ launcher: true, lwf: w.file, lstep: 2 }) })),
+      groups: [
+        { label: 'Waiting on you · ' + waiting.length, note: 'blocks the run until answered', isEmpty: !waiting.length, emptyL: 'Nothing is waiting on you.',
+          labelStyle: 'font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;color:#a9583e', items: waiting },
+        { label: 'Running · ' + running.length, note: 'pool ' + st.conc + ' agents', isEmpty: !running.length, emptyL: 'No runs are working right now.',
+          labelStyle: 'font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;color:#35786b', items: running }
+      ],
+
+      runsSummary: rowsAll.length + ' runs in the journal window · 30d',
+      runFilters: filters.map(f => ({ label: f, pick: () => set({ runFilter: f }), style: lpill(st.runFilter === f) })),
+      hasStarted: !!st.started,
+      startedRow: st.started ? { wf: st.started.wf, file: st.started.file } : { wf: '', file: '' },
+      runRows: rows.map(r => ({
+        id: r.id, wf: r.wf, file: r.file, outcome: r.outcome, started: r.started, dur: r.dur, cost: r.cost,
+        stateL: stateL[r.state] || r.state,
+        open: openRun(r.id, r.state === 'waiting' ? 'gate' : 'default', 'runs'),
+        dotStyle: 'width:7px;height:7px;border-radius:999px;flex:none;background:' + SC[r.state],
+        rowStyle: 'appearance:none;border:0;width:100%;cursor:pointer;font:inherit;display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid #efe9de;text-align:left;background:' + (st.runId === r.id && st.view === 'run' ? '#f6e2d8' : 'transparent'),
+        stateStyle: MONO + ';font-size:11px;width:104px;flex:none;white-space:nowrap;color:' + (r.state === 'waiting' ? '#a9583e' : r.state === 'running' ? '#35786b' : '#6c6a64')
+      })),
+
+      wfRows: wfs.map(w => ({
+        name: w.name, file: w.file, lastL: w.lastL, ok: w.ok + '%', p50: w.p50, cost: w.cost,
+        select: () => set({ wfSel: w.file }),
+        dotStyle: 'width:7px;height:7px;border-radius:999px;flex:none;background:' + SC[w.state],
+        rowStyle: 'appearance:none;border:0;width:100%;font:inherit;text-align:left;display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid #efe9de;cursor:pointer;background:' + (st.wfSel === w.file ? '#f6e2d8' : 'transparent'),
+        barStyle: 'display:block;height:100%;border-radius:999px;width:' + w.ok + '%;background:' + (w.ok >= 95 ? '#c4bdb2' : w.ok >= 88 ? '#dd9b80' : '#cc785c'),
+        shape: w.shape.map(c => ({ ch: c[1], style: MONO + ';font-size:10px;font-weight:500;border-radius:8px;padding:2px 5px;background:' + (c[0] === 'agent' ? '#d7ece7' : c[0] === 'human' ? '#f6e2d8' : '#efe9de') + ';color:' + (c[0] === 'agent' ? '#275a51' : c[0] === 'human' ? '#8a4630' : '#3d3d3a') }))
+      })),
+      wfSel: {
+        name: wf.name, file: wf.file, desc: wf.desc, historyNote: wf.historyNote,
+        history: wf.history.map((v, ix) => ({ style: 'flex:1;border-radius:999px;min-height:12px;background:' + (v ? '#a9dbd0' : '#b0483a') + ';height:' + (v ? [70,58,64,52,66,74,60,56,68,62,72,58,64,70][ix] : 30) + '%' })),
+        phases: wf.labels.map((p, ix) => ({ n: ix + 1, name: p[0], meta: p[1],
+          numStyle: MONO + ';font-size:10px;font-weight:600;width:18px;height:18px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;flex:none;background:' + (p[1].indexOf('human') > -1 ? '#f6e2d8' : '#efe9de') + ';color:' + (p[1].indexOf('human') > -1 ? '#8a4630' : '#3d3d3a') })),
+        facts: wf.facts.map(f => ({ k: f[0], v: f[1] })),
+        noRecent: wf.recent.length === 0,
+        recent: wf.recent.map(r => ({ id: r[0], outcome: r[1], ago: r[2], open: openRun(r[0], runs[r[0]] && runs[r[0]].state === 'waiting' ? 'gate' : 'default', 'runs'),
+          dotStyle: 'width:6px;height:6px;border-radius:999px;flex:none;background:' + SC[(runs[r[0]] || {}).state || 'done'],
+          rowStyle: 'appearance:none;border:0;width:100%;font:inherit;cursor:pointer;text-align:left;display:flex;align-items:center;gap:9px;padding:6px 0;border-bottom:1px solid #efe9de;background:none' }))
+      },
+      runSelected: () => set({ launcher: true, lwf: wf.file, lstep: 2 }),
+
+      policyRows: [['read', 'fs.read · git.log · fetch(allow-list)'], ['write', 'fs.write · labels · branch push'], ['network', 'publish · deploy · external POST'], ['destructive', 'delete · force-push · billing']].map(t => {
+        const cur = st.policy[t[0]];
+        const btn = v => 'appearance:none;cursor:pointer;font:inherit;' + MONO + ';font-size:11px;border-radius:999px;padding:4px 12px;background:' + (cur === v ? '#cc785c' : '#fffefb') + ';color:' + (cur === v ? '#faf9f5' : '#55534d') + ';border:1px solid ' + (cur === v ? '#cc785c' : '#e6dfd8');
+        return { tier: t[0], ops: t[1], autoStyle: btn('auto'), askStyle: btn('ask'),
+          setAuto: () => self.setState(s2 => ({ policy: Object.assign({}, s2.policy, { [t[0]]: 'auto' }) })),
+          setAsk: () => self.setState(s2 => ({ policy: Object.assign({}, s2.policy, { [t[0]]: 'ask' }) })) };
+      }),
+      providers: [{ id: 'claude', model: 'sonnet · opus (fallback)', status: 'ready' }, { id: 'codex', model: 'gpt-5-codex', status: 'ready' }],
+      budget: st.budget, setBudget: e => set({ budget: e.target.value }),
+      conc: st.conc, concL: st.conc + ' agents', setConc: e => set({ conc: Number(e.target.value) }),
+
+      run: {
+        id: run.id, wf: run.wf, file: run.file, chrome: run.chrome, pill: run.pill,
+        pillStyle: pillStyle(runPillKind),
+        adds: '+' + run.files.reduce((n, f) => n + f[1], 0), dels: '−' + run.files.reduce((n, f) => n + f[2], 0),
+        railTitle: run.railTitle, artTitle: 'Artifacts · ' + run.artifacts.length, fileCount: run.files.length,
+        changesNote: run.changesNote, branchNote: run.branchNote, open: !run.committed,
+        hasActive: run.active.length > 0,
+        rail: run.rail.map(g2 => ({ name: g2[0], meta: g2[1], steps: g2[2].map(s2 => ({
+          kind: s2[0], label: s2[1], meta: s2[2], art: s2[4], hasArt: !!s2[4],
+          select: () => set({ stepId: s2[5], tab: 'steps' }),
+          dotStyle: 'width:7px;height:7px;border-radius:999px;flex:none;background:' + SC[s2[3]],
+          rowStyle: 'appearance:none;border:0;width:100%;font:inherit;text-align:left;display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:8px;cursor:pointer;background:' + (stepId === s2[5] ? '#f6e2d8' : s2[3] === 'fail' ? '#f7e4e1' : s2[3] === 'waiting' ? '#fbf1ec' : s2[3] === 'run' ? '#eaf6f3' : 'transparent'),
+          labelStyle: 'flex:1 0 auto;min-width:0;font-size:13px;white-space:nowrap;font-weight:' + (s2[3] === 'run' || s2[3] === 'fail' || s2[3] === 'waiting' ? '600' : '500'),
+          metaStyle: MONO + ';font-size:10px;flex:none;text-align:right;white-space:nowrap;color:' + (s2[3] === 'fail' ? '#b0483a' : s2[3] === 'waiting' ? '#a9583e' : '#6c6a64')
+        })) })),
+        active: run.active.map(a => ({ label: a[0], name: a[1], meta: a[2], select: () => set({ stepId: a[3], tab: 'steps' }),
+          style: 'appearance:none;cursor:pointer;font:inherit;display:flex;align-items:center;gap:7px;padding:4px 10px;border-radius:999px;white-space:nowrap;background:' + (stepId === a[3] ? '#f6e2d8' : '#faf9f5') + ';border:1px solid ' + (stepId === a[3] ? '#dd9b80' : '#e2dbd1') })),
+        findings: run.findings.map(f => ({
+          id: f[0], msg: f[1], loc: f[2], sev: f[3], stepL: f[4], chip: f[5], open: () => set({ stepId: f[7], tab: 'steps' }),
+          cardStyle: 'display:flex;flex-direction:column;gap:7px;padding:12px 14px;border-radius:12px;background:#faf9f5;border:1px solid ' + (f[6] ? '#e2dbd1' : '#dd9b80'),
+          sevStyle: MONO + ';font-size:10px;text-transform:uppercase;letter-spacing:.07em;border-radius:999px;padding:2px 9px;white-space:nowrap;background:#f6e2d8;color:#8a4630',
+          chipStyle: MONO + ';font-size:10px;border-radius:999px;padding:2px 9px;white-space:nowrap;background:' + (f[6] ? '#efe9de' : '#f6e2d8') + ';color:' + (f[6] ? '#3d3d3a' : '#8a4630')
+        })),
+        artifacts: run.artifacts.map(a => ({
+          f: a[0], t: a[1], sz: a[2], step: a[3], ago: a[4], select: () => set({ artSel: a[0] }),
+          rowStyle: 'appearance:none;cursor:pointer;font:inherit;display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:12px;background:' + (art[0] === a[0] ? '#f6e2d8' : 'transparent') + ';border:1px solid ' + (art[0] === a[0] ? '#dd9b80' : 'transparent'),
+          typeStyle: MONO + ';font-size:10px;text-transform:uppercase;letter-spacing:.06em;border-radius:8px;padding:2px 6px;flex:none;background:' + (a[1] === 'md' ? '#d7ece7' : a[1] === 'patch' ? '#f6e2d8' : '#efe9de') + ';color:' + (a[1] === 'md' ? '#275a51' : a[1] === 'patch' ? '#8a4630' : '#3d3d3a')
+        })),
+        tree: (() => {
+          const treeRows = [], dirs = {};
+          run.files.forEach(f => {
+            const parts = f[0].split('/'), name = parts.pop();
+            let path = '';
+            parts.forEach((p, d) => { path = path ? path + '/' + p : p; if (!dirs[path]) { dirs[path] = true; treeRows.push({ dir: true, name: p, depth: d, path: path }); } });
+            treeRows.push({ dir: false, name: name, depth: parts.length, path: f[0], a: f[1], d: f[2] });
+          });
+          const ext = n => (n.split('.').pop() || '').toUpperCase();
+          const extColor = e => e === 'TS' ? '#35786b' : e === 'JSON' ? '#a9583e' : e === 'MD' ? '#6c6a64' : '#8e8b82';
+          return treeRows.map(r => {
+            const on = !r.dir && file[0] === r.path;
+            return {
+              name: r.name, isFile: !r.dir, twisty: r.dir ? '▾' : '',
+              twistyStyle: MONO + ';font-size:10px;color:#8e8b82;width:10px;flex:none;text-align:center',
+              icon: r.dir ? '' : ext(r.name),
+              iconStyle: r.dir ? 'display:none' : MONO + ';font-size:10px;letter-spacing:.04em;border-radius:8px;padding:1px 4px;flex:none;background:#efe9de;color:' + extColor(ext(r.name)),
+              nameStyle: MONO + ';font-size:12px;flex:1;min-width:0;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:' + (r.dir ? '500' : on ? '600' : '400') + ';color:' + (r.dir ? '#55534d' : '#141413'),
+              stat: r.dir ? '' : '+' + r.a + ' −' + r.d,
+              statStyle: MONO + ';font-size:10px;flex:none;color:' + (on ? '#8a4630' : '#8e8b82'),
+              rowStyle: 'appearance:none;border:0;width:100%;cursor:' + (r.dir ? 'default' : 'pointer') + ';font:inherit;display:flex;align-items:center;gap:6px;padding:3px 10px 3px ' + (10 + r.depth * 13) + 'px;background:' + (on ? '#f6e2d8' : 'transparent'),
+              select: r.dir ? (() => {}) : (() => set({ fileSel: r.path }))
+            };
+          });
+        })(),
+        journal: run.journal.map(l => ({ t: l[0], tag: l[1], text: l[2],
+          tagStyle: MONO + ';font-size:10px;width:56px;flex:none;color:' + (l[1] === 'agent' ? '#7fc9b9' : l[1] === 'tool' ? '#dd9b80' : l[1] === 'human' ? '#eac6b4' : '#a09d96') })),
+        live: run.state === 'running' || run.state === 'waiting'
+      },
+      openWorkflow: () => set({ view: 'workflows', wfSel: run.file }),
+      backLabel: st.from === 'runs' ? '← Runs' : '← Queue',
+      back: () => set({ view: st.from === 'runs' ? 'runs' : 'queue' }),
+      canCancel: run.state === 'running' || run.state === 'waiting',
+
+      showRail: tab === 'steps',
+      tabs: tabDef.map(t => ({
+        label: t[1], badge: t[0] === 'steps' ? t[2] : (t[0] === 'journal' ? '' : t[2]), go: () => set({ tab: t[0] }),
+        style: 'appearance:none;border:0;cursor:pointer;font:inherit;display:flex;align-items:center;gap:7px;padding:9px 13px;background:none;font-size:13px;border-bottom:2px solid ' + (tab === t[0] ? '#cc785c' : 'transparent') + ';font-weight:' + (tab === t[0] ? '600' : '500') + ';color:' + (tab === t[0] ? '#141413' : '#6c6a64'),
+        badgeStyle: (t[0] === 'steps' ? t[2] : t[2] && t[0] !== 'journal') ? MONO + ';font-size:10px;border-radius:999px;padding:1px 6px;background:' + (t[0] === 'steps' ? '#cc785c' : tab === t[0] ? '#f6e2d8' : '#efe9de') + ';color:' + (t[0] === 'steps' ? '#faf9f5' : tab === t[0] ? '#8a4630' : '#6c6a64') : 'display:none'
+      })),
+      tabSteps: tab === 'steps' && !(pendingGate && stepId === run.gateStep),
+      showGatePane: tab === 'steps' && pendingGate && stepId === run.gateStep,
+      tabFindings: tab === 'findings', tabArtifacts: tab === 'artifacts', tabChanges: tab === 'changes', tabJournal: tab === 'journal',
+      goQuestion: () => set({ tab: 'steps', stepId: run.gateStep }),
+
+      step: {
+        title: step.title, pill: step.pill, pillStyle: pillStyle(step.pillKind), action: step.action, idL: 'weft explain ' + stepId,
+        cells: step.cells.map(c => self.cell(c[0], c[1], c[2], c[0] === 'kind' ? 96 : 104)),
+        input: step.input.map((f, ix) => ({
+          k: f[0], isRecord: f[1] === 'record', isFile: f[1] === 'file', isText: f[1] === 'text', hasPills: (f[5] || []).length > 0,
+          ref: f[2], title: f[1] === 'record' ? f[3] : f[2], sub: f[1] === 'record' ? f[4] : f[3],
+          textStyle: MONO + ';font-size:12px;color:#3d3d3a',
+          pills: (f[5] || []).map(p => ({ t: p, style: MONO + ';font-size:11px;border-radius:999px;padding:2px 9px;white-space:nowrap;background:#efe9de;color:#3d3d3a' })),
+          rowStyle: 'display:flex;align-items:flex-start;gap:12px;padding:7px 12px;' + (ix ? 'border-top:1px solid #efe9de' : '')
+        })),
+        outTitle: step.outTitle, outNote: step.outNote, out: step.out.map(o => ({ t: o[0] })), streaming: step.streaming,
+        hasTools: step.hasTools, toolsTitle: step.toolsTitle,
+        tools: (step.tools || []).map(t => ({ cmd: t[0], meta: t[1],
+          rowStyle: 'display:flex;align-items:center;gap:10px;padding:6px 11px;border-radius:8px;background:' + (t[2] ? '#fbf1ec' : '#faf9f5') + ';border:1px solid ' + (t[2] ? '#dd9b80' : '#e2dbd1'),
+          metaStyle: MONO + ';font-size:11px;flex:none;color:' + (t[2] ? '#a9583e' : '#6c6a64') })),
+        hasNext: step.hasNext, nextK: step.nextK, nextV: step.nextV, nextGoQ: !!step.nextGoQ
+      },
+      gate: gate,
+      submitGate: () => self.setState(s2 => ({ answered: Object.assign({}, s2.answered, { [run.id]: true }), tab: 'steps', stepId: run.gateStep })),
+      denyGate: () => self.setState(s2 => ({ answered: Object.assign({}, s2.answered, { [run.id]: true }), denied: Object.assign({}, s2.denied, { [run.id]: true }), tab: 'steps', stepId: run.gateStep })),
+
+      art: { f: art[0], path: '.weft/runs/' + run.id + '/artifacts/' + art[0],
+        isMd: view.kind === 'md', isCode: view.kind === 'code',
+        title: view.kind === 'md' ? view.title : art[0],
+        body: (view.paras || []).map(p => ({ t: p, style: 'font-size:13px;line-height:1.6;color:#3d3d3a' })),
+        hasRows: !!(view.rows && view.rows.length), rows: (view.rows || []).map(r => ({ k: r[0], t: r[1], v: r[2] })),
+        code: (view.lines || []).map(l => ({ t: l })),
+        meta: [['produced by', art[3]], ['type', art[1]], ['size', art[2]], ['journaled', art[4]]].map((m, ix) => ({ k: m[0], v: m[1],
+          style: 'display:flex;flex-direction:column;gap:2px;min-width:120px;padding:0 14px;' + (ix ? 'border-left:1px solid #efe9de' : 'padding-left:0') })) },
+
+      file: { p: file[0], a: '+' + file[1], d: '−' + file[2], hunk: diff.hunk,
+        lines: diff.lines.map(l => ({ ln: l[0] || '·', rn: l[1] || '·', t: l[2],
+          rowStyle: 'display:flex;align-items:baseline;background:' + (l[3] === '+' ? 'rgba(93,184,166,.12)' : l[3] === '-' ? 'rgba(204,120,92,.14)' : 'transparent'),
+          textStyle: 'flex:1;min-width:0;white-space:pre;color:' + (l[3] === '+' ? '#a9dbd0' : l[3] === '-' ? '#eac6b4' : '#a09d96') })) },
+
+      launcherOpen: st.launcher, lstep1: st.lstep === 1, lstep2: st.lstep === 2,
+      backToPick: () => set({ lstep: 1 }),
+      lwfName: lwf.name, lwfFile: lwf.file, lwfMeta: '~' + lwf.p50 + ' · ~' + lwf.cost,
+      openLauncher: () => set({ launcher: true, lstep: 1, query: '', lsel: 0 }),
+      closeLauncher: () => set({ launcher: false }),
+      stop: e => e.stopPropagation(),
+      query: st.query, setQuery: e => set({ query: e.target.value, lsel: 0 }),
+      matchL: matches.length + ' of ' + wfs.length + ' match',
+      matches: matches.map((w, ix) => ({
+        name: w.name, file: w.file, meta: '~' + w.p50 + ' · ~' + w.cost, pick: () => set({ lwf: w.file, lstep: 2, lsel: ix }),
+        dotStyle: 'width:7px;height:7px;border-radius:999px;flex:none;background:' + SC[w.state],
+        rowStyle: 'appearance:none;cursor:pointer;font:inherit;display:flex;align-items:center;gap:12px;padding:9px 20px;text-align:left;width:100%;background:' + (lsel === ix ? '#f6e2d8' : 'transparent') + ';border:0;border-left:3px solid ' + (lsel === ix ? '#cc785c' : 'transparent')
+      })),
+      launcherShape: lwf.labels.map(l => l[0]).join(' → '),
+      launcherBudget: 'budget ' + st.budget + ' · gates: ' + st.policy.write + ' on write',
+      launcherFields: lwf.inputs.map(f => {
+        const key = f[0], kind = f[2], opts = f[3] || [], cur = li[key];
+        return {
+          k: f[1], req: f[4] ? ' *' : '',
+          isText: kind === 'text', isSeg: kind === 'seg', isChips: kind === 'chips', isFile: kind === 'file', isFlag: kind === 'flag',
+          v: kind === 'flag' ? (cur ? opts[0] : opts[1]) : cur,
+          set: e => setLi(key, e.target.value),
+          toggle: () => setLi(key, !cur),
+          trackStyle: 'width:30px;height:17px;border-radius:999px;flex:none;display:inline-flex;align-items:center;padding:0 2px;justify-content:' + (cur ? 'flex-end' : 'flex-start') + ';background:' + (cur ? '#cc785c' : '#e6dfd8'),
+          opts: opts.map(o => ({ label: o, tick: kind === 'chips' && (cur || []).indexOf(o) > -1 ? '✓ ' : '',
+            pick: () => setLi(key, kind === 'chips' ? ((cur || []).indexOf(o) > -1 ? cur.filter(x => x !== o) : (cur || []).concat([o])) : o),
+            style: lpill(kind === 'chips' ? (cur || []).indexOf(o) > -1 : cur === o) }))
+        };
+      }),
+      startRun: startRun
+    };
+  }
+}
+
+</script>
+</body>
+</html>

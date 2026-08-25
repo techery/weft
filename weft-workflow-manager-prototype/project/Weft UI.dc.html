@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="_ds/organic-f31772e2-eef1-43a3-aacb-3f9319af0042/styles.css">
+  <script src="_ds/organic-f31772e2-eef1-43a3-aacb-3f9319af0042/_ds_bundle.js"></script>
+  <style>
+    body { margin: 0; background: var(--color-bg); }
+    a { color: var(--color-accent-700); } a:hover { color: var(--color-accent); }
+    @keyframes weft-pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+  </style>
+</helmet>
+<div style="min-height:100vh;display:flex;flex-direction:column;font-family:var(--font-body);color:var(--color-text)">
+  <div class="nav" style="position:sticky;top:0;z-index:30;background:var(--color-bg);border-bottom:1px solid var(--color-divider)">
+    <div class="nav-brand" style="display:flex;align-items:center;gap:10px">
+      <div style="width:32px;height:32px;border-radius:999px;background:var(--color-accent);color:var(--color-bg);display:flex;align-items:center;justify-content:center;font-family:var(--font-heading);font-size:17px;flex:none">w</div>
+      <span>weft</span>
+      <span class="tag tag-neutral" style="font-family:ui-monospace,monospace">acme/treel</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:2px">
+      <sc-for list="{{ navTabs }}" as="t" hint-placeholder-count="3">
+        <button onClick="{{ t.on }}" style="{{ t.style }}" style-hover="color:var(--color-accent)">{{ t.l }}<span style="{{ t.badgeStyle }}">{{ t.badge }}</span></button>
+      </sc-for>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--color-neutral-600)">
+      <span style="width:8px;height:8px;border-radius:999px;background:var(--color-accent-2-500);flex:none"></span>
+      <span style="font-family:ui-monospace,monospace">daemon · localhost:4781</span>
+    </div>
+  </div>
+
+  <sc-if value="{{ isRuns }}" hint-placeholder-val="{{ true }}">
+    <div data-screen-label="Runs" style="max-width:1080px;width:100%;margin:0 auto;padding:var(--space-6) var(--space-4) var(--space-8);box-sizing:border-box">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:var(--space-4);margin-bottom:var(--space-5)">
+        <div>
+          <h1 style="margin:0 0 6px;font-size:34px">Runs</h1>
+          <p style="margin:0;font-size:14px;color:var(--color-neutral-700)">{{ runsSubtitle }}</p>
+        </div>
+        <button class="btn btn-primary" onClick="{{ goWorkflows }}">New run</button>
+      </div>
+      <sc-for list="{{ pendingBanners }}" as="p" hint-placeholder-count="1">
+        <div class="card elev-md" style="background:var(--color-accent-100);margin-bottom:var(--space-4);flex-direction:row;align-items:center;gap:var(--space-4);flex-wrap:wrap">
+          <div style="flex:1;min-width:260px">
+            <div class="card-kicker">Waiting for you · {{ p.runL }}</div>
+            <div style="font-weight:600;font-size:15px;margin-top:4px">{{ p.action }}</div>
+            <div style="font-size:13px;color:var(--color-neutral-700);margin-top:2px">{{ p.detail }}</div>
+          </div>
+          <span class="tag tag-accent">risk: {{ p.risk }}</span>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary" onClick="{{ p.deny }}">Deny</button>
+            <button class="btn btn-primary" onClick="{{ p.approve }}">Approve</button>
+            <button class="btn btn-ghost" onClick="{{ p.open }}">Open run</button>
+          </div>
+        </div>
+      </sc-for>
+      <table class="table">
+        <thead><tr><th>Run</th><th>Workflow</th><th>Status</th><th>Started</th><th>Duration</th><th>Agents</th><th>Cost</th></tr></thead>
+        <tbody>
+          <sc-for list="{{ runRows }}" as="r" hint-placeholder-count="5">
+            <tr onClick="{{ r.open }}" style="cursor:pointer">
+              <td style="font-family:ui-monospace,monospace;font-size:13px">{{ r.id }}</td>
+              <td style="font-weight:600">{{ r.wf }}</td>
+              <td><span class="tag" style="{{ r.tagStyle }}">{{ r.statusL }}</span></td>
+              <td style="color:var(--color-neutral-700)">{{ r.started }}</td>
+              <td style="font-family:ui-monospace,monospace;font-size:13px">{{ r.dur }}</td>
+              <td>{{ r.agents }}</td>
+              <td style="font-family:ui-monospace,monospace;font-size:13px">{{ r.cost }}</td>
+            </tr>
+          </sc-for>
+        </tbody>
+      </table>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isWorkflows }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Workflows" style="max-width:1080px;width:100%;margin:0 auto;padding:var(--space-6) var(--space-4) var(--space-8);box-sizing:border-box">
+      <h1 style="margin:0 0 6px;font-size:34px">Workflows</h1>
+      <p style="margin:0 0 var(--space-5);font-size:14px;color:var(--color-neutral-700)">Registered in <span style="font-family:ui-monospace,monospace">.weft/workflows/</span> — TypeScript in, typed values out. Every step returns a schema-validated value.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:var(--space-4)">
+        <sc-for list="{{ wfCards }}" as="w" hint-placeholder-count="3">
+          <div class="card elev-sm" style="gap:var(--space-2)">
+            <div class="card-kicker" style="font-family:ui-monospace,monospace;text-transform:none;letter-spacing:.03em">.weft/workflows/{{ w.file }}</div>
+            <div class="card-title" style="font-size:22px">{{ w.name }}</div>
+            <p class="card-body" style="font-size:14px">{{ w.desc }}</p>
+            <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:2px">
+              <sc-for list="{{ w.pipeline }}" as="ph" hint-placeholder-count="4">
+                <span style="display:inline-flex;align-items:center;gap:6px">
+                  <span style="width:22px;height:22px;border-radius:999px;background:var(--color-accent-2-200);color:var(--color-accent-2-800);display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:none">{{ ph.n }}</span>
+                  <span style="font-size:13px;font-weight:600">{{ ph.name }}</span>
+                  <span style="font-size:11px;color:var(--color-neutral-600)">{{ ph.meta }}</span>
+                  <span style="color:var(--color-neutral-400);font-size:12px">{{ ph.arrow }}</span>
+                </span>
+              </sc-for>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:4px">
+              <span style="font-size:12px;color:var(--color-neutral-600);font-family:ui-monospace,monospace">output {{ w.output }} · {{ w.lastRun }}</span>
+              <button class="btn btn-primary" onClick="{{ w.run }}">Run…</button>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Settings" style="max-width:820px;width:100%;margin:0 auto;padding:var(--space-6) var(--space-4) var(--space-8);box-sizing:border-box;display:flex;flex-direction:column;gap:var(--space-4)">
+      <h1 style="margin:0;font-size:34px">Settings</h1>
+      <div class="card elev-sm">
+        <div class="card-kicker">Approval policy</div>
+        <div class="card-title">What "ask" means, per risk tier</div>
+        <p class="card-body">A workflow may raise a tier, never lower it. Auto-approvals are still journaled as <span style="font-family:ui-monospace,monospace">answered_by: "policy"</span>.</p>
+        <div style="display:flex;flex-direction:column;gap:var(--space-2);margin-top:6px">
+          <sc-for list="{{ policyRows }}" as="t" hint-placeholder-count="4">
+            <div style="display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap">
+              <span class="tag tag-neutral" style="width:92px;justify-content:center">{{ t.tier }}</span>
+              <span style="flex:1;min-width:200px;font-family:ui-monospace,monospace;font-size:12px;color:var(--color-neutral-700)">{{ t.ops }}</span>
+              <div class="seg">
+                <label class="seg-opt"><input type="radio" name="{{ t.radioName }}" checked="{{ t.autoChecked }}" onChange="{{ t.setAuto }}"><span>auto</span></label>
+                <label class="seg-opt"><input type="radio" name="{{ t.radioName }}" checked="{{ t.askChecked }}" onChange="{{ t.setAsk }}"><span>ask</span></label>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      <div class="card elev-sm">
+        <div class="card-kicker">Budget &amp; limits</div>
+        <div class="card-title">Hard ceilings</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4);margin-top:6px">
+          <div class="field"><label>Default run budget</label><input class="input" value="{{ budgetVal }}" onChange="{{ setBudget }}"></div>
+          <div class="field"><label>Agent concurrency · {{ concLabel }}</label><input type="range" min="2" max="24" value="{{ concVal }}" onChange="{{ setConc }}" style="accent-color:var(--color-accent);margin-top:14px;width:100%"></div>
+        </div>
+        <p class="card-body" style="margin-top:4px">Budget exhaustion throws inside the next step; the pool is shared with child workflows. Per step: maxTurns 50 · 20 min wall clock.</p>
+      </div>
+      <div class="card elev-sm">
+        <div class="card-kicker">Providers</div>
+        <div class="card-title">One interface, two SDKs</div>
+        <div style="display:flex;flex-direction:column;gap:var(--space-2);margin-top:6px">
+          <sc-for list="{{ providerRows }}" as="p" hint-placeholder-count="2">
+            <div style="display:flex;align-items:center;gap:var(--space-3)">
+              <span style="width:80px;font-weight:600">{{ p.id }}</span>
+              <span style="flex:1;font-family:ui-monospace,monospace;font-size:12px;color:var(--color-neutral-700)">{{ p.model }}</span>
+              <span class="tag tag-accent-2">{{ p.status }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <p class="card-body" style="margin-top:4px">Credentials come from your Claude Code / Codex logins. Sandbox fetch allow-list: api.github.com · registry.npmjs.org.</p>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isRun }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Run detail" style="max-width:1240px;width:100%;margin:0 auto;padding:var(--space-4) var(--space-4) var(--space-8);box-sizing:border-box">
+      <button class="btn btn-ghost" onClick="{{ closeRun }}">← Runs</button>
+      <div style="display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap;margin:var(--space-2) 0 var(--space-1)">
+        <h1 style="margin:0;font-size:30px">{{ runWf }}</h1>
+        <span class="tag tag-neutral" style="font-family:ui-monospace,monospace">{{ runIdL }}</span>
+        <span class="tag" style="{{ runTagStyle }}">{{ runStatusL }}</span>
+        <span style="flex:1"></span>
+        <sc-if value="{{ canCancel }}" hint-placeholder-val="{{ false }}"><button class="btn btn-secondary" onClick="{{ cancelRun }}">Cancel</button></sc-if>
+        <sc-if value="{{ canResume }}" hint-placeholder-val="{{ false }}"><button class="btn btn-primary" onClick="{{ resumeRun }}">weft resume</button></sc-if>
+      </div>
+      <div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--color-neutral-700);margin-bottom:var(--space-4)">{{ runTicker }}</div>
+
+      <sc-if value="{{ hasPending }}" hint-placeholder-val="{{ false }}">
+        <div class="card elev-md" style="background:var(--color-accent-100);margin-bottom:var(--space-4)">
+          <div class="card-kicker">human.requested · {{ pendingId }}</div>
+          <div style="font-weight:700;font-size:17px;font-family:var(--font-heading)">{{ pendingAction }}</div>
+          <p class="card-body" style="font-size:14px">{{ pendingDetail }}</p>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span class="tag tag-accent">risk: {{ pendingRisk }}</span>
+            <span style="flex:1"></span>
+            <button class="btn btn-secondary" onClick="{{ pendingDeny }}">Deny</button>
+            <button class="btn btn-primary" onClick="{{ pendingApprove }}">Approve</button>
+          </div>
+        </div>
+      </sc-if>
+
+      <div style="display:grid;grid-template-columns:minmax(340px,5fr) minmax(420px,7fr);gap:var(--space-4);align-items:start">
+        <div class="card elev-sm" style="gap:var(--space-2)">
+          <div class="card-kicker">Live tree · click a step for weft explain</div>
+          <sc-for list="{{ treePhases }}" as="ph" hint-placeholder-count="3">
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600);font-weight:700;margin-top:6px">{{ ph.name }} <span style="font-weight:400;text-transform:none;letter-spacing:0">{{ ph.meta }}</span></div>
+              <sc-for list="{{ ph.steps }}" as="s" hint-placeholder-count="3">
+                <div onClick="{{ s.open }}" style="display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:999px;cursor:pointer" style-hover="background:var(--color-neutral-100)">
+                  <span style="{{ s.dotStyle }}"></span>
+                  <span style="width:46px;flex:none;font-family:ui-monospace,monospace;font-size:10px;text-transform:uppercase;color:var(--color-neutral-600)">{{ s.kind }}</span>
+                  <span style="flex:1;min-width:0;font-size:13.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.label }}</span>
+                  <span style="font-family:ui-monospace,monospace;font-size:11px;color:var(--color-accent-2-700)">{{ s.prov }}</span>
+                  <span style="font-family:ui-monospace,monospace;font-size:11px;color:var(--color-neutral-600)">{{ s.meta }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:var(--space-3);min-width:0">
+          <div class="seg" style="align-self:flex-start">
+            <label class="seg-opt"><input type="radio" name="dtab" checked="{{ tabJournal }}" onChange="{{ setTabJournal }}"><span>Journal</span></label>
+            <label class="seg-opt"><input type="radio" name="dtab" checked="{{ tabReport }}" onChange="{{ setTabReport }}"><span>Report</span></label>
+          </div>
+          <sc-if value="{{ tabJournal }}" hint-placeholder-val="{{ true }}">
+            <div ref="{{ consoleRef }}" style="background:var(--color-neutral-900);border-radius:var(--radius-lg);padding:var(--space-4);height:520px;overflow-y:auto;font-family:ui-monospace,monospace;font-size:12px;line-height:1.75;box-sizing:border-box">
+              <sc-for list="{{ journalLines }}" as="l" hint-placeholder-count="8">
+                <div style="display:flex;gap:12px">
+                  <span style="color:var(--color-neutral-500);flex:none">{{ l.t }}</span>
+                  <span style="{{ l.tagStyle }}">{{ l.tag }}</span>
+                  <span style="color:var(--color-neutral-200)">{{ l.text }}</span>
+                </div>
+              </sc-for>
+              <sc-if value="{{ isLive }}" hint-placeholder-val="{{ false }}">
+                <div style="color:var(--color-neutral-400);animation:weft-pulse 1.2s infinite">▋</div>
+              </sc-if>
+            </div>
+          </sc-if>
+          <sc-if value="{{ tabReport }}" hint-placeholder-val="{{ false }}">
+            <div class="card elev-sm" style="min-height:520px;box-sizing:border-box;gap:0">
+              <div class="card-kicker" style="margin-bottom:var(--space-2)">report.md · projection of the final step's output</div>
+              <sc-for list="{{ reportLines }}" as="r" hint-placeholder-count="4">
+                <div style="display:flex;gap:14px;font-size:14px;padding:10px 0;border-bottom:1px solid color-mix(in srgb, var(--color-text) 8%, transparent)">
+                  <span style="width:100px;flex:none;font-weight:700">{{ r.h }}</span>
+                  <span style="color:var(--color-neutral-800)">{{ r.text }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ hasDrawer }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;inset:0;z-index:40;background:color-mix(in srgb, var(--color-neutral-900) 40%, transparent)" onClick="{{ closeDrawer }}"></div>
+    <div class="card elev-lg" style="position:fixed;top:16px;right:16px;bottom:16px;width:min(460px,90vw);z-index:41;overflow-y:auto;gap:var(--space-3);box-sizing:border-box">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div class="card-kicker" style="flex:1;font-family:ui-monospace,monospace;text-transform:none">weft explain {{ drawerKey }}</div>
+        <button class="btn btn-ghost" onClick="{{ closeDrawer }}">Close</button>
+      </div>
+      <div class="card-title" style="font-size:20px">{{ drawerLabel }}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <span class="tag" style="{{ drawerTagStyle }}">{{ drawerStatus }}</span>
+        <span class="tag tag-neutral">{{ drawerKind }}</span>
+        <span class="tag tag-accent-2">{{ drawerProv }}</span>
+      </div>
+      <sc-for list="{{ drawerMeta }}" as="m" hint-placeholder-count="3">
+        <div style="display:flex;gap:12px;font-size:13px;border-bottom:1px solid color-mix(in srgb, var(--color-text) 8%, transparent);padding:6px 0">
+          <span style="width:90px;flex:none;color:var(--color-neutral-600)">{{ m.k }}</span>
+          <span style="font-family:ui-monospace,monospace;font-size:12px">{{ m.v }}</span>
+        </div>
+      </sc-for>
+      <div class="card-kicker" style="margin-top:4px">Input</div>
+      <pre style="background:var(--color-neutral-900);color:var(--color-neutral-200);padding:12px;border-radius:var(--radius-md);font-size:11.5px;overflow:auto;margin:0;white-space:pre-wrap">{{ drawerInput }}</pre>
+      <div class="card-kicker" style="margin-top:4px">Output · schema-validated</div>
+      <pre style="background:var(--color-neutral-900);color:var(--color-neutral-200);padding:12px;border-radius:var(--radius-md);font-size:11.5px;overflow:auto;margin:0;white-space:pre-wrap">{{ drawerOutput }}</pre>
+      <p class="card-body" style="font-size:12px">Deterministic replay: on <span style="font-family:ui-monospace,monospace">weft resume</span> this step's journaled value is returned without re-execution.</p>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ hasDialog }}" hint-placeholder-val="{{ false }}">
+    <div class="dialog-backdrop" style="z-index:50" onClick="{{ closeDialog }}">
+      <div class="card elev-lg" onClick="{{ stopClick }}" style="width:min(440px,92vw);gap:var(--space-3);box-sizing:border-box">
+        <div class="card-kicker" style="font-family:ui-monospace,monospace;text-transform:none">weft run {{ dialogFile }}</div>
+        <div class="card-title" style="font-size:22px">Run {{ dialogName }}</div>
+        <sc-for list="{{ dialogFields }}" as="f" hint-placeholder-count="2">
+          <div class="field"><label>{{ f.label }}</label><input class="input" value="{{ f.val }}" onChange="{{ f.set }}" style="font-family:ui-monospace,monospace"></div>
+        </sc-for>
+        <div class="field"><label>Budget ceiling</label><input class="input" value="{{ dialogBudget }}" onChange="{{ setDialogBudget }}" style="font-family:ui-monospace,monospace"></div>
+        <p class="card-body" style="font-size:12px">Inputs are validated against the workflow's zod schema before the run starts.</p>
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <button class="btn btn-secondary" onClick="{{ closeDialog }}">Cancel</button>
+          <button class="btn btn-primary" onClick="{{ startRun }}">Start run</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;simSpeed&quot;: {&quot;editor&quot;: &quot;range&quot;, &quot;default&quot;: 1.1, &quot;min&quot;: 0.3, &quot;max&quot;: 3, &quot;step&quot;: 0.1, &quot;unit&quot;: &quot;s&quot;, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Simulation&quot;}}">
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.consoleEl = React.createRef();
+    this.WF = {
+      triage: {
+        file: 'triage.ts', name: 'Issue triage', output: 'TriageReport', agents: 4,
+        desc: 'Fetch new issues, classify each with a parallel agent fan-out, apply labels behind a write gate, then summarize.',
+        inputs: [{ key: 'repo', label: 'Repository', def: 'acme/treel' }, { key: 'window', label: 'Window', def: '24h' }],
+        pipeline: [{ n: 1, name: 'gather', meta: 'task' }, { n: 2, name: 'classify', meta: '4× agent ∥' }, { n: 3, name: 'apply', meta: 'human → task' }, { n: 4, name: 'report', meta: 'agent' }],
+        lastRun: 'last run just now',
+        phases: [
+          { name: 'gather', meta: 'task', steps: [
+            { kind: 'task', label: 'fetch-issues', prov: 'deno', s: 2, d: 3, meta: '1.2s', dur: '1.2s', tokens: '—', input: '{ repo: "acme/treel", window: "24h" }', output: 'Issue[4] — #812, #814, #815, #816' } ] },
+          { name: 'classify', meta: 'fan-out ∥ 4', steps: [
+            { kind: 'agent', label: 'classify #812', prov: 'claude', model: 'sonnet', s: 5, d: 10, meta: '2,988 tok', dur: '38s', tokens: '2,988', input: '#812 "Export ignores locale" + repo context', output: '{ label: "feature-request", severity: null }' },
+            { kind: 'agent', label: 'classify #814', prov: 'claude', model: 'sonnet', s: 6, d: 9, meta: '3,412 tok', dur: '31s', tokens: '3,412', input: '#814 "Sort order flips on refresh" + repo context', output: '{ label: "bug", severity: "P2" }' },
+            { kind: 'agent', label: 'classify #815', prov: 'codex', model: 'gpt-5-codex', s: 7, d: 12, meta: '4,120 tok', dur: '52s', tokens: '4,120', input: '#815 "Crash in scheduler loop" + stack trace', output: '{ label: "bug", severity: "P1", related: ["#802"] }' },
+            { kind: 'agent', label: 'classify #816', prov: 'claude', model: 'sonnet', s: 8, d: 11, meta: '1,904 tok', dur: '24s', tokens: '1,904', input: '#816 "Typo in CLI docs"', output: '{ label: "docs", severity: null }' } ] },
+          { name: 'apply', meta: 'gated write', steps: [
+            { kind: 'human', label: 'approve: apply 4 labels', prov: 'policy', s: 14, d: 15, meta: 'auto', dur: '0s', tokens: '—', input: '{ action: "Apply 4 labels", risk: "write" }', output: '{ answer: "approve", answered_by: "policy" }' },
+            { kind: 'task', label: 'apply-labels', prov: 'deno', s: 15, d: 16, meta: '2.1s', dur: '2.1s', tokens: '—', input: 'LabelPlan[4]', output: '{ updated: 4 }' } ] },
+          { name: 'report', meta: 'agent', steps: [
+            { kind: 'agent', label: 'summarize', prov: 'claude', model: 'sonnet', s: 17, d: 18, meta: '2,240 tok', dur: '19s', tokens: '2,240', input: 'Classification[4] + apply result', output: 'TriageReport (markdown, 1.4 KB)' },
+            { kind: 'artifact', label: 'report.md', prov: '', s: 18, d: 19, meta: '1.4 KB', dur: '—', tokens: '—', input: 'TriageReport', output: '.weft/runs/<id>/artifacts/report.md' } ] }
+        ],
+        events: [
+          ['run', 'run.started · triage · inputs { repo: "acme/treel", window: "24h" }'],
+          ['phase', 'phase gather started'],
+          ['task', 'fetch-issues started · runtime deno · net: api.github.com'],
+          ['task', 'fetch-issues ok · 4 open issues · 1.2s → Issue[4]'],
+          ['phase', 'phase classify started · fan-out 4 agents · pool 4/8'],
+          ['agent', 'classify #812 · claude/sonnet · started'],
+          ['agent', 'classify #814 · claude/sonnet · started'],
+          ['agent', 'classify #815 · codex/gpt-5-codex · started'],
+          ['agent', 'classify #816 · claude/sonnet · started'],
+          ['agent', 'classify #814 done · { label: "bug", severity: "P2" } · 3,412 tok'],
+          ['agent', 'classify #812 done · { label: "feature-request" } · 2,988 tok'],
+          ['agent', 'classify #816 done · { label: "docs" } · 1,904 tok'],
+          ['agent', 'classify #815 done · { label: "bug", severity: "P1" } · 4,120 tok'],
+          ['phase', 'phase apply started'],
+          ['human', 'human.requested h-93 · "Apply 4 labels to acme/treel" · risk: write'],
+          ['human', 'human.answered h-93 · approve · answered_by: policy (write: auto)'],
+          ['task', 'apply-labels ok · 4 issues updated · 2.1s'],
+          ['phase', 'phase report started'],
+          ['agent', 'summarize done · claude/sonnet · TriageReport · 2,240 tok'],
+          ['artifact', 'artifact report.md written · 1.4 KB'],
+          ['run', 'run.succeeded · output TriageReport · $1.92 · 4m 02s']
+        ],
+        report: [
+          { h: 'Run', text: 'triage · succeeded in 4m 02s · $1.92 of $8.00' },
+          { h: 'Triaged', text: '4 issues — 2 bugs (1× P1), 1 feature request, 1 docs' },
+          { h: 'P1', text: '#815 crash in scheduler loop — likely regression of #802; flagged for on-call' },
+          { h: 'Applied', text: '4 labels via apply-labels, approved by policy (write: auto)' }
+        ],
+        finalDur: '4m 02s', finalCost: '$1.92'
+      },
+      release: {
+        file: 'release-notes.ts', name: 'Release notes', output: 'ReleaseNotes', agents: 1,
+        desc: 'Collect commits since the last tag, draft grouped notes with one agent, hold for human review, publish to GitHub.',
+        inputs: [{ key: 'tag', label: 'Tag', def: 'v0.9.0' }],
+        pipeline: [{ n: 1, name: 'collect', meta: 'task' }, { n: 2, name: 'draft', meta: 'agent' }, { n: 3, name: 'review', meta: 'human' }, { n: 4, name: 'publish', meta: 'task' }],
+        lastRun: 'last run 25 min ago',
+        phases: [
+          { name: 'collect', meta: 'task', steps: [
+            { kind: 'task', label: 'git-log', prov: 'deno', s: 1, d: 2, meta: '0.8s', dur: '0.8s', tokens: '—', input: '{ since: "v0.8.2" }', output: 'Commit[37]' } ] },
+          { name: 'draft', meta: 'agent', steps: [
+            { kind: 'agent', label: 'draft-notes', prov: 'claude', model: 'sonnet', s: 4, d: 5, meta: '9,730 tok', dur: '74s', tokens: '9,730', input: 'Commit[37] + previous notes as style reference', output: 'ReleaseNotes draft — 6 sections' } ] },
+          { name: 'review', meta: 'human gate', steps: [
+            { kind: 'human', label: 'approve: publish v0.9.0', prov: 'you', s: 7, d: 8, meta: '', dur: '—', tokens: '—', input: '{ action: "Publish release notes for v0.9.0", risk: "network" }', output: 'pending' } ] },
+          { name: 'publish', meta: 'task', steps: [
+            { kind: 'task', label: 'create-release', prov: 'deno', s: 9, d: 10, meta: '1.6s', dur: '1.6s', tokens: '—', input: 'ReleaseNotes + tag v0.9.0', output: '{ url: "github.com/acme/treel/releases/v0.9.0" }' },
+            { kind: 'artifact', label: 'notes.md', prov: '', s: 10, d: 11, meta: '4.2 KB', dur: '—', tokens: '—', input: 'ReleaseNotes', output: '.weft/runs/<id>/artifacts/notes.md' } ] }
+        ],
+        events: [
+          ['run', 'run.started · release-notes · inputs { tag: "v0.9.0" }'],
+          ['task', 'git-log started · runtime deno'],
+          ['task', 'git-log ok · 37 commits since v0.8.2 · 0.8s'],
+          ['phase', 'phase draft started'],
+          ['agent', 'draft-notes · claude/sonnet · started'],
+          ['agent', 'draft-notes done · 6 sections · 9,730 tok'],
+          ['phase', 'phase review started'],
+          ['human', 'human.requested h-88 · "Publish release notes for v0.9.0" · risk: network → blocking'],
+          ['human', 'human.answered h-88 · approve · answered_by: dima'],
+          ['task', 'create-release ok · GitHub release v0.9.0 · 1.6s'],
+          ['artifact', 'artifact notes.md written · 4.2 KB'],
+          ['run', 'run.succeeded · output ReleaseNotes · $0.84']
+        ],
+        gate: { cut: 8, id: 'h-88', action: 'Publish release notes for v0.9.0', detail: 'Draft has 6 sections covering 37 commits. Approving creates a public GitHub release.', risk: 'network' },
+        report: [
+          { h: 'Run', text: 'release-notes · succeeded · $0.84' },
+          { h: 'Draft', text: '6 sections over 37 commits since v0.8.2' },
+          { h: 'Published', text: 'github.com/acme/treel/releases/v0.9.0' },
+          { h: 'Review', text: 'held at review gate until approved by dima' }
+        ],
+        finalDur: '12m 40s', finalCost: '$0.84'
+      },
+      deps: {
+        file: 'deps-audit.ts', name: 'Dependency audit', output: 'AuditReport', agents: 3,
+        desc: 'Scan advisories, assess each with an agent, open one fix PR behind a write gate, verify with the test suite.',
+        inputs: [{ key: 'scope', label: 'Scope', def: 'prod deps only' }],
+        pipeline: [{ n: 1, name: 'scan', meta: 'task' }, { n: 2, name: 'assess', meta: '3× agent ∥' }, { n: 3, name: 'fix', meta: 'human → task' }, { n: 4, name: 'verify', meta: 'task' }],
+        lastRun: 'last run 2h ago',
+        phases: [
+          { name: 'scan', meta: 'task', steps: [
+            { kind: 'task', label: 'npm-audit', prov: 'deno', s: 1, d: 2, meta: '4.1s', dur: '4.1s', tokens: '—', input: '{ scope: "prod" }', output: 'Advisory[3]' } ] },
+          { name: 'assess', meta: 'fan-out ∥ 3', steps: [
+            { kind: 'agent', label: 'assess lodash', prov: 'claude', model: 'sonnet', s: 4, d: 4, meta: '2,015 tok', dur: '26s', tokens: '2,015', input: 'GHSA-4xc9 + lockfile context', output: '{ verdict: "patch", to: "4.17.23" }' },
+            { kind: 'agent', label: 'assess semver', prov: 'codex', model: 'gpt-5-codex', s: 5, d: 5, meta: '1,660 tok', dur: '21s', tokens: '1,660', input: 'GHSA-c2qf + usage scan', output: '{ verdict: "not-exploitable" }' },
+            { kind: 'agent', label: 'assess undici', prov: 'claude', model: 'sonnet', s: 6, d: 6, meta: '2,388 tok', dur: '30s', tokens: '2,388', input: 'GHSA-m4v8 + fetch call sites', output: '{ verdict: "upgrade-minor", to: "6.21.2" }' } ] },
+          { name: 'fix', meta: 'gated write', steps: [
+            { kind: 'human', label: 'approve: open fix PR', prov: 'policy', s: 8, d: 9, meta: 'auto', dur: '0s', tokens: '—', input: '{ action: "Open PR bumping 3 deps", risk: "write" }', output: '{ answer: "approve", answered_by: "policy" }' },
+            { kind: 'task', label: 'open-pr', prov: 'deno', s: 9, d: 10, meta: '3.0s', dur: '3.0s', tokens: '—', input: 'FixPlan[3]', output: '{ pr: "#1289" }' } ] },
+          { name: 'verify', meta: 'task', steps: [
+            { kind: 'task', label: 'run-tests', prov: 'deno', s: 11, d: 12, meta: '96s', dur: '96s', tokens: '—', input: '{ ref: "pr-1289" }', output: '{ passed: 412, failed: 0 }' } ] }
+        ],
+        events: [
+          ['run', 'run.started · deps-audit · inputs { scope: "prod" }'],
+          ['task', 'npm-audit started · runtime deno'],
+          ['task', 'npm-audit ok · 3 advisories · 4.1s'],
+          ['phase', 'phase assess started · fan-out 3 agents'],
+          ['agent', 'assess lodash done · patch → 4.17.23 · 2,015 tok'],
+          ['agent', 'assess semver done · not exploitable · 1,660 tok'],
+          ['agent', 'assess undici done · upgrade → 6.21.2 · 2,388 tok'],
+          ['phase', 'phase fix started'],
+          ['human', 'human.requested h-71 · "Open PR bumping 3 deps" · risk: write'],
+          ['human', 'human.answered h-71 · approve · answered_by: policy (write: auto)'],
+          ['task', 'open-pr ok · PR #1289 · 3.0s'],
+          ['task', 'run-tests started · 412 tests'],
+          ['task', 'run-tests ok · 412 passed, 0 failed · 96s'],
+          ['run', 'run.succeeded · output AuditReport · $0.61 · 3m 44s']
+        ],
+        report: [
+          { h: 'Run', text: 'deps-audit · succeeded in 3m 44s · $0.61' },
+          { h: 'Advisories', text: '3 found — 2 actionable, 1 not exploitable (semver, no vulnerable call path)' },
+          { h: 'Fix', text: 'PR #1289 bumps lodash → 4.17.23, undici → 6.21.2' },
+          { h: 'Verified', text: '412 tests passed on the PR branch' }
+        ],
+        finalDur: '3m 44s', finalCost: '$0.61'
+      }
+    };
+    this.state = {
+      view: 'runs', runId: null, tab: 'journal', drawer: null,
+      dialog: null, dialogVals: {}, dialogBudget: '$8.00',
+      policy: { read: 'auto', write: 'auto', network: 'ask', destructive: 'ask' },
+      budget: '$8.00', conc: 8, nextId: 48,
+      runs: [
+        { id: 'r-047', wf: 'triage', mode: 'live', tick: 1, started: 'just now' },
+        { id: 'r-046', wf: 'release', mode: 'gated', started: '25 min ago', dur: '—', cost: '$0.71' },
+        { id: 'r-045', wf: 'deps', mode: 'full', started: '2h ago' },
+        { id: 'r-044', wf: 'triage', mode: 'failed', cut: 9, started: 'yesterday', dur: '1m 12s', cost: '$0.48' },
+        { id: 'r-043', wf: 'release', mode: 'full', started: 'yesterday' },
+        { id: 'r-042', wf: 'triage', mode: 'cancelled', cut: 6, started: '2 days ago', dur: '41s', cost: '$0.11' }
+      ]
+    };
+  }
+  componentDidMount() {
+    this.timer = setInterval(() => {
+      this.setState(st => ({ runs: st.runs.map(r => {
+        if (r.mode !== 'live') return r;
+        const len = this.WF[r.wf].events.length;
+        return r.tick >= len + 1 ? r : Object.assign({}, r, { tick: r.tick + 1 });
+      }) }));
+    }, (this.props.simSpeed ?? 1.1) * 1000);
+  }
+  componentWillUnmount() { clearInterval(this.timer); }
+  componentDidUpdate() {
+    const el = this.consoleEl.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }
+  runStatus(r) {
+    const wf = this.WF[r.wf];
+    if (r.mode === 'full') return 'succeeded';
+    if (r.mode === 'failed') return 'failed';
+    if (r.mode === 'cancelled') return 'cancelled';
+    if (r.mode === 'denied') return 'failed';
+    if (r.mode === 'gated') return 'waiting on you';
+    return r.tick >= wf.events.length ? 'succeeded' : 'running';
+  }
+  revealed(r) {
+    const ev = this.WF[r.wf].events;
+    if (r.mode === 'full') return ev;
+    if (r.mode === 'live') return ev.slice(0, Math.min(r.tick, ev.length));
+    if (r.mode === 'gated') return ev.slice(0, this.WF[r.wf].gate.cut);
+    if (r.mode === 'denied') return ev.slice(0, this.WF[r.wf].gate.cut).concat([
+      ['human', 'human.answered ' + this.WF[r.wf].gate.id + ' · deny · answered_by: dima'],
+      ['error', 'run.failed · HumanDeniedError at publish · journal preserved']
+    ]);
+    if (r.mode === 'failed') return ev.slice(0, r.cut).concat([
+      ['error', 'classify #815 failed · provider timeout after 3 retries'],
+      ['error', 'run.failed · StepError at classify · resume with: weft resume ' + r.id]
+    ]);
+    if (r.mode === 'cancelled') return ev.slice(0, r.cut).concat([
+      ['error', 'run.cancelled · SIGINT · checkpoint kept — weft resume ' + r.id]
+    ]);
+    return ev;
+  }
+  tagStyleFor(status) {
+    if (status === 'running') return 'background:var(--color-accent-2-100);color:var(--color-accent-2-800);animation:weft-pulse 1.6s infinite';
+    if (status === 'waiting on you') return 'background:var(--color-accent-100);color:var(--color-accent-800)';
+    if (status === 'succeeded') return 'background:var(--color-accent-2-200);color:var(--color-accent-2-900)';
+    if (status === 'failed') return 'background:var(--color-accent-800);color:var(--color-bg)';
+    return 'background:var(--color-neutral-100);color:var(--color-neutral-800)';
+  }
+  fmtT(i) { const s = i * 13; return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); }
+  lineStyle(tag) {
+    const m = { run: 'color:var(--color-accent-200);font-weight:700', phase: 'color:var(--color-neutral-400)', task: 'color:var(--color-accent-2-300)', agent: 'color:var(--color-accent-300)', human: 'color:#f0c88a;font-weight:700', artifact: 'color:var(--color-accent-2-200)', error: 'color:#ff9d8a;font-weight:700' };
+    return (m[tag] || '') + ';flex:none;width:64px';
+  }
+  resolveGate(runId, answer) {
+    this.setState(st => ({ runs: st.runs.map(r => {
+      if (r.id !== runId || r.mode !== 'gated') return r;
+      const cut = this.WF[r.wf].gate.cut;
+      return answer === 'approve' ? Object.assign({}, r, { mode: 'live', tick: cut + 1 }) : Object.assign({}, r, { mode: 'denied' });
+    }) }));
+  }
+  renderVals() {
+    const st = this.state, WF = this.WF;
+    const view = st.view;
+    const runs = st.runs;
+    const waiting = runs.filter(r => this.runStatus(r) === 'waiting on you');
+    const running = runs.filter(r => this.runStatus(r) === 'running');
+    const nav = [['runs', 'Runs'], ['workflows', 'Workflows'], ['settings', 'Settings']];
+    const vals = {
+      navTabs: nav.map(([k, l]) => ({
+        l, on: () => this.setState({ view: k, runId: null }),
+        style: 'appearance:none;border:0;background:none;cursor:pointer;font:inherit;font-size:14px;padding:8px 12px;border-radius:999px;display:inline-flex;align-items:center;gap:6px;' + ((view === k || (k === 'runs' && view === 'run')) ? 'color:var(--color-accent);font-weight:700' : 'color:var(--color-text)'),
+        badge: k === 'runs' && waiting.length ? String(waiting.length) : '',
+        badgeStyle: k === 'runs' && waiting.length ? 'background:var(--color-accent);color:var(--color-bg);border-radius:999px;font-size:10px;font-weight:700;min-width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;padding:0 4px' : 'display:none'
+      })),
+      isRuns: view === 'runs', isWorkflows: view === 'workflows', isSettings: view === 'settings', isRun: view === 'run',
+      goWorkflows: () => this.setState({ view: 'workflows' }),
+      runsSubtitle: running.length + ' running · ' + waiting.length + ' waiting on you · journal at .weft/runs/',
+      pendingBanners: waiting.map(r => {
+        const g = WF[r.wf].gate;
+        return { runL: r.id + ' · ' + WF[r.wf].name, action: g.action, detail: g.detail, risk: g.risk,
+          approve: () => this.resolveGate(r.id, 'approve'), deny: () => this.resolveGate(r.id, 'deny'),
+          open: () => this.setState({ view: 'run', runId: r.id }) };
+      }),
+      runRows: runs.map(r => {
+        const status = this.runStatus(r), wf = WF[r.wf];
+        const rev = this.revealed(r).length;
+        const dur = status === 'running' ? this.fmtT(rev) : (r.mode === 'full' || r.mode === 'live' ? wf.finalDur : r.dur);
+        const cost = (r.mode === 'live' && status === 'running') ? '$' + (rev * 0.09).toFixed(2) : (r.mode === 'full' || r.mode === 'live' ? wf.finalCost : r.cost);
+        return { id: r.id, wf: wf.name, statusL: status, tagStyle: this.tagStyleFor(status), started: r.started, dur, agents: wf.agents, cost,
+          open: () => this.setState({ view: 'run', runId: r.id, tab: 'journal' }) };
+      }),
+      wfCards: Object.keys(WF).map(k => {
+        const w = WF[k];
+        return { file: w.file, name: w.name, desc: w.desc, output: w.output, lastRun: w.lastRun,
+          pipeline: w.pipeline.map((p, i) => Object.assign({}, p, { arrow: i < w.pipeline.length - 1 ? '→' : '' })),
+          run: () => this.setState({ dialog: k, dialogVals: Object.fromEntries(w.inputs.map(f => [f.key, f.def])), dialogBudget: st.budget }) };
+      }),
+      policyRows: [
+        ['read', 'fs.read · git.log · fetch(allow-list)'],
+        ['write', 'fs.write · labels · branch push'],
+        ['network', 'publish · deploy · external POST'],
+        ['destructive', 'delete · force-push · billing']
+      ].map(([tier, ops]) => ({
+        tier, ops, radioName: 'pol-' + tier,
+        autoChecked: st.policy[tier] === 'auto', askChecked: st.policy[tier] === 'ask',
+        setAuto: () => this.setState(s => ({ policy: Object.assign({}, s.policy, { [tier]: 'auto' }) })),
+        setAsk: () => this.setState(s => ({ policy: Object.assign({}, s.policy, { [tier]: 'ask' }) }))
+      })),
+      budgetVal: st.budget, setBudget: e => this.setState({ budget: e.target.value }),
+      concVal: st.conc, concLabel: st.conc + ' agents', setConc: e => this.setState({ conc: Number(e.target.value) }),
+      providerRows: [
+        { id: 'claude', model: 'sonnet (default) · opus for review steps', status: 'connected' },
+        { id: 'codex', model: 'gpt-5-codex · used where workflows pin it', status: 'connected' }
+      ],
+      hasDialog: !!st.dialog, stopClick: e => e.stopPropagation(),
+      closeDialog: () => this.setState({ dialog: null }),
+      hasDrawer: false, hasPending: false, canCancel: false, canResume: false,
+      isLive: false, tabJournal: st.tab === 'journal', tabReport: st.tab === 'report',
+      setTabJournal: () => this.setState({ tab: 'journal' }),
+      setTabReport: () => this.setState({ tab: 'report' }),
+      consoleRef: this.consoleEl
+    };
+    if (st.dialog) {
+      const w = WF[st.dialog];
+      vals.dialogFile = w.file; vals.dialogName = w.name;
+      vals.dialogFields = w.inputs.map(f => ({ label: f.label, val: st.dialogVals[f.key] || '',
+        set: e => this.setState(s => ({ dialogVals: Object.assign({}, s.dialogVals, { [f.key]: e.target.value }) })) }));
+      vals.dialogBudget = st.dialogBudget;
+      vals.setDialogBudget = e => this.setState({ dialogBudget: e.target.value });
+      vals.startRun = () => this.setState(s => {
+        const id = 'r-' + String(s.nextId).padStart(3, '0');
+        return { runs: [{ id, wf: s.dialog, mode: 'live', tick: 0, started: 'just now' }].concat(s.runs),
+          nextId: s.nextId + 1, dialog: null, view: 'run', runId: id, tab: 'journal' };
+      });
+    }
+    if (view === 'run' && st.runId) {
+      const r = runs.find(x => x.id === st.runId);
+      if (r) {
+        const wf = WF[r.wf];
+        const status = this.runStatus(r);
+        const rev = this.revealed(r);
+        const rIdx = (r.mode === 'full') ? wf.events.length : (r.mode === 'live' ? Math.min(r.tick, wf.events.length) : (r.mode === 'gated' ? wf.gate.cut : r.cut || wf.gate.cut));
+        vals.runWf = wf.name; vals.runIdL = r.id; vals.runStatusL = status;
+        vals.runTagStyle = this.tagStyleFor(status);
+        vals.canCancel = status === 'running';
+        vals.canResume = status === 'failed';
+        vals.cancelRun = () => this.setState(s => ({ runs: s.runs.map(x => x.id === r.id ? Object.assign({}, x, { mode: 'cancelled', cut: Math.min(x.tick || 5, wf.events.length) }) : x) }));
+        vals.resumeRun = () => this.setState(s => ({ runs: s.runs.map(x => x.id === r.id ? { id: x.id, wf: x.wf, mode: 'live', tick: (x.cut || 5), started: x.started } : x) }));
+        vals.isLive = status === 'running';
+        const cost = status === 'running' ? '$' + (rev.length * 0.09).toFixed(2) : (r.mode === 'full' || r.mode === 'live' ? wf.finalCost : r.cost || '—');
+        vals.runTicker = 'elapsed ' + this.fmtT(rev.length) + ' · ' + rev.length + ' journal events · ' + cost + ' of ' + st.budget + ' · pool ' + st.conc;
+        const gatePending = r.mode === 'gated';
+        vals.hasPending = gatePending;
+        if (gatePending) {
+          const g = wf.gate;
+          vals.pendingId = g.id; vals.pendingAction = g.action; vals.pendingDetail = g.detail; vals.pendingRisk = g.risk;
+          vals.pendingApprove = () => this.resolveGate(r.id, 'approve');
+          vals.pendingDeny = () => this.resolveGate(r.id, 'deny');
+        }
+        vals.treePhases = wf.phases.map((ph, pi) => ({ name: ph.name, meta: '· ' + ph.meta,
+          steps: ph.steps.map((s, si) => {
+            let sst = rIdx > s.d ? 'done' : (rIdx >= s.s ? 'running' : 'pending');
+            if ((r.mode === 'failed') && s.s <= rIdx && s.d >= rIdx) sst = 'error';
+            if (r.mode === 'denied' && s.output === 'pending') sst = 'error';
+            const dot = sst === 'done' ? 'background:var(--color-accent-2-500)' : sst === 'running' ? 'background:var(--color-accent);animation:weft-pulse 1.2s infinite' : sst === 'error' ? 'background:var(--color-accent-800)' : 'background:transparent;border:1.5px solid var(--color-neutral-400)';
+            return { kind: s.kind, label: s.label, prov: s.prov ? (s.prov + (s.model ? '/' + s.model : '')) : '',
+              meta: sst === 'done' ? s.meta : (sst === 'running' ? '…' : ''),
+              dotStyle: 'width:10px;height:10px;border-radius:999px;flex:none;box-sizing:border-box;' + dot,
+              open: () => this.setState({ drawer: { r: r.id, p: pi, s: si, status: sst } }) };
+          }) }));
+        vals.journalLines = rev.map((e, i) => ({ t: this.fmtT(i), tag: e[0], text: e[1], tagStyle: this.lineStyle(e[0]) }));
+        vals.reportLines = status === 'succeeded' ? wf.report : [{ h: '—', text: 'The report is written by the final step; this run hasn\u2019t produced it yet. The journal is the source of truth.' }];
+      }
+    }
+    if (st.drawer) {
+      const r = runs.find(x => x.id === st.drawer.r);
+      if (r) {
+        const wf = WF[r.wf];
+        const step = wf.phases[st.drawer.p].steps[st.drawer.s];
+        vals.hasDrawer = true;
+        vals.closeDrawer = () => this.setState({ drawer: null });
+        vals.drawerKey = r.id + ' ' + wf.phases[st.drawer.p].name + '/' + step.label;
+        vals.drawerLabel = step.label;
+        vals.drawerStatus = st.drawer.status;
+        vals.drawerTagStyle = this.tagStyleFor(st.drawer.status === 'done' ? 'succeeded' : st.drawer.status === 'error' ? 'failed' : st.drawer.status === 'running' ? 'running' : 'cancelled');
+        vals.drawerKind = step.kind;
+        vals.drawerProv = step.prov ? (step.prov + (step.model ? ' / ' + step.model : '')) : 'fs';
+        vals.drawerMeta = [
+          { k: 'duration', v: step.dur }, { k: 'tokens', v: step.tokens },
+          { k: 'retries', v: st.drawer.status === 'error' ? '3 of 3 · provider timeout' : '0' },
+          { k: 'journal', v: '.weft/runs/' + r.id + '/journal.jsonl' }
+        ];
+        vals.drawerInput = step.input;
+        vals.drawerOutput = st.drawer.status === 'done' ? step.output : st.drawer.status === 'error' ? 'StepError: provider timeout — value not journaled' : '— not yet produced —';
+      }
+    }
+    return vals;
+  }
+}
+</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 # @techery/weft
 
-weft CLI: run, resume, answer, check, explain, report, diff, ui, doctor.
+weft CLI: run, resume, answer, check, explain, report, diff, skill, ui, doctor.
 
 Part of [Weft](https://github.com/techery/weft) — durable, journaled, schema-validated multi-agent coding workflows
 in TypeScript. This package is not usually installed on its own; see the

@@ -1,0 +1,14 @@
+.card {
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+}
+.note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-neutral-700);
+  line-height: 1.5;
+}

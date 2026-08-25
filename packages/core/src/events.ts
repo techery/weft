@@ -115,6 +115,8 @@ export type JournalEvent =
       route?: { provider: string; model?: string; effort?: string };
       scope?: { paths: string[]; also?: string[]; mode: "warn" | "strict" };
       payload?: unknown;
+      /** JSON Schema for the validated output, when this step declared one. */
+      schema?: unknown;
       childRunId?: string;
     }
   // `usage` on a retry attempt is what the FAILED previous attempt spent — journaled

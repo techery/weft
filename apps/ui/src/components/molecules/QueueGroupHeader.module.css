@@ -1,0 +1,10 @@
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.note {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-500);
+}

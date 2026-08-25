@@ -2,6 +2,10 @@
  * `weft ui` — hand this repo's engine to the local daemon and print the URL. The daemon is
  * loaded through a computed specifier so `@techery/weft` never links it at build or test time:
  * the rich surface is optional, and a checkout without it still has every other command.
+ *
+ * What lands on `/` is the workflow manager (`apps/ui`, built into the daemon's `web/`).
+ * A checkout that has not built it gets the daemon's own built-in page instead, and this
+ * command says so rather than leaving you wondering which one you are looking at.
  */
 import type { Weft } from "@techery/weft-host";
 import { Command } from "commander";
@@ -19,6 +23,8 @@ interface DaemonModule {
 interface DaemonHandle {
   url?: string;
   port?: number;
+  /** `"manager"` when the built UI is being served on `/`, `"builtin"` when it is not. */
+  surface?: "manager" | "builtin";
 }
 
 interface UiOptions {
@@ -56,7 +62,17 @@ export function uiCommand(io: CliIo): Command {
 
       const handle = (await daemon.startDaemon({ weft, port })) ?? {};
       const url = handle.url ?? `http://localhost:${handle.port ?? port}`;
-      say(io, `${pc.bold("weft ui")}  ${pc.cyan(url)}`, pc.dim(`serving ${weft.runsDir} — Ctrl-C to stop`));
+      say(
+        io,
+        `${pc.bold("weft ui")}  ${pc.cyan(url)}`,
+        pc.dim(`serving ${weft.runsDir} — Ctrl-C to stop`),
+        handle.surface === "builtin"
+          ? pc.dim(
+              "the workflow manager is not built in this checkout — run `pnpm build` to serve it; " +
+                "showing the built-in page",
+            )
+          : pc.dim(`live journal page: ${url}/legacy`),
+      );
       // The server holds the event loop open; there is nothing to await here.
     });
 }

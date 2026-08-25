@@ -1,0 +1,21 @@
+.tab {
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  background: transparent;
+  color: var(--color-neutral-700);
+  text-decoration: none;
+}
+.on {
+  font-weight: 600;
+  background: var(--color-accent-200);
+  color: var(--color-accent-800);
+}

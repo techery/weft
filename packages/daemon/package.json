@@ -35,6 +35,7 @@
   "files": [
     "dist",
     "src",
+    "web",
     "README.md",
     "LICENSE"
   ],
@@ -51,12 +52,13 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist web"
   },
   "dependencies": {
     "@techery/weft-host": "workspace:*",
     "@techery/weft-core": "workspace:*",
     "hono": "^4.13.3",
-    "@hono/node-server": "^2.1.1"
+    "@hono/node-server": "^2.1.1",
+    "zod": "^4.4.3"
   }
 }

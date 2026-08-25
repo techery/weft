@@ -1,0 +1,19 @@
+.badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  border-radius: var(--radius-pill);
+  padding: 2px 9px;
+  white-space: nowrap;
+  flex: none;
+}
+.rounded {
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+/* Rail chips hold one short word; they keep it and let the label beside them give way. */
+.truncating {
+  flex: none;
+  padding: 1px 6px;
+}

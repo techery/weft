@@ -1,0 +1,1332 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="_ds/organic-f31772e2-eef1-43a3-aacb-3f9319af0042/styles.css">
+  <script src="_ds/organic-f31772e2-eef1-43a3-aacb-3f9319af0042/_ds_bundle.js"></script>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <style>
+    :root {
+      --color-bg: #f2ede3; --color-surface: #faf9f5; --color-text: #141413;
+      --color-accent: #cc785c; --color-accent-2: #5db8a6; --color-divider: #e2dbd1;
+      --color-neutral-100: #f5f0e8; --color-neutral-200: #efe9de; --color-neutral-300: #e6dfd8;
+      --color-neutral-400: #c4bdb2; --color-neutral-500: #8e8b82; --color-neutral-600: #6c6a64;
+      --color-neutral-700: #55534d; --color-neutral-800: #3d3d3a; --color-neutral-900: #181715;
+      --color-accent-100: #fbf1ec; --color-accent-200: #f6e2d8; --color-accent-300: #eac6b4;
+      --color-accent-400: #dd9b80; --color-accent-500: #cc785c; --color-accent-600: #b8664c;
+      --color-accent-700: #a9583e; --color-accent-800: #8a4630; --color-accent-900: #5e2f20;
+      --color-accent-2-100: #eaf6f3; --color-accent-2-200: #d7ece7; --color-accent-2-300: #a9dbd0;
+      --color-accent-2-400: #7fc9b9; --color-accent-2-500: #5db8a6; --color-accent-2-600: #489a8a;
+      --color-accent-2-700: #35786b; --color-accent-2-800: #275a51; --color-accent-2-900: #1a3c36;
+      --shadow-sm: 0 1px 3px rgba(20,20,19,.08); --shadow-md: 0 4px 14px rgba(20,20,19,.10);
+      --shadow-lg: 0 18px 44px rgba(20,20,19,.18);
+    }
+    body { margin: 0; background: #f2ede3; }
+    #dc-root { font-family: "Inter", -apple-system, system-ui, sans-serif; color: #141413; }
+    #dc-root input, #dc-root button, #dc-root label, #dc-root select, #dc-root textarea { font-family: inherit; }
+    h1, h2, h3 { font-family: "Source Serif 4", Georgia, serif; font-weight: 400; letter-spacing: -.02em; margin: 0; }
+    #dc-root .tag { border-radius: 999px !important; padding: 2px 10px !important; }
+    #dc-root .btn { letter-spacing: 0; font-weight: 500; }
+    #dc-root .input { background: #fffefb; border-color: #e6dfd8; }
+    #dc-root .input:focus { outline: none; border-color: #cc785c; box-shadow: 0 0 0 3px rgba(204,120,92,.15); }
+    a { color: #a9583e; } a:hover { color: #cc785c; }
+    ::selection { background: rgba(204,120,92,.22); }
+    @keyframes weft-pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+  </style>
+</helmet>
+<div style="height:100vh;display:flex;flex-direction:column;overflow:hidden;font-size:13px;background:#f2ede3">
+
+  <div style="flex:none;display:flex;align-items:center;gap:12px;padding:0 14px;height:44px;border-bottom:1px solid #e2dbd1;background:#faf9f5">
+    <div style="display:flex;align-items:center;gap:9px">
+      <span style="width:22px;height:22px;border-radius:7px;background:#cc785c;color:#faf9f5;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;flex:none">w</span>
+      <span style="font-weight:600;font-size:13.5px">weft</span>
+      <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;border:1px solid #e2dbd1;border-radius:999px;padding:2px 9px;white-space:nowrap">acme/treel</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:2px;margin-left:8px">
+      <sc-for list="{{ nav }}" as="n" hint-placeholder-count="3">
+        <button onClick="{{ n.go }}" style="{{ n.style }}">{{ n.label }}<span style="{{ n.badgeStyle }}">{{ n.badge }}</span></button>
+      </sc-for>
+    </div>
+    <span style="flex:1"></span>
+    <button onClick="{{ openLauncher }}" class="btn btn-primary" style="padding:6px 14px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Run a workflow ⌘K</button>
+    <span style="display:flex;align-items:center;gap:7px;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;white-space:nowrap">
+      <span style="width:7px;height:7px;border-radius:999px;background:#5db8a6"></span>daemon · localhost:4781
+    </span>
+  </div>
+
+  <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+
+  <sc-if value="{{ isQueue }}" hint-placeholder-val="{{ true }}">
+    <div data-screen-label="Queue" style="flex:1;min-height:0;overflow-y:auto">
+      <div style="max-width:1180px;margin:0 auto;padding:26px 26px 40px;box-sizing:border-box;display:flex;flex-direction:column;gap:18px">
+        <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+          <h1 style="font-size:34px">Queue</h1>
+          <span style="font-size:13.5px;color:#55534d">{{ queueSummary }}</span>
+          <span style="flex:1"></span>
+          <span style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6c6a64;font-weight:600">start</span>
+            <sc-for list="{{ pinned }}" as="p" hint-placeholder-count="4">
+              <button onClick="{{ p.run }}" class="btn btn-secondary" style="padding:5px 13px;font-size:12px;border-radius:999px;min-height:0;white-space:nowrap">{{ p.name }}</button>
+            </sc-for>
+          </span>
+        </div>
+        <sc-for list="{{ groups }}" as="g" hint-placeholder-count="3">
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="{{ g.labelStyle }}">{{ g.label }}</span>
+              <span style="flex:1;height:1px;background:#e2dbd1"></span>
+              <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#8e8b82">{{ g.note }}</span>
+            </div>
+            <sc-for list="{{ g.items }}" as="i" hint-placeholder-count="3">
+              <div style="{{ i.cardStyle }}">
+                <div style="display:flex;align-items:center;gap:16px">
+                  <span style="width:176px;flex:none;display:flex;flex-direction:column;gap:2px">
+                    <span style="display:flex;align-items:center;gap:8px">
+                      <span style="{{ i.dotStyle }}"></span>
+                      <span style="font-size:14px;font-weight:600">{{ i.wf }}</span>
+                    </span>
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#8e8b82">{{ i.sub }}</span>
+                  </span>
+                  <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+                    <span style="font-size:13.5px;font-weight:500">{{ i.ask }}</span>
+                    <span style="font-size:12px;color:#55534d;line-height:1.45">{{ i.detail }}</span>
+                  </span>
+                  <span style="{{ i.metaStyle }}">{{ i.meta }}</span>
+                  <button onClick="{{ i.open }}" class="{{ i.btnCls }}" style="padding:6px 14px;font-size:12px;border-radius:8px;min-height:0;flex:none;white-space:nowrap">{{ i.action }}</button>
+                </div>
+                <div style="display:flex;align-items:center;gap:0;flex-wrap:wrap;padding:8px 0 0;border-top:1px solid #efe9de">
+                  <span style="width:150px;flex:none;display:flex;align-items:center;gap:8px;padding-right:12px">
+                    <span style="flex:1;height:4px;border-radius:999px;background:#e6dfd8;overflow:hidden"><span style="{{ i.barStyle }}"></span></span>
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#6c6a64;white-space:nowrap">{{ i.phaseL }}</span>
+                  </span>
+                  <sc-for list="{{ i.facts }}" as="f" hint-placeholder-count="4">
+                    <span style="{{ f.cellStyle }}">
+                      <span style="font-size:8.5px;letter-spacing:.09em;text-transform:uppercase;color:#8e8b82">{{ f.k }}</span>
+                      <span style="{{ f.vStyle }}">{{ f.v }}</span>
+                    </span>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isWorkflows }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Workflows" style="flex:1;min-height:0;display:flex">
+      <div style="flex:1;min-width:0;overflow-y:auto;padding:24px 26px 40px;box-sizing:border-box;display:flex;flex-direction:column;gap:16px">
+        <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap">
+          <h1 style="font-size:34px">Workflows</h1>
+          <span style="flex:1"></span>
+          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64">.weft/workflows/ · 342 runs · 30d</span>
+        </div>
+        <div style="border:1px solid #e2dbd1;border-radius:12px;background:#faf9f5;overflow:hidden">
+          <div style="display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid #e2dbd1;background:#f5f0e8;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#6c6a64;font-weight:600">
+            <span style="flex:1;min-width:0;white-space:nowrap">Workflow</span>
+            <span style="width:96px;flex:none;white-space:nowrap">Shape</span>
+            <span style="width:62px;flex:none;white-space:nowrap">Last</span>
+            <span style="width:88px;flex:none;white-space:nowrap">Success</span>
+            <span style="width:52px;flex:none;text-align:right">p50</span>
+            <span style="width:54px;flex:none;text-align:right">Cost</span>
+          </div>
+          <sc-for list="{{ wfRows }}" as="w" hint-placeholder-count="6">
+            <div onClick="{{ w.select }}" style="{{ w.rowStyle }}" style-hover="background:#f5f0e8">
+              <span style="flex:1;min-width:0;display:flex;align-items:center;gap:9px;overflow:hidden">
+                <span style="{{ w.dotStyle }}"></span>
+                <span style="font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none;max-width:100%">{{ w.name }}</span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#8e8b82;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">{{ w.file }}</span>
+              </span>
+              <span style="width:96px;flex:none;display:flex;align-items:center;gap:3px">
+                <sc-for list="{{ w.shape }}" as="c" hint-placeholder-count="4">
+                  <span style="{{ c.style }}">{{ c.ch }}</span>
+                </sc-for>
+              </span>
+              <span style="width:62px;flex:none;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;color:#55534d;white-space:nowrap">{{ w.lastL }}</span>
+              <span style="width:88px;flex:none;display:flex;align-items:center;gap:8px">
+                <span style="flex:1;height:5px;border-radius:999px;background:#e6dfd8;overflow:hidden"><span style="{{ w.barStyle }}"></span></span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px">{{ w.ok }}</span>
+              </span>
+              <span style="width:52px;flex:none;text-align:right;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;white-space:nowrap">{{ w.p50 }}</span>
+              <span style="width:54px;flex:none;text-align:right;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;white-space:nowrap">{{ w.cost }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <p style="margin:0 2px;font-size:11.5px;color:#6c6a64">Shape: <span style="font-family:JetBrains Mono,ui-monospace,monospace">T</span> task · <span style="font-family:JetBrains Mono,ui-monospace,monospace">A</span> agent · <span style="font-family:JetBrains Mono,ui-monospace,monospace">H</span> human gate · <span style="font-family:JetBrains Mono,ui-monospace,monospace">∥</span> parallel.</p>
+      </div>
+      <div style="width:352px;flex:none;border-left:1px solid #e2dbd1;background:#faf9f5;padding:22px 20px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px;overflow-y:auto">
+        <div style="display:flex;flex-direction:column;gap:5px">
+          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#a9583e">.weft/workflows/{{ wfSel.file }}</span>
+          <h2 style="font-size:24px">{{ wfSel.name }}</h2>
+          <span style="font-size:12.5px;color:#55534d;line-height:1.5">{{ wfSel.desc }}</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button onClick="{{ runSelected }}" class="btn btn-primary" style="padding:6px 14px;font-size:12px;border-radius:8px;min-height:0">Run…</button>
+          <button class="btn btn-secondary" style="padding:6px 14px;font-size:12px;border-radius:8px;min-height:0">Source</button>
+          <button class="btn btn-ghost" style="padding:6px 10px;font-size:12px;border-radius:8px;min-height:0">Schedule</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:7px">
+          <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Last 14 runs</span>
+          <span style="display:flex;align-items:flex-end;gap:3px;height:52px">
+            <sc-for list="{{ wfSel.history }}" as="h" hint-placeholder-count="14">
+              <span style="{{ h.style }}"></span>
+            </sc-for>
+          </span>
+          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#6c6a64">{{ wfSel.historyNote }}</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1px">
+          <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600;margin-bottom:6px">Labels in code</span>
+          <sc-for list="{{ wfSel.phases }}" as="p" hint-placeholder-count="4">
+            <span style="display:flex;align-items:center;gap:9px;padding:6px 0;border-bottom:1px solid #efe9de">
+              <span style="{{ p.numStyle }}">{{ p.n }}</span>
+              <span style="font-size:12.5px;font-weight:500;flex:1">{{ p.name }}</span>
+              <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#6c6a64">{{ p.meta }}</span>
+            </span>
+          </sc-for>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;margin-top:auto">
+          <sc-for list="{{ wfSel.facts }}" as="f" hint-placeholder-count="4">
+            <span style="display:flex;gap:10px;font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;padding:4px 0;border-top:1px solid #efe9de">
+              <span style="flex:1;color:#6c6a64">{{ f.k }}</span><span>{{ f.v }}</span>
+            </span>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Settings" style="flex:1;min-height:0;overflow-y:auto">
+      <div style="max-width:760px;margin:0 auto;padding:26px 26px 40px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px">
+        <h1 style="font-size:34px">Settings</h1>
+        <div style="border:1px solid #e2dbd1;border-radius:12px;background:#faf9f5;padding:16px 18px;display:flex;flex-direction:column;gap:10px">
+          <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Approval policy</span>
+          <p style="margin:0;font-size:12.5px;color:#3d3d3a;line-height:1.5">A workflow may raise a tier, never lower it. Auto-approvals are journaled as <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px">answered_by: "policy"</span>.</p>
+          <sc-for list="{{ policyRows }}" as="t" hint-placeholder-count="4">
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-top:1px solid #efe9de;padding-top:9px">
+              <span style="font-size:12.5px;font-weight:600;width:88px;flex:none">{{ t.tier }}</span>
+              <span style="flex:1;min-width:180px;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;color:#55534d">{{ t.ops }}</span>
+              <span style="display:flex;gap:4px">
+                <button onClick="{{ t.setAuto }}" style="{{ t.autoStyle }}">auto</button>
+                <button onClick="{{ t.setAsk }}" style="{{ t.askStyle }}">ask</button>
+              </span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="border:1px solid #e2dbd1;border-radius:12px;background:#faf9f5;padding:16px 18px;display:flex;flex-direction:column;gap:12px">
+          <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Budget &amp; limits</span>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <label style="display:flex;flex-direction:column;gap:6px">
+              <span style="font-size:11px;color:#55534d">Default run budget</span>
+              <input class="input" style="border-radius:8px;min-height:34px;font-size:12.5px;font-family:JetBrains Mono,ui-monospace,monospace" value="{{ budget }}" onChange="{{ setBudget }}">
+            </label>
+            <label style="display:flex;flex-direction:column;gap:6px">
+              <span style="font-size:11px;color:#55534d">Agent concurrency · {{ concL }}</span>
+              <span style="display:flex;align-items:center;gap:9px;min-height:34px">
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#6c6a64">2</span>
+                <input type="range" min="2" max="24" value="{{ conc }}" onChange="{{ setConc }}" style="accent-color:#cc785c;flex:1">
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#6c6a64">24</span>
+              </span>
+            </label>
+          </div>
+          <p style="margin:0;font-size:12px;color:#55534d;line-height:1.5">Budget exhaustion throws inside the next step; the pool is shared with child workflows. Per step: maxTurns 50 · 20 min wall clock.</p>
+        </div>
+        <div style="border:1px solid #e2dbd1;border-radius:12px;background:#faf9f5;padding:16px 18px;display:flex;flex-direction:column;gap:10px">
+          <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Providers</span>
+          <sc-for list="{{ providers }}" as="p" hint-placeholder-count="2">
+            <div style="display:flex;align-items:center;gap:12px;border-top:1px solid #efe9de;padding-top:9px">
+              <span style="width:74px;font-weight:600;font-size:12.5px">{{ p.id }}</span>
+              <span style="flex:1;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;color:#55534d">{{ p.model }}</span>
+              <span class="tag tag-accent-2" style="font-size:10.5px">{{ p.status }}</span>
+            </div>
+          </sc-for>
+          <p style="margin:0;font-size:12px;color:#55534d">Credentials come from your Claude Code / Codex logins. Sandbox fetch allow-list: api.github.com · registry.npmjs.org.</p>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ isRun }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Run detail" style="flex:1;min-height:0;display:flex;flex-direction:column">
+      <div style="flex:none;padding:12px 22px;background:#faf9f5;border-bottom:1px solid #e2dbd1;display:flex;flex-direction:column;gap:0">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <button onClick="{{ backToQueue }}" class="btn btn-ghost" style="padding:4px 9px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">← Queue</button>
+          <h2 style="font-size:26px">{{ run.wf }}</h2>
+          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;border:1px solid #e2dbd1;border-radius:999px;padding:2px 9px;white-space:nowrap">{{ run.id }}</span>
+          <span style="{{ run.pillStyle }}">{{ run.pill }}</span>
+          <span style="flex:1"></span>
+          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;white-space:nowrap">{{ run.chrome }}</span>
+          <button class="btn btn-secondary" style="padding:5px 13px;font-size:11.5px;border-radius:8px;min-height:0;white-space:nowrap">Cancel run</button>
+        </div>
+      </div>
+      <div style="flex:none;display:flex;align-items:stretch;gap:2px;padding:0 18px;background:#faf9f5;border-bottom:1px solid #e2dbd1">
+        <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="5">
+          <button onClick="{{ t.go }}" style="{{ t.style }}">{{ t.label }}<span style="{{ t.badgeStyle }}">{{ t.badge }}</span></button>
+        </sc-for>
+      </div>
+      <div style="flex:1;min-height:0;display:flex">
+        <sc-if value="{{ showRail }}" hint-placeholder-val="{{ true }}">
+          <div style="width:330px;flex:none;border-right:1px solid #e2dbd1;background:#faf9f5;padding:12px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:2px;overflow-y:auto">
+            <span style="font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:#8e8b82;font-weight:600;padding:0 9px 6px">{{ run.railTitle }}</span>
+            <sc-for list="{{ run.rail }}" as="g" hint-placeholder-count="4">
+              <div style="display:flex;flex-direction:column;gap:1px">
+                <span style="display:flex;align-items:baseline;gap:7px;padding:9px 9px 4px">
+                  <span style="font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#55534d;font-weight:600">{{ g.name }}</span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:9.5px;color:#8e8b82">{{ g.meta }}</span>
+                </span>
+                <sc-for list="{{ g.steps }}" as="st" hint-placeholder-count="3">
+                  <div onClick="{{ st.select }}" style="{{ st.rowStyle }}" style-hover="background:#f5f0e8">
+                    <span style="{{ st.dotStyle }}"></span>
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:9.5px;text-transform:uppercase;letter-spacing:.06em;color:#8e8b82;width:44px;flex:none">{{ st.kind }}</span>
+                    <span style="{{ st.labelStyle }}">{{ st.label }}</span>
+                    <sc-if value="{{ st.hasArt }}" hint-placeholder-val="{{ false }}">
+                      <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:9px;border-radius:999px;padding:1px 6px;background:#d7ece7;color:#275a51;flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ st.art }}</span>
+                    </sc-if>
+                    <span style="{{ st.metaStyle }}">{{ st.meta }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-for>
+            <span style="margin-top:auto;font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82;padding:9px 9px 0;border-top:1px solid #efe9de;line-height:1.5">One linear list, appended as steps start. Several steps can be active at once under different labels.</span>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ tabSteps }}" hint-placeholder-val="{{ true }}">
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;padding:16px 22px 20px;box-sizing:border-box;gap:13px;overflow-y:auto">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span style="font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:#8e8b82;white-space:nowrap">active now</span>
+              <sc-for list="{{ run.active }}" as="a" hint-placeholder-count="3">
+                <button onClick="{{ a.select }}" style="{{ a.style }}">
+                  <span style="width:6px;height:6px;border-radius:999px;background:#cc785c;flex:none"></span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:9.5px;color:#8a4630">{{ a.label }}</span>
+                  <span style="font-size:11.5px;font-weight:500">{{ a.name }}</span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#6c6a64">{{ a.meta }}</span>
+                </button>
+              </sc-for>
+            </div>
+            <div style="display:flex;align-items:center;gap:11px;flex-wrap:wrap">
+              <h2 style="font-size:22px">{{ step.title }}</h2>
+              <span style="{{ step.pillStyle }}">{{ step.pill }}</span>
+              <span style="flex:1"></span>
+              <button class="btn btn-secondary" style="padding:5px 11px;font-size:11.5px;border-radius:8px;min-height:0;white-space:nowrap">{{ step.action }}</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px">
+              <span style="font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Overview</span>
+              <span style="flex:1;height:1px;background:#e2dbd1"></span>
+              <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82;white-space:nowrap">{{ step.idL }}</span>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px 0;padding:11px 0 12px;border-top:1px solid #efe9de;border-bottom:1px solid #efe9de">
+              <sc-for list="{{ step.cells }}" as="c" hint-placeholder-count="5">
+                <span style="{{ c.style }}">
+                  <span style="font-size:8.5px;letter-spacing:.09em;text-transform:uppercase;color:#8e8b82">{{ c.k }}</span>
+                  <span style="{{ c.vStyle }}">{{ c.v }}</span>
+                </span>
+              </sc-for>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <div style="display:flex;align-items:center;gap:9px">
+                <span style="font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Input</span>
+                <span style="flex:1;height:1px;background:#e2dbd1"></span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82">raw JSON</span>
+              </div>
+              <div style="border:1px solid #e2dbd1;border-radius:10px;background:#faf9f5;overflow:hidden;display:flex;flex-direction:column">
+                <sc-for list="{{ step.input }}" as="f" hint-placeholder-count="4">
+                  <div style="{{ f.rowStyle }}">
+                    <span style="font-size:11px;color:#6c6a64;width:88px;flex:none;padding-top:1px">{{ f.k }}</span>
+                    <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:5px">
+                      <sc-if value="{{ f.isRecord }}" hint-placeholder-val="{{ false }}">
+                        <span style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;color:#a9583e">{{ f.ref }}</span>
+                          <span style="font-size:12.5px;font-weight:600">{{ f.title }}</span>
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82">{{ f.sub }}</span>
+                        </span>
+                      </sc-if>
+                      <sc-if value="{{ f.isFile }}" hint-placeholder-val="{{ false }}">
+                        <span style="display:flex;align-items:center;gap:9px;border:1px solid #e6dfd8;border-radius:8px;background:#fffefb;padding:5px 10px;width:fit-content;max-width:100%">
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;white-space:nowrap">{{ f.title }}</span>
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82;white-space:nowrap">{{ f.sub }}</span>
+                        </span>
+                      </sc-if>
+                      <sc-if value="{{ f.isText }}" hint-placeholder-val="{{ true }}">
+                        <span style="{{ f.textStyle }}">{{ f.title }}</span>
+                      </sc-if>
+                      <sc-if value="{{ f.hasPills }}" hint-placeholder-val="{{ false }}">
+                        <span style="display:flex;gap:5px;flex-wrap:wrap">
+                          <sc-for list="{{ f.pills }}" as="p" hint-placeholder-count="3">
+                            <span style="{{ p.style }}">{{ p.t }}</span>
+                          </sc-for>
+                        </span>
+                      </sc-if>
+                    </span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px">
+              <span style="font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Output</span>
+              <span style="flex:1;height:1px;background:#e2dbd1"></span>
+            </div>
+            <div style="min-height:130px;border-radius:12px;background:#181715;padding:12px 14px;box-sizing:border-box;display:flex;flex-direction:column;gap:3px">
+              <span style="display:flex;align-items:center;gap:9px;padding-bottom:5px">
+                <span style="font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:#a09d96;font-weight:600">{{ step.outTitle }}</span>
+                <span style="flex:1"></span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#a09d96">{{ step.outNote }}</span>
+              </span>
+              <sc-for list="{{ step.out }}" as="o" hint-placeholder-count="3">
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;line-height:1.75;color:#efe9de">{{ o.t }}</span>
+              </sc-for>
+              <sc-if value="{{ step.streaming }}" hint-placeholder-val="{{ false }}">
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;color:#dd9b80;animation:weft-pulse 1.2s infinite">▋</span>
+              </sc-if>
+            </div>
+            <sc-if value="{{ step.hasTools }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:5px">
+                <div style="display:flex;align-items:center;gap:9px">
+                  <span style="font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">{{ step.toolsTitle }}</span>
+                  <span style="flex:1;height:1px;background:#e2dbd1"></span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82">sandboxed · fs read-only, no network</span>
+                </div>
+                <sc-for list="{{ step.tools }}" as="t" hint-placeholder-count="3">
+                  <span style="{{ t.rowStyle }}">
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:9.5px;text-transform:uppercase;color:#8e8b82;width:38px;flex:none">tool</span>
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ t.cmd }}</span>
+                    <span style="{{ t.metaStyle }}">{{ t.meta }}</span>
+                  </span>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ step.hasNext }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 13px;border-radius:12px;background:#faf9f5;border:1px dashed #dd9b80;flex-wrap:wrap">
+                <span style="font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:#a9583e;font-weight:600;white-space:nowrap">{{ step.nextK }}</span>
+                <span style="font-size:12.5px;color:#3d3d3a;flex:1;min-width:200px">{{ step.nextV }}</span>
+                <sc-if value="{{ step.nextGoQ }}" hint-placeholder-val="{{ false }}">
+                  <button onClick="{{ goQuestion }}" class="btn btn-primary" style="padding:5px 13px;font-size:11.5px;border-radius:8px;min-height:0;white-space:nowrap">Answer now</button>
+                </sc-if>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ showGatePane }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0">
+            <div style="flex:1;min-height:0;overflow-y:auto;padding:16px 22px 20px;box-sizing:border-box;display:flex;flex-direction:column;gap:13px">
+              <div style="display:flex;align-items:center;gap:11px;flex-wrap:wrap">
+                <h2 style="font-size:22px">{{ step.title }}</h2>
+                <span style="{{ step.pillStyle }}">{{ step.pill }}</span>
+                <span style="flex:1"></span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82;white-space:nowrap">{{ step.idL }}</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:7px;padding-top:11px;border-top:1px solid #efe9de">
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#a9583e">human.requested · {{ gate.id }}</span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:9.5px;border-radius:999px;padding:2px 9px;background:#f6e2d8;color:#8a4630;white-space:nowrap">risk: {{ gate.risk }}</span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#6c6a64">{{ gate.blocks }}</span>
+                </div>
+                <h3 style="font-size:20px">{{ gate.title }}</h3>
+                <span style="font-size:13px;color:#3d3d3a;line-height:1.5;max-width:660px;text-wrap:pretty">{{ gate.detail }}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:9px;padding-top:2px">
+                <span style="font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Answers</span>
+                <span style="flex:1;height:1px;background:#e2dbd1"></span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82;white-space:nowrap">journaled verbatim · passed to the next step</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:9px">
+                <sc-for list="{{ gate.questions }}" as="q" hint-placeholder-count="5">
+                  <div style="display:flex;align-items:flex-start;gap:12px">
+                    <span style="width:104px;flex:none;padding-top:6px;font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#55534d;white-space:nowrap">{{ q.k }}<span style="color:#cc785c">{{ q.req }}</span></span>
+                    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:5px">
+                      <sc-if value="{{ q.isCards }}" hint-placeholder-val="{{ false }}">
+                        <span style="display:flex;gap:8px;flex-wrap:wrap">
+                          <sc-for list="{{ q.opts }}" as="o" hint-placeholder-count="3">
+                            <button onClick="{{ o.pick }}" style="{{ o.cardStyle }}">
+                              <span style="display:flex;align-items:center;gap:7px">
+                                <span style="{{ o.dotStyle }}"></span>
+                                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;font-weight:600;white-space:nowrap">{{ o.label }}</span>
+                                <span style="flex:1"></span>
+                                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:9.5px;color:#8a4630;white-space:nowrap">{{ o.meta }}</span>
+                              </span>
+                              <span style="font-size:11px;color:#55534d;line-height:1.4;text-align:left">{{ o.desc }}</span>
+                            </button>
+                          </sc-for>
+                        </span>
+                      </sc-if>
+                      <sc-if value="{{ q.isChoice }}" hint-placeholder-val="{{ false }}">
+                        <span style="display:flex;gap:5px;flex-wrap:wrap">
+                          <sc-for list="{{ q.opts }}" as="o" hint-placeholder-count="3">
+                            <button onClick="{{ o.pick }}" style="{{ o.pillStyle }}">{{ o.tick }}{{ o.label }}</button>
+                          </sc-for>
+                        </span>
+                      </sc-if>
+                      <sc-if value="{{ q.isSelect }}" hint-placeholder-val="{{ false }}">
+                        <select class="input" style="border-radius:8px;min-height:32px;font-size:12px;font-family:JetBrains Mono,ui-monospace,monospace;width:fit-content;min-width:210px" value="{{ q.val }}" onChange="{{ q.set }}">
+                          <sc-for list="{{ q.opts }}" as="o" hint-placeholder-count="4">
+                            <option value="{{ o.label }}">{{ o.label }}</option>
+                          </sc-for>
+                        </select>
+                      </sc-if>
+                      <sc-if value="{{ q.isFile }}" hint-placeholder-val="{{ false }}">
+                        <span style="display:flex;align-items:center;gap:9px;border:1px dashed #dd9b80;border-radius:8px;background:#fdf6f2;padding:6px 10px">
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;flex:1;min-width:0">{{ q.val }}</span>
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#a9583e;white-space:nowrap">drop a file or ⌘O</span>
+                        </span>
+                      </sc-if>
+                      <sc-if value="{{ q.isToggle }}" hint-placeholder-val="{{ false }}">
+                        <button onClick="{{ q.toggle }}" style="appearance:none;border:0;background:none;padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:9px;width:fit-content">
+                          <span style="{{ q.trackStyle }}"><span style="width:13px;height:13px;border-radius:999px;background:#faf9f5;display:block"></span></span>
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#55534d">{{ q.valL }}</span>
+                        </button>
+                      </sc-if>
+                      <sc-if value="{{ q.isNumber }}" hint-placeholder-val="{{ false }}">
+                        <input class="input" type="number" min="1" max="5" style="border-radius:8px;min-height:32px;font-size:12px;width:70px;font-family:JetBrains Mono,ui-monospace,monospace" value="{{ q.val }}" onChange="{{ q.set }}">
+                      </sc-if>
+                      <sc-if value="{{ q.isNote }}" hint-placeholder-val="{{ false }}">
+                        <textarea class="input" rows="2" style="border-radius:8px;font-size:12px;resize:vertical;width:100%;max-width:520px;box-sizing:border-box" value="{{ q.val }}" onChange="{{ q.set }}" placeholder="optional context for the report agent — journaled verbatim"></textarea>
+                      </sc-if>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="flex:none;border-top:1px solid #e2dbd1;background:#faf9f5;padding:10px 22px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+              <span style="display:flex;flex-direction:column;gap:1px;flex:1;min-width:220px">
+                <span style="font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#a9583e;font-weight:600">payload → next step</span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#55534d;line-height:1.5;overflow-wrap:anywhere">{{ gate.payload }}</span>
+              </span>
+              <button onClick="{{ denyGate }}" class="btn btn-secondary" style="padding:6px 14px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Deny &amp; stop</button>
+              <button onClick="{{ submitGate }}" class="btn btn-primary" style="padding:6px 16px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">{{ gate.submitL }}</button>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ tabFindings }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1;min-width:0;overflow-y:auto;padding:18px 22px 24px;box-sizing:border-box;display:flex;flex-direction:column;gap:12px">
+            <div style="display:flex;align-items:center;gap:9px">
+              <h2 style="font-size:22px">Findings</h2>
+              <span style="flex:1;height:1px;background:#e2dbd1"></span>
+              <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82">each finding opened one step — the code decided how many and when</span>
+            </div>
+            <sc-for list="{{ run.findings }}" as="f" hint-placeholder-count="2">
+              <div style="{{ f.cardStyle }}">
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#a9583e;white-space:nowrap">{{ f.id }}</span>
+                  <span style="font-size:13px;font-weight:600;flex:1;min-width:0">{{ f.msg }}</span>
+                  <span style="{{ f.sevStyle }}">{{ f.sev }}</span>
+                </div>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#55534d">{{ f.loc }}</span>
+                <div style="display:flex;align-items:center;gap:10px;padding-top:7px;border-top:1px solid #efe9de;flex-wrap:wrap">
+                  <span style="font-size:8.5px;letter-spacing:.09em;text-transform:uppercase;color:#8e8b82;white-space:nowrap">opened step</span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;white-space:nowrap">{{ f.stepL }}</span>
+                  <span style="{{ f.chipStyle }}">{{ f.chip }}</span>
+                  <span style="flex:1"></span>
+                  <button onClick="{{ f.open }}" class="btn btn-secondary" style="padding:4px 11px;font-size:11.5px;border-radius:8px;min-height:0;white-space:nowrap">Open step</button>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ tabArtifacts }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1;min-width:0;display:flex;min-height:0">
+            <div style="width:318px;flex:none;border-right:1px solid #e2dbd1;background:#faf9f5;padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:5px;overflow-y:auto">
+              <span style="font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:#8e8b82;font-weight:600;padding:0 8px 4px">{{ run.artTitle }}</span>
+              <sc-for list="{{ run.artifacts }}" as="a" hint-placeholder-count="6">
+                <button onClick="{{ a.select }}" style="{{ a.rowStyle }}">
+                  <span style="{{ a.typeStyle }}">{{ a.t }}</span>
+                  <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;text-align:left">
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ a.f }}</span>
+                    <span style="font-size:10.5px;color:#6c6a64;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">from {{ a.step }} · {{ a.ago }}</span>
+                  </span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#8e8b82;flex:none">{{ a.sz }}</span>
+                </button>
+              </sc-for>
+              <span style="margin-top:auto;font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82;padding:8px;border-top:1px solid #efe9de;line-height:1.5">every artifact is journaled with the step that produced it</span>
+            </div>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0">
+              <div style="flex:none;display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid #e2dbd1;background:#faf9f5;flex-wrap:wrap">
+                <span style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:180px">
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:13px;font-weight:600">{{ art.f }}</span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#6c6a64">{{ art.path }}</span>
+                </span>
+                <button class="btn btn-ghost" style="padding:5px 11px;font-size:11.5px;border-radius:8px;min-height:0">Raw</button>
+                <button class="btn btn-secondary" style="padding:5px 11px;font-size:11.5px;border-radius:8px;min-height:0;white-space:nowrap">Diff vs previous</button>
+                <button class="btn btn-primary" style="padding:5px 13px;font-size:11.5px;border-radius:8px;min-height:0">Download</button>
+              </div>
+              <div style="flex:1;min-height:0;overflow-y:auto;padding:22px 26px;box-sizing:border-box;background:#fdfbf7">
+                <div style="max-width:640px;display:flex;flex-direction:column;gap:12px">
+                  <h2 style="font-size:28px">{{ art.title }}</h2>
+                  <sc-for list="{{ art.body }}" as="b" hint-placeholder-count="3">
+                    <span style="{{ b.style }}">{{ b.t }}</span>
+                  </sc-for>
+                  <sc-if value="{{ art.hasRows }}" hint-placeholder-val="{{ false }}">
+                    <span style="display:flex;flex-direction:column;gap:6px;padding:14px 16px;border-radius:12px;background:#f5f0e8">
+                      <sc-for list="{{ art.rows }}" as="r" hint-placeholder-count="4">
+                        <span style="display:flex;gap:10px;font-size:12.5px">
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;color:#a9583e;width:56px;flex:none">{{ r.k }}</span>
+                          <span style="flex:1">{{ r.t }}</span>
+                          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64;flex:none">{{ r.v }}</span>
+                        </span>
+                      </sc-for>
+                    </span>
+                  </sc-if>
+                </div>
+              </div>
+              <div style="flex:none;display:flex;gap:0;padding:10px 20px;border-top:1px solid #e2dbd1;background:#faf9f5;flex-wrap:wrap">
+                <sc-for list="{{ art.meta }}" as="m" hint-placeholder-count="4">
+                  <span style="{{ m.style }}">
+                    <span style="font-size:8.5px;letter-spacing:.09em;text-transform:uppercase;color:#8e8b82">{{ m.k }}</span>
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;white-space:nowrap">{{ m.v }}</span>
+                  </span>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ tabChanges }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1;min-width:0;display:flex;min-height:0">
+            <div style="width:280px;flex:none;border-right:1px solid #e2dbd1;background:#faf9f5;display:flex;flex-direction:column;min-height:0">
+              <div style="flex:none;display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid #efe9de">
+                <span style="font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:#8e8b82;font-weight:600">Changes</span>
+                <span style="flex:1"></span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#35786b">+142</span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#a9583e">−38</span>
+              </div>
+              <div style="flex:1;min-height:0;overflow-y:auto;padding:6px 0 10px;display:flex;flex-direction:column;gap:0">
+                <span style="display:flex;align-items:center;gap:6px;padding:4px 10px 4px 8px">
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:9px;color:#8e8b82;width:10px">▾</span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;font-weight:500;color:#3d3d3a">weft/{{ run.id }}</span>
+                  <span style="flex:1"></span>
+                  <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:9.5px;color:#8e8b82">{{ run.fileCount }}</span>
+                </span>
+                <sc-for list="{{ run.tree }}" as="n" hint-placeholder-count="7">
+                  <button onClick="{{ n.select }}" style="{{ n.rowStyle }}">
+                    <span style="{{ n.twistyStyle }}">{{ n.twisty }}</span>
+                    <span style="{{ n.iconStyle }}">{{ n.icon }}</span>
+                    <span style="{{ n.nameStyle }}">{{ n.name }}</span>
+                    <sc-if value="{{ n.isFile }}" hint-placeholder-val="{{ false }}">
+                      <span style="{{ n.statStyle }}">{{ n.stat }}</span>
+                    </sc-if>
+                  </button>
+                </sc-for>
+              </div>
+              <div style="flex:none;display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-top:1px solid #efe9de">
+                <span style="font-size:11px;color:#55534d;line-height:1.45">Staged behind the write gate. Nothing is committed until you approve.</span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82">branch weft/{{ run.id }} · not pushed</span>
+              </div>
+            </div>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;min-height:0">
+              <div style="flex:none;display:flex;align-items:center;gap:12px;padding:11px 20px;border-bottom:1px solid #e2dbd1;background:#faf9f5">
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:12.5px;font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ file.p }}</span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#35786b">{{ file.a }}</span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#a9583e">{{ file.d }}</span>
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#6c6a64;white-space:nowrap">unified · 1 hunk</span>
+              </div>
+              <div style="flex:1;min-height:0;overflow:auto;background:#181715;padding:12px 0;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;line-height:1.8">
+                <span style="display:flex;gap:10px;padding:0 16px 8px;color:#a09d96;font-size:10.5px">{{ file.hunk }}</span>
+                <sc-for list="{{ file.lines }}" as="l" hint-placeholder-count="14">
+                  <span style="{{ l.rowStyle }}">
+                    <span style="width:40px;flex:none;text-align:right;color:#5c584f;padding-right:10px">{{ l.ln }}</span>
+                    <span style="width:40px;flex:none;text-align:right;color:#5c584f;padding-right:14px">{{ l.rn }}</span>
+                    <span style="{{ l.textStyle }}">{{ l.t }}</span>
+                  </span>
+                </sc-for>
+              </div>
+              <div style="flex:none;display:flex;align-items:center;gap:12px;padding:10px 20px;border-top:1px solid #e2dbd1;background:#faf9f5;flex-wrap:wrap">
+                <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#6c6a64;flex:1;min-width:180px">verify runs the test suite before the branch is pushed</span>
+                <button class="btn btn-ghost" style="padding:6px 12px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Open in editor</button>
+                <button class="btn btn-secondary" style="padding:6px 14px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Request changes</button>
+                <button class="btn btn-primary" style="padding:6px 16px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Approve &amp; commit</button>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ tabJournal }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1;min-width:0;background:#181715;padding:14px 18px;box-sizing:border-box;overflow-y:auto;display:flex;flex-direction:column;gap:2px">
+            <sc-for list="{{ run.journal }}" as="l" hint-placeholder-count="10">
+              <span style="display:flex;gap:12px;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;line-height:1.75">
+                <span style="color:#5c584f;flex:none">{{ l.t }}</span>
+                <span style="{{ l.tagStyle }}">{{ l.tag }}</span>
+                <span style="color:#efe9de;min-width:0">{{ l.text }}</span>
+              </span>
+            </sc-for>
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;color:#dd9b80;animation:weft-pulse 1.2s infinite">▋</span>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </sc-if>
+
+  </div>
+
+  <div style="flex:none;height:28px;display:flex;align-items:center;gap:16px;padding:0 14px;border-top:1px solid #e2dbd1;background:#faf9f5;font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#6c6a64">
+    <span style="color:#35786b">● daemon ok</span>
+    <span>pool {{ concL }}</span>
+    <span>default budget {{ budget }}</span>
+    <span>journal .weft/runs/ · append-only jsonl</span>
+    <span style="flex:1"></span>
+    <span>weft v0.9.0</span>
+  </div>
+
+  <sc-if value="{{ launcherOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeLauncher }}" style="position:fixed;inset:0;background:rgba(20,20,19,.28);z-index:60;display:flex;justify-content:center;align-items:flex-start;padding-top:80px">
+      <div onClick="{{ stop }}" style="width:min(720px,94vw);background:#faf9f5;border:1px solid #e2dbd1;border-radius:14px;box-shadow:0 18px 44px rgba(20,20,19,.18);overflow:hidden;display:flex;flex-direction:column">
+        <sc-if value="{{ lstep1 }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid #e2dbd1">
+          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:16px;color:#a9583e">run</span>
+          <input autoFocus="{{ true }}" value="{{ query }}" onChange="{{ setQuery }}" placeholder="type to filter…" style="flex:1;appearance:none;border:0;background:none;outline:none;font-family:JetBrains Mono,ui-monospace,monospace;font-size:16px;color:#141413">
+          <span style="font-size:11.5px;color:#8e8b82;white-space:nowrap">{{ matchL }}</span>
+        </div>
+        <div style="max-height:300px;overflow-y:auto;display:flex;flex-direction:column">
+        <sc-for list="{{ matches }}" as="m" hint-placeholder-count="4">
+          <button onClick="{{ m.pick }}" style="{{ m.rowStyle }}">
+            <span style="{{ m.dotStyle }}"></span>
+            <span style="font-weight:600;font-size:13.5px">{{ m.name }}</span>
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#a9583e">{{ m.file }}</span>
+            <span style="flex:1"></span>
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#55534d;white-space:nowrap">{{ m.meta }}</span>
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#8e8b82;white-space:nowrap">→</span>
+          </button>
+        </sc-for>
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;padding:9px 20px;border-top:1px solid #e2dbd1;background:#f5f0e8;font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#6c6a64">
+          <span>↑↓ move</span><span>⏎ select</span><span>esc close</span>
+          <span style="flex:1"></span>
+          <span>step 1 of 2 · pick a workflow</span>
+        </div>
+        </sc-if>
+        <sc-if value="{{ lstep2 }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid #e2dbd1">
+          <button onClick="{{ backToPick }}" class="btn btn-ghost" style="padding:4px 9px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">←</button>
+          <span style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:0">
+            <span style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap">
+              <span style="font-size:15px;font-weight:600">{{ lwfName }}</span>
+              <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#a9583e">{{ lwfFile }}</span>
+            </span>
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#6c6a64;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ launcherShape }}</span>
+          </span>
+          <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#6c6a64;white-space:nowrap">{{ lwfMeta }}</span>
+        </div>
+        <div style="padding:14px 20px 16px;background:#fdfbf7;display:flex;flex-direction:column;gap:7px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#a9583e;font-weight:600">Inputs</span>
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#6c6a64">tab to move · ⏎ starts · step 2 of 2</span>
+          </div>
+          <sc-for list="{{ launcherFields }}" as="f" hint-placeholder-count="5">
+            <div style="display:flex;align-items:flex-start;gap:10px;padding:2px 0">
+              <span style="width:72px;flex:none;padding-top:6px;font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#55534d;white-space:nowrap">{{ f.k }}<span style="color:#cc785c">{{ f.req }}</span></span>
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px">
+                <sc-if value="{{ f.isText }}" hint-placeholder-val="{{ true }}">
+                  <input class="input" style="border-radius:8px;min-height:32px;font-size:12px;font-family:JetBrains Mono,ui-monospace,monospace;width:100%;box-sizing:border-box" value="{{ f.v }}" onChange="{{ f.set }}">
+                </sc-if>
+                <sc-if value="{{ f.isSeg }}" hint-placeholder-val="{{ false }}">
+                  <span style="display:flex;gap:4px">
+                    <sc-for list="{{ f.opts }}" as="o" hint-placeholder-count="3">
+                      <button onClick="{{ o.pick }}" style="{{ o.style }}">{{ o.label }}</button>
+                    </sc-for>
+                  </span>
+                </sc-if>
+                <sc-if value="{{ f.isChips }}" hint-placeholder-val="{{ false }}">
+                  <span style="display:flex;flex-wrap:wrap;gap:5px">
+                    <sc-for list="{{ f.opts }}" as="o" hint-placeholder-count="4">
+                      <button onClick="{{ o.pick }}" style="{{ o.style }}">{{ o.tick }}{{ o.label }}</button>
+                    </sc-for>
+                  </span>
+                </sc-if>
+                <sc-if value="{{ f.isFile }}" hint-placeholder-val="{{ false }}">
+                  <span style="display:flex;align-items:center;gap:9px;border:1px dashed #dd9b80;border-radius:8px;background:#fdf6f2;padding:6px 10px">
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11.5px;flex:1;min-width:0">{{ f.v }}</span>
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10px;color:#a9583e;white-space:nowrap">drop or ⌘O</span>
+                  </span>
+                </sc-if>
+                <sc-if value="{{ f.isFlag }}" hint-placeholder-val="{{ false }}">
+                  <button onClick="{{ f.toggle }}" style="appearance:none;border:0;background:none;padding:3px 0 0;cursor:pointer;display:inline-flex;align-items:center;gap:9px;width:fit-content">
+                    <span style="{{ f.trackStyle }}"><span style="width:13px;height:13px;border-radius:999px;background:#faf9f5;display:block"></span></span>
+                    <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:11px;color:#55534d">{{ f.v }}</span>
+                  </button>
+                </sc-if>
+              </div>
+            </div>
+          </sc-for>
+          <div style="display:flex;align-items:center;gap:12px;padding-top:6px;border-top:1px solid #e6dfd8;margin-top:4px">
+            <span style="font-family:JetBrains Mono,ui-monospace,monospace;font-size:10.5px;color:#6c6a64;flex:1;min-width:0">budget {{ budget }} · gates ask on write</span>
+            <button onClick="{{ backToPick }}" class="btn btn-ghost" style="padding:6px 12px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Back</button>
+            <button onClick="{{ startRun }}" class="btn btn-primary" style="padding:6px 16px;font-size:12px;border-radius:8px;min-height:0;white-space:nowrap">Start run ⏎</button>
+          </div>
+        </div>
+        </sc-if>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1440, &quot;height&quot;: 900}}">
+const MONO = "font-family:JetBrains Mono,ui-monospace,monospace";
+const SC = { running: '#5db8a6', waiting: '#cc785c', idle: '#c4bdb2', done: '#5db8a6', run: '#cc785c', wait: '#c4bdb2', fail: '#c64545' };
+
+class Component extends DCLogic {
+  state = {
+    view: 'queue', runId: 'r-045', tab: 'steps', stepId: 'verify-1',
+    wfSel: 'deps-audit.ts', artSel: 'report.md', fileSel: 'src/labels/apply.ts',
+    launcher: false, query: '', lwf: 'triage.ts', lstep: 1,
+    li: { repo: 'acme/treel', window: '24h', labels: ['bug', 'docs'], rules: 'triage-rules.md · 2.4 KB', dry: false },
+    ans: { fix: 'patch + test', page: 'page now', notify: ['#eng-alerts'], owner: 'on-call rotation', evidence: 'stacktrace-815.txt · 8.1 KB', draft: false, maxlab: 2, note: '' },
+    answered: {}, policy: { read: 'auto', write: 'auto', network: 'ask', destructive: 'ask' },
+    budget: '$8.00', conc: 8
+  };
+
+  componentDidMount() {
+    this._key = e => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); this.setState({ launcher: true }); }
+      if (e.key === 'Escape') this.setState({ launcher: false });
+    };
+    window.addEventListener('keydown', this._key);
+  }
+  componentWillUnmount() { window.removeEventListener('keydown', this._key); }
+
+  WF() {
+    return [
+      { file: 'triage.ts', name: 'Issue triage', desc: 'Fetch new issues, classify each with a parallel agent fan-out, apply labels behind a write gate, then summarize.', state: 'running', lastL: 'just now', ok: 96, p50: '4m 02s', cost: '$1.92',
+        shape: [['task', 'T'], ['agent', 'A∥'], ['human', 'H'], ['agent', 'A']],
+        labels: [['gather', 'task'], ['classify', 'agent ×4 ∥'], ['apply', 'human → task'], ['report', 'agent']],
+        history: [1,1,1,1,1,1,1,0,1,1,1,1,1,1], historyNote: '1 failed · rate limit at classify',
+        facts: [['schedule', 'on issue open'], ['gate policy', 'write → auto'], ['owner', 'platform'], ['p95 cost', '$2.60']] },
+      { file: 'release-notes.ts', name: 'Release notes', desc: 'Collect commits since the last tag, draft grouped notes with one agent, hold for review, publish to GitHub.', state: 'waiting', lastL: '25 min', ok: 100, p50: '3m 10s', cost: '$0.71',
+        shape: [['task', 'T'], ['agent', 'A'], ['human', 'H'], ['task', 'T']],
+        labels: [['collect', 'task'], ['draft', 'agent'], ['review', 'human'], ['publish', 'task']],
+        history: [1,1,1,1,1,1,1,1,1,1,1,1,1,1], historyNote: 'no failures in 30d',
+        facts: [['schedule', 'on tag'], ['gate policy', 'network → ask'], ['owner', 'release'], ['p95 cost', '$0.90']] },
+      { file: 'deps-audit.ts', name: 'Dependency audit', desc: 'Scan advisories, assess each with an agent, open one fix PR behind a write gate, verify with the test suite.', state: 'waiting', lastL: '40 min', ok: 86, p50: '6m 44s', cost: '$2.40',
+        shape: [['task', 'T'], ['agent', 'A∥'], ['human', 'H'], ['task', 'T']],
+        labels: [['scan', 'task'], ['assess', 'agent ×3 ∥'], ['fix', 'human → task'], ['verify', 'task, may repeat']],
+        history: [1,1,1,0,1,1,1,1,1,1,0,1,1,1], historyNote: '2 failed · both at verify · flaky e2e suite',
+        facts: [['schedule', 'daily 02:00 UTC'], ['gate policy', 'write → ask'], ['owner', 'platform'], ['p95 cost', '$3.80']] },
+      { file: 'docs-hero.ts', name: 'Docs hero refresh', desc: 'Two agents draft hero designs in parallel; a human picks one, a task applies it and screenshots the result.', state: 'waiting', lastL: '2 min', ok: 83, p50: '5m 20s', cost: '$0.29',
+        shape: [['task', 'T'], ['agent', 'A∥'], ['human', 'H'], ['task', 'T']],
+        labels: [['read', 'task'], ['design', 'agent ×2 ∥'], ['pick', 'human'], ['apply', 'task']],
+        history: [1,1,0,1,1,1,0,1,1,1,1,0,1,1], historyNote: '3 failed · screenshot timeouts',
+        facts: [['schedule', 'manual'], ['gate policy', 'write → ask'], ['owner', 'design'], ['p95 cost', '$0.44']] },
+      { file: 'flaky-sweep.ts', name: 'Flaky test sweep', desc: 'Collect failures, re-run each suspect six times, classify with an agent, quarantine behind a gate.', state: 'idle', lastL: '3 h', ok: 89, p50: '9m 12s', cost: '$1.10',
+        shape: [['task', 'T'], ['task', 'T∥'], ['agent', 'A'], ['human', 'H']],
+        labels: [['collect', 'task'], ['rerun', 'task ×6 ∥'], ['classify', 'agent'], ['quarantine', 'human → task']],
+        history: [1,1,1,1,0,1,1,1,1,1,1,1,0,1], historyNote: '2 failed · runner OOM',
+        facts: [['schedule', 'nightly'], ['gate policy', 'write → ask'], ['owner', 'qa'], ['p95 cost', '$1.60']] },
+      { file: 'digest.ts', name: 'Weekly digest', desc: 'Pull the week of runs, write the digest with one agent, send it to the team channel.', state: 'idle', lastL: 'yesterday', ok: 100, p50: '1m 40s', cost: '$0.34',
+        shape: [['task', 'T'], ['agent', 'A'], ['task', 'T']],
+        labels: [['pull', 'task'], ['write', 'agent'], ['send', 'task']],
+        history: [1,1,1,1,1,1,1,1,1,1,1,1,1,1], historyNote: 'no failures in 30d',
+        facts: [['schedule', 'Mon 09:00'], ['gate policy', 'network → auto'], ['owner', 'ops'], ['p95 cost', '$0.40']] }
+    ];
+  }
+
+  RUNS() {
+    const answered = this.state.answered;
+    return {
+      'r-045': {
+        id: 'r-045', wf: 'Dependency audit', file: 'deps-audit.ts', state: answered['r-045'] ? 'running' : 'waiting',
+        chrome: '11 steps · 08:41 · $2.40 / $6.00', tickNote: '11 recorded · 3 active in 3 labels · no fixed plan',
+        pill: answered['r-045'] ? '3 steps active' : 'waiting on you · 40 min',
+        ticks: ['done','done','done','done','done','done','fail','done','run','run','run'],
+        labelCounts: [['scan', 1], ['assess', 3], ['fix', 3, true], ['verify', 2, true], ['report', 1, true]],
+        railTitle: 'Run tree · 11 steps · 3 active',
+        rail: [
+          ['scan', 'task · 1.4s', [['task', 'scan-advisories', '1.4s', 'done', '', 'scan-1']]],
+          ['assess', 'agent ×3 ∥', [
+            ['agent', 'assess CVE-1183', '4.1k tok', 'done', '', 'as-1'],
+            ['agent', 'assess CVE-0994', '3.8k tok', 'done', '', 'as-2'],
+            ['agent', 'assess GHSA-77x2', '4.2k tok', 'done', '', 'as-3']]],
+          ['fix', 'gated write', [
+            ['human', 'gate: open fix PR', answered['r-045'] ? 'approved · you' : 'waiting on you', answered['r-045'] ? 'done' : 'run', '', 'gate-1'],
+            ['task', 'apply-fix', '+42 −7', 'done', 'fix.patch', 'apply-1']]],
+          ['verify', 'task', [['task', 'verify', 'failed · 2 findings', 'fail', '', 'verify-1']]],
+          ['fix', 'again · from findings', [
+            ['task', 'bump lockfile', '0.9s', 'done', '', 'fix-f1'],
+            ['agent', 'patch call site', 'codex · 34s', 'run', '', 'fix-f2']]],
+          ['verify', 'again · running', [['task', 'verify (lockfile only)', '12s', 'run', '', 'verify-2']]],
+          ['report', 'agent · streaming', [['agent', 'draft audit summary', '1.8k tok', 'run', '', 'report-1']]]
+        ],
+        active: [['fix', 'patch call site', '34s', 'fix-f2'], ['verify', 'verify (lockfile only)', '12s', 'verify-2'], ['report', 'draft audit summary', '1.8k tok', 'report-1']],
+        findings: [
+          ['f-1', 'Lockfile still pins the vulnerable transitive dep', 'package-lock.json · 8,204 · CVE-2026-1183', 'blocking', '8 · bump lockfile', 'done · 0.9s', true, 'fix-f1'],
+          ['f-2', 'Patched call site drops the retry guard', 'src/net/fetchWithRetry.ts:118 · 2 tests failing', 'blocking', '9 · patch call site', 'running · 34s', false, 'fix-f2']],
+        artifacts: [
+          ['advisories.json', 'json', '18 KB', 'scan-advisories', '8 min'],
+          ['fix.patch', 'patch', '3.1 KB', 'apply-fix', '5 min'],
+          ['verify.log', 'log', '44 KB', 'verify', '3 min'],
+          ['report.md', 'md', '1.4 KB', 'draft audit summary', 'live'],
+          ['run.jsonl', 'journal', '92 KB', 'run', 'live']],
+        files: [['src/net/fetchWithRetry.ts', 42, 7], ['package-lock.json', 8, 2], ['docs/security.md', 92, 29]],
+        journal: [
+          ['06:12', 'run', 'run.started · deps-audit · inputs { severity: "high" }'],
+          ['06:14', 'task', 'scan-advisories ok · 3 advisories · 1.4s'],
+          ['06:41', 'agent', 'assess CVE-1183 done · actionable · 4,102 tok'],
+          ['07:02', 'human', 'human.answered gate-1 · approve · answered_by: you'],
+          ['07:44', 'task', 'apply-fix ok · +42 −7 across 3 files'],
+          ['08:02', 'task', 'verify failed · exit 1 · 2 findings recorded'],
+          ['08:07', 'task', 'bump lockfile ok · 0.9s · opened by finding f-1'],
+          ['08:12', 'agent', 'patch call site started · codex/gpt-5 · opened by f-2'],
+          ['08:29', 'task', 'verify (lockfile only) started · 214 tests'],
+          ['08:36', 'agent', 'draft audit summary streaming · 1,804 tok']],
+        gate: {
+          id: 'gate-1', risk: 'write', blocks: 'blocks step 6 · apply-fix', title: 'Pick a fix strategy',
+          detail: '3 advisories assessed — 2 actionable. The agent proposes three directions; your answer is journaled and passed to the apply step.',
+          submitL: 'Submit & resume',
+          questions: [
+            ['fix', 'strategy *', 'cards', [
+              ['patch + test', 'agent pick', 'Patch both call sites and add a regression test. Opens one PR.'],
+              ['bump only', '', 'Bump the transitive dep and re-run the suite. No code change.'],
+              ['defer', 'closes', 'Record the advisory and skip this cycle. Nothing is written.']]],
+            ['page', 'on-call', 'choice', [['page now'], ['next standup'], ['ticket only']]],
+            ['notify', 'notify', 'chips', [['#eng-alerts'], ['#on-call'], ['#product'], ['email digest']]],
+            ['owner', 'assign to', 'select', [['on-call rotation'], ['unassigned'], ['dima'], ['marta'], ['priya']]],
+            ['evidence', 'evidence', 'file', []],
+            ['draft', 'draft PR', 'toggle', []],
+            ['maxlab', 'max files', 'number', []],
+            ['note', 'note', 'note', []]]
+        },
+        steps: {
+          'verify-1': {
+            title: 'verify · step 7', pill: 'failed · opened 3 steps', pillKind: 'fail', action: 'Re-run verify',
+            cells: [['kind', 'task · deno'], ['exit', 'code 1', '#c64545'], ['suite', '214 tests · 2 failed'], ['duration', '2m 18s'], ['findings', '2 · both actionable'], ['opened', 'steps 8, 9, 10', '#a9583e']],
+            input: [['patch', 'record', 'fix.patch', '3 files changed', '+42 −7 · staged', []], ['suite', 'text', 'deno task test:e2e', '', '', []], ['env', 'pills', '', '', '', ['CI=1', 'RETRIES=0', 'SHARD=1/1']]],
+            outTitle: 'step output · exit 1', outNote: '2 findings recorded',
+            out: [['FAIL src/net/fetchWithRetry.test.ts — retry guard missing (2 cases)'], ['FAIL audit — package-lock.json still pins vulnerable dep'], ['214 tests · 212 passed · 2 failed · 2m 18s']],
+            hasTools: false, streaming: false, hasNext: true, nextK: 'what weft did', nextV: 'Nothing was scheduled: after this step returned findings, the code opened steps 8–10. weft recorded the order and the links.'
+          },
+          'fix-f2': {
+            title: 'patch call site · step 9', pill: 'running · 34s', pillKind: 'run', action: 'Skip step',
+            cells: [['kind', 'agent'], ['provider', 'codex/gpt-5', '#35786b'], ['started', '08:12'], ['elapsed', '34s of ~90s'], ['tokens', '6,240'], ['opened by', 'step 7 · f-2', '#a9583e']],
+            input: [['finding', 'record', 'f-2', 'Patched call site drops the retry guard', 'blocking · from step 7', []],
+              ['file', 'file', 'src/net/fetchWithRetry.ts', '4.2 KB · 118 lines', '', []],
+              ['tests', 'pills', '', '', '', ['retry guard missing', 'backoff cap']]],
+            outTitle: 'step output · streaming', outNote: 'will be parsed against FixPatch',
+            out: [['Restoring the retry guard around the awaited fetch and keeping the'], ['backoff cap the bump removed; adding one regression case for both.']],
+            hasTools: true, toolsTitle: 'Tool calls · 3', streaming: true,
+            tools: [['read-file src/net/fetchWithRetry.ts', '4.2 KB · 0.2s', false], ['grep "retryGuard" src/**', '4 matches · 0.3s', false], ['write-file src/net/fetchWithRetry.ts', 'running · 2s', true]],
+            hasNext: false
+          },
+          'gate-1': {
+            title: 'gate: open fix PR · step 5', pill: this.state.answered['r-045'] ? 'answered · you' : 'waiting on you', pillKind: this.state.answered['r-045'] ? 'done' : 'run', action: this.state.answered['r-045'] ? 'Re-open gate' : 'Copy gate id',
+            cells: [['kind', 'human'], ['risk', 'write', '#a9583e'], ['asked', '07:01'], ['policy', 'write → ask'], ['blocks', 'step 6 · apply-fix']],
+            input: [['action', 'text', 'Open one fix PR against main', '', '', []], ['advisories', 'pills', '', '', '', ['CVE-2026-1183', 'CVE-2026-0994', 'GHSA-77x2']]],
+            outTitle: 'answer', outNote: 'journaled verbatim',
+            out: [[this.state.answered['r-045'] ? '{ answer: "patch + test", answered_by: "you", at: "07:02" }' : 'pending — the run is stopped at this step']],
+            hasTools: false, streaming: false,
+            hasNext: true,
+            nextK: this.state.answered['r-045'] ? 'resumed' : 'needs you',
+            nextV: this.state.answered['r-045'] ? 'next → step 6 · apply-fix, started at 07:02' : 'The run resumes as soon as this gate is answered.',
+            nextGoQ: !this.state.answered['r-045']
+          }
+        }
+      },
+      'r-049': {
+        id: 'r-049', wf: 'Issue triage', file: 'triage.ts', state: 'running',
+        chrome: '9 steps · 01:04 · $0.09 / $8.00 · pool 4/8', tickNote: '9 recorded · 2 active in 2 labels · no fixed plan',
+        pill: '2 steps active',
+        ticks: ['done','done','done','run','run','wait','wait','wait','wait'],
+        labelCounts: [['gather', 1], ['classify', 4, true], ['apply', 2], ['report', 2]],
+        railTitle: 'Run tree · 9 steps · 2 active',
+        rail: [
+          ['gather', 'task · 1.2s', [['task', 'fetch-issues', 'deno · 1.2s', 'done', 'issues.json', 'fetch-1']]],
+          ['classify', 'agent ×4 ∥', [
+            ['agent', 'classify #812', 'sonnet · 2,988 tok', 'done', '', 'cl-812'],
+            ['agent', 'classify #814', 'sonnet · 3,412 tok', 'done', '', 'cl-814'],
+            ['agent', 'classify #815', 'codex · 21s', 'run', '', 'cl-815'],
+            ['agent', 'classify #816', 'sonnet · 8s', 'run', '', 'cl-816']]],
+          ['apply', 'gated write', [
+            ['human', 'gate: apply labels', 'not started', 'wait', '', 'gate-2'],
+            ['task', 'apply-labels', 'not started', 'wait', '', 'apply-2']]],
+          ['report', 'agent', [
+            ['agent', 'summarize', 'not started', 'wait', '', 'sum-1'],
+            ['artifact', 'report.md', '—', 'wait', '', 'art-1']]]
+        ],
+        active: [['classify', 'classify #815', '21s', 'cl-815'], ['classify', 'classify #816', '8s', 'cl-816']],
+        findings: [],
+        artifacts: [['issues.json', 'json', '24 KB', 'fetch-issues', '1 min'], ['run.jsonl', 'journal', '18 KB', 'run', 'live']],
+        files: [['src/labels/apply.ts', 42, 7], ['src/scheduler.ts', 8, 2], ['docs/triage.md', 92, 29]],
+        journal: [
+          ['00:00', 'run', 'run.started · triage · inputs { repo: "acme/treel", window: "24h" }'],
+          ['00:01', 'task', 'fetch-issues started · runtime deno · net: api.github.com'],
+          ['00:02', 'task', 'fetch-issues ok · 4 open issues · 1.2s → Issue[4]'],
+          ['00:03', 'agent', 'classify #812 · claude/sonnet · started'],
+          ['00:38', 'agent', 'classify #812 done · { label: "feature-request" } · 2,988 tok'],
+          ['00:44', 'agent', 'classify #814 done · { label: "bug", severity: "P2" } · 3,412 tok'],
+          ['00:51', 'tool', '#815 grep "scheduler loop" · 6 matches in 3 files'],
+          ['00:58', 'agent', '#815 streaming · severity judgement in progress'],
+          ['01:02', 'pool', 'slot freed · #816 dequeued']],
+        gate: null,
+        steps: {
+          'cl-815': {
+            title: 'classify #815 · step 5', pill: 'running · 21s', pillKind: 'run', action: 'Skip step',
+            cells: [['kind', 'agent'], ['provider', 'codex/gpt-5', '#35786b'], ['started', '00:44'], ['elapsed', '21s of ~50s'], ['tokens', '4,120'], ['cost', '$0.03']],
+            input: [['issue', 'record', '#815', 'Crash in scheduler loop', 'open · 2 h ago · dima', ['needs-triage', 'reported by 3 users']],
+              ['stack trace', 'file', 'stacktrace-815.txt', '8.1 KB · 214 frames', '', []],
+              ['call sites', 'pills', '', '', '', ['src/scheduler.ts:118', 'src/scheduler.ts:204', 'src/pool.ts:44', '+3 more']],
+              ['model', 'text', 'gpt-5-codex', '', '', []]],
+            outTitle: 'step output · streaming', outNote: 'will be parsed against Classification',
+            out: [['The stack terminates in scheduler.tick(), the same frame as #802.'], ['Six call sites reach that loop; two skip the mutex added in 0.8.2, so'], ['the regression window is 0.8.2 → HEAD. Severity: P1, related: ["#802"]']],
+            hasTools: true, toolsTitle: 'Tool calls · 3', streaming: true,
+            tools: [['read-file src/scheduler.ts', '8,420 B · 0.2s', false], ['grep "scheduler loop" src/**', '6 matches · 0.4s', false], ['git log -S "mutex" --since v0.8.2', 'running · 3s', true]],
+            hasNext: true, nextK: 'next', nextV: 'gate: apply labels — will ask you before writing 4 labels (policy: write → ask)'
+          },
+          'fetch-1': {
+            title: 'fetch-issues · step 1', pill: 'done · 1.2s', pillKind: 'done', action: 'Re-run step',
+            cells: [['kind', 'task · deno'], ['duration', '1.2s'], ['net', 'api.github.com'], ['result', 'Issue[4]'], ['artifact', 'issues.json', '#35786b']],
+            input: [['repo', 'text', 'acme/treel', '', '', []], ['window', 'text', '24h', '', '', []], ['state', 'pills', '', '', '', ['open', 'not draft']]],
+            outTitle: 'step output', outNote: 'parsed · Issue[4]',
+            out: [['#812 Export ignores locale · #814 Sort order flips on refresh'], ['#815 Crash in scheduler loop · #816 Typo in CLI docs']],
+            hasTools: false, streaming: false, hasNext: false
+          }
+        }
+      }
+    };
+  }
+
+  cell(k, v, c, w) {
+    return { k: k, v: v, vStyle: MONO + ';font-size:11.5px;white-space:nowrap;color:' + (c || '#141413'),
+      style: 'display:flex;flex-direction:column;gap:2px;min-width:' + (w || 100) + 'px;padding:0 13px;border-left:1px solid #efe9de' };
+  }
+
+  renderVals() {
+    const st = this.state, self = this;
+    const set = o => this.setState(o);
+    const runs = this.RUNS();
+    const run = runs[st.runId] || runs['r-045'];
+    const wfs = this.WF();
+    const wf = wfs.find(w => w.file === st.wfSel) || wfs[2];
+    const pendCount = 3 - Object.keys(st.answered).length;
+
+    const navBtn = (v, label, badge) => ({
+      label: label, badge: badge || '', go: () => set({ view: v }),
+      style: 'appearance:none;border:0;cursor:pointer;font:inherit;display:flex;align-items:center;gap:7px;padding:6px 12px;border-radius:8px;font-size:12.5px;font-weight:' + (st.view === v ? '600' : '500') + ';background:' + (st.view === v ? '#f6e2d8' : 'transparent') + ';color:' + (st.view === v ? '#8a4630' : '#55534d'),
+      badgeStyle: badge ? MONO + ';font-size:9.5px;border-radius:999px;padding:1px 6px;background:' + (st.view === v ? '#cc785c' : '#efe9de') + ';color:' + (st.view === v ? '#fff' : '#6c6a64') : 'display:none'
+    });
+
+    const openRun = (id, which) => () => set({ view: 'run', runId: id, tab: 'steps',
+      stepId: which === 'gate' ? 'gate-1' : id === 'r-045' ? 'verify-1' : 'cl-815' });
+
+    const factCells = arr => arr.map(f => ({ k: f[0], v: f[1],
+      cellStyle: 'display:flex;flex-direction:column;gap:2px;min-width:96px;flex:none;padding:0 12px;border-left:1px solid #efe9de',
+      vStyle: MONO + ';font-size:11px;white-space:nowrap;color:' + (f[0] === 'diff' || f[0] === 'patch' ? '#35786b' : f[0] === 'risk' ? '#a9583e' : '#141413') }));
+
+    const qItem = (wfName, sub, ask, detail, meta, action, kind, pct, phaseL, facts, go) => ({
+      wf: wfName, sub: sub, ask: ask, detail: detail, meta: meta, action: action, phaseL: phaseL, open: go,
+      dotStyle: 'width:7px;height:7px;border-radius:999px;flex:none;background:' + (kind === 'a' ? '#cc785c' : kind === 'b' ? '#5db8a6' : '#c4bdb2'),
+      btnCls: kind === 'a' ? 'btn btn-primary' : 'btn btn-secondary',
+      metaStyle: MONO + ';font-size:10.5px;width:104px;text-align:right;flex:none;color:' + (kind === 'a' ? '#a9583e' : '#6c6a64'),
+      cardStyle: 'display:flex;flex-direction:column;gap:8px;padding:12px 15px;border-radius:12px;background:#faf9f5;border:1px solid ' + (kind === 'a' ? '#dd9b80' : '#e2dbd1'),
+      barStyle: 'display:block;height:100%;width:' + pct + '%;border-radius:999px;background:' + (kind === 'a' ? '#cc785c' : kind === 'b' ? '#5db8a6' : '#c4bdb2'),
+      facts: factCells(facts)
+    });
+
+    const waiting = [];
+    if (!st.answered['r-045']) waiting.push(qItem('Dependency audit', 'r-045 · waiting · 40 min', 'Pick a fix strategy', '3 advisories assessed — 2 actionable. The agent proposes three directions.', 'risk: write', 'Answer →', 'a', 70, 'fix 5/11',
+      [['advisories', '3 · 2 actionable'], ['patch', '+42 −7'], ['files', '3'], ['tokens', '14.2k'], ['spent', '$2.40 / $6.00']], openRun('r-045', 'gate')));
+    waiting.push(qItem('Release notes', 'r-046 · waiting · 25 min', 'Approve publish for v0.9.0', 'Draft covers 37 commits in 6 sections. Approving creates a public GitHub release.', 'risk: network', 'Review →', 'a', 80, 'review 3/4',
+      [['commits', '37'], ['sections', '6'], ['artifact', 'notes.md 4.2 KB'], ['tokens', '9.7k'], ['spent', '$0.71 / $4.00']], openRun('r-045', 'gate')));
+    waiting.push(qItem('Docs hero refresh', 'r-048 · waiting · 2 min', 'Pick a hero design', 'Two agents drafted variants; previews render the actual HTML each produced.', 'risk: write', 'Answer →', 'a', 75, 'pick 3/4',
+      [['variants', '2'], ['diff', '+86 −38'], ['files', '2 staged'], ['agents', '2× ∥'], ['spent', '$0.29 / $4.00']], openRun('r-045', 'gate')));
+
+    const running = [qItem('Issue triage', 'r-049 · running · 01:04', 'classify — 2 of 4 agents still working', 'Next stop: apply gate (write: auto). No action expected from you.', '$0.09 / $8.00', 'Open', 'b', 48, 'classify 2/4',
+      [['agents', '4× ∥'], ['tokens', '8.3k'], ['issues', '4'], ['writes', 'none yet'], ['eta', '~2m 40s']], openRun('r-049', 'steps'))];
+    if (st.answered['r-045']) running.push(qItem('Dependency audit', 'r-045 · running · 08:41', '3 steps active — fix, verify, report', 'Gate answered by you; the code opened three more steps.', '$2.40 / $6.00', 'Open', 'b', 82, 'fix 9/11',
+      [['active', '3 steps'], ['patch', '+42 −7'], ['findings', '2 open'], ['tokens', '18.4k'], ['spent', '$2.40 / $6.00']], openRun('r-045', 'steps')));
+
+    const idle = [
+      qItem('Flaky test sweep', 'last 3 h ago', 'Ran clean · 2 tests quarantined', '', '89% · 30d', 'Run…', 'c', 100, 'done',
+        [['reran', '6× ∥'], ['quarantined', '2'], ['diff', '+14 −0'], ['cost', '$1.10']], () => set({ launcher: true, lwf: 'flaky-sweep.ts', lstep: 2 })),
+      qItem('Weekly digest', 'last yesterday', 'Scheduled Monday 09:00', '', '100% · 30d', 'Run…', 'c', 100, 'done',
+        [['recipients', '48'], ['p50', '1m 40s'], ['cost', '$0.34']], () => set({ launcher: true, lwf: 'digest.ts', lstep: 2 }))
+    ];
+
+    /* ---- run detail ---- */
+    const stepKeys = Object.keys(run.steps);
+    const stepId = run.steps[st.stepId] ? st.stepId : stepKeys[0];
+    const step = run.steps[stepId];
+    const pillStyle = kind => MONO + ';font-size:9.5px;text-transform:uppercase;letter-spacing:.07em;border-radius:999px;padding:2px 9px;white-space:nowrap;background:' + (kind === 'fail' ? '#fbeceb' : kind === 'run' ? '#f6e2d8' : '#d7ece7') + ';color:' + (kind === 'fail' ? '#c64545' : kind === 'run' ? '#8a4630' : '#275a51');
+
+    const pendingGate = !!(run.gate && !st.answered[run.id]);
+    const tabDef = [['steps', 'Steps', pendingGate ? '1' : ''], ['findings', 'Findings', run.findings.length ? String(run.findings.length) : ''], ['artifacts', 'Artifacts', String(run.artifacts.length)], ['changes', 'Changes', String(run.files.length)], ['journal', 'Journal', '']]
+      .filter(t => !(t[0] === 'findings' && !run.findings.length));
+    const tab = tabDef.some(t => t[0] === st.tab) ? st.tab : 'steps';
+
+    const art = (run.artifacts.find(a => a[0] === st.artSel) || run.artifacts[0]);
+    const artBody = art[1] === 'md'
+      ? { title: run.id === 'r-045' ? 'Dependency audit — 3 advisories' : 'Triage — 24 h window',
+          body: [['Two of three advisories are actionable in this repo. One fix PR is staged on branch weft/' + run.id + '; verify is still re-running after two findings.', 'p']],
+          rows: [['CVE-1183', 'Vulnerable transitive dep still pinned in the lockfile', 'blocking'], ['CVE-0994', 'Patched call site drops the retry guard', 'blocking'], ['GHSA-77x2', 'Dev-only dependency — no runtime path', 'ignored']] }
+      : { title: art[0], body: [[art[1].toUpperCase() + ' artifact · ' + art[2] + ' — produced by ' + art[3] + '. Open it raw or download it; the journal records the step, model and byte count.', 'p']], rows: [] };
+
+    const file = run.files.find(f => f[0] === st.fileSel) || run.files[0];
+    const DIFFS = {
+      'package-lock.json': { hunk: '@@ -1204,7 +1204,7 @@ node_modules/undici', lines: [
+        ['1204', '1204', '     "node_modules/undici": {', ''],
+        ['1205', '', '-      "version": "6.11.1",', '-'],
+        ['1206', '', '-      "integrity": "sha512-2Rk1Xw…",', '-'],
+        ['', '1205', '+      "version": "6.21.2",', '+'],
+        ['', '1206', '+      "integrity": "sha512-9fBc1Q…",', '+'],
+        ['1207', '1207', '       "license": "MIT"', ''],
+        ['1208', '1208', '     },', '']] },
+      'docs/security.md': { hunk: '@@ -18,6 +18,14 @@ Advisory handling', lines: [
+        ['18', '18', ' ## Advisory handling', ''],
+        ['19', '19', '', ''],
+        ['', '20', '+Advisories are triaged nightly by deps-audit.ts. Every fix is staged on a', '+'],
+        ['', '21', '+branch and held at a write gate — no dependency lands without a human answer.', '+'],
+        ['', '22', '+', '+'],
+        ['', '23', '+### Retry guard', '+'],
+        ['', '24', '+fetchWithRetry must keep its backoff cap; verify fails the run without it.', '+'],
+        ['20', '25', ' See the runbook for the escalation path.', '']] }
+    };
+    const diffLines = [
+      ['12', '12', ' export async function fetchWithRetry(req: Request) {', ''],
+      ['13', '13', '   const backoff = capped(retryPolicy);', ''],
+      ['14', '', '-  return await fetch(req);', '-'],
+      ['', '14', '+  return await retryGuard(backoff, async () => {', '+'],
+      ['', '15', '+    const res = await fetch(req);', '+'],
+      ['', '16', '+    if (!res.ok && retryable(res.status)) throw new Retry(res);', '+'],
+      ['', '17', '+    return res;', '+'],
+      ['', '18', '+  });', '+'],
+      ['15', '19', ' }', '']
+    ];
+
+    /* ---- gate ---- */
+    const g = run.gate;
+    const ans = st.ans;
+    const gate = g ? {
+      id: g.id, risk: g.risk, blocks: g.blocks, title: g.title, detail: g.detail, submitL: g.submitL,
+      payload: '{ strategy: "' + ans.fix + '", onCall: "' + ans.page + '", notify: [' + ans.notify.map(n => '"' + n + '"').join(', ') + '], owner: "' + ans.owner + '", draftPR: ' + ans.draft + ', maxFiles: ' + ans.maxlab + ' }',
+      questions: g.questions.map(q => {
+        const key = q[0], kind = q[2], opts = q[3] || [];
+        const cur = ans[key];
+        const base = { k: q[1], req: q[1].indexOf('*') > -1 ? '' : '' };
+        const mk = {
+          isCards: kind === 'cards', isChoice: kind === 'choice', isSelect: kind === 'select',
+          isFile: kind === 'file', isToggle: kind === 'toggle', isNumber: kind === 'number', isNote: kind === 'note',
+          val: kind === 'toggle' ? cur : cur, valL: kind === 'toggle' ? (cur ? 'open a draft PR' : 'write directly') : '',
+          set: e => { const v = e && e.target ? e.target.value : e; self.setState(s => ({ ans: Object.assign({}, s.ans, { [key]: v }) })); },
+          toggle: () => self.setState(s => ({ ans: Object.assign({}, s.ans, { [key]: !s.ans[key] }) })),
+          trackStyle: 'width:30px;height:17px;border-radius:999px;flex:none;display:inline-flex;align-items:center;padding:0 2px;justify-content:' + (cur ? 'flex-end' : 'flex-start') + ';background:' + (cur ? '#cc785c' : '#e6dfd8'),
+          opts: opts.map(o => {
+            const label = o[0];
+            const on = kind === 'chips' ? cur.indexOf(label) > -1 : cur === label;
+            return {
+              label: label, meta: o[1] || '', desc: o[2] || '', tick: kind === 'chips' && on ? '✓ ' : '',
+              pick: () => self.setState(s => {
+                if (kind === 'chips') {
+                  const list = s.ans[key].slice();
+                  const i = list.indexOf(label);
+                  if (i > -1) list.splice(i, 1); else list.push(label);
+                  return { ans: Object.assign({}, s.ans, { [key]: list }) };
+                }
+                return { ans: Object.assign({}, s.ans, { [key]: label }) };
+              }),
+              dotStyle: 'width:11px;height:11px;border-radius:999px;flex:none;' + (on ? 'border:3px solid #cc785c;background:#faf9f5' : 'border:1.5px solid #c4bdb2'),
+              cardStyle: 'appearance:none;cursor:pointer;font:inherit;flex:1;min-width:190px;display:flex;flex-direction:column;gap:5px;padding:10px 12px;border-radius:10px;background:' + (on ? '#f6e2d8' : '#fffefb') + ';border:1px solid ' + (on ? '#cc785c' : '#e6dfd8'),
+              pillStyle: 'appearance:none;cursor:pointer;' + MONO + ';font-size:11px;border-radius:999px;padding:4px 11px;white-space:nowrap;background:' + (on ? '#f6e2d8' : '#fffefb') + ';border:1px solid ' + (on ? '#cc785c' : '#e6dfd8') + ';color:' + (on ? '#8a4630' : '#55534d')
+            };
+          })
+        };
+        if (kind === 'chips') { mk.isChoice = true; }
+        return Object.assign(base, mk);
+      })
+    } : { questions: [] };
+
+    /* ---- launcher ---- */
+    const lwf = wfs.find(w => w.file === st.lwf) || wfs[0];
+    const q = st.query.toLowerCase();
+    const matches = wfs.filter(w => !q || w.name.toLowerCase().indexOf(q) > -1 || w.file.indexOf(q) > -1);
+    const lpill = on => MONO + ';font-size:11px;border-radius:999px;padding:4px 11px;white-space:nowrap;appearance:none;cursor:pointer;background:' + (on ? '#f6e2d8' : '#fffefb') + ';border:1px solid ' + (on ? '#cc785c' : '#e6dfd8') + ';color:' + (on ? '#8a4630' : '#55534d');
+    const li = st.li;
+    const setLi = (k, v) => self.setState(s => ({ li: Object.assign({}, s.li, { [k]: v }) }));
+
+    return {
+      nav: [navBtn('queue', 'Queue', String(Math.max(pendCount, 0))), navBtn('workflows', 'Workflows'), navBtn('settings', 'Settings')],
+      isQueue: st.view === 'queue', isWorkflows: st.view === 'workflows', isSettings: st.view === 'settings', isRun: st.view === 'run',
+      queueSummary: Math.max(pendCount, 0) + ' waiting on you · ' + running.length + ' running · 2 idle',
+      pinned: wfs.slice(0, 4).map(w => ({ name: w.name, run: () => set({ launcher: true, lwf: w.file, lstep: 2 }) })),
+      groups: [
+        { label: 'Waiting on you · ' + waiting.length, note: 'blocks the run until answered', labelStyle: 'font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;color:#a9583e', items: waiting },
+        { label: 'Running · ' + running.length, note: 'pool ' + st.conc + ' agents', labelStyle: 'font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;color:#35786b', items: running },
+        { label: 'Idle · 2', note: 'nothing scheduled in the next 6 h', labelStyle: 'font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:600;color:#6c6a64', items: idle }
+      ],
+
+      wfRows: wfs.map(w => ({
+        name: w.name, file: w.file, lastL: w.lastL, ok: w.ok + '%', p50: w.p50, cost: w.cost,
+        select: () => set({ wfSel: w.file }),
+        dotStyle: 'width:7px;height:7px;border-radius:999px;flex:none;background:' + SC[w.state],
+        rowStyle: 'display:flex;align-items:center;gap:12px;padding:9px 14px;border-bottom:1px solid #efe9de;cursor:pointer;background:' + (st.wfSel === w.file ? '#f6e2d8' : 'transparent'),
+        barStyle: 'display:block;height:100%;border-radius:999px;width:' + w.ok + '%;background:' + (w.ok >= 95 ? '#5db8a6' : w.ok >= 88 ? '#e8a55a' : '#cc785c'),
+        shape: w.shape.map(c => ({ ch: c[1], style: MONO + ';font-size:10px;font-weight:500;border-radius:6px;padding:2px 5px;background:' + (c[0] === 'agent' ? '#d7ece7' : c[0] === 'human' ? '#f6e2d8' : '#efe9de') + ';color:' + (c[0] === 'agent' ? '#275a51' : c[0] === 'human' ? '#8a4630' : '#3d3d3a') }))
+      })),
+      wfSel: {
+        name: wf.name, file: wf.file, desc: wf.desc, historyNote: wf.historyNote,
+        history: wf.history.map((v, i) => ({ style: 'flex:1;border-radius:3px;min-height:12px;background:' + (v ? '#a9dbd0' : '#cc785c') + ';height:' + (v ? [70,58,64,52,66,74,60,56,68,62,72,58,64,70][i] : 30) + '%' })),
+        phases: wf.labels.map((p, i) => ({ n: i + 1, name: p[0], meta: p[1],
+          numStyle: MONO + ';font-size:10px;font-weight:600;width:18px;height:18px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;flex:none;background:' + (p[1].indexOf('human') > -1 ? '#f6e2d8' : '#efe9de') + ';color:' + (p[1].indexOf('human') > -1 ? '#8a4630' : '#3d3d3a') })),
+        facts: wf.facts.map(f => ({ k: f[0], v: f[1] }))
+      },
+      runSelected: () => set({ launcher: true, lwf: wf.file, lstep: 2 }),
+
+      policyRows: [['read', 'fs.read · git.log · fetch(allow-list)'], ['write', 'fs.write · labels · branch push'], ['network', 'publish · deploy · external POST'], ['destructive', 'delete · force-push · billing']].map(t => {
+        const cur = st.policy[t[0]];
+        const btn = v => 'appearance:none;cursor:pointer;font:inherit;' + MONO + ';font-size:11px;border-radius:999px;padding:4px 12px;background:' + (cur === v ? '#cc785c' : '#fffefb') + ';color:' + (cur === v ? '#fff' : '#55534d') + ';border:1px solid ' + (cur === v ? '#cc785c' : '#e6dfd8');
+        return { tier: t[0], ops: t[1], autoStyle: btn('auto'), askStyle: btn('ask'),
+          setAuto: () => self.setState(s => ({ policy: Object.assign({}, s.policy, { [t[0]]: 'auto' }) })),
+          setAsk: () => self.setState(s => ({ policy: Object.assign({}, s.policy, { [t[0]]: 'ask' }) })) };
+      }),
+      providers: [{ id: 'claude', model: 'sonnet · opus (fallback)', status: 'ready' }, { id: 'codex', model: 'gpt-5-codex', status: 'ready' }],
+      budget: st.budget, setBudget: e => set({ budget: e.target.value }),
+      conc: st.conc, concL: st.conc + ' agents', setConc: e => set({ conc: Number(e.target.value) }),
+
+      run: {
+        id: run.id, wf: run.wf, chrome: run.chrome, tickNote: run.tickNote, pill: run.pill,
+        pillStyle: pillStyle(run.state === 'waiting' ? 'run' : 'done'),
+        railTitle: run.railTitle, artTitle: 'Artifacts · ' + run.artifacts.length, fileCount: run.files.length,
+        ticks: run.ticks.map(s => ({ style: 'flex:' + (s === 'run' ? '1.3' : '1') + ';height:' + (s === 'run' ? '20' : '12') + 'px;border-radius:4px;background:' + SC[s] })),
+        labels: run.labelCounts.map(l => ({ name: l[0], n: l[1],
+          style: MONO + ';font-size:10px;border-radius:999px;padding:2px 9px;white-space:nowrap;background:' + (l[2] ? '#f6e2d8' : '#efe9de') + ';color:' + (l[2] ? '#8a4630' : '#3d3d3a'),
+          nStyle: 'color:' + (l[2] ? '#a9583e' : '#8e8b82') })),
+        rail: run.rail.map(g2 => ({ name: g2[0], meta: g2[1], steps: g2[2].map(s => ({
+          kind: s[0], label: s[1], meta: s[2], art: s[4], hasArt: !!s[4],
+          select: () => set({ stepId: s[5], tab: 'steps' }),
+          dotStyle: 'width:7px;height:7px;border-radius:999px;flex:none;background:' + SC[s[3]],
+          rowStyle: 'display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:8px;cursor:pointer;background:' + (stepId === s[5] ? '#f6e2d8' : s[3] === 'fail' ? '#fbeceb' : s[3] === 'run' ? '#fdf6f2' : 'transparent'),
+          labelStyle: 'flex:1 0 auto;min-width:0;font-size:12.5px;white-space:nowrap;font-weight:' + (s[3] === 'run' || s[3] === 'fail' ? '600' : '500'),
+          metaStyle: MONO + ';font-size:10px;flex:0 1 auto;min-width:0;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:' + (s[3] === 'fail' ? '#c64545' : '#6c6a64')
+        })) })),
+        active: run.active.map(a => ({ label: a[0], name: a[1], meta: a[2], select: () => set({ stepId: a[3], tab: 'steps' }),
+          style: 'appearance:none;cursor:pointer;font:inherit;display:flex;align-items:center;gap:7px;padding:4px 10px;border-radius:999px;white-space:nowrap;background:' + (stepId === a[3] ? '#f6e2d8' : '#faf9f5') + ';border:1px solid ' + (stepId === a[3] ? '#dd9b80' : '#e2dbd1') })),
+        findings: run.findings.map(f => ({
+          id: f[0], msg: f[1], loc: f[2], sev: f[3], stepL: f[4], chip: f[5], open: () => set({ stepId: f[7], tab: 'steps' }),
+          cardStyle: 'display:flex;flex-direction:column;gap:7px;padding:12px 14px;border-radius:12px;background:#faf9f5;border:1px solid ' + (f[6] ? '#e2dbd1' : '#dd9b80'),
+          sevStyle: MONO + ';font-size:9.5px;text-transform:uppercase;letter-spacing:.07em;border-radius:999px;padding:2px 9px;white-space:nowrap;background:#f6e2d8;color:#8a4630',
+          chipStyle: MONO + ';font-size:9.5px;border-radius:999px;padding:2px 9px;white-space:nowrap;background:' + (f[6] ? '#d7ece7' : '#f6e2d8') + ';color:' + (f[6] ? '#275a51' : '#8a4630')
+        })),
+        artifacts: run.artifacts.map(a => ({
+          f: a[0], t: a[1], sz: a[2], step: a[3], ago: a[4], select: () => set({ artSel: a[0] }),
+          rowStyle: 'appearance:none;cursor:pointer;font:inherit;display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:10px;background:' + (art[0] === a[0] ? '#f6e2d8' : 'transparent') + ';border:1px solid ' + (art[0] === a[0] ? '#dd9b80' : 'transparent'),
+          typeStyle: MONO + ';font-size:9.5px;text-transform:uppercase;letter-spacing:.06em;border-radius:6px;padding:2px 6px;flex:none;background:' + (a[1] === 'md' ? '#d7ece7' : a[1] === 'patch' ? '#f6e2d8' : '#efe9de') + ';color:' + (a[1] === 'md' ? '#275a51' : a[1] === 'patch' ? '#8a4630' : '#3d3d3a')
+        })),
+        tree: (() => {
+          const rows = [];
+          const dirs = {};
+          run.files.forEach(f => {
+            const parts = f[0].split('/');
+            const name = parts.pop();
+            let path = '';
+            parts.forEach((p, d) => {
+              path = path ? path + '/' + p : p;
+              if (!dirs[path]) { dirs[path] = true; rows.push({ dir: true, name: p, depth: d, path: path }); }
+            });
+            rows.push({ dir: false, name: name, depth: parts.length, path: f[0], a: f[1], d: f[2] });
+          });
+          const ext = n => (n.split('.').pop() || '').toUpperCase();
+          const extColor = e => e === 'TS' ? '#35786b' : e === 'JSON' ? '#a9583e' : e === 'MD' ? '#6c6a64' : '#8e8b82';
+          return rows.map(r => {
+            const on = !r.dir && file[0] === r.path;
+            return {
+              name: r.name, isFile: !r.dir,
+              twisty: r.dir ? '▾' : '',
+              twistyStyle: MONO + ';font-size:9px;color:#8e8b82;width:10px;flex:none;text-align:center',
+              icon: r.dir ? '' : ext(r.name),
+              iconStyle: r.dir ? 'display:none' : MONO + ';font-size:8px;letter-spacing:.04em;border-radius:4px;padding:1px 4px;flex:none;background:#efe9de;color:' + extColor(ext(r.name)),
+              nameStyle: MONO + ';font-size:11.5px;flex:1;min-width:0;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:' + (r.dir ? '500' : on ? '600' : '400') + ';color:' + (r.dir ? '#55534d' : '#141413'),
+              stat: r.dir ? '' : '+' + r.a + ' −' + r.d,
+              statStyle: MONO + ';font-size:9.5px;flex:none;color:' + (on ? '#8a4630' : '#8e8b82'),
+              rowStyle: 'appearance:none;border:0;cursor:' + (r.dir ? 'default' : 'pointer') + ';font:inherit;display:flex;align-items:center;gap:6px;padding:3px 10px 3px ' + (10 + r.depth * 13) + 'px;background:' + (on ? '#f6e2d8' : 'transparent'),
+              select: r.dir ? (() => {}) : (() => set({ fileSel: r.path }))
+            };
+          });
+        })(),
+        files: run.files.map(f => ({
+          p: f[0], a: '+' + f[1], d: '−' + f[2], select: () => set({ fileSel: f[0] }),
+          rowStyle: 'appearance:none;cursor:pointer;font:inherit;display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:10px;background:' + (file[0] === f[0] ? '#f6e2d8' : 'transparent')
+        })),
+        journal: run.journal.map(l => ({ t: l[0], tag: l[1], text: l[2],
+          tagStyle: MONO + ';font-size:10px;width:56px;flex:none;color:' + (l[1] === 'agent' ? '#7fc9b9' : l[1] === 'tool' ? '#dd9b80' : l[1] === 'human' ? '#eac6b4' : '#a09d96') }))
+      },
+      showRail: tab === 'steps' || tab === 'question',
+      tabs: tabDef.map(t => ({
+        label: t[1], badge: t[2], go: () => set({ tab: t[0] }),
+        style: 'appearance:none;border:0;cursor:pointer;font:inherit;display:flex;align-items:center;gap:7px;padding:9px 13px;background:none;font-size:12.5px;border-bottom:2px solid ' + (tab === t[0] ? '#cc785c' : 'transparent') + ';font-weight:' + (tab === t[0] ? '600' : '500') + ';color:' + (tab === t[0] ? '#141413' : '#6c6a64'),
+        badgeStyle: t[2] ? MONO + ';font-size:9.5px;border-radius:999px;padding:1px 6px;background:' + (tab === t[0] ? '#f6e2d8' : '#efe9de') + ';color:' + (tab === t[0] ? '#8a4630' : '#6c6a64') : 'display:none'
+      })),
+      tabSteps: tab === 'steps' && !(pendingGate && stepId.indexOf('gate') === 0),
+      showGatePane: tab === 'steps' && pendingGate && stepId.indexOf('gate') === 0,
+      tabFindings: tab === 'findings',
+      tabArtifacts: tab === 'artifacts', tabChanges: tab === 'changes', tabJournal: tab === 'journal',
+      backToQueue: () => set({ view: 'queue' }),
+      goQuestion: () => set({ tab: 'steps', stepId: 'gate-1' }),
+
+      step: {
+        title: step.title, pill: step.pill, pillStyle: pillStyle(step.pillKind), action: step.action, idL: 'weft explain ' + stepId,
+        cells: step.cells.map(c => self.cell(c[0], c[1], c[2], c[0] === 'kind' ? 96 : 104)),
+        input: step.input.map((f, i) => ({
+          k: f[0], isRecord: f[1] === 'record', isFile: f[1] === 'file', isText: f[1] === 'text', hasPills: (f[5] || []).length > 0,
+          ref: f[2], title: f[1] === 'record' ? f[3] : f[2], sub: f[1] === 'record' ? f[4] : f[3],
+          textStyle: MONO + ';font-size:11.5px;color:' + (f[2] === '—' ? '#8e8b82' : '#3d3d3a'),
+          pills: (f[5] || []).map(p => ({ t: p, style: MONO + ';font-size:10.5px;border-radius:999px;padding:2px 9px;white-space:nowrap;background:#efe9de;color:#3d3d3a' })),
+          rowStyle: 'display:flex;align-items:flex-start;gap:12px;padding:7px 12px;' + (i ? 'border-top:1px solid #efe9de' : '')
+        })),
+        outTitle: step.outTitle, outNote: step.outNote, out: step.out.map(o => ({ t: o[0] })), streaming: step.streaming,
+        hasTools: step.hasTools, toolsTitle: step.toolsTitle,
+        tools: (step.tools || []).map(t => ({ cmd: t[0], meta: t[1],
+          rowStyle: 'display:flex;align-items:center;gap:10px;padding:6px 11px;border-radius:9px;background:' + (t[2] ? '#fdf6f2' : '#faf9f5') + ';border:1px solid ' + (t[2] ? '#dd9b80' : '#e2dbd1'),
+          metaStyle: MONO + ';font-size:10.5px;flex:none;color:' + (t[2] ? '#a9583e' : '#6c6a64') })),
+        hasNext: step.hasNext, nextK: step.nextK, nextV: step.nextV, nextGoQ: !!step.nextGoQ
+      },
+      gate: gate,
+      submitGate: () => self.setState(s => ({ answered: Object.assign({}, s.answered, { [run.id]: true }), tab: 'steps', stepId: 'fix-f2' })),
+      denyGate: () => self.setState(s => ({ answered: Object.assign({}, s.answered, { [run.id]: true }), view: 'queue' })),
+
+      art: { f: art[0], path: '.weft/runs/' + run.id + '/artifacts/' + art[0], title: artBody.title,
+        body: artBody.body.map(b => ({ t: b[0], style: 'font-size:13.5px;line-height:1.6;color:#3d3d3a' })),
+        hasRows: artBody.rows.length > 0, rows: artBody.rows.map(r => ({ k: r[0], t: r[1], v: r[2] })),
+        meta: [['produced by', art[3]], ['type', art[1]], ['size', art[2]], ['journaled', art[4]]].map((m, i) => ({ k: m[0], v: m[1],
+          style: 'display:flex;flex-direction:column;gap:2px;min-width:120px;padding:0 14px;' + (i ? 'border-left:1px solid #efe9de' : 'padding-left:0') })) },
+
+      file: { p: file[0], a: '+' + file[1], d: '−' + file[2],
+        hunk: (DIFFS[file[0]] || {}).hunk || '@@ -12,4 +12,9 @@ fetchWithRetry()',
+        lines: ((DIFFS[file[0]] || {}).lines || diffLines).map(l => ({ ln: l[0] || '·', rn: l[1] || '·', t: l[2],
+          rowStyle: 'display:flex;align-items:baseline;background:' + (l[3] === '+' ? 'rgba(93,184,166,.12)' : l[3] === '-' ? 'rgba(204,120,92,.14)' : 'transparent'),
+          textStyle: 'flex:1;min-width:0;white-space:pre;color:' + (l[3] === '+' ? '#a9dbd0' : l[3] === '-' ? '#eac6b4' : '#c8c3ba') })) },
+
+      launcherOpen: st.launcher, lstep1: st.lstep === 1, lstep2: st.lstep === 2,
+      backToPick: () => set({ lstep: 1 }),
+      lwfName: lwf.name, lwfFile: lwf.file, lwfMeta: '~' + lwf.p50 + ' · ~' + lwf.cost,
+      openLauncher: () => set({ launcher: true, lstep: 1, query: '' }),
+      closeLauncher: () => set({ launcher: false }),
+      stop: e => e.stopPropagation(),
+      query: st.query, setQuery: e => set({ query: e.target.value }),
+      matchL: matches.length + ' of ' + wfs.length + ' match',
+      matches: matches.map(w => ({
+        name: w.name, file: w.file, meta: '~' + w.p50 + ' · ~' + w.cost, pick: () => set({ lwf: w.file, lstep: 2 }),
+        dotStyle: 'width:7px;height:7px;border-radius:999px;flex:none;background:' + SC[w.state],
+        rowStyle: 'appearance:none;cursor:pointer;font:inherit;display:flex;align-items:center;gap:12px;padding:9px 20px;text-align:left;background:' + (st.lwf === w.file ? '#f6e2d8' : 'transparent') + ';border:0;border-left:3px solid ' + (st.lwf === w.file ? '#cc785c' : 'transparent')
+      })),
+      launcherShape: lwf.labels.map(l => l[0]).join(' → '),
+      launcherFields: [
+        { k: 'repo', req: ' *', isText: true, v: li.repo, set: e => setLi('repo', e.target.value) },
+        { k: 'window', req: ' *', isSeg: true, opts: ['24h', '7d', '30d'].map(o => ({ label: o, pick: () => setLi('window', o), style: lpill(li.window === o) })) },
+        { k: 'labels', req: '', isChips: true, opts: ['bug', 'docs', 'feature', 'security'].map(o => ({ label: o, tick: li.labels.indexOf(o) > -1 ? '✓ ' : '',
+          pick: () => setLi('labels', li.labels.indexOf(o) > -1 ? li.labels.filter(x => x !== o) : li.labels.concat([o])), style: lpill(li.labels.indexOf(o) > -1) })) },
+        { k: 'rules', req: '', isFile: true, v: li.rules },
+        { k: 'dryRun', req: '', isFlag: true, v: li.dry ? 'plan only — no writes' : 'writes allowed at gates',
+          toggle: () => setLi('dry', !li.dry),
+          trackStyle: 'width:30px;height:17px;border-radius:999px;flex:none;display:inline-flex;align-items:center;padding:0 2px;justify-content:' + (li.dry ? 'flex-end' : 'flex-start') + ';background:' + (li.dry ? '#cc785c' : '#e6dfd8') }
+      ],
+      startRun: () => set({ launcher: false, lstep: 1, view: 'run', runId: 'r-049', tab: 'steps', stepId: 'cl-815' })
+    };
+  }
+}
+</script>
+</body>
+</html>

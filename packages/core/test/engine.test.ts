@@ -50,6 +50,12 @@ describe("engine end to end", () => {
     expect(types).toContain("run.completed");
     const scheduled = recs.find((r) => r.ev.type === "step.scheduled")?.ev;
     expect(scheduled).toMatchObject({ kind: "agent", key: "plan", phase: "Plan" });
+    expect(scheduled).toMatchObject({
+      schema: {
+        type: "object",
+        properties: { steps: { type: "array" }, risk: { type: "string" } },
+      },
+    });
     expect(t.builder.calls[0]!.prompt).toContain("Plan: migrate");
     // read-only steps get the read-only instruction
     expect(t.builder.calls[0]!.prompt).toContain("read-only");
