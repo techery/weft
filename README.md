@@ -247,8 +247,18 @@ The daemon's HTTP surface is what it reads from:
 
 ```bash
 pnpm build && node packages/cli/bin/weft.js ui   # or `weft ui` with weft on your PATH
-pnpm dev:ui                                      # vite on :4782, hot reload, no daemon
 ```
+
+To work on the UI itself, run both: the daemon does the work, and Vite serves the page
+and proxies its API calls there — so a component can be edited while a run is mid-flight.
+
+```bash
+weft ui        # terminal 1 — a daemon on :4781
+pnpm dev:ui    # terminal 2 — the UI on :4782, hot-reloading against it
+```
+
+Open **http://localhost:4782** (Vite binds `[::1]`, the daemon binds `127.0.0.1`; the
+proxy bridges them). `WEFT_DAEMON=http://127.0.0.1:4790 pnpm dev:ui` points it elsewhere.
 
 A checkout that has not built the manager still gets a working UI: the daemon falls back
 to its own built-in page, and `weft ui` says which one you are looking at. That page reads

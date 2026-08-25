@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, type ProxyOptions } from "vite";
 
 /**
  * The manager is served by `@techery/weft-daemon` — what `weft ui` starts — so it builds
@@ -10,12 +10,37 @@ import { defineConfig } from "vite";
  */
 const DAEMON_WEB = fileURLToPath(new URL("../../packages/daemon/web", import.meta.url));
 
+/**
+ * In dev the page is served by Vite, not by the daemon, so its same-origin `/api` calls
+ * would land on Vite. They are proxied to a daemon you start yourself:
+ *
+ *   weft ui                     # a daemon on :4781, doing real work
+ *   pnpm dev:ui                 # this, on :4782, hot-reloading against it
+ *   WEFT_DAEMON=http://127.0.0.1:4790 pnpm dev:ui
+ *
+ * Proxying rather than enabling CORS on the daemon is deliberate: the daemon refuses any
+ * request carrying a non-loopback Origin, and that guard is what stands between a page you
+ * happen to visit and an API that can cancel your runs. A proxy keeps the browser
+ * same-origin, so the guard stays exactly as strict as it is in production.
+ */
+const DAEMON = process.env.WEFT_DAEMON ?? "http://127.0.0.1:4781";
+
+const proxy: Record<string, ProxyOptions> = {
+  // The journal arrives as Server-Sent Events, so this path has to stream rather than
+  // buffer. http-proxy passes a response through as it arrives, and the daemon already
+  // sends `x-accel-buffering: no`, so no special handling is needed here — but it is the
+  // thing to check first if a live run stops updating in dev.
+  "/api": { target: DAEMON, changeOrigin: true },
+};
+
 export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: { "~": fileURLToPath(new URL("./src", import.meta.url)) },
   },
-  server: { port: 4782 },
+  server: { port: 4782, proxy },
+  // `vite preview` serves the built bundle, which needs the same door to the daemon.
+  preview: { port: 4783, proxy },
   build: {
     outDir: DAEMON_WEB,
     // The output lives outside this project root, so Vite wants the intent spelled out.

@@ -3,10 +3,47 @@
 The weft workflow manager — the local daemon's single-page web UI.
 
 ```bash
-pnpm dev:ui                              # vite dev server on :4782, hot reload
+pnpm dev:ui                              # vite on :4782, hot reload, proxied to a daemon
 pnpm --filter @techery/weft-ui build     # -> packages/daemon/web/
 pnpm --filter @techery/weft-ui test
 ```
+
+## Editing the UI against a working daemon
+
+Two processes. The daemon does the real work; Vite serves the page and forwards its API
+calls there, so you can edit a component while a run is mid-flight and see the change
+without losing what is on screen.
+
+```bash
+weft ui                 # terminal 1 — a daemon on :4781, running your workflows
+pnpm dev:ui             # terminal 2 — the UI on :4782, hot-reloading against it
+```
+
+Then open **http://localhost:4782** — not `127.0.0.1:4782`. Vite binds `[::1]` and the
+daemon binds `127.0.0.1`; the proxy bridges them, but only the address Vite is actually
+listening on will answer.
+
+Point it somewhere else with `WEFT_DAEMON`:
+
+```bash
+WEFT_DAEMON=http://127.0.0.1:4790 pnpm dev:ui
+```
+
+Keep that an IP, not `localhost` — Node resolves `localhost` to `::1` first, and the
+daemon does not listen there.
+
+The proxy exists instead of CORS on the daemon, deliberately. The daemon refuses any
+request carrying a non-loopback `Origin`, and that guard is what stands between a page you
+happen to visit and an API that can cancel your runs. Proxying keeps the browser
+same-origin, so the guard stays exactly as strict in dev as in production.
+
+Two things to know:
+
+- **`weft ui` serves the built bundle**, read once at startup. Changes you make in dev do
+  not reach it until `pnpm --filter @techery/weft-ui build` **and** a daemon restart. Dev
+  mode is where you iterate; the daemon is where you check the shipped artifact.
+- The status bar shows the origin the page is talking to, which in dev is Vite's address
+  rather than the daemon's. That is the address requests actually go to.
 
 ## How `weft ui` serves it
 
