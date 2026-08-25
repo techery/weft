@@ -96,7 +96,7 @@ export function RunDetailPage() {
           )
         ) : null}
 
-        {tab === "findings" ? <FindingsTab run={run} /> : null}
+        {tab === "notes" ? <FindingsTab run={run} /> : null}
 
         {tab === "artifacts" ? (
           <ArtifactsTab run={run} artifact={artifact} onSelect={(name) => patch({ artifact: name })} />

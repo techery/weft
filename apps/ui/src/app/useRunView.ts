@@ -83,13 +83,40 @@ export function useRunView(runId: string): RunView {
   // The request blocking THIS run, which is not always the root's — a child suspended on a
   // person is the run that must be answered.
   const request = pending.data?.pending.find((entry) => entry.runId === runId);
-  const files: FileChange[] = (patch.data?.patches ?? []).flatMap((entry) =>
-    entry.stats.map((stat) => ({ path: stat.path, adds: stat.adds, dels: stat.dels })),
-  );
+  // A run captures one patch per write step, and several of them routinely touch the same
+  // file — five agents all editing App.tsx is the normal shape of a parallel build. The
+  // changes view is about FILES, so each one is listed once with its totals across every
+  // patch, and its hunks are concatenated in capture order rather than one patch silently
+  // replacing another's.
+  const totals = new Map<string, FileChange>();
   const diffs: Record<string, FileDiff> = {};
   for (const entry of patch.data?.patches ?? []) {
-    if (entry.diff !== undefined) Object.assign(diffs, splitDiff(entry.diff));
+    for (const stat of entry.stats) {
+      const seen = totals.get(stat.path);
+      if (seen) {
+        seen.adds += stat.adds;
+        seen.dels += stat.dels;
+      } else {
+        totals.set(stat.path, { path: stat.path, adds: stat.adds, dels: stat.dels });
+      }
+    }
+    if (entry.diff === undefined) continue;
+    for (const [path, fileDiff] of Object.entries(splitDiff(entry.diff))) {
+      const seen = diffs[path];
+      if (seen === undefined) {
+        diffs[path] = fileDiff;
+        continue;
+      }
+      // The later patch's own header becomes a line, so the join stays readable as one
+      // scroll rather than pretending the hunks were contiguous.
+      seen.lines.push(
+        { ln: "", rn: "", text: "", sign: "" },
+        { ln: "", rn: "", text: fileDiff.hunk, sign: "" },
+      );
+      seen.lines.push(...fileDiff.lines);
+    }
   }
+  const files: FileChange[] = [...totals.values()];
 
   const run = adaptRun(detail.data, {
     journal: journalEntries(records),

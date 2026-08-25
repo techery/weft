@@ -116,11 +116,15 @@ export function createApp(weft: Weft, opts: CreateAppOptions = {}): Hono {
         await Promise.all(
           rows.map(async (row) => {
             const state = await stateOf(weft, row.runId).catch(() => undefined);
+            // Distinct seqs, not array length: a replay that could not trust step
+            // positions re-schedules a seq, and the fold keeps both records on purpose —
+            // so a resumed run would otherwise report more steps than it has.
+            const latest = new Map(state?.steps.map((step) => [step.seq, step]) ?? []);
             return {
               ...row,
               spend: state ? state.budget : { tokens: 0, usd: 0 },
-              steps: state ? state.steps.length : 0,
-              running: state ? state.steps.filter((step) => step.status === "running").length : 0,
+              steps: latest.size,
+              running: [...latest.values()].filter((step) => step.status === "running").length,
             };
           }),
         ),

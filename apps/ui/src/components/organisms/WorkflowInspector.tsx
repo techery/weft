@@ -4,6 +4,7 @@ import type { HistoryBar } from "~/components/molecules/HistoryBars";
 import { HistoryBars } from "~/components/molecules/HistoryBars";
 import { PhaseRow } from "~/components/molecules/PhaseRow";
 import { RecentRunRow } from "~/components/molecules/RecentRunRow";
+import { ShapeStrip } from "~/components/molecules/ShapeStrip";
 import type { RunState, Workflow } from "~/domain/types";
 import styles from "./WorkflowInspector.module.css";
 
@@ -40,7 +41,7 @@ export function WorkflowInspector({
   return (
     <aside className={styles.panel}>
       <div className={styles.identity}>
-        <span className={styles.path}>.weft/workflows/{workflow.file}</span>
+        <span className={styles.path}>{workflow.file}</span>
         <h2 className={styles.name}>{workflow.name}</h2>
         <span className={styles.desc}>{workflow.desc}</span>
       </div>
@@ -82,6 +83,18 @@ export function WorkflowInspector({
                 : "no runs in the last 30 days"}
           </span>
         ) : null}
+      </div>
+
+      <div className={styles.labels}>
+        <Kicker className={styles.kickerSpaced}>Shape</Kicker>
+        {workflow.shape.length > 0 ? (
+          <span className={styles.shapeRow}>
+            <ShapeStrip shape={workflow.shape} />
+            <span className={styles.shapeLegend}>T task · A agent · H human · ∥ parallel</span>
+          </span>
+        ) : (
+          <span className={styles.recentEmpty}>no runs yet — the shape is read off the newest one</span>
+        )}
       </div>
 
       <div className={styles.labels}>

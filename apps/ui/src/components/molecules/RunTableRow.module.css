@@ -69,7 +69,7 @@
   font-size: 12px;
 }
 .cost {
-  width: 56px;
+  width: 76px;
   flex: none;
   text-align: right;
   font-family: var(--font-mono);

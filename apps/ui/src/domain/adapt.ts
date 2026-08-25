@@ -94,6 +94,23 @@ export function money(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
+/**
+ * What a run cost, in whatever unit the providers actually reported. Codex reports tokens
+ * and no dollars, so a bare "$0.00" beside three million tokens reads as free rather than
+ * as unpriced.
+ */
+export function spend(budget: { tokens: number; usd: number }): string {
+  if (budget.usd > 0) return money(budget.usd);
+  if (budget.tokens > 0) return `${compactTokens(budget.tokens)} tok`;
+  return "$0.00";
+}
+
+function compactTokens(count: number): string {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${Math.round(count / 1_000)}k`;
+  return String(count);
+}
+
 export function tokens(step: StepState): number {
   return (step.usage?.input ?? 0) + (step.usage?.output ?? 0);
 }
@@ -137,7 +154,11 @@ export interface RunExtras {
 
 export function adaptRun(detail: RunDetail, extras: RunExtras = {}): Run {
   const state = runState(detail.status);
-  const running = detail.steps.filter((step) => step.status === "running");
+  // A resumed run journals the same seq twice, and the projection keeps both occurrences
+  // so the earlier one stays readable. Everything counted here — the step total, what is
+  // active, the rail — means DISTINCT steps, so it reads the latest of each.
+  const steps = latestBySeq(detail.steps);
+  const running = steps.filter((step) => step.status === "running");
   const pending = detail.humans.filter((human) => human.status === "pending");
   const gate = extras.pending ? adaptGate(extras.pending) : adaptGateFromState(detail, pending[0]);
 
@@ -146,17 +167,22 @@ export function adaptRun(detail: RunDetail, extras: RunExtras = {}): Run {
     wf: detail.workflow,
     file: extras.file ?? "",
     state,
-    chrome: chromeOf(detail),
+    chrome: chromeOf(detail, steps.length),
     pill: pillOf(detail, running.length, pending.length),
     gateStep: gate ? gateStepId(gate.id) : null,
-    railTitle: railTitleOf(detail),
-    rail: railOf(detail, pending),
-    active: running.map((step) => ({
-      label: step.phase ?? "",
-      name: labelOf(step),
-      meta: duration(step.startedAt, undefined),
-      stepId: stepId(step.seq),
-    })),
+    railTitle: railTitleOf(detail, steps.length),
+    rail: railOf(detail, steps, pending, terminal(detail.status)),
+    // A finished run has nothing active. A step still marked `running` in one never
+    // recorded its completion, and counting elapsed time from its start would report the
+    // age of the run as its duration.
+    active: terminal(detail.status)
+      ? []
+      : running.map((step) => ({
+          label: step.phase ?? "",
+          name: labelOf(step),
+          meta: duration(step.startedAt, undefined),
+          stepId: stepId(step.seq),
+        })),
     findings: findingsOf(detail),
     artifacts: extras.artifacts ?? [],
     files: extras.files ?? [],
@@ -167,18 +193,18 @@ export function adaptRun(detail: RunDetail, extras: RunExtras = {}): Run {
     branchNote: branchNoteOf(detail),
     journal: extras.journal ?? [],
     gate,
-    steps: stepsOf(detail, pending),
+    steps: stepsOf(detail, steps, pending),
   };
 }
 
-function chromeOf(detail: RunDetail): string {
+function chromeOf(detail: RunDetail, stepCount: number): string {
   const parts = [
-    `${detail.steps.length} step${detail.steps.length === 1 ? "" : "s"}`,
+    `${stepCount} step${stepCount === 1 ? "" : "s"}`,
     duration(detail.createdAt, terminal(detail.status) ? detail.updatedAt : undefined),
   ];
   const cap = detail.limits?.usd;
   // No ceiling means no denominator: "$0.12 / $0.00" would read as over budget.
-  parts.push(cap === undefined ? money(detail.budget.usd) : `${money(detail.budget.usd)} / ${money(cap)}`);
+  parts.push(cap === undefined ? spend(detail.budget) : `${money(detail.budget.usd)} / ${money(cap)}`);
   return parts.join(" · ");
 }
 
@@ -199,9 +225,9 @@ function pillOf(detail: RunDetail, running: number, pending: number): string {
   }
 }
 
-function railTitleOf(detail: RunDetail): string {
+function railTitleOf(detail: RunDetail, stepCount: number): string {
   return terminal(detail.status)
-    ? `Run tree · ${detail.steps.length} step${detail.steps.length === 1 ? "" : "s"} recorded`
+    ? `Run tree · ${stepCount} step${stepCount === 1 ? "" : "s"} recorded`
     : "Run tree · appended as steps start";
 }
 
@@ -211,57 +237,80 @@ function railTitleOf(detail: RunDetail): string {
  * A pending human request is shown as `waiting`, which the step's own status cannot say —
  * a human step is "running" right up until it is answered.
  */
-function railOf(detail: RunDetail, pending: HumanState[]): RailGroup[] {
+function railOf(
+  detail: RunDetail,
+  steps: StepState[],
+  pending: HumanState[],
+  runFinished: boolean,
+): RailGroup[] {
   const waitingSeqs = new Set(pending.map((human) => human.seq));
-  const bySeq = new Map(detail.steps.map((step) => [step.seq, step]));
-  const grouped = new Set<number>();
-  const groups: RailGroup[] = [];
+  const bySeq = new Map(steps.map((step) => [step.seq, step]));
 
+  // A resumed run schedules the same seq again, so the projection can list one step under
+  // two phases. The projection's own rule for a duplicate seq is that the LATEST occurrence
+  // counts, and the same holds here: a step shows once, under the phase that was current
+  // when it last ran.
+  const phaseOf = new Map<number, string>();
+  for (const phase of detail.phases) {
+    for (const seq of phase.steps) phaseOf.set(seq, phase.name);
+  }
+
+  const groups: RailGroup[] = [];
+  const grouped = new Set<number>();
   for (const phase of detail.phases) {
     const steps = phase.steps
+      .filter((seq) => phaseOf.get(seq) === phase.name)
       .map((seq) => bySeq.get(seq))
       .filter((step): step is StepState => step !== undefined);
-    for (const step of steps) grouped.add(step.seq);
     if (steps.length === 0) continue;
+    for (const step of steps) grouped.add(step.seq);
     groups.push({
       name: phase.name,
       meta: groupMeta(steps),
-      steps: steps.map((s) => railStep(s, waitingSeqs)),
+      steps: steps.map((step) => railStep(step, waitingSeqs, runFinished)),
     });
   }
 
-  const loose = detail.steps.filter((step) => !grouped.has(step.seq));
+  const loose = steps.filter((step) => !grouped.has(step.seq));
   if (loose.length > 0) {
     groups.push({
       name: "no phase",
       meta: groupMeta(loose),
-      steps: loose.map((s) => railStep(s, waitingSeqs)),
+      steps: loose.map((step) => railStep(step, waitingSeqs, runFinished)),
     });
   }
   return groups;
 }
 
+/** A group's one-line summary. The count is said once, never twice. */
+
 function groupMeta(steps: StepState[]): string {
   const kinds = new Set(steps.map((step) => step.kind));
   const parallel = steps.filter((step) => step.status === "running").length > 1;
-  const shape = kinds.size === 1 ? [...kinds][0] : `${steps.length} steps`;
-  return `${shape}${steps.length > 1 ? ` ×${steps.length}` : ""}${parallel ? " ∥" : ""}`;
+  const shape =
+    kinds.size === 1
+      ? `${[...kinds][0]}${steps.length > 1 ? ` ×${steps.length}` : ""}`
+      : `${steps.length} steps`;
+  return `${shape}${parallel ? " ∥" : ""}`;
 }
 
-function railStep(step: StepState, waiting: Set<number>): RailStep {
+function railStep(step: StepState, waiting: Set<number>, runFinished: boolean): RailStep {
   const isWaiting = step.kind === "human" && waiting.has(step.seq);
+  // A step left running by a run that has since finished never recorded a completion.
+  const stranded = runFinished && step.status === "running";
   return {
     id: stepId(step.seq),
     kind: stepBucket(step.kind),
     label: labelOf(step),
-    meta: stepMeta(step, isWaiting),
-    state: isWaiting ? "waiting" : stepStatus(step),
+    meta: stepMeta(step, isWaiting, stranded),
+    state: isWaiting ? "waiting" : stranded ? "idle" : stepStatus(step),
     artifact: step.patchRef ? "patch" : "",
   };
 }
 
-function stepMeta(step: StepState, waiting: boolean): string {
+function stepMeta(step: StepState, waiting: boolean, stranded: boolean): string {
   if (waiting) return "waiting on you";
+  if (stranded) return "never finished";
   if (step.status === "failed") return `failed${step.error?.code ? ` · ${step.error.code}` : ""}`;
   const count = tokens(step);
   if (count > 0) return `${(count / 1000).toFixed(1)}k tok`;
@@ -309,11 +358,11 @@ function terminal(status: RunStatus): boolean {
 
 /* ── Steps ────────────────────────────────────────────────────────────────── */
 
-function stepsOf(detail: RunDetail, pending: HumanState[]): Record<string, StepDetail> {
+function stepsOf(detail: RunDetail, steps: StepState[], pending: HumanState[]): Record<string, StepDetail> {
   const out: Record<string, StepDetail> = {};
   const waitingIds = new Set(pending.map((human) => human.id));
 
-  for (const step of detail.steps) {
+  for (const step of steps) {
     out[stepId(step.seq)] = machineStep(detail, step);
   }
   for (const human of detail.humans) {
@@ -407,6 +456,17 @@ function inputRows(payload: unknown): StepInput[] {
     }
     return { k: key, kind: "text" as const, ref: "", title: compact(value), sub: "", pills: [] };
   });
+}
+
+/**
+ * The latest occurrence of each step. A replay that could not trust step positions
+ * re-schedules a seq, and the projection keeps both records on purpose; the second is what
+ * actually ran.
+ */
+function latestBySeq(steps: StepState[]): StepState[] {
+  const bySeq = new Map<number, StepState>();
+  for (const step of steps) bySeq.set(step.seq, step);
+  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
 }
 
 /** Pretty-printed JSON as lines, or one line for a scalar. */
@@ -565,9 +625,10 @@ export function adaptWorkflow(row: WorkflowRow, extras: WorkflowExtras = {}): Wo
     desc: row.description,
     state: workflowStateOf(recent),
     lastLabel: ago(stats?.lastRunAt),
-    ok: stats?.successRate ?? 100,
+    // `null` means "never scored", which is not the same as "scored perfectly".
+    ok: stats?.successRate ?? null,
     p50: stats?.p50Ms === null || stats?.p50Ms === undefined ? "—" : formatElapsed(stats.p50Ms),
-    cost: stats === undefined ? "—" : money(stats.p50Usd ?? 0),
+    cost: costOf(stats),
     shape: shapeOf(extras.shapeSource),
     labels: labelsOf(extras.shapeSource),
     // Newest-first from the API; the sparkline reads oldest-first.
@@ -581,6 +642,14 @@ export function adaptWorkflow(row: WorkflowRow, extras: WorkflowExtras = {}): Wo
     })),
     inputs: [],
   };
+}
+
+/** Median run cost, in whatever unit was reported — or nothing, for a workflow never run. */
+function costOf(stats: WorkflowStats | undefined): string {
+  if (stats === undefined || stats.runs === 0) return "—";
+  if (stats.p50Usd !== null && stats.p50Usd > 0) return money(stats.p50Usd);
+  if (stats.tokens > 0) return `${compactTokens(Math.round(stats.tokens / Math.max(stats.runs, 1)))} tok`;
+  return "—";
 }
 
 function workflowStateOf(recent: WorkflowStats["recent"]): Workflow["state"] {
@@ -698,19 +767,25 @@ export function adaptRunRows(rows: RunRow[], pendingByRun: Map<string, PendingRe
       outcome: outcomeOf(row, pendingByRun.get(row.runId)),
       started: clock(row.createdAt),
       dur: duration(row.createdAt, terminal(row.status) ? row.updatedAt : undefined),
-      cost: row.spend ? money(row.spend.usd) : "",
+      cost: row.spend ? spend(row.spend) : "",
     }));
 }
 
+/**
+ * The one-line "where it stands". It must say something the State column does not — a row
+ * reading "done · done" spends a column to repeat itself.
+ */
 function outcomeOf(row: RunRow, pending: PendingRequest | undefined): string {
   if (pending) return pending.question;
+  const steps = row.steps ?? 0;
+  const recorded = steps === 1 ? "1 step" : `${steps} steps`;
   switch (row.status) {
     case "complete":
-      return "done";
+      return steps > 0 ? `finished ${recorded}` : "";
     case "failed":
-      return "failed";
+      return steps > 0 ? `failed after ${recorded}` : "failed";
     case "cancelled":
-      return "stopped";
+      return steps > 0 ? `stopped after ${recorded}` : "stopped";
     case "waiting_for_signal":
       return "waiting for a signal";
     default: {

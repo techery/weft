@@ -44,8 +44,8 @@ export type Workflow = {
   desc: string;
   state: WorkflowState;
   lastLabel: string;
-  /** Success rate over the journal window, as a whole percent. */
-  ok: number;
+  /** Success rate over the journal window as a whole percent, or null when never scored. */
+  ok: number | null;
   p50: string;
   cost: string;
   shape: ShapeCell[];

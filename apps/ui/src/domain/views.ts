@@ -6,7 +6,7 @@ import type { Artifact, FileChange, Run } from "./types";
 /** Where a run was opened from, so its back button can say so. */
 export type RunOrigin = "queue" | "runs";
 
-export const RUN_TABS = ["steps", "findings", "artifacts", "changes", "journal"] as const;
+export const RUN_TABS = ["steps", "notes", "artifacts", "changes", "journal"] as const;
 export type RunTab = (typeof RUN_TABS)[number];
 
 export type RunTabDef = { key: RunTab; label: string; badge: string };
@@ -15,7 +15,7 @@ export type RunTabDef = { key: RunTab; label: string; badge: string };
 export function runTabs(run: Run, pendingGate: boolean): RunTabDef[] {
   const defs: RunTabDef[] = [
     { key: "steps", label: "Steps", badge: pendingGate ? "1" : "" },
-    { key: "findings", label: "Notes", badge: String(run.findings.length) },
+    { key: "notes", label: "Notes", badge: String(run.findings.length) },
     { key: "artifacts", label: "Artifacts", badge: String(run.artifacts.length) },
     { key: "changes", label: "Changes", badge: String(run.files.length) },
     { key: "journal", label: "Journal", badge: "" },
@@ -68,7 +68,11 @@ export type TreeNode = {
 export function fileTree(files: FileChange[]): TreeNode[] {
   const rows: TreeNode[] = [];
   const seen = new Set<string>();
-  for (const file of files) {
+  // Sorted first, or this is not a tree: patches arrive in capture order, so a second file
+  // under `src/` reached after a root-level file would open `src/components/` below it and
+  // the indentation would describe a hierarchy that is not there.
+  const ordered = [...files].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  for (const file of ordered) {
     const parts = file.path.split("/");
     const name = parts.pop() ?? "";
     let path = "";
@@ -87,7 +91,9 @@ export function fileTree(files: FileChange[]): TreeNode[] {
         extColor: "",
       });
     });
-    const ext = (name.split(".").pop() ?? "").toUpperCase();
+    // `.gitignore` has no extension — its leading dot is part of the name.
+    const dot = name.lastIndexOf(".");
+    const ext = dot > 0 ? name.slice(dot + 1).toUpperCase() : "";
     rows.push({
       key: `file:${file.path}`,
       name,

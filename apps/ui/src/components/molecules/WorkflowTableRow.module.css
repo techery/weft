@@ -38,10 +38,6 @@
   flex: 1;
   min-width: 0;
 }
-.shape {
-  width: 96px;
-  flex: none;
-}
 .last {
   width: 62px;
   flex: none;

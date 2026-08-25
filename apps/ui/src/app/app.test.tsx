@@ -150,7 +150,9 @@ describe("workflows", () => {
   it("lists the registry and inspects the selected one", async () => {
     renderApp("/workflows?wf=release");
     expect(await screen.findByText("Draft and publish release notes")).toBeInTheDocument();
-    expect(screen.getByText(".weft/workflows/release.ts")).toBeInTheDocument();
+    // The API returns a repo-relative path; the inspector must not prefix it again.
+    expect(screen.getAllByText(".weft/workflows/release.ts").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/\.weft\/workflows\/\.weft/)).not.toBeInTheDocument();
   });
 });
 

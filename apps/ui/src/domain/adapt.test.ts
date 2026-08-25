@@ -116,7 +116,8 @@ describe("tabs", () => {
     const run = adaptRun(detail({ notes: [{ kind: "finding", text: "x" }] }));
     expect(runTabs(run, true)[0]?.badge).toBe("1");
     expect(runTabs(run, false)[0]?.badge).toBe("");
-    expect(runTabs(run, false).map((t) => t.key)).toContain("findings");
+    // The tab is labelled "Notes"; its key matches, so ?tab=notes resolves.
+    expect(runTabs(run, false).map((t) => t.key)).toContain("notes");
   });
 });
 

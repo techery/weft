@@ -12,10 +12,8 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+/* Rail chips hold one short word; they keep it and let the label beside them give way. */
 .truncating {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: none;
   padding: 1px 6px;
 }

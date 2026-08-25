@@ -79,7 +79,6 @@ export function WorkflowsPage() {
               head={
                 <>
                   <span className={styles.headWorkflow}>Workflow</span>
-                  <span className={styles.headShape}>Shape</span>
                   <span className={styles.headLast}>Last</span>
                   <span className={styles.headSuccess}>Success</span>
                   <span className={styles.headP50}>p50</span>
@@ -99,11 +98,6 @@ export function WorkflowsPage() {
                 />
               ))}
             </ListTable>
-            <p className={styles.legend}>
-              Shape: <span className={styles.mono}>T</span> task · <span className={styles.mono}>A</span>{" "}
-              agent · <span className={styles.mono}>H</span> human gate ·{" "}
-              <span className={styles.mono}>∥</span> parallel.
-            </p>
           </>
         ) : null}
       </div>

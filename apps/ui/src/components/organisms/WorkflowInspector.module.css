@@ -79,3 +79,16 @@
   flex: 1;
   color: var(--color-neutral-600);
 }
+
+.shapeRow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  padding-bottom: 4px;
+}
+.shapeLegend {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-neutral-500);
+}

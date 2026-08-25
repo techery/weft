@@ -27,15 +27,18 @@ export function journalEntries(records: JournalRecord[]): JournalEntry[] {
   // and nothing else. Remembering the kind is what keeps a step's lines under one tag
   // instead of starting as "agent" and finishing as "step".
   const kindBySeq = new Map<number, string>();
+  const labelBySeq = new Map<number, string>();
   return records.map((record) => {
     const ev = record.ev;
-    if (ev.type === "step.scheduled" && typeof ev.seq === "number" && typeof ev.kind === "string") {
-      kindBySeq.set(ev.seq, ev.kind);
+    if (ev.type === "step.scheduled" && typeof ev.seq === "number") {
+      if (typeof ev.kind === "string") kindBySeq.set(ev.seq, ev.kind);
+      const named = str(ev.label) || str(ev.key);
+      if (named) labelBySeq.set(ev.seq, named);
     }
     return {
       time: formatElapsed(record.at - start),
       tag: tagOf(ev, kindBySeq),
-      text: textOf(ev),
+      text: textOf(ev, labelBySeq),
     };
   });
 }
@@ -58,9 +61,12 @@ function tagOf(ev: JournalEvent, kindBySeq: Map<number, string>): string {
   return type;
 }
 
-function textOf(ev: JournalEvent): string {
+function textOf(ev: JournalEvent, labelBySeq: Map<number, string> = new Map()): string {
   const seq = typeof ev.seq === "number" ? `#${ev.seq}` : "";
-  const named = label(ev) || seq || "";
+  // Only `step.scheduled` names a step; its completion and failure carry a seq alone, so
+  // the name is remembered rather than letting a finished step read as "#12 ok".
+  const remembered = typeof ev.seq === "number" ? (labelBySeq.get(ev.seq) ?? "") : "";
+  const named = label(ev) || remembered || seq || "";
 
   switch (ev.type) {
     case "run.created":

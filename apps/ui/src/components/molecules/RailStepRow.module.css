@@ -40,10 +40,14 @@
   flex: none;
 }
 .label {
-  flex: 1 0 auto;
+  /* Shrinks and ellipsises: a real step label is long, and the alternative was squeezing
+     the artifact chip beside it down to a single letter. */
+  flex: 1 1 auto;
   min-width: 0;
   font-size: 13px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-weight: 500;
 }
 .emphasis {
