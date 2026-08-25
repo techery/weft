@@ -799,6 +799,69 @@ describe("weft task", () => {
     expect(String(invalid)).toMatch(/task extensions failed/);
   });
 
+  it("resolves a stable workflow id before another workflow's callable name", async () => {
+    const root = await tempRoot();
+    await write(
+      root,
+      ".weft/workflows/name-owner.ts",
+      `import { defineWorkflow, z } from "@techery/weft-sdk";
+export default defineWorkflow(
+  {
+    id: "name-owner",
+    name: "shared-ref",
+    description: "owns the callable name",
+    input: z.object({}),
+    output: z.object({}),
+    tasks: { extensions: z.object({ lane: z.literal("name") }) },
+  },
+  async () => ({}),
+);`,
+    );
+    await write(
+      root,
+      ".weft/workflows/id-owner.ts",
+      `import { defineWorkflow, z } from "@techery/weft-sdk";
+export default defineWorkflow(
+  {
+    id: "shared-ref",
+    name: "id-owner",
+    description: "owns the durable id",
+    input: z.object({}),
+    output: z.object({}),
+    tasks: { extensions: z.object({ lane: z.literal("id") }) },
+  },
+  async () => ({}),
+);`,
+    );
+
+    const created = await cli(
+      "--cwd",
+      root,
+      "--mock",
+      "task",
+      "--workflow",
+      "shared-ref",
+      "--json",
+      "create",
+      "--title",
+      "Use stable identity",
+      "--description",
+      "Never cross workflow task namespaces",
+      "--extensions",
+      '{"lane":"id"}',
+    );
+
+    expect(JSON.parse(created.text)).toMatchObject({
+      workflowId: "shared-ref",
+      extensions: { lane: "id" },
+    });
+    const namespace = JSON.parse(
+      await readFile(path.join(root, ".weft/tasks/shared-ref/.workflow.json"), "utf8"),
+    ) as { id: string; name: string };
+    expect(namespace).toMatchObject({ id: "shared-ref", name: "id-owner" });
+    expect(existsSync(path.join(root, ".weft/tasks/name-owner"))).toBe(false);
+  });
+
   it("reopens a durable namespace for a path or stdin workflow without a registry file", async () => {
     const root = await tempRoot();
     const namespaceFile = ".weft/tasks/inline-review/.workflow.json";

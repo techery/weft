@@ -374,7 +374,7 @@ async function withTasks(
   }
 }
 
-/** Resolve the registry filename or an explicit `meta.name` used by the engine prompt. */
+/** Resolve the stable task namespace before considering a callable workflow name. */
 async function loadBoundWorkflow(
   weft: Weft,
   workflowId: string,
@@ -383,6 +383,27 @@ async function loadBoundWorkflow(
   def: WorkflowDefinition | undefined;
   namespace: TaskWorkflowNamespace;
 }> {
+  // Agent instructions always emit the durable workflow id. A different workflow
+  // may legally use that string as its callable name, so name-first lookup can
+  // silently mutate the wrong namespace. Registry ids are authoritative here.
+  const entries = await weft.registry.list();
+  const idEntry = entries.find((entry) => entry.id === workflowId);
+  if (idEntry) {
+    const loaded = await weft.registry.load(idEntry.name);
+    const namespace = await namespaceForDefinition(
+      weft,
+      workflowId,
+      loaded.def.meta.name ?? idEntry.name,
+      loaded.def,
+    );
+    return { workflowId, def: loaded.def, namespace };
+  }
+
+  // Path/stdin workflows can leave a durable namespace without a registry
+  // definition. Its exact id still outranks an unrelated callable name.
+  const namespace = await weft.tasks.namespace(workflowId);
+  if (namespace) return { workflowId, def: undefined, namespace };
+
   let directError: unknown;
   try {
     const loaded = await weft.registry.load(workflowId);
@@ -393,16 +414,6 @@ async function loadBoundWorkflow(
     directError = err;
     if (!isRegistryMiss(err)) throw err;
   }
-  for (const entry of await weft.registry.list()) {
-    const candidate = await weft.registry.load(entry.name);
-    if (candidate.def.meta.id === workflowId || candidate.def.meta.name === workflowId) {
-      const id = candidate.def.meta.id ?? candidate.def.meta.name ?? workflowId;
-      const namespace = await namespaceForDefinition(weft, id, entry.name, candidate.def);
-      return { workflowId: id, def: candidate.def, namespace };
-    }
-  }
-  const namespace = await weft.tasks.namespace(workflowId);
-  if (namespace) return { workflowId, def: undefined, namespace };
   throw directError;
 }
 
