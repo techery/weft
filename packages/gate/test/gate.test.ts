@@ -450,6 +450,20 @@ describe("bundleWorkflow", () => {
     ]);
   });
 
+  it("keeps every minimal API cookbook workflow gate-clean", async () => {
+    const files = [
+      "composition.ts",
+      "humans-and-waits.ts",
+      "effects.ts",
+      "git.ts",
+      "state-tasks-and-patches.ts",
+    ];
+    for (const file of files) {
+      const loaded = await loadWorkflow({ entry: path.join(repoRoot, "examples/10-api-cookbook", file) });
+      expect(loaded.def.kind, file).toBe("weft.workflow");
+    }
+  });
+
   it("inlines relative imports and keeps @techery/weft-sdk external", async () => {
     const dir = await tempDir();
     const entry = await writeReview(dir);

@@ -22,6 +22,7 @@ npx tsx examples/01-engine-as-a-library/main.ts    # then any example
 | 07 | [`07-testing-workflows`](./07-testing-workflows) | `@techery/weft-testing`'s `runWorkflow`: git fixtures, schema-validated mock fixtures, journal and phase assertions |
 | 08 | [`08-task-backed-code-review`](./08-task-backed-code-review) | A read-only review that consolidates and independently refutes findings, then upserts only human-selected work into a durable deduplicated backlog |
 | 09 | [`09-custom-react-ui`](./09-custom-react-ui) | Browser-compiled React views for a replayable result, schema-authoritative human input, and a composed final presentation |
+| 10 | [`10-api-cookbook`](./10-api-cookbook) | Minimal, single-purpose workflows covering every remaining public `Ctx` API |
 
 ## Key-feature coverage
 
@@ -39,6 +40,7 @@ this matrix in the same change.
 | Deterministic fixtures and journal assertions | 07 · Testing workflows |
 | Durable task observation, selection, deduplication, and upsert | 08 · Task-backed code review |
 | Custom result views, custom human input, composed React presentations | 09 · Custom React UI |
+| Every remaining public workflow API | 10 · Minimal API cookbook; enforced by `pnpm verify:examples` |
 
 Most example *workflows* used by the CLI live separately in [`.weft/workflows/`](../.weft/workflows)
 (`review.ts`, `audit-and-fix.ts`) — those are what `weft run review` executes; the folders

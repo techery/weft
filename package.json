@@ -20,6 +20,7 @@
     "format": "biome format --write .",
     "sync:meta": "node scripts/sync-package-meta.mjs",
     "verify:packing": "node scripts/verify-packing.mjs",
+    "verify:examples": "node scripts/check-example-coverage.mjs",
     "version:set": "node scripts/set-version.mjs",
     "verify:install": "node scripts/verify-install.mjs",
     "dev:ui": "pnpm --filter @techery/weft-ui dev"
