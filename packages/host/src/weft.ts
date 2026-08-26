@@ -124,7 +124,8 @@ export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
     }
     return undefined;
   };
-  const tasks = new TaskStore(join(weftDir, "tasks"), async (workflowId) =>
+  const taskRoot = join(weftDir, "tasks");
+  const tasks = new TaskStore(taskRoot, async (workflowId) =>
     taskDefinition(workflowId).then((def) => def?.meta.tasks?.extensions),
   );
   const engine = new Engine({
@@ -136,6 +137,7 @@ export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
     // name, in a process that never saw the file.
     registry,
     taskTracker: {
+      protectedPaths: [taskRoot],
       prepare: async (workflow, extensionSchema, taskOptions) => {
         let jsonSchema: unknown | null = null;
         if (extensionSchema) {

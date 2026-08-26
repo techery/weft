@@ -2,7 +2,7 @@ import type { JournalRecord } from "@techery/weft-core";
 import { mockTaskEnvelope } from "@techery/weft-provider-mock";
 import { defineWorkflow, StepError, z } from "@techery/weft-sdk";
 import { afterAll, describe, expect, test } from "vitest";
-import { cleanupRepos, reopen, tempDir, testEngine } from "./helpers.ts";
+import { cleanupRepos, reopen, tempDir, tempRepo, testEngine } from "./helpers.ts";
 
 afterAll(cleanupRepos);
 
@@ -90,6 +90,34 @@ describe("engine end to end", () => {
     ).toBe(true);
     // read-only steps get the read-only instruction
     expect(t.builder.calls[0]!.prompt).toContain("read-only");
+  });
+
+  test("passes tracker storage protection to task-aware writable agents", async () => {
+    const t = testEngine({
+      taskTracker: {
+        protectedPaths: ["/host/.weft/tasks"],
+        snapshot: async () => ({ total: 0, tasks: [] }),
+        schema: async () => null,
+        applyBatch: async () => undefined,
+      },
+    });
+    t.builder.on({ key: "fix" }, { ok: true });
+    const def = defineWorkflow(
+      { description: "protected writes", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) =>
+        ctx.agent("Fix and verify", {
+          key: "fix",
+          schema: z.object({ ok: z.boolean() }),
+          write: { paths: ["src/**"], mode: "warn" },
+        }),
+    );
+
+    const handle = await t.engine.start(def, {
+      input: {},
+      cwd: await tempRepo({ "src/index.ts": "export {};\n" }),
+    });
+    expect(await handle.result).toEqual({ ok: true });
+    expect(t.builder.calls[0]?.protectedPaths).toEqual(["/host/.weft/tasks"]);
   });
 
   test("mock fixtures may legitimately return result and taskOperations fields", async () => {

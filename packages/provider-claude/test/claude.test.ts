@@ -435,11 +435,13 @@ describe("the tool gate", () => {
     });
   });
 
-  test("write agents cannot bypass engine-owned workflow task settlement", async () => {
+  test("a protected sandbox isolates task storage without disabling the write shell", async () => {
+    const taskRoot = `${CWD}/.weft/tasks`;
     const options = await gateContext(
       request({
         tools: { allowEdits: true },
         writeScope: { paths: ["src/**"], mode: "warn" },
+        protectedPaths: [taskRoot],
         taskContext: {
           workflowId: "review",
           workflowName: "review",
@@ -451,16 +453,20 @@ describe("the tool gate", () => {
       }),
     );
 
+    expect(options.sandbox).toEqual({
+      enabled: true,
+      failIfUnavailable: true,
+      autoAllowBashIfSandboxed: false,
+      allowUnsandboxedCommands: false,
+      filesystem: { denyRead: [taskRoot], denyWrite: [taskRoot] },
+    });
     for (const command of [
-      "weft --cwd /work/repo task --workflow review update task-deadbeef --status done",
-      'w"e"ft task --workflow review update task-deadbeef --status done',
-      "node packages/cli/dist/index.js task --workflow review update task-deadbeef --status done",
-      "printf hacked > /work/repo/.weft/tasks/review/task-deadbeef.json",
+      "pnpm test",
+      "pnpm exec tsc --noEmit",
+      "pnpm exec biome format --write src",
+      "node scripts/generate.mjs",
     ]) {
-      expect(await ask(options, "Bash", { command })).toMatchObject({
-        behavior: "deny",
-        message: expect.stringContaining("engine-owned"),
-      });
+      expect(await ask(options, "Bash", { command }), command).toEqual({ behavior: "allow" });
     }
     expect(await ask(options, "Bash", { command: "rg -n 'TODO' src" })).toEqual({ behavior: "allow" });
     expect(
@@ -470,6 +476,44 @@ describe("the tool gate", () => {
       behavior: "deny",
       message: expect.stringContaining("could not be verified"),
     });
+  });
+
+  test("task hosts without a protected path retain the fail-closed shell fallback", async () => {
+    const options = await gateContext(
+      request({
+        tools: { allowEdits: true },
+        taskContext: {
+          workflowId: "review",
+          workflowName: "review",
+          runId: "run-1",
+          step: "review",
+          provider: "claude",
+          mode: "write",
+        },
+      }),
+    );
+    expect(await ask(options, "Bash", { command: "pnpm test" })).toMatchObject({
+      behavior: "deny",
+      message: expect.stringContaining("did not expose a protected storage path"),
+    });
+  });
+
+  test("relative protected paths fail closed before starting the SDK query", async () => {
+    await expect(
+      gateContext(
+        request({
+          protectedPaths: [".weft/tasks"],
+          taskContext: {
+            workflowId: "review",
+            workflowName: "review",
+            runId: "run-1",
+            step: "review",
+            provider: "claude",
+            mode: "write",
+          },
+        }),
+      ),
+    ).rejects.toThrow(/protected path must be absolute/);
   });
 
   test("task-aware warn scopes deny edits through symlinks outside the worktree", async () => {

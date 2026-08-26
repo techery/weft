@@ -182,16 +182,13 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
 
     if (base === "Bash") {
       const command = typeof input.command === "string" ? input.command : "";
-      // A task-aware step must not get an alternative mutation channel around
-      // the engine's selector, revision, journaling, and provenance checks.
-      // Matching command spellings is not a boundary: shell concatenation
-      // (`w"e"ft`), an indirect Node entrypoint, or a computed path all evade a
-      // regex. Deny every shell command that is not proven read-only instead.
-      // Scoped code writes remain available through Edit/Write tools and are
-      // still captured by the worktree boundary.
-      if (req.taskContext && !isReadOnlyCommand(command)) {
+      // A custom task host that cannot identify its storage has no narrower
+      // shell boundary available. First-party hosts provide protectedPaths,
+      // which the SDK sandbox denies while leaving normal worktree commands
+      // such as tests, compilers and formatters available.
+      if (req.taskContext && !req.protectedPaths?.length && !isReadOnlyCommand(command)) {
         return deny(
-          "workflow tasks are engine-owned; task-aware steps may only use read-only shell commands and must return taskOperations for tracker changes",
+          "workflow tasks are engine-owned; this task host did not expose a protected storage path, so task-aware steps may only use read-only shell commands",
         );
       }
       // Repository config can attach EXECUTABLE diff/textconv drivers to a plain

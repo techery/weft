@@ -50,6 +50,7 @@ export interface MockRequest {
   model?: string;
   effort?: string;
   writeScope?: { paths: string[]; also?: string[]; mode: "warn" | "strict" };
+  protectedPaths?: readonly string[];
   /** 1 on the first call; >1 on repair calls, with the validation issues. */
   attempt: number;
   issues?: SchemaIssue[];
@@ -168,6 +169,7 @@ export class MockProvider implements AgentProvider {
       ...(req.model !== undefined ? { model: req.model } : {}),
       ...(req.effort !== undefined ? { effort: req.effort } : {}),
       ...(req.writeScope !== undefined ? { writeScope: req.writeScope } : {}),
+      ...(req.protectedPaths !== undefined ? { protectedPaths: req.protectedPaths } : {}),
       ...(issues !== undefined ? { issues } : {}),
     };
     this.builder.calls.push(mockReq);

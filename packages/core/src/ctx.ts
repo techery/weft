@@ -754,6 +754,11 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 timeoutMs,
                 onMaxTurns: opts.onMaxTurns ?? "finalize",
                 tools: { allowEdits: scope !== undefined || mode.writeInPlace === true },
+                // Read-only steps already deny every write tool and shell command;
+                // writable agents need the narrower host-path sandbox boundary.
+                ...(taskContext && scope && rt.host.taskTracker?.protectedPaths?.length
+                  ? { protectedPaths: [...rt.host.taskTracker.protectedPaths] }
+                  : {}),
                 ...(taskContext ? { taskContext } : {}),
                 ...(scope
                   ? {

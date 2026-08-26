@@ -14,6 +14,8 @@
  * with result.{usage.{input_tokens,output_tokens,cache_read_input_tokens},total_cost_usd,
  * session_id}. A rename upstream lands in this file.
  */
+
+import { isAbsolute } from "node:path";
 import {
   createSdkMcpServer,
   type Options,
@@ -123,6 +125,30 @@ function toolDescription(schema: unknown): string {
   );
 }
 
+/**
+ * Keep engine-owned task state outside the agent's filesystem capability while
+ * preserving a writable shell inside its worktree. Requiring the sandbox to be
+ * available is load-bearing: silently degrading would expose the host paths.
+ */
+function protectedPathSandbox(req: AgentRequest): Options["sandbox"] | undefined {
+  if (!req.protectedPaths?.length) return undefined;
+  const relativePath = req.protectedPaths.find((path) => !isAbsolute(path));
+  if (relativePath !== undefined) {
+    throw new Error(`claude: protected path must be absolute: ${JSON.stringify(relativePath)}`);
+  }
+  const protectedPaths = [...new Set(req.protectedPaths)];
+  return {
+    enabled: true,
+    failIfUnavailable: true,
+    autoAllowBashIfSandboxed: false,
+    allowUnsandboxedCommands: false,
+    filesystem: {
+      denyRead: protectedPaths,
+      denyWrite: protectedPaths,
+    },
+  };
+}
+
 function repairPrompt(req: AgentRequest, errors: readonly SchemaIssue[]): string {
   const issues = errors.map((issue) => `- ${issue.path || "(root)"}: ${issue.message}`).join("\n");
   return (
@@ -220,6 +246,7 @@ class ClaudeProvider implements AgentProvider {
       arm();
     }
 
+    const protectedSandbox = protectedPathSandbox(req);
     const options: Options = {
       cwd: req.cwd,
       abortController: controller,
@@ -234,6 +261,7 @@ class ClaudeProvider implements AgentProvider {
       // pre-approve, "dontAsk" denies what is not pre-approved without asking, and
       // "plan" runs no tools at all.
       permissionMode: "default",
+      ...(protectedSandbox ? { sandbox: protectedSandbox } : {}),
       ...(req.model !== undefined ? { model: req.model } : {}),
       ...(req.maxTurns !== undefined ? { maxTurns: req.maxTurns } : {}),
       // Effort maps 1:1 onto Options.effort — same five tiers, same names.

@@ -47,6 +47,11 @@ async function mockWeft(): Promise<{ weft: Weft; root: string }> {
 }
 
 describe("createWeft", () => {
+  it("marks the durable task root as protected provider storage", async () => {
+    const { weft, root } = await mockWeft();
+    expect(weft.engine.taskTracker?.protectedPaths).toEqual([path.join(root, ".weft", "tasks")]);
+  });
+
   it("persists an inline script with its run and reconstructs it for a later resume", async () => {
     const { weft } = await mockWeft();
     const source = `import { defineWorkflow, z } from "@techery/weft-sdk";
