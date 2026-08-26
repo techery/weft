@@ -334,11 +334,13 @@ export class TaskStore {
     if (currentTasks.some((candidate) => candidate.id === id)) {
       throw new Error(`task id ${id} already exists in workflow ${workflowId}`);
     }
-    const extensionInput = input.extensions === undefined ? {} : input.extensions;
+    const config = await this.extensionConfig(workflowId);
+    const schemaDeclared = config.declared || extensionSchema !== undefined;
+    const extensionInput = input.extensions === undefined && !schemaDeclared ? {} : input.extensions;
     const task = withStoredExtensions<WorkflowTask>(
       {
         schemaVersion: TASK_SCHEMA_VERSION,
-        extensionSchemaVersion: (await this.extensionConfig(workflowId)).version,
+        extensionSchemaVersion: config.version,
         id,
         workflowId,
         ...(dedupeKey ? { dedupeKey } : {}),
@@ -355,7 +357,11 @@ export class TaskStore {
           met: false,
         })),
         notes: input.initialNote ? [{ text: cleanRequired(input.initialNote, "note"), at: now, actor }] : [],
-        extensions: await extensionsOf(extensionInput, extensionSchema),
+        extensions: await extensionsOf(
+          extensionInput,
+          extensionSchema,
+          schemaDeclared && extensionSchema === undefined,
+        ),
         createdAt: now,
         updatedAt: now,
         createdBy: actor,
@@ -867,7 +873,7 @@ export class TaskStore {
     const migrate = config.migrate;
     const migrateCreate = async <T extends { extensions?: unknown }>(input: T): Promise<T> => ({
       ...input,
-      extensions: await migrate(input.extensions === undefined ? {} : input.extensions, fromVersion),
+      extensions: await migrate(input.extensions, fromVersion),
     });
     const migrated: AgentTaskOperation[] = [];
     for (const operation of operations) {
@@ -1079,19 +1085,25 @@ export class TaskStore {
       }
       candidate = await config.migrate(candidate, task.extensionSchemaVersion);
     }
+    const schemaDeclared = config.declared || extensionSchema !== undefined;
     const extensions = await extensionsOf(
       candidate,
       extensionSchema,
-      config.declared && extensionSchema === undefined,
+      schemaDeclared && extensionSchema === undefined,
     );
     return withStoredExtensions(
       { ...task, extensionSchemaVersion: config.version, extensions },
-      candidate === undefined ? {} : candidate,
+      candidate === undefined && !schemaDeclared ? {} : candidate,
     );
   }
 
   private async write(task: WorkflowTask, createOnly = false): Promise<void> {
-    const persisted = { ...task, extensions: storedExtensionsOf(task) };
+    const { extensions: _extensions, ...taskWithoutExtensions } = task;
+    const storedExtensions = storedExtensionsOf(task);
+    const persisted =
+      storedExtensions === undefined
+        ? taskWithoutExtensions
+        : { ...taskWithoutExtensions, extensions: storedExtensions };
     const bad = jsonUnsafeAt(persisted);
     if (bad !== undefined) throw new Error(`task cannot be stored as JSON at ${bad}`);
     const dir = this.workflowDir(task.workflowId);
@@ -1269,21 +1281,21 @@ async function extensionsOf(
   schema?: AnySchema,
   preserveDeclaredJson = false,
 ): Promise<unknown> {
-  const candidate = value === undefined ? {} : value;
   if (schema === undefined) {
-    if (preserveDeclaredJson) return candidate;
+    if (preserveDeclaredJson) return value;
+    const candidate = value === undefined ? {} : value;
     if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
       throw new Error("task extensions must be a JSON object when the workflow declares no extension schema");
     }
     return candidate;
   }
-  const checked = await validateSchema(schema, candidate);
+  const checked = await validateSchema(schema, value);
   if (!checked.ok) {
     throw new Error(
       `task extensions failed the workflow schema: ${checked.issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`,
     );
   }
-  const unsafe = jsonUnsafeAt(checked.value);
+  const unsafe = checked.value === undefined ? undefined : jsonUnsafeAt(checked.value);
   if (unsafe !== undefined) {
     throw new Error(`task extension schema output must be JSON-safe at ${unsafe}`);
   }
@@ -1520,7 +1532,7 @@ function decodeTask(
     relatedFiles: stringsAt("relatedFiles"),
     acceptanceCriteria,
     notes,
-    extensions: v.extensions === undefined ? {} : v.extensions,
+    extensions: v.extensions,
     createdAt,
     updatedAt,
     createdBy: string("createdBy"),

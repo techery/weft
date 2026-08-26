@@ -220,6 +220,61 @@ describe("TaskStore", () => {
     expect((await reader.list("release"))[0]?.extensions).toEqual({ lane: "api" });
   });
 
+  it("passes omitted extensions through declared schemas and preserves their absence", async () => {
+    const root = await tempRoot();
+    const taskRoot = join(root, ".weft", "tasks");
+    const defaulted = z.string().default("general");
+    const optional = z.string().optional();
+    const schemaFor = async (workflowId: string): Promise<AnySchema | undefined> => {
+      if (workflowId === "defaulted") return defaulted;
+      if (workflowId === "optional") return optional;
+      return undefined;
+    };
+    const store = new TaskStore(taskRoot, schemaFor);
+    await store.registerWorkflow({ id: "defaulted", name: "defaulted" }, defaulted, null);
+    await store.registerWorkflow({ id: "optional", name: "optional" }, optional, null);
+
+    const defaultedTask = await store.create("defaulted", {
+      title: "Default extensions",
+      description: "Let the declared schema provide its root default",
+    });
+    const optionalTask = await store.upsert("optional", "optional-finding", {
+      create: {
+        title: "Optional extensions",
+        description: "Keep an omitted optional root absent",
+      },
+    });
+    const plainTask = await store.create("plain", {
+      title: "Plain extensions",
+      description: "Schema-less workflows retain their object default",
+    });
+
+    expect(defaultedTask.extensions).toBe("general");
+    expect(optionalTask.extensions).toBeUndefined();
+    expect(plainTask.extensions).toEqual({});
+    for (const [workflowId, task] of [
+      ["defaulted", defaultedTask],
+      ["optional", optionalTask],
+    ] as const) {
+      const persisted = JSON.parse(
+        await readFile(join(taskRoot, workflowId, `${task.id}.json`), "utf8"),
+      ) as Record<string, unknown>;
+      expect(persisted).not.toHaveProperty("extensions");
+    }
+    expect(JSON.parse(await readFile(join(taskRoot, "plain", `${plainTask.id}.json`), "utf8"))).toMatchObject(
+      { extensions: {} },
+    );
+
+    const reopened = new TaskStore(taskRoot, schemaFor);
+    expect((await reopened.get("defaulted", defaultedTask.id)).extensions).toBe("general");
+    expect((await reopened.get("optional", optionalTask.id)).extensions).toBeUndefined();
+    await reopened.update("optional", optionalTask.id, { status: "in_progress" });
+    const updated = JSON.parse(
+      await readFile(join(taskRoot, "optional", `${optionalTask.id}.json`), "utf8"),
+    ) as Record<string, unknown>;
+    expect(updated).not.toHaveProperty("extensions");
+  });
+
   it("persists extension schema input while returning transformed output across mutations", async () => {
     const root = await tempRoot();
     const extensions = z
