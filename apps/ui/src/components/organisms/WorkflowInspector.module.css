@@ -32,6 +32,9 @@
   display: flex;
   gap: 8px;
 }
+.actions button {
+  width: 100%;
+}
 .block {
   display: flex;
   flex-direction: column;

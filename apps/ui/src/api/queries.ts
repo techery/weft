@@ -18,6 +18,7 @@ import type {
   RunDetail,
   RunRow,
   WorkflowDetail,
+  WorkflowIssue,
   WorkflowRow,
   WorkflowStats,
   WorkflowTask,
@@ -74,6 +75,10 @@ export function useRun(runId: string): UseQueryResult<RunDetail> {
 export function useWorkflows(): UseQueryResult<WorkflowRow[]> {
   // Listing re-bundles every workflow file, so it is worth holding onto.
   return useQuery({ queryKey: keys.workflows, queryFn: api.workflows, staleTime: 30_000 });
+}
+
+export function useWorkflowIssues(): UseQueryResult<WorkflowIssue[]> {
+  return useQuery({ queryKey: [...keys.workflows, "issues"], queryFn: api.workflowIssues, staleTime: 30_000 });
 }
 
 export function useWorkflow(name: string): UseQueryResult<WorkflowDetail> {

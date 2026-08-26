@@ -32,10 +32,12 @@ WEFT_DAEMON=http://127.0.0.1:4790 pnpm dev:ui
 Keep that an IP, not `localhost` — Node resolves `localhost` to `::1` first, and the
 daemon does not listen there.
 
-The proxy exists instead of CORS on the daemon, deliberately. The daemon refuses any
-request carrying a non-loopback `Origin`, and that guard is what stands between a page you
-happen to visit and an API that can cancel your runs. Proxying keeps the browser
-same-origin, so the guard stays exactly as strict in dev as in production.
+The proxy exists instead of CORS on the daemon, deliberately. The daemon requires the
+`Origin` to exactly match its `Host`, and that guard is what stands between a page you
+happen to visit and an API that can cancel your runs. For a request whose Origin exactly
+matches Vite's incoming Host, the proxy translates both to the daemon origin. Foreign
+origins pass through unchanged and the daemon rejects them, so the guard stays strict in
+development.
 
 Two things to know:
 

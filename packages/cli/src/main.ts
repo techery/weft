@@ -47,6 +47,12 @@ export function buildProgram(io: CliIo = consoleIo): Command {
     .description("durable, journaled, schema-validated multi-agent workflows")
     .option("--cwd <dir>", "repo root to run in", process.cwd())
     .option(
+      "--extra-workflow-dir <dir>",
+      "add a workflow directory without moving run state (repeatable)",
+      collect,
+      [],
+    )
+    .option(
       "--mock",
       "wire the fixture provider instead of Claude/Codex; agent steps then need fixtures and fail loudly without them",
     )
@@ -77,6 +83,10 @@ export function buildProgram(io: CliIo = consoleIo): Command {
     program.addCommand(factory(io));
   }
   return program;
+}
+
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }
 
 function trimEol(text: string): string {

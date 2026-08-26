@@ -15,6 +15,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@techery/weft-design-system": "workspace:*",
     "@techery/weft-sdk": "workspace:*",
     "@tanstack/react-query": "^5.102.3",
     "@tanstack/react-router": "^1.170.32",

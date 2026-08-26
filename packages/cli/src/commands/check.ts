@@ -16,7 +16,7 @@ import { promisify } from "node:util";
 import { type GateDiagnostic, GateError, loadWorkflow } from "@techery/weft-host";
 import { Command } from "commander";
 import pc from "picocolors";
-import { allowBareOf, openWeft, workflowsDir } from "../context.ts";
+import { allowBareOf, openWeft, workflowDirs } from "../context.ts";
 import { type CliIo, say } from "../io.ts";
 
 const run = promisify(execFile);
@@ -34,10 +34,10 @@ export function checkCommand(io: CliIo): Command {
     .action(async (name: string | undefined, opts: CheckOptions, cmd: Command) => {
       const weft = await openWeft(cmd);
       try {
-        const dir = workflowsDir(weft);
-        const files = await filesToCheck(weft.registry, dir, name);
+        const dirs = workflowDirs(weft);
+        const files = await filesToCheck(weft.registry, dirs, name);
         if (files.length === 0) {
-          io.out(pc.dim(`nothing to check in ${dir} — scaffold one with: weft new <name>`));
+          io.out(pc.dim(`nothing to check in ${dirs.join(", ")} — scaffold one with: weft new <name>`));
           return;
         }
 
@@ -98,32 +98,45 @@ interface NamedRegistry {
   list(): Promise<Array<{ name: string; file: string }>>;
 }
 
-async function filesToCheck(registry: NamedRegistry, dir: string, name?: string): Promise<string[]> {
+async function filesToCheck(
+  registry: NamedRegistry,
+  dirs: readonly string[],
+  name?: string,
+): Promise<string[]> {
   if (name === undefined) {
-    let entries: string[];
-    try {
-      entries = await readdir(dir);
-    } catch (err) {
-      // Only genuine ABSENCE means "nothing to check". Any other failure —
-      // EACCES, EIO, a stray FILE at the directory's path — would silently
-      // skip every workflow and let CI pass having validated nothing.
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw new Error(`cannot read ${dir}: ${(err as Error).message}`);
+    const files: string[] = [];
+    for (const dir of dirs) {
+      let entries: string[];
+      try {
+        entries = await readdir(dir);
+      } catch (err) {
+        // Only genuine ABSENCE means "nothing to check". Any other failure —
+        // EACCES, EIO, a stray FILE at the directory's path — would silently
+        // skip every workflow and let CI pass having validated nothing.
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw new Error(`cannot read ${dir}: ${(err as Error).message}`);
+      }
+      files.push(
+        ...entries
+          .filter((entry) => entry.endsWith(".ts") && !entry.endsWith(".d.ts"))
+          .sort()
+          .map((entry) => path.join(dir, entry)),
+      );
     }
-    return entries
-      .filter((entry) => entry.endsWith(".ts") && !entry.endsWith(".d.ts"))
-      .sort()
-      .map((entry) => path.join(dir, entry));
+    return [...new Set(files)];
   }
 
   // A workflow may rename itself, so the filename is only the first guess; the registry
   // knows the rest — but it can only list the files that already load.
-  const direct = path.join(dir, `${name}.ts`);
-  if (await isFile(direct)) return [direct];
   const hit = (await registry.list().catch(() => [])).find((entry) => entry.name === name);
   if (hit) return [hit.file];
+  const direct = dirs.map((dir) => path.join(dir, `${name}.ts`));
+  const directHits = (
+    await Promise.all(direct.map(async (file) => ((await isFile(file)) ? file : undefined)))
+  ).filter((file): file is string => file !== undefined);
+  if (directHits.length > 0) return directHits;
   throw new Error(
-    `unknown workflow "${name}" — no ${path.relative(process.cwd(), direct)} and nothing named it`,
+    `unknown workflow "${name}" — no ${direct.map((file) => path.relative(process.cwd(), file)).join(", ")} and nothing named it`,
   );
 }
 

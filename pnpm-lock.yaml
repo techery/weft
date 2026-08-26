@@ -14,6 +14,9 @@ importers:
       '@techery/weft-core':
         specifier: workspace:*
         version: link:packages/core
+      '@techery/weft-design-system':
+        specifier: workspace:*
+        version: link:packages/design-system
       '@techery/weft-provider-mock':
         specifier: workspace:*
         version: link:packages/provider-mock
@@ -53,6 +56,9 @@ importers:
       '@tanstack/react-router':
         specifier: ^1.170.32
         version: 1.170.32(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@techery/weft-design-system':
+        specifier: workspace:*
+        version: link:../../packages/design-system
       '@techery/weft-sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
@@ -183,8 +189,24 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
+  packages/design-system:
+    dependencies:
+      '@phosphor-icons/react':
+        specifier: ^2.1.10
+        version: 2.1.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+    devDependencies:
+      '@types/react':
+        specifier: ^19.2.18
+        version: 19.2.18
+      react:
+        specifier: ^19.2.8
+        version: 19.2.8
+
   packages/gate:
     dependencies:
+      '@techery/weft-design-system':
+        specifier: workspace:*
+        version: link:../design-system
       '@techery/weft-sdk':
         specifier: workspace:*
         version: link:../sdk
@@ -829,6 +851,13 @@ packages:
 
   '@oxc-project/types@0.146.0':
     resolution: {integrity: sha512-XC0QsnnhVe7sLIWmYmdPw7x5P0h4W8vUU3Nv1ySgWXtvCz8NizoAEpGXA0sOYoJQV2Rl13LgURAHQ5cI5ILCSA==}
+
+  '@phosphor-icons/react@2.1.10':
+    resolution: {integrity: sha512-vt8Tvq8GLjheAZZYa+YG/pW7HDbov8El/MANW8pOAz4eGxrwhnbfrQZq0Cp4q8zBEu8NIhHdnr+r8thnfRSNYA==}
+    engines: {node: '>=10'}
+    peerDependencies:
+      react: '>= 16.8'
+      react-dom: '>= 16.8'
 
   '@rolldown/binding-android-arm-eabi@1.2.5':
     resolution: {integrity: sha512-DLe/i+l8ynIBY7XEQ191TeZvCoowIGa18R+dIV30GW7DiOtp74i/xX8hs8GUjW5ARV7VZuie3d6AumSmCwbeRA==}
@@ -2373,6 +2402,11 @@ snapshots:
   '@opentelemetry/api@1.9.1': {}
 
   '@oxc-project/types@0.146.0': {}
+
+  '@phosphor-icons/react@2.1.10(react-dom@19.2.8(react@19.2.8))(react@19.2.8)':
+    dependencies:
+      react: 19.2.8
+      react-dom: 19.2.8(react@19.2.8)
 
   '@rolldown/binding-android-arm-eabi@1.2.5':
     optional: true

@@ -1,0 +1,6 @@
+# Written by weft. Run state is local and rebuildable from nothing;
+# workflows/ is source and stays tracked.
+runs/
+blobs/
+tasks/
+index.sqlite

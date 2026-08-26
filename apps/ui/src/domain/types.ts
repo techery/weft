@@ -192,6 +192,8 @@ export type Gate = {
 export type Run = {
   id: string;
   wf: string;
+  /** Start time used by live run chrome while the run is still active. */
+  createdAt: number;
   file: string;
   state: RunState;
   /** The mono strip in the run header: step count · clock · spend. */

@@ -1,6 +1,5 @@
 import { Link } from "@tanstack/react-router";
 import { useMeta } from "~/api/queries";
-import { Button } from "~/components/atoms/Button";
 import { StatusDot } from "~/components/atoms/StatusDot";
 import { NavTab } from "~/components/molecules/NavTab";
 import type { RunState } from "~/domain/types";
@@ -12,10 +11,9 @@ type Props = {
   active: NavKey;
   /** Absent when nothing is waiting, or before the queue has answered. */
   queueBadge?: string;
-  onOpenLauncher: () => void;
 };
 
-export function TopBar({ active, queueBadge, onOpenLauncher }: Props) {
+export function TopBar({ active, queueBadge }: Props) {
   const meta = useMeta();
   // Grey until /api/meta answers once: a green dot before anything replied would be
   // claiming a reachability the page has not established yet.
@@ -37,9 +35,6 @@ export function TopBar({ active, queueBadge, onOpenLauncher }: Props) {
         <NavTab to="/settings" label="Settings" active={active === "settings"} />
       </nav>
       <span className={styles.spacer} />
-      <Button variant="primary" size="mediumWide" onClick={onOpenLauncher}>
-        Run a workflow ⌘K
-      </Button>
       <span className={styles.daemon} title={meta.error?.message}>
         <StatusDot state={dot} />
         {/* This page is served by the daemon it talks to, so its own origin is the address. */}

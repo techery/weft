@@ -405,6 +405,24 @@ export default defineWorkflow(
     expect(name).toBe("hello");
   });
 
+  it("adds host-supplied workflow directories without moving state", async () => {
+    const root = await tempRoot();
+    await write(root, "examples/flows/hello.ts", HELLO_WORKFLOW);
+    const weft = await createWeft({
+      cwd: root,
+      providers: "mock",
+      extraWorkflowDirs: ["examples/flows"],
+    });
+    opened.push(weft);
+
+    expect(weft.workflowDirs).toEqual([
+      path.join(root, ".weft/workflows"),
+      path.join(root, "examples/flows"),
+    ]);
+    expect(weft.runsDir).toBe(path.join(root, ".weft/runs"));
+    await expect(resolveWorkflow(weft, "hello")).resolves.toMatchObject({ name: "hello" });
+  });
+
   it("registers the real adapters without credentials", async () => {
     const root = await tempRoot();
     const weft = await createWeft({ cwd: root });

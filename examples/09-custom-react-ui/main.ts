@@ -30,7 +30,15 @@ const engine = new Engine({
 
 try {
   const handle = await engine.start(loaded.def, {
-    input: { environment: "staging", services: ["api", "web", "worker"] },
+    input: {
+      environment: "staging",
+      releaseName: "Search reliability rollout",
+      version: "2026.08.26-rc.3",
+      requestedBy: "release-bot@weft.local",
+      risk: "high",
+      window: "maintenance-window",
+      services: ["api", "web", "worker", "billing"],
+    },
     cwd: process.cwd(),
     defHash: loaded.hash,
     uiCatalog: loaded.uiCatalog,
@@ -49,14 +57,32 @@ try {
   );
 
   await engine.answer(handle.runId, request.id, {
+    intent: "partial",
     approvedServices: ["api", "worker"],
+    strategy: "canary",
+    trafficPercent: 10,
+    monitorMinutes: 30,
+    rollbackOnError: true,
+    runSmokeTests: true,
+    acknowledgedRisk: true,
     note: "Hold web for the cache migration.",
   });
   assert.deepEqual(await handle.result, {
     environment: "staging",
+    releaseName: "Search reliability rollout",
+    version: "2026.08.26-rc.3",
+    risk: "high",
+    window: "maintenance-window",
+    decision: "partial",
     approvedServices: ["api", "worker"],
-    deferredServices: ["web"],
+    deferredServices: ["web", "billing"],
+    strategy: "canary",
+    trafficPercent: 10,
+    monitorMinutes: 30,
+    rollbackOnError: true,
+    runSmokeTests: true,
     note: "Hold web for the cache migration.",
+    warnings: ["2 services deferred", "Canary limited to 10% traffic"],
   });
 
   const completed = await engine.state(handle.runId);

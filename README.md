@@ -91,6 +91,10 @@ node packages/cli/bin/weft.js check review                    # tsc + gate
 node packages/cli/bin/weft.js run review --base main --watch  # input fields become flags
 node packages/cli/bin/weft.js ui                              # localhost: runs, live tree, report, answer
 
+# Keep state in this repo while also registering workflows from other folders
+node packages/cli/bin/weft.js --extra-workflow-dir examples/08-task-backed-code-review \
+  --extra-workflow-dir examples/09-custom-react-ui ui
+
 # scaffold another one, or put `weft` on your PATH for this checkout
 node packages/cli/bin/weft.js new triage
 pnpm -C packages/cli link --global

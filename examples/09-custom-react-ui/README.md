@@ -1,13 +1,29 @@
 # 09 · Custom React workflow UI
 
-This workflow demonstrates every custom-UI mode in one durable run:
+This workflow is both a custom-UI contract example and a stress test for the reusable Weft design system. It
+demonstrates every custom-UI mode in one durable run:
 
 1. `ctx.ui.render()` publishes a read-only deployment plan as its own replayable presentation step.
-2. `ctx.human.ask({ ui: … })` renders a custom selector that can only stage a candidate answer.
+2. `ctx.human.ask({ ui: … })` renders a custom release command center that can only stage a candidate answer.
 3. A second `ctx.ui.render()` composes workflow input and the validated human decision into a final view.
 
 The standard schema form and raw result stay visible beside custom UI. The component never receives a final
 submission function; the Workflow Manager validates and submits the staged candidate through host-owned chrome.
+
+The views import `@techery/weft-design-system` for the same tokens and React primitives used by the manager.
+Each view uses `WeftTheme`, which embeds the approved styles without a CSS import.
+
+The default input deliberately includes eight services across ready, degraded, queued, and blocked states. The
+review frame exercises responsive grids, overflow, empty selections, long operator notes, required production
+fields, disabled actions, accessible toggles, ranges, selects, and four decision presets:
+
+- **Approve all** produces an all-clear receipt with an empty deferred state.
+- **Safe canary** demonstrates partial approval and warning banners.
+- **Minimal scope** reduces the release to one service and changes rollout controls.
+- **Reject** stages a valid zero-service no-op and requires an explanatory note.
+
+The final view renders approved, partial, and rejected outcomes; empty and populated service groups; missing and
+present optional fields; policy warnings; long wrapping text; and an expandable normalized JSON receipt.
 
 Run the deterministic offline contract check used by CI:
 
@@ -28,7 +44,7 @@ Then start the example in another terminal:
 
 ```sh
 pnpm exec weft run ./examples/09-custom-react-ui/workflow.ts \
-  --args '{"environment":"staging","services":["api","web","worker"]}' \
+  --args '{"environment":"production"}' \
   --watch
 ```
 

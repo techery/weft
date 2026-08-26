@@ -2,10 +2,12 @@
   appearance: none;
   cursor: pointer;
   font: inherit;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(0, 2.5fr) 18px;
   align-items: center;
   gap: 12px;
-  padding: 9px 20px;
+  min-height: 64px;
+  padding: 12px 20px;
   text-align: left;
   width: 100%;
   background: transparent;
@@ -16,30 +18,46 @@
   background: var(--color-accent-200);
   border-left-color: var(--color-accent);
 }
+.identity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
 .name {
   font-weight: 600;
   font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .file {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--color-accent-700);
-}
-.spacer {
-  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .meta {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--color-neutral-700);
-  white-space: nowrap;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
 }
 .arrow {
+  display: block;
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--color-neutral-500);
   white-space: nowrap;
+  text-align: right;
 }

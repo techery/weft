@@ -11,6 +11,8 @@ import type { Command } from "commander";
 export interface GlobalOptions {
   /** Repo root: what runs execute in, and where `.weft` is read and written. */
   cwd: string;
+  /** Additional workflow registries; relative paths resolve against `cwd`. */
+  extraWorkflowDirs: string[];
   /**
    * `--mock` wires the fixture provider in place of Claude and Codex. There is no way to
    * script fixtures from a shell, so this is for agent-less workflows: an agent step under
@@ -20,14 +22,19 @@ export interface GlobalOptions {
 }
 
 export function globalOptions(cmd: Command): GlobalOptions {
-  const opts = cmd.optsWithGlobals() as { cwd?: string; mock?: boolean };
-  return { cwd: resolve(opts.cwd ?? process.cwd()), mock: opts.mock === true };
+  const opts = cmd.optsWithGlobals() as { cwd?: string; extraWorkflowDir?: string[]; mock?: boolean };
+  const cwd = resolve(opts.cwd ?? process.cwd());
+  return {
+    cwd,
+    extraWorkflowDirs: (opts.extraWorkflowDir ?? []).map((dir) => resolve(cwd, dir)),
+    mock: opts.mock === true,
+  };
 }
 
 /** Open the engine for this invocation. */
 export async function openWeft(cmd: Command): Promise<Weft> {
-  const { cwd, mock } = globalOptions(cmd);
-  return createWeft({ cwd, providers: mock ? "mock" : "real" });
+  const { cwd, extraWorkflowDirs, mock } = globalOptions(cmd);
+  return createWeft({ cwd, extraWorkflowDirs, providers: mock ? "mock" : "real" });
 }
 
 /**
@@ -36,8 +43,12 @@ export async function openWeft(cmd: Command): Promise<Weft> {
  * fail to load, which the registry listing skips by design.
  */
 export function workflowsDir(weft: Weft): string {
-  const configured = weft.config.workflows?.dir;
-  return configured ? resolve(weft.cwd, configured) : join(weft.weftDir, "workflows");
+  return weft.workflowDirs[0] ?? join(weft.weftDir, "workflows");
+}
+
+/** Primary configured registry followed by repeatable CLI-provided extras. */
+export function workflowDirs(weft: Weft): readonly string[] {
+  return weft.workflowDirs;
 }
 
 /** The repo's bare-import allowance (defaults + config extras), in the shape the gate takes. */

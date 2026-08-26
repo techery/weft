@@ -237,7 +237,7 @@ describe("a run", () => {
 describe("workflows", () => {
   it("lists the registry and inspects the selected one", async () => {
     const { user } = renderApp("/workflows?wf=release");
-    expect(await screen.findByText("Draft and publish release notes")).toBeInTheDocument();
+    expect((await screen.findAllByText("Draft and publish release notes")).length).toBeGreaterThan(0);
     // The API returns a repo-relative path; the inspector must not prefix it again.
     expect(screen.getAllByText(".weft/workflows/release.ts").length).toBeGreaterThan(0);
     expect(screen.queryByText(/\.weft\/workflows\/\.weft/)).not.toBeInTheDocument();
@@ -252,6 +252,30 @@ describe("workflows", () => {
     await user.click(screen.getByText(/2 notes · latest by draft-agent/));
     expect(screen.getByText(/Initial source scan completed/)).toBeInTheDocument();
     expect(screen.getByText(/Two commits still need issue links/)).toBeInTheDocument();
+  });
+
+  it("shows broken workflow files with their parse diagnostics", async () => {
+    daemon.state.workflowIssues = [
+      {
+        file: ".weft/workflows/custom-react-ui.ts",
+        error: "workflow gate: 1 violation",
+        diagnostics: [
+          {
+            rule: "no-date-now",
+            message: "Date.now() is unavailable",
+            file: ".weft/workflows/custom-react-ui.ts",
+            line: 18,
+            column: 14,
+            fixIt: "use ctx.now()",
+          },
+        ],
+      },
+    ];
+    renderApp("/workflows");
+    expect(await screen.findByRole("heading", { name: "Broken workflows" })).toBeInTheDocument();
+    expect(screen.getByText(".weft/workflows/custom-react-ui.ts")).toBeInTheDocument();
+    expect(screen.getByText(/no-date-now/)).toBeInTheDocument();
+    expect(screen.getByText(/use ctx\.now\(\)/)).toBeInTheDocument();
   });
 });
 
@@ -270,12 +294,12 @@ describe("the launcher", () => {
   it("starts a run from the workflow's declared inputs", async () => {
     const { user, router } = renderApp("/queue");
     await screen.findByText("Approve the v0.9.0 release");
-    await user.keyboard("{Meta>}k{/Meta}");
+    await user.click(await screen.findByRole("button", { name: "triage" }));
 
     const dialog = await screen.findByRole("dialog", { name: "Run a workflow" });
     await user.click(within(dialog).getByText("triage"));
     const inputPane = within(dialog).getByRole("region", { name: "Workflow input" });
-    expect(within(inputPane).getByText("schema-driven")).toBeInTheDocument();
+    expect(within(inputPane).getByText(/tab to move/)).toBeInTheDocument();
     expect(within(inputPane).getByText("string · optional")).toBeInTheDocument();
     // `triage` declares window as an enum, so the form offers its values as pills.
     expect(await within(dialog).findByRole("button", { name: "24h" })).toBeInTheDocument();
@@ -295,7 +319,7 @@ describe("the launcher", () => {
     daemon.fail("/api/runs", 400, 'triage has no input field "whoo" — it takes --window');
     const { user } = renderApp("/queue");
     await screen.findByText("Approve the v0.9.0 release");
-    await user.keyboard("{Meta>}k{/Meta}");
+    await user.click(await screen.findByRole("button", { name: "triage" }));
     const dialog = await screen.findByRole("dialog", { name: "Run a workflow" });
     await user.click(within(dialog).getByText("triage"));
     await user.click(await within(dialog).findByRole("button", { name: /Start run/ }));
@@ -305,14 +329,6 @@ describe("the launcher", () => {
 });
 
 describe("the chrome", () => {
-  it("names the repo and the pool from the daemon", async () => {
-    renderApp("/queue");
-    expect(await screen.findByText("treel")).toBeInTheDocument();
-    // The status bar says the pool size; the queue's running group says it too.
-    expect((await screen.findAllByText(/8 agents/)).length).toBeGreaterThan(0);
-    expect(screen.getByText(/weft v0\.9\.0/)).toBeInTheDocument();
-  });
-
   it("badges the queue with the number of outstanding questions", async () => {
     renderApp("/queue");
     const link = await screen.findByRole("link", { name: /Queue/ });

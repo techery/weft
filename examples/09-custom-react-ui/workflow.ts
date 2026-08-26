@@ -3,7 +3,7 @@
  * while input views can stage—but never submit—a schema-validated human answer.
  *
  *   pnpm exec weft run ./examples/09-custom-react-ui/workflow.ts \
- *     --args '{"environment":"staging","services":["api","web","worker"]}' --watch
+ *     --args '{"environment":"production","services":["api","web","worker","billing"]}' --watch
  */
 import { defineWorkflow } from "@techery/weft-sdk";
 import outcomeView from "./deployment-outcome.ui.tsx";
@@ -15,7 +15,8 @@ export default defineWorkflow(
   {
     id: "example.custom-react-ui",
     name: "custom-react-ui",
-    description: "Render durable React views for a deployment plan, human decision, and composed result.",
+    description:
+      "Exercise rich, durable workflow UI across healthy, risky, partial, empty, and rejected states.",
     input: DeploymentInput,
     output: DeploymentOutput,
   },
@@ -37,12 +38,43 @@ export default defineWorkflow(
       ui: { view: reviewView, props: input },
     });
 
-    const approved = new Set(decision.approvedServices);
+    const requestedServices = new Set(input.services);
+    const approved = new Set(
+      decision.intent === "reject"
+        ? []
+        : decision.approvedServices.filter((service) => requestedServices.has(service)),
+    );
+    const approvedServices = input.services.filter((service) => approved.has(service));
+    const deferredServices = input.services.filter((service) => !approved.has(service));
+    const normalizedDecision: "approved" | "partial" | "rejected" =
+      approvedServices.length === 0 ? "rejected" : deferredServices.length === 0 ? "approved" : "partial";
+    const warnings = [
+      ...(deferredServices.length > 0
+        ? [`${deferredServices.length} service${deferredServices.length === 1 ? "" : "s"} deferred`]
+        : []),
+      ...(decision.trafficPercent < 100 ? [`Canary limited to ${decision.trafficPercent}% traffic`] : []),
+      ...(!decision.rollbackOnError ? ["Automatic rollback disabled"] : []),
+      ...(input.environment === "production" && !decision.changeTicket
+        ? ["Production change ticket not supplied"]
+        : []),
+    ];
     const result = {
       environment: input.environment,
-      approvedServices: input.services.filter((service) => approved.has(service)),
-      deferredServices: input.services.filter((service) => !approved.has(service)),
+      releaseName: input.releaseName,
+      version: input.version,
+      risk: input.risk,
+      window: input.window,
+      decision: normalizedDecision,
+      approvedServices,
+      deferredServices,
+      strategy: decision.strategy,
+      trafficPercent: decision.trafficPercent,
+      monitorMinutes: decision.monitorMinutes,
+      rollbackOnError: decision.rollbackOnError,
+      runSmokeTests: decision.runSmokeTests,
+      ...(decision.changeTicket ? { changeTicket: decision.changeTicket } : {}),
       ...(decision.note ? { note: decision.note } : {}),
+      warnings,
     };
 
     ctx.phase("Summarize");
@@ -50,12 +82,7 @@ export default defineWorkflow(
       key: "deployment-outcome",
       slot: "deployment",
       view: outcomeView,
-      props: {
-        environment: result.environment,
-        approved: result.approvedServices,
-        deferred: result.deferredServices,
-        ...(result.note ? { note: result.note } : {}),
-      },
+      props: result,
     });
 
     return result;

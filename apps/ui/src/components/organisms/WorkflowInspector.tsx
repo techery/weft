@@ -51,11 +51,11 @@ export function WorkflowInspector({
   return (
     <aside className={styles.panel} aria-labelledby="workflow-inspector-title">
       <div className={styles.identity}>
-        <span className={styles.path}>{workflow.file}</span>
         <h2 id="workflow-inspector-title" className={styles.name}>
           {workflow.name}
         </h2>
         <span className={styles.desc}>{workflow.desc}</span>
+        <span className={styles.path}>{workflow.file}</span>
       </div>
 
       <div className={styles.actions}>

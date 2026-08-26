@@ -16,6 +16,7 @@ import type {
   RunRow,
   WeftConfigFile,
   WorkflowDetail,
+  WorkflowIssue,
   WorkflowRow,
   WorkflowStats,
   WorkflowTask,
@@ -97,6 +98,7 @@ export const api = {
   pending: () => request<PendingResponse>("/api/pending"),
 
   workflows: () => request<WorkflowRow[]>("/api/workflows"),
+  workflowIssues: () => request<WorkflowIssue[]>("/api/workflows/issues"),
   workflow: (name: string) => request<WorkflowDetail>(`/api/workflows/${encodeURIComponent(name)}`),
   workflowStats: (name: string) => request<WorkflowStats>(`/api/workflows/${encodeURIComponent(name)}/stats`),
   workflowTasks: (name: string) =>

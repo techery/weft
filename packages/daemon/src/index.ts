@@ -19,7 +19,8 @@
  * `.../resume` act on one.
  *
  * Everything else: `GET /api/meta`, `GET /api/pending` (across every run),
- * `GET /api/workflows`, `/api/workflows/:name`, `/api/workflows/:name/stats`,
+ * `GET /api/workflows`, `/api/workflows/issues`, `/api/workflows/:name`,
+ * `/api/workflows/:name/stats`,
  * `GET /api/blobs/:ref`, and `GET`/`PUT /api/config`.
  */
 export { type FileStat, parseDiffStats, registerArtifactRoutes } from "./api/artifacts.ts";

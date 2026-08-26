@@ -3,7 +3,7 @@
  *
  * Everything the daemon owns (runs, workflows, config, what is waiting on a person) lives
  * in TanStack Query, because it is somebody else's data and it changes without this page's
- * involvement. What is left here is genuinely local: which step of the launcher is open,
+ * involvement. What is left here is genuinely local: which workflow input dialog is open,
  * what has been typed into a form but not yet submitted. None of it survives a reload, and
  * none of it should.
  */
@@ -12,13 +12,8 @@ import { atom } from "jotai";
 /* ── Launcher ───────────────────────────────────────────────────────────── */
 
 export const launcherOpenAtom = atom(false);
-/** 1 = pick a workflow, 2 = fill in its declared inputs. */
-export const launcherStepAtom = atom<1 | 2>(1);
-export const launcherQueryAtom = atom("");
 /** Registry name of the workflow being configured. */
 export const launcherWorkflowAtom = atom("");
-/** Index of the highlighted row in the step-1 list. */
-export const launcherCursorAtom = atom(0);
 
 /** Draft inputs, per workflow name — kept while the launcher is open. */
 export const launcherInputsAtom = atom<Record<string, Record<string, unknown>>>({});
@@ -36,18 +31,10 @@ export const toggleLauncherChipAtom = atom(null, (get, set, workflow: string, ke
   set(launcherInputsAtom, { ...all, [workflow]: { ...all[workflow], [key]: next } });
 });
 
-export const openLauncherAtom = atom(null, (_get, set) => {
-  set(launcherOpenAtom, true);
-  set(launcherStepAtom, 1);
-  set(launcherQueryAtom, "");
-  set(launcherCursorAtom, 0);
-});
-
-/** Skip the picker and go straight to a known workflow's inputs. */
+/** Open the selected workflow's input form. */
 export const openLauncherForAtom = atom(null, (_get, set, workflow: string) => {
   set(launcherOpenAtom, true);
   set(launcherWorkflowAtom, workflow);
-  set(launcherStepAtom, 2);
 });
 
 export const closeLauncherAtom = atom(null, (_get, set) => {

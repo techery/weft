@@ -1,11 +1,17 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useSetAtom } from "jotai";
-import { useRun, useWorkflow, useWorkflowStats, useWorkflows, useWorkflowTasks } from "~/api/queries";
+import {
+  useRun,
+  useWorkflow,
+  useWorkflowIssues,
+  useWorkflowStats,
+  useWorkflows,
+  useWorkflowTasks,
+} from "~/api/queries";
 import type { RunDetail, RunStatus, WorkflowRow } from "~/api/types";
 import { useOpenRun } from "~/app/useOpenRun";
 import { EmptyNote } from "~/components/molecules/EmptyNote";
 import type { HistoryBar } from "~/components/molecules/HistoryBars";
-import { ListTable } from "~/components/molecules/ListTable";
 import { WorkflowTableRow } from "~/components/molecules/WorkflowTableRow";
 import { WorkflowInspector } from "~/components/organisms/WorkflowInspector";
 import { PageHeader } from "~/components/templates/PageHeader";
@@ -25,6 +31,7 @@ export function WorkflowsPage() {
   const openRun = useOpenRun();
 
   const workflows = useWorkflows();
+  const workflowIssues = useWorkflowIssues();
   const rows = workflows.data ?? [];
   // `wf` can name a workflow the registry no longer carries; the first row always exists.
   const selectedRow = rows.find((row) => row.name === wf) ?? rows[0];
@@ -75,17 +82,7 @@ export function WorkflowsPage() {
           <EmptyNote>No workflows here yet — add a file to .weft/workflows/.</EmptyNote>
         ) : null}
         {rows.length > 0 ? (
-          <ListTable
-            head={
-              <>
-                <span className={styles.headWorkflow}>Workflow</span>
-                <span className={styles.headLast}>Last</span>
-                <span className={styles.headSuccess}>Success</span>
-                <span className={styles.headP50}>p50</span>
-                <span className={styles.headCost}>Cost</span>
-              </>
-            }
-          >
+          <div className={styles.cards}>
             {rows.map((row) => (
               <RegistryRow
                 key={row.name}
@@ -95,9 +92,47 @@ export function WorkflowsPage() {
                 // that can carry a shape — every other one would cost a run read.
                 shapeSource={row.name === selectedRow?.name ? shapeSource.data : undefined}
                 onSelect={() => void navigate({ to: "/workflows", search: { wf: row.name } })}
+                onRun={() => openLauncherFor(row.name)}
               />
             ))}
-          </ListTable>
+          </div>
+        ) : null}
+        {workflowIssues.data && workflowIssues.data.length > 0 ? (
+          <section className={styles.issues} aria-labelledby="broken-workflows-heading">
+            <div className={styles.issuesHeader}>
+              <h2 id="broken-workflows-heading">Broken workflows</h2>
+              <span className={styles.issuesCount}>{workflowIssues.data.length}</span>
+            </div>
+            {workflowIssues.data.map((issue) => (
+              <article key={issue.file} className={styles.issue}>
+                <div className={styles.issueFile}>
+                  <span className={styles.issueMarker} aria-hidden="true">
+                    !
+                  </span>
+                  <span>{issue.file}</span>
+                </div>
+                <p className={styles.issueError}>{issue.error.split("\n", 1)[0]}</p>
+                {issue.diagnostics.length > 0 ? (
+                  <ul className={styles.diagnostics}>
+                    {issue.diagnostics.map((diagnostic) => (
+                      <li
+                        key={`${diagnostic.file}:${diagnostic.line}:${diagnostic.column}:${diagnostic.rule}`}
+                      >
+                        <span className={styles.diagnosticLocation}>
+                          {diagnostic.file}:{diagnostic.line}:{diagnostic.column}
+                        </span>{" "}
+                        <span className={styles.diagnosticRule}>{diagnostic.rule}</span>
+                        <span> {diagnostic.message}</span>
+                        {diagnostic.fixIt ? (
+                          <span className={styles.diagnosticFix}>Fix: {diagnostic.fixIt}</span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </article>
+            ))}
+          </section>
         ) : null}
       </div>
 
@@ -131,12 +166,14 @@ function RegistryRow({
   selected,
   shapeSource,
   onSelect,
+  onRun,
 }: {
   row: WorkflowRow;
   selected: boolean;
   /** This workflow's newest run, when the page already holds it — the only source of a shape. */
   shapeSource?: RunDetail;
   onSelect: () => void;
+  onRun: () => void;
 }) {
   const stats = useWorkflowStats(row.name);
   return (
@@ -144,6 +181,7 @@ function RegistryRow({
       workflow={adaptWorkflow(row, { stats: stats.data, shapeSource })}
       selected={selected}
       onSelect={onSelect}
+      onRun={onRun}
     />
   );
 }

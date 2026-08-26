@@ -189,6 +189,10 @@ function browserImportPolicy(root: string): Plugin {
     "react-dom",
     "react-dom/client",
     "scheduler",
+    "@techery/weft-design-system",
+    "@techery/weft-design-system/styles",
+    "@techery/weft-design-system/icons",
+    "@phosphor-icons/react",
     "@techery/weft-sdk/ui",
   ]);
   const supported = /\.[cm]?[jt]sx?$/;
@@ -228,7 +232,15 @@ function browserImportPolicy(root: string): Plugin {
           };
         }
         try {
-          const resolved = COMPILER_REQUIRE.resolve(args.path);
+          // A compiler-owned dependency may import another allowed package that is only
+          // present in its own dependency graph (react-dom -> scheduler under pnpm). Resolve
+          // that edge from the importer; workflow-authored bare imports still resolve from
+          // this compiler package and remain constrained by `allowedBare` above.
+          const resolver =
+            args.importer && compilerFiles.has(args.importer)
+              ? createRequire(args.importer)
+              : COMPILER_REQUIRE;
+          const resolved = resolver.resolve(args.path);
           compilerFiles.add(resolved);
           return { path: resolved };
         } catch (err) {
@@ -269,7 +281,8 @@ window.addEventListener("message", function initialize(event) {
   initialized = true;
   const send = (message) => port.postMessage({ ...message, presentationId: data.presentationId, generation: data.generation });
   const report = (error) => send({ type: "error", message: error instanceof Error ? error.message : String(error) });
-  const root = createRoot(document.getElementById("root"), {
+  const rootElement = document.getElementById("root");
+  const root = createRoot(rootElement, {
     onCaughtError: report,
     onUncaughtError: report,
     onRecoverableError: report,
@@ -280,12 +293,25 @@ window.addEventListener("message", function initialize(event) {
   try {
     root.render(React.createElement(view.component, componentProps));
     send({ type: "ready" });
+    const measure = () => send({
+      type: "resize",
+      height: Math.max(
+        document.documentElement.scrollHeight,
+        document.body ? document.body.scrollHeight : 0,
+        rootElement ? rootElement.scrollHeight : 0,
+      ),
+    });
     if (typeof ResizeObserver === "function") {
-      const observer = new ResizeObserver(() => send({ type: "resize", height: document.documentElement.scrollHeight }));
-      observer.observe(document.documentElement);
+      const observer = new ResizeObserver(measure);
+      observer.observe(rootElement || document.documentElement);
     } else {
-      send({ type: "resize", height: document.documentElement.scrollHeight });
+      measure();
     }
+    requestAnimationFrame(() => {
+      measure();
+      requestAnimationFrame(measure);
+    });
+    setTimeout(measure, 100);
   } catch (error) {
     send({ type: "error", message: error instanceof Error ? error.message : String(error) });
   }

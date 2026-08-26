@@ -17,6 +17,8 @@ export type {
   FileWorkflowRegistry,
   RegistryLoadResult,
   RegistryOptions,
+  WorkflowInspection,
+  WorkflowLoadIssue,
   WorkflowListEntry,
   WorkflowRegistry,
 } from "./registry.ts";

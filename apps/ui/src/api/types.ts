@@ -179,6 +179,20 @@ export interface WorkflowRow {
   description: string;
 }
 
+/** One file rejected while the daemon inspected the workflow directory. */
+export interface WorkflowIssue {
+  file: string;
+  error: string;
+  diagnostics: Array<{
+    rule: string;
+    message: string;
+    file: string;
+    line: number;
+    column: number;
+    fixIt?: string;
+  }>;
+}
+
 /** `GET /api/workflows/:name` */
 export interface WorkflowDetail extends WorkflowRow {
   hash: string;

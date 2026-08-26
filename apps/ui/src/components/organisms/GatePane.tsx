@@ -10,7 +10,7 @@ import { StatusPill } from "~/components/atoms/StatusPill";
 import { GateQuestionRow } from "~/components/molecules/GateQuestionRow";
 import { SectionHeading } from "~/components/molecules/SectionHeading";
 import { WorkflowViewFrame } from "~/components/molecules/WorkflowViewFrame";
-import { gateAnswer, VERDICT_FIELD } from "~/domain/adapt";
+import { gateAnswer } from "~/domain/adapt";
 import type { Gate, StepDetail } from "~/domain/types";
 import { clearGateDraftAtom, gateDraftAtom, setGateFieldAtom, toggleGateChipAtom } from "~/state/atoms";
 import styles from "./GatePane.module.css";
@@ -60,14 +60,6 @@ export function GatePane({ gate, step, schema, onAnswered }: Props) {
       },
     );
   };
-
-  // Previewing the approving answer: it is the one the primary button sends, and a
-  // preview that omitted the verdict would show something the run never receives.
-  const payload = JSON.stringify(
-    candidate === undefined
-      ? gateAnswer(schema, gate.deniable ? { ...values, [VERDICT_FIELD]: true } : values)
-      : candidate,
-  );
 
   return (
     <div className={styles.pane}>
@@ -119,7 +111,7 @@ export function GatePane({ gate, step, schema, onAnswered }: Props) {
             />
             {candidate !== undefined ? (
               <span className={styles.detail}>
-                Candidate staged by the custom view. Review the payload below, then submit from Weft.
+                Candidate staged by the custom view. Review it, then submit from Weft.
               </span>
             ) : null}
           </div>
@@ -156,10 +148,6 @@ export function GatePane({ gate, step, schema, onAnswered }: Props) {
       </div>
 
       <div className={styles.foot}>
-        <span className={styles.payload}>
-          <span className={styles.payloadLabel}>payload → waiting step</span>
-          <span className={styles.payloadValue}>{payload}</span>
-        </span>
         {gate.deniable ? (
           <Button
             variant="secondary"

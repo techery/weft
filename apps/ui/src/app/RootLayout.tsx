@@ -13,7 +13,7 @@ export function RootLayout() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
 
   return (
-    <AppShell active={navKeyFor(pathname)}>
+    <AppShell active={navKeyFor(pathname)} hideHeader={pathname.startsWith("/runs/")}>
       <Outlet />
     </AppShell>
   );

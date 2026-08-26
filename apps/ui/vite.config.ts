@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type ProxyOptions } from "vite";
+import { proxiedOrigin } from "./src/proxy-origin.js";
 
 /**
  * The manager is served by `@techery/weft-daemon` — what `weft ui` starts — so it builds
@@ -18,19 +19,29 @@ const DAEMON_WEB = fileURLToPath(new URL("../../packages/daemon/web", import.met
  *   pnpm dev:ui                 # this, on :4782, hot-reloading against it
  *   WEFT_DAEMON=http://127.0.0.1:4790 pnpm dev:ui
  *
- * Proxying rather than enabling CORS on the daemon is deliberate: the daemon refuses any
- * request carrying a non-loopback Origin, and that guard is what stands between a page you
- * happen to visit and an API that can cancel your runs. A proxy keeps the browser
- * same-origin, so the guard stays exactly as strict as it is in production.
+ * Proxying rather than enabling CORS on the daemon is deliberate: the daemon requires an
+ * Origin that exactly matches its Host. The proxy translates a request only when its
+ * incoming Origin already matches Vite's Host; foreign origins remain foreign and the
+ * daemon rejects them.
  */
 const DAEMON = process.env.WEFT_DAEMON ?? "http://127.0.0.1:4781";
+const DAEMON_ORIGIN = new URL(DAEMON).origin;
 
 const proxy: Record<string, ProxyOptions> = {
   // The journal arrives as Server-Sent Events, so this path has to stream rather than
   // buffer. http-proxy passes a response through as it arrives, and the daemon already
   // sends `x-accel-buffering: no`, so no special handling is needed here — but it is the
   // thing to check first if a live run stops updating in dev.
-  "/api": { target: DAEMON, changeOrigin: true },
+  "/api": {
+    target: DAEMON,
+    changeOrigin: true,
+    configure(server) {
+      server.on("proxyReq", (proxyReq, req) => {
+        const origin = proxiedOrigin(req.headers.origin, req.headers.host, DAEMON_ORIGIN);
+        if (origin !== undefined) proxyReq.setHeader("origin", origin);
+      });
+    },
+  },
 };
 
 export default defineConfig({

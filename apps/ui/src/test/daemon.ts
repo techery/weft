@@ -16,6 +16,7 @@ import type {
   RunDetail,
   RunRow,
   WorkflowDetail,
+  WorkflowIssue,
   WorkflowRow,
   WorkflowStats,
   WorkflowTask,
@@ -27,6 +28,7 @@ export interface DaemonState {
   detail: Record<string, RunDetail>;
   pending: PendingResponse;
   workflows: WorkflowRow[];
+  workflowIssues: WorkflowIssue[];
   workflow: Record<string, WorkflowDetail>;
   tasks: Record<string, WorkflowTask[]>;
   stats: Record<string, WorkflowStats>;
@@ -237,6 +239,7 @@ export function defaultState(): DaemonState {
       },
       { id: "triage", name: "triage", file: ".weft/workflows/triage.ts", description: "Classify new issues" },
     ],
+    workflowIssues: [],
     workflow: {
       release: {
         id: "release",
@@ -499,6 +502,8 @@ export function fakeDaemon(overrides: Partial<DaemonState> = {}): FakeDaemon {
         return detail ? json(detail) : json({ error: `run ${runId} not found` }, 404);
       }
     }
+
+    if (route === "/api/workflows/issues") return json(state.workflowIssues);
 
     const wf = /^\/api\/workflows\/([^/]+)(\/(?:stats|tasks))?$/.exec(route ?? "");
     if (wf) {

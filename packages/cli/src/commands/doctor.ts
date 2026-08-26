@@ -12,7 +12,7 @@ import { promisify } from "node:util";
 import { configPath, GateError, loadWorkflow } from "@techery/weft-host";
 import { Command } from "commander";
 import pc from "picocolors";
-import { allowBareOf, globalOptions, openWeft, workflowsDir } from "../context.ts";
+import { allowBareOf, globalOptions, openWeft, workflowDirs } from "../context.ts";
 import { table } from "../format.ts";
 import { type CliIo, say } from "../io.ts";
 
@@ -38,7 +38,8 @@ export function doctorCommand(io: CliIo): Command {
 
       const weft = await openWeft(cmd);
       try {
-        checks.push(...layoutChecks(weft.weftDir, workflowsDir(weft), cwd));
+        const dirs = workflowDirs(weft);
+        checks.push(...layoutChecks(weft.weftDir, dirs, cwd));
         checks.push(...credentialChecks());
 
         const entries = await weft.registry.list().catch(() => []);
@@ -51,26 +52,31 @@ export function doctorCommand(io: CliIo): Command {
         // registry.list() silently SKIPS files that fail to load: a broken
         // workflow beside a healthy one must not let doctor print "ready".
         const listed = new Set(entries.map((entry) => path.resolve(entry.file)));
-        let files: string[] = [];
-        try {
-          files = (await readdir(workflowsDir(weft))).filter((f) => f.endsWith(".ts"));
-        } catch (err) {
-          // Only genuine ABSENCE is fine (layoutChecks already reports it). Any
-          // other failure — EACCES, EIO, a stray FILE named "workflows" — hides
-          // every workflow behind an empty scan, and "ready" over a directory
-          // nobody can read is a lie.
-          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-            checks.push({
-              verdict: "fail",
-              label: "workflows",
-              detail: `cannot read ${path.relative(cwd, workflowsDir(weft))}: ${(err as Error).message}`,
-            });
+        const files: string[] = [];
+        for (const dir of dirs) {
+          try {
+            files.push(
+              ...(await readdir(dir))
+                .filter((file) => file.endsWith(".ts"))
+                .map((file) => path.resolve(dir, file)),
+            );
+          } catch (err) {
+            // Only genuine ABSENCE is fine (layoutChecks already reports it). Any
+            // other failure — EACCES, EIO, a stray FILE named "workflows" — hides
+            // every workflow behind an empty scan, and "ready" over a directory
+            // nobody can read is a lie.
+            if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+              checks.push({
+                verdict: "fail",
+                label: "workflows",
+                detail: `cannot read ${path.relative(cwd, dir)}: ${(err as Error).message}`,
+              });
+            }
           }
         }
         for (const file of files) {
-          const full = path.resolve(workflowsDir(weft), file);
-          if (listed.has(full)) continue;
-          checks.push(await unlistedFileCheck(full, cwd, allowBareOf(weft)));
+          if (listed.has(file)) continue;
+          checks.push(await unlistedFileCheck(file, cwd, allowBareOf(weft)));
         }
 
         say(
@@ -118,9 +124,10 @@ async function gitCheck(): Promise<Check> {
   }
 }
 
-function layoutChecks(weftDir: string, flows: string, cwd: string): Check[] {
+function layoutChecks(weftDir: string, flows: readonly string[], cwd: string): Check[] {
   const rel = (p: string): string => path.relative(cwd, p) || ".";
   const config = configPath(cwd);
+  const primary = flows[0] ?? path.join(weftDir, "workflows");
   return [
     {
       verdict: existsSync(weftDir) ? "ok" : "warn",
@@ -128,10 +135,15 @@ function layoutChecks(weftDir: string, flows: string, cwd: string): Check[] {
       detail: existsSync(weftDir) ? rel(weftDir) : `${rel(weftDir)} not created yet — the first run makes it`,
     },
     {
-      verdict: existsSync(flows) ? "ok" : "warn",
+      verdict: existsSync(primary) ? "ok" : "warn",
       label: "workflows",
-      detail: existsSync(flows) ? rel(flows) : `${rel(flows)} missing — weft new <name> creates it`,
+      detail: existsSync(primary) ? rel(primary) : `${rel(primary)} missing — weft new <name> creates it`,
     },
+    ...flows.slice(1).map((dir) => ({
+      verdict: existsSync(dir) ? ("ok" as const) : ("warn" as const),
+      label: "workflow +",
+      detail: existsSync(dir) ? rel(dir) : `${rel(dir)} missing`,
+    })),
     {
       verdict: "ok",
       label: "config",

@@ -166,6 +166,7 @@ export function adaptRun(detail: RunDetail, extras: RunExtras = {}): Run {
   return {
     id: detail.runId,
     wf: detail.workflow,
+    createdAt: detail.createdAt,
     file: extras.file ?? "",
     state,
     chrome: chromeOf(detail, steps.length),

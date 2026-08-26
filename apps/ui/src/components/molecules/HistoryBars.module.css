@@ -6,6 +6,6 @@
 }
 .bar {
   flex: 1;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   min-height: 12px;
 }

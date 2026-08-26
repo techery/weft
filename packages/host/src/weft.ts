@@ -45,6 +45,8 @@ export interface Weft {
   cwd: string;
   /** `<cwd>/.weft` — stores, workflows, and the derived index live under it. */
   weftDir: string;
+  /** Primary configured workflow directory followed by any host-supplied extras. */
+  workflowDirs: readonly string[];
   runsDir: string;
   /** Workflow-scoped durable context used by the task CLI and workflow manager. */
   tasks: TaskStore;
@@ -69,6 +71,8 @@ export interface CreateWeftOptions {
   config?: WeftConfig;
   /** `"real"` (default) wires the Claude and Codex adapters; `"mock"` wires fixtures only. */
   providers?: "real" | "mock";
+  /** Extra workflow directories; relative paths resolve against `cwd`. */
+  extraWorkflowDirs?: readonly string[];
 }
 
 /**
@@ -121,8 +125,13 @@ export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
   await ensureStateIgnored(weftDir);
 
   const allowBare = mergedAllowBare(config);
+  const primaryWorkflowDir = workflowsDir(cwd, weftDir, config);
+  const workflowDirs = [
+    ...new Set([primaryWorkflowDir, ...(opts.extraWorkflowDirs ?? []).map((dir) => resolve(cwd, dir))]),
+  ];
   const registry = createWorkflowRegistry({
-    dir: workflowsDir(cwd, weftDir, config),
+    dir: primaryWorkflowDir,
+    ...(workflowDirs.length > 1 ? { extraDirs: workflowDirs.slice(1) } : {}),
     ...(allowBare ? { allowBare } : {}),
   });
 
@@ -206,6 +215,7 @@ export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
     config,
     cwd,
     weftDir,
+    workflowDirs,
     runsDir: stores.runsDir,
     tasks,
     mockBuilder,

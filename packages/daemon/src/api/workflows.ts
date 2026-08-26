@@ -65,7 +65,7 @@ interface Cached<T> {
 }
 
 export function registerWorkflowRoutes(app: Hono, weft: Weft): void {
-  let listing: Cached<Awaited<ReturnType<Weft["registry"]["list"]>>> | undefined;
+  let listing: Cached<Awaited<ReturnType<Weft["registry"]["listWithIssues"]>>> | undefined;
   let index: Cached<RunIndex> | undefined;
 
   /**
@@ -89,14 +89,16 @@ export function registerWorkflowRoutes(app: Hono, weft: Weft): void {
     return value;
   };
 
-  const listWorkflows = () =>
+  const inspectWorkflows = () =>
     cache(
       () => listing,
       (c) => {
         listing = c;
       },
-      () => weft.registry.list(),
+      () => weft.registry.listWithIssues(),
     );
+
+  const listWorkflows = () => inspectWorkflows().then((inspection) => inspection.entries);
 
   const runIndex = () =>
     cache(
@@ -118,6 +120,24 @@ export function registerWorkflowRoutes(app: Hono, weft: Weft): void {
           name: entry.name,
           file: relative(weft.cwd, entry.file),
           description: entry.description,
+        })),
+      );
+    } catch (err) {
+      return fail(c, err);
+    }
+  });
+
+  app.get("/api/workflows/issues", async (c) => {
+    try {
+      const inspection = await inspectWorkflows();
+      return c.json(
+        inspection.issues.map((issue) => ({
+          file: relative(weft.cwd, issue.file),
+          error: issue.error,
+          diagnostics: issue.diagnostics.map((diagnostic) => ({
+            ...diagnostic,
+            file: relative(weft.cwd, diagnostic.file),
+          })),
         })),
       );
     } catch (err) {

@@ -18,34 +18,88 @@
   font-size: 11px;
   color: var(--color-neutral-600);
 }
-.headWorkflow {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-}
-.headLast {
-  width: 62px;
-  flex: none;
-  white-space: nowrap;
-}
-.headSuccess {
-  width: 88px;
-  flex: none;
-  white-space: nowrap;
-}
-.headP50 {
-  width: 52px;
-  flex: none;
-  text-align: right;
-}
-.headCost {
-  width: 54px;
-  flex: none;
-  text-align: right;
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 .legend {
   margin: 0 2px;
   font-size: 12px;
+  color: var(--color-neutral-600);
+}
+.issues {
+  border: 1px solid var(--color-danger);
+  background: var(--color-danger-bg);
+}
+.issuesHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-danger) 35%, transparent);
+}
+.issuesHeader h2 {
+  font-size: 18px;
+}
+.issuesCount {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-danger);
+}
+.issue {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-danger) 25%, transparent);
+}
+.issue:last-child {
+  border-bottom: 0;
+}
+.issueFile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-danger);
+}
+.issueMarker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--color-danger);
+  color: var(--color-danger-bg);
+  font-weight: 700;
+}
+.issueError,
+.diagnostics {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.issueError {
+  color: var(--color-neutral-900);
+}
+.diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-left: 24px;
+  color: var(--color-neutral-700);
+}
+.diagnosticLocation,
+.diagnosticRule {
+  color: var(--color-danger);
+}
+.diagnosticFix {
+  display: block;
+  padding-left: 16px;
   color: var(--color-neutral-600);
 }
 .mono {
@@ -61,9 +115,5 @@
     min-height: 320px;
     overflow: visible;
     padding: 18px 16px 28px;
-  }
-  .headP50,
-  .headCost {
-    display: none;
   }
 }

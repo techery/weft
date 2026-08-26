@@ -26,9 +26,6 @@ export function RunRail({ run, selectedStepId, onSelect }: Props) {
           ))}
         </div>
       ))}
-      <span className={styles.note}>
-        One linear list, appended as steps start. Several steps can be active at once under different labels.
-      </span>
     </nav>
   );
 }

@@ -366,11 +366,12 @@ describe("bundleWorkflow", () => {
       dir,
       "summary.ui.tsx",
       [
+        `import { Button, WeftTheme } from "@techery/weft-design-system";`,
         `import { defineResultView } from "@techery/weft-sdk/ui";`,
         `export default defineResultView<{ message: string }>({`,
         `  id: "summary",`,
         `  revision: "1",`,
-        `  component: ({ props }) => <strong>{props.message}</strong>,`,
+        `  component: ({ props }) => <WeftTheme><Button variant="primary" size="small">{props.message}</Button></WeftTheme>,`,
         `});`,
       ].join("\n"),
     );
@@ -393,11 +394,10 @@ describe("bundleWorkflow", () => {
     expect(first.uiCatalog.assets).toHaveLength(1);
     expect(first.uiCatalog.assets[0]).toMatchObject({ id: "summary", revision: "1", mode: "display" });
     expect(first.uiCatalog.assets[0]?.code).toContain("createRoot");
+    expect(first.uiCatalog.assets[0]?.code).toContain("weft-button");
+    expect(first.uiCatalog.assets[0]?.code).toContain("data-weft-design-system");
 
-    await writeFile(
-      view,
-      (await readFile(view, "utf8")).replace("<strong>", "<em>").replace("</strong>", "</em>"),
-    );
+    await writeFile(view, (await readFile(view, "utf8")).replace('size="small"', 'size="medium"'));
     const styled = await bundleWorkflow({ entry, cwd: dir });
     expect(styled.hash).toBe(first.hash);
     expect(styled.buildHash).not.toBe(first.buildHash);
@@ -480,6 +480,11 @@ describe("bundleWorkflow", () => {
       { id: "example.deployment-review", mode: "input" },
       { id: "example.deployment-plan", mode: "display" },
     ]);
+    for (const asset of loaded.uiCatalog.assets) {
+      expect(asset.code).toContain("requestAnimationFrame");
+      expect(asset.code).toContain("setTimeout");
+      expect(asset.code).toContain("scrollHeight");
+    }
   });
 
   it("keeps every minimal API cookbook workflow gate-clean", async () => {
@@ -906,6 +911,28 @@ describe("createWorkflowRegistry", () => {
     await expect(registry.load("nope")).rejects.toThrow(/not found/);
   });
 
+  it("merges additional workflow directories into one registry", async () => {
+    const primary = await tempDir();
+    const extra = await tempDir();
+    await writeReview(primary, "review.ts");
+    await writeReview(extra, "ship.ts", { id: "ship", description: "Ship it" });
+    const registry = createWorkflowRegistry({ dir: primary, extraDirs: [extra] });
+
+    expect((await registry.list()).map((entry) => entry.name)).toEqual(["review", "ship"]);
+    expect((await registry.load("ship")).file).toBe(path.join(extra, "ship.ts"));
+  });
+
+  it("rejects duplicate identities across workflow directories", async () => {
+    const primary = await tempDir();
+    const extra = await tempDir();
+    await writeReview(primary, "review.ts", { id: "shared" });
+    await writeReview(extra, "ship.ts", { id: "shared", description: "Ship it" });
+    const registry = createWorkflowRegistry({ dir: primary, extraDirs: [extra] });
+
+    await expect(registry.list()).rejects.toThrow(/duplicate workflow id "shared"/);
+    await expect(registry.load("review")).rejects.toThrow(/duplicate workflow id "shared"/);
+  });
+
   it("skips helper modules that are not workflows", async () => {
     const dir = await tempDir();
     await writeReview(dir, "review.ts"); // also writes schemas.ts beside it
@@ -1012,6 +1039,23 @@ describe("createWorkflowRegistry", () => {
     const registry = createWorkflowRegistry({ dir });
     await expect(registry.load("broken")).rejects.toThrow(/no-date-now/);
     expect(await registry.list()).toEqual([]);
+  });
+
+  it("reports broken workflow files without hiding them from inspection", async () => {
+    const dir = await tempDir();
+    await write(dir, "broken.ts", sandboxProbe({ body: `const t = Date.now();` }));
+    const registry = createWorkflowRegistry({ dir });
+
+    const inspection = await registry.listWithIssues();
+    expect(inspection.entries).toEqual([]);
+    expect(inspection.issues).toHaveLength(1);
+    expect(inspection.issues[0]).toMatchObject({
+      file: path.join(dir, "broken.ts"),
+      error: expect.stringContaining("no-date-now"),
+      diagnostics: [
+        expect.objectContaining({ rule: "no-date-now", file: expect.stringContaining("broken.ts") }),
+      ],
+    });
   });
 
   it("tolerates a missing directory", async () => {

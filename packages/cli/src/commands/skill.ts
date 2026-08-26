@@ -311,9 +311,10 @@ pattern's shape can be a workflow's \`output:\` directly.
 
 ## CLI
 
-Global flags: \`--cwd <dir>\` (repo root), \`--mock\` (wire the fixture provider instead of
-Claude/Codex — an agent step then fails loudly without a fixture rather than inventing an
-answer, so it is for agent-less workflows and smoke tests).
+Global flags: \`--cwd <dir>\` (repo root), repeatable \`--extra-workflow-dir <dir>\` (add
+workflow registries without moving run/task state), and \`--mock\` (wire the fixture provider
+instead of Claude/Codex — an agent step then fails loudly without a fixture rather than
+inventing an answer, so it is for agent-less workflows and smoke tests).
 
 | Command | |
 | --- | --- |

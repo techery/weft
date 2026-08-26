@@ -33,6 +33,7 @@
     "typescript": "~5.9.3",
     "vitest": "^4.1.11",
     "tsx": "^4.23.12",
+    "@techery/weft-design-system": "workspace:*",
     "@techery/weft-core": "workspace:*",
     "@techery/weft-provider-mock": "workspace:*",
     "@techery/weft-sdk": "workspace:*",

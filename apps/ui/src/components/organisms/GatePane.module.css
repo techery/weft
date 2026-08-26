@@ -93,24 +93,3 @@
   gap: 14px;
   flex-wrap: wrap;
 }
-.payload {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  flex: 1;
-  min-width: 220px;
-}
-.payloadLabel {
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--color-accent-700);
-  font-weight: 600;
-}
-.payloadValue {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--color-neutral-700);
-  line-height: 1.5;
-  overflow-wrap: anywhere;
-}

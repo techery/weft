@@ -475,6 +475,39 @@ describe("weft doctor", () => {
     expect(doctored.text).toContain("audit");
     expect(doctored.text).toContain("ready");
   });
+
+  it("loads workflows from repeatable extra directories", async () => {
+    const root = await tempRoot();
+    await write(root, "examples/one/greet.ts", GREET);
+    await write(root, "examples/two/audit.ts", AUDIT);
+
+    const checked = await cli(
+      "--cwd",
+      root,
+      "--extra-workflow-dir",
+      "examples/one",
+      "--extra-workflow-dir",
+      "examples/two",
+      "--mock",
+      "check",
+      "--no-tsc",
+    );
+    expect(checked.text).toContain("examples/one/greet.ts");
+    expect(checked.text).toContain("examples/two/audit.ts");
+
+    const started = await cli(
+      "--cwd",
+      root,
+      "--extra-workflow-dir",
+      "examples/one",
+      "--mock",
+      "run",
+      "greet",
+      "--name",
+      "extra",
+    );
+    expect(started.text).toContain("complete");
+  });
 });
 
 describe("weft doctor with unlisted files", () => {
