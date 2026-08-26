@@ -644,7 +644,7 @@ export interface Ctx {
 export interface WorkflowDefinitionLike<In, Out> {
   readonly kind: "weft.workflow";
   readonly run: (ctx: Ctx, input: In) => Promise<Out>;
-  readonly meta: { name?: string; description: string };
+  readonly meta: { id?: string; name?: string; description: string };
 }
 
 /** Re-exported here so a StepError's type is reachable from types-only imports. */

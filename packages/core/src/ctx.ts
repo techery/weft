@@ -754,9 +754,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 timeoutMs,
                 onMaxTurns: opts.onMaxTurns ?? "finalize",
                 tools: { allowEdits: scope !== undefined || mode.writeInPlace === true },
-                // Read-only steps already deny every write tool and shell command;
-                // writable agents need the narrower host-path sandbox boundary.
-                ...(taskContext && scope && rt.host.taskTracker?.protectedPaths?.length
+                ...(taskContext && rt.host.taskTracker?.protectedPaths?.length
                   ? { protectedPaths: [...rt.host.taskTracker.protectedPaths] }
                   : {}),
                 ...(taskContext ? { taskContext } : {}),
@@ -1370,6 +1368,8 @@ export function buildCtx(rt: RunRuntime): Ctx {
     opts: SubWorkflowOptions = {},
   ): Promise<unknown> {
     const name = typeof defOrName === "string" ? defOrName : (defOrName.meta.name ?? "inline");
+    const workflowIdentity =
+      typeof defOrName === "string" ? name : (defOrName.meta.id ?? defOrName.meta.name ?? "inline");
     if (rt.depth + 1 > config.limits.maxDepth) {
       throw new StepError(
         "depth_exceeded",
@@ -1387,7 +1387,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
       // validates {} for the former and null for the latter, so collapsing them
       // would serve a completed child's output across a real input change.
       payload: {
-        workflow: name,
+        workflow: workflowIdentity,
         input: input === undefined ? { $omitted: true } : input,
         budget: opts.budget ?? null,
       },

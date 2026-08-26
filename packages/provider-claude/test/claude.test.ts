@@ -478,6 +478,32 @@ describe("the tool gate", () => {
     });
   });
 
+  test("the protected sandbox hides task storage from read-only task agents", async () => {
+    const taskRoot = `${CWD}/.weft/tasks`;
+    const options = await gateContext(
+      request({
+        tools: { allowEdits: false },
+        protectedPaths: [taskRoot],
+        taskContext: {
+          workflowId: "review",
+          workflowName: "review",
+          runId: "run-1",
+          step: "review",
+          provider: "claude",
+          mode: "read",
+        },
+      }),
+    );
+
+    expect(options.sandbox).toEqual({
+      enabled: true,
+      failIfUnavailable: true,
+      autoAllowBashIfSandboxed: false,
+      allowUnsandboxedCommands: false,
+      filesystem: { denyRead: [taskRoot], denyWrite: [taskRoot] },
+    });
+  });
+
   test("task hosts without a protected path retain the fail-closed shell fallback", async () => {
     const options = await gateContext(
       request({

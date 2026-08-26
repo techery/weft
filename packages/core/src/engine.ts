@@ -1028,14 +1028,19 @@ export class Engine implements EngineHost {
     this.active.get(runtime.runId)?.pending.set(request.id, request);
   }
 
-  /** True when the journal at childId was created BY this parent for this workflow. */
-  private async ownsChildJournal(childId: string, parentRunId: string, workflow: string): Promise<boolean> {
+  /** True when the journal at childId was created BY this parent for this durable workflow. */
+  private async ownsChildJournal(
+    childId: string,
+    parentRunId: string,
+    workflow: { id: string; name: string },
+  ): Promise<boolean> {
     for await (const rec of this.journal.read(childId)) {
-      return (
-        rec.ev.type === "run.created" &&
-        rec.ev.parentRunId === parentRunId &&
-        rec.ev.workflow.name === workflow
-      );
+      if (rec.ev.type !== "run.created" || rec.ev.parentRunId !== parentRunId) return false;
+      // Stable IDs survive display-name edits. Journals written before workflow
+      // IDs were recorded retain their historical name-only ownership check.
+      return rec.ev.workflow.id !== undefined
+        ? rec.ev.workflow.id === workflow.id
+        : rec.ev.workflow.name === workflow.name;
     }
     return false;
   }
@@ -1130,6 +1135,8 @@ export class Engine implements EngineHost {
         step: { kind: "workflow", key: spec.key ?? spec.name, runId: parent.runId },
       });
     }
+    const childWorkflowName = def.meta.name ?? spec.name;
+    const childWorkflowId = def.meta.id ?? childWorkflowName;
 
     const shared: SharedRunResources = {
       // Every child gets its OWN scope, capped or not: the budget.sampled
@@ -1144,7 +1151,13 @@ export class Engine implements EngineHost {
 
     let childId = spec.childRunId;
     let resuming = await this.journal.exists(childId);
-    if (resuming && !(await this.ownsChildJournal(childId, parent.runId, def.meta.name ?? spec.name))) {
+    if (
+      resuming &&
+      !(await this.ownsChildJournal(childId, parent.runId, {
+        id: childWorkflowId,
+        name: childWorkflowName,
+      }))
+    ) {
       // An eight-hex collision with an UNRELATED run: adopting it would replay a
       // stranger's input and append terminal records into their journal. Nothing
       // of ours lives there — take a fresh, free id (the completed step journals
@@ -1264,8 +1277,6 @@ export class Engine implements EngineHost {
     }
     const input = check.value;
 
-    const childWorkflowName = def.meta.name ?? spec.name;
-    const childWorkflowId = def.meta.id ?? childWorkflowName;
     const bodyHash = definitionHash(def);
     const taskSchemaBinding = await this.taskTracker?.prepare?.(
       { id: childWorkflowId, name: childWorkflowName },

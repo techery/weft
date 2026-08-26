@@ -19,6 +19,7 @@ describe("engine end to end", () => {
     const applied: unknown[] = [];
     const t = testEngine({
       taskTracker: {
+        protectedPaths: ["/host/.weft/tasks"],
         snapshot: async () => ({ total: 0, tasks: [] }),
         schema: async () => null,
         applyBatch: async (_context, _batchId, operations) => {
@@ -79,6 +80,7 @@ describe("engine end to end", () => {
     expect(t.builder.calls[0]!.prompt).toContain("## Workflow task tracker");
     expect(t.builder.calls[0]!.prompt).toContain("task --workflow 'planner'");
     expect(t.builder.calls[0]!.prompt).toContain("taskOperations");
+    expect(t.builder.calls[0]!.protectedPaths).toEqual(["/host/.weft/tasks"]);
     expect(applied).toEqual([]);
     expect(
       recs.some(
@@ -751,6 +753,70 @@ describe("engine end to end", () => {
     expect(sampled.length).toBeGreaterThan(0);
     const last = sampled[sampled.length - 1]!.ev;
     if (last.type === "budget.sampled") expect(last.tokens).toBeGreaterThan(0);
+  });
+
+  test("a nested workflow keeps its durable journal when its display name changes", async () => {
+    const child = (name: string) =>
+      defineWorkflow(
+        {
+          id: "durable-child",
+          name,
+          description: "child with a renameable display name",
+          input: z.object({}),
+          output: z.object({ value: z.number() }),
+        },
+        async (ctx) =>
+          ctx.agent("produce the durable child value", {
+            schema: z.object({ value: z.number() }),
+            key: "child-agent",
+          }),
+      );
+    const parent = (nested: ReturnType<typeof child>) =>
+      defineWorkflow(
+        {
+          id: "durable-parent",
+          name: "durable-parent",
+          description: "parent",
+          input: z.object({}),
+          output: z.object({ value: z.number(), approved: z.boolean() }),
+        },
+        async (ctx) => {
+          const result = await ctx.workflow(nested, {}, { key: "durable-child-step" });
+          const approval = await ctx.human.approve({ action: "Finish the parent?" });
+          return { value: result.value, approved: approval.approved };
+        },
+      );
+
+    const first = testEngine();
+    first.builder.on({ key: "child-agent" }, { value: 7 });
+    const handle = await first.engine.start(parent(child("original-child-name")), {
+      input: {},
+      cwd: await tempDir(),
+    });
+    const outcome = await handle.outcome();
+    expect(outcome.status).toBe("waiting_for_human");
+    if (outcome.status !== "waiting_for_human") throw new Error("unreachable");
+    const parentRecords = await records(first.journal, handle.runId);
+    const childScheduled = parentRecords.find(
+      (record) => record.ev.type === "step.scheduled" && record.ev.kind === "workflow",
+    );
+    const childRunId = childScheduled?.ev.type === "step.scheduled" ? childScheduled.ev.childRunId : undefined;
+    expect(childRunId).toEqual(expect.any(String));
+
+    await first.engine.shutdown();
+    await reopen(first).engine.answer(handle.runId, outcome.pending[0]!.id, { approved: true });
+    const resumed = reopen(first);
+    const resumedHandle = await resumed.engine.resume(handle.runId, {
+      def: parent(child("renamed-child")),
+    });
+
+    expect(await resumedHandle.result).toEqual({ value: 7, approved: true });
+    expect(resumed.builder.calls).toHaveLength(0);
+    const resumedRecords = await records(first.journal, handle.runId);
+    const childRunIds = resumedRecords
+      .filter((record) => record.ev.type === "step.scheduled" && record.ev.kind === "workflow")
+      .map((record) => (record.ev.type === "step.scheduled" ? record.ev.childRunId : undefined));
+    expect(new Set(childRunIds)).toEqual(new Set([childRunId]));
   });
 
   test("depth cap rejects nesting past 3", async () => {
