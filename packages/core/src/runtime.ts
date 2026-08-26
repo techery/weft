@@ -191,6 +191,8 @@ export interface StepSpec<T> {
 
 interface HumanSpec {
   kind: HumanKind;
+  /** Caller-supplied replay identity; folded into the hash so two same-worded gates differ. */
+  key?: string;
   question: string;
   detail?: string;
   schemaJson: unknown;
@@ -474,8 +476,11 @@ export class RunRuntime {
 
   private checkIdle(): void {
     if (this.inflightLive === 0 && this.hasPendingWaits()) {
-      const listeners = this.idleListeners;
-      for (const l of listeners) l();
+      // Iterate a COPY: a listener normally unregisters itself as it fires, and
+      // `offIdle` splices the live array, which shifts every later element left
+      // under the loop's index and skips every second waiter. With two waiters
+      // that means one of them never learns the run went idle.
+      for (const l of [...this.idleListeners]) l();
     }
   }
 
@@ -944,10 +949,29 @@ export class RunRuntime {
       ...(spec.onTimeout !== undefined ? { onTimeout: spec.onTimeout } : {}),
       ...(spec.timeoutDefault !== undefined ? { timeoutDefault: spec.timeoutDefault } : {}),
     };
-    const hash = hashStep("human", payload);
+    const hash = hashStep("human", payload, undefined, spec.key);
     const seq = ++this.seqCounter;
 
-    const entry = this.replay?.matchHuman(hash);
+    let match = this.replay?.matchHuman(hash, seq, this.shared.positionsTrusted !== false);
+    if (match?.ambiguous) {
+      // Two human call sites share this question and schema, and the script moved, so
+      // position cannot say which journaled answer belongs to this one. Re-ask instead
+      // of serving a coin flip — an approval nobody gave is the one outcome this system
+      // must never produce.
+      this.log(
+        `ambiguous replay identity for human step #${seq}: more than one journaled request ` +
+          `shares this question and schema — re-asking rather than serving one of their answers`,
+      );
+      await this.append([
+        {
+          type: "replay.diverged",
+          seq,
+          reason: "ambiguous keyless identity (human): several journaled requests share this content",
+        },
+      ]);
+      match = undefined;
+    }
+    const entry = match?.entry;
     if (entry) {
       entry.consumed = true;
       this.consumedEntries++;

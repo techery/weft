@@ -60,6 +60,29 @@ function isLoopbackName(value: string): boolean {
   }
 }
 
+/**
+ * True when `origin` names the same host AND port this request was addressed to.
+ * Both are normalised through `URL`, so `localhost:4781` and `http://localhost:4781`
+ * compare equal while `127.0.0.1:3000` and `127.0.0.1:4781` do not. A request with no
+ * Host to compare against is judged on loopback alone — that is HTTP/1.0 or a
+ * hand-written client, never a browser.
+ */
+function sameOrigin(origin: string, host: string | undefined): boolean {
+  if (!isLoopbackName(origin)) return false;
+  if (host === undefined) return true;
+  const authority = (value: string): string | undefined => {
+    try {
+      const url = new URL(value.includes("://") ? value : `http://${value}`);
+      return `${url.hostname}:${url.port}`;
+    } catch {
+      return undefined;
+    }
+  };
+  const a = authority(origin);
+  const b = authority(host);
+  return a !== undefined && a === b;
+}
+
 export interface CreateAppOptions {
   /**
    * The built workflow manager to serve at `/`. Defaults to the bundle shipped beside
@@ -91,7 +114,21 @@ export function createApp(weft: Weft, opts: CreateAppOptions = {}): Hono {
       return c.json({ error: "forbidden: non-local Host header" }, 403);
     }
     const origin = c.req.header("origin");
-    if (origin !== undefined && !isLoopbackName(origin)) {
+    if (origin !== undefined && !sameOrigin(origin, host)) {
+      // Loopback is not one origin. A page served from ANY other localhost port — a
+      // dev server on :3000, another local tool — is a different origin, and a
+      // CORS-simple POST from it carries an honest Origin that the old
+      // "any loopback passes" test waved through. It could start runs and satisfy
+      // human approval gates. Same-origin means the SAME host:port, nothing else.
+      return c.json({ error: "forbidden: cross-site request" }, 403);
+    }
+    // A no-cors cross-site GET (an <img>, a <script>, a form) carries no Origin at
+    // all, so the two checks above never see it — and this surface has a GET that
+    // writes (`/api/workflows/:name/tasks` registers a namespace). Every browser
+    // that omits Origin sends this instead: `same-origin` is the UI, `none` is a
+    // typed URL or a bookmark, and `cross-site`/`same-site` is somebody else's page.
+    const site = c.req.header("sec-fetch-site");
+    if (site !== undefined && site !== "same-origin" && site !== "none") {
       return c.json({ error: "forbidden: cross-site request" }, 403);
     }
     return next();

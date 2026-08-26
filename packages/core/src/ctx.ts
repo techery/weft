@@ -279,6 +279,33 @@ function resolveSecretValues(
 // Tree hashing (patch idempotency)
 // ---------------------------------------------------------------------------
 
+/**
+ * Safety floor for the bare git calls in this module. A pathname-valued
+ * `core.fsmonitor` is a program git executes on any worktree scan, so a repository
+ * can run code simply by being scanned — and these helpers run `add -A .` on every
+ * write-step dispatch and inside every `ctx.integrate`, which means cloning an
+ * untrusted repo would be enough. `@techery/weft-git`'s `GitCli.raw` takes exactly
+ * this position on every call it makes (packages/git/src/git.ts:100); these helpers
+ * predate it and need the same floor rather than a second opinion.
+ *
+ * The safety vars are spread LAST on purpose: callers here build `env` from
+ * `process.env`, so spreading them first would let an inherited hostile value win.
+ * None of these commands are diff-family, so `GIT_EXTERNAL_DIFF` only needs clearing.
+ */
+const GIT_SAFE_ENV: Record<string, string | undefined> = {
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_OPTIONAL_LOCKS: "0",
+  LC_ALL: "C",
+  GIT_EXTERNAL_DIFF: undefined,
+};
+
+function safeGit(args: string[], opts: { cwd: string; env?: Record<string, string | undefined> }) {
+  return execa("git", ["-c", "core.fsmonitor=false", ...args], {
+    cwd: opts.cwd,
+    env: { ...(opts.env ?? {}), ...GIT_SAFE_ENV },
+  });
+}
+
 /** Content hash of the full working tree (tracked + untracked, minus ignored). */
 export async function treeHash(cwd: string): Promise<string> {
   const indexFile = join(tmpdir(), `weft-index-${randomUUID()}`);
@@ -287,9 +314,9 @@ export async function treeHash(cwd: string): Promise<string> {
     // Seed from HEAD first (same reason as integrationBaseCommit below): on an empty
     // index a tracked file that .gitignore also matches would drop out of the hash,
     // and integrate's idempotency check would go blind to changes in it.
-    await execa("git", ["read-tree", "HEAD"], { cwd, env });
-    await execa("git", ["add", "-A", "."], { cwd, env });
-    const { stdout } = await execa("git", ["write-tree"], { cwd, env });
+    await safeGit(["read-tree", "HEAD"], { cwd, env });
+    await safeGit(["add", "-A", "."], { cwd, env });
+    const { stdout } = await safeGit(["write-tree"], { cwd, env });
     return stdout.trim();
   } finally {
     await nodeFs.rm(indexFile, { force: true }).catch(() => undefined);
@@ -318,8 +345,8 @@ export async function integrationBaseCommit(cwd: string, alsoInclude: string[] =
   try {
     // Seed from HEAD first: on an empty index a tracked file that .gitignore also
     // matches would look untracked to `add -A` and silently drop out of the tree.
-    await execa("git", ["read-tree", "HEAD"], { cwd, env });
-    await execa("git", ["add", "-A", "."], { cwd, env });
+    await safeGit(["read-tree", "HEAD"], { cwd, env });
+    await safeGit(["add", "-A", "."], { cwd, env });
     // A rollback restores its caller's target paths FROM this snapshot: a
     // pre-existing IGNORED file at one of those paths is skipped by `add -A`,
     // so the rollback would read it as patch-created and DELETE the user's
@@ -335,10 +362,10 @@ export async function integrationBaseCommit(cwd: string, alsoInclude: string[] =
       )
         present.push(file);
     }
-    if (present.length > 0) await execa("git", ["add", "-f", "--", ...present], { cwd, env });
-    const tree = (await execa("git", ["write-tree"], { cwd, env })).stdout.trim();
-    const head = (await execa("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
-    const headTree = (await execa("git", ["rev-parse", "HEAD^{tree}"], { cwd })).stdout.trim();
+    if (present.length > 0) await safeGit(["add", "-f", "--", ...present], { cwd, env });
+    const tree = (await safeGit(["write-tree"], { cwd, env })).stdout.trim();
+    const head = (await safeGit(["rev-parse", "HEAD"], { cwd })).stdout.trim();
+    const headTree = (await safeGit(["rev-parse", "HEAD^{tree}"], { cwd })).stdout.trim();
     if (tree === headTree) return head;
     const { stdout } = await execa(
       "git",
@@ -354,7 +381,7 @@ export async function integrationBaseCommit(cwd: string, alsoInclude: string[] =
     // days (onConflict: "ask") — one `git gc --prune` while nobody holds the
     // run and the skip/abort restore path has nothing left to check out. The
     // ref is content-addressed, so re-pinning the same snapshot is idempotent.
-    await execa("git", ["update-ref", `refs/weft/snapshots/${sha}`, sha], { cwd });
+    await safeGit(["update-ref", `refs/weft/snapshots/${sha}`, sha], { cwd });
     return sha;
   } finally {
     await nodeFs.rm(indexFile, { force: true }).catch(() => undefined);
@@ -364,6 +391,14 @@ export async function integrationBaseCommit(cwd: string, alsoInclude: string[] =
 // ---------------------------------------------------------------------------
 // buildCtx
 // ---------------------------------------------------------------------------
+
+/**
+ * Carriers produced by a SUPPRESSED (`onError: "null"`) replay. `revive` must return the
+ * step's carrier shape, but the live path returned a bare `null`, and a schema that
+ * permits `value: null` means the value alone cannot tell the two apart. Process-local so
+ * it never becomes part of the journal or the public result type.
+ */
+const suppressedRevivals = new WeakSet<object>();
 
 export function buildCtx(rt: RunRuntime): Ctx {
   const config = rt.host.config;
@@ -540,12 +575,18 @@ export function buildCtx(rt: RunRuntime): Ctx {
         journaled !== null &&
         (journaled as { $suppressed?: boolean }).$suppressed === true
       ) {
-        return {
+        const revived = {
           value: null,
           usage: entry?.usage ?? { input: 0, output: 0 },
           files: [],
           attempts: entry?.attempts ?? 1,
         } as unknown as DetailedAgentResult<InferOut<S>>;
+        // `revive` has to hand back the step's carrier shape, but `agent.detailed`
+        // returned a bare `null` when the suppression happened live. Mark the carrier so
+        // the caller can restore that — a schema permitting `value: null` legitimately
+        // means the value alone cannot distinguish the two.
+        suppressedRevivals.add(revived as object);
+        return revived;
       }
       const out = journaled as {
         value: unknown;
@@ -1222,6 +1263,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
     try {
       const detailed = await run();
+      // A durable suppression replays as the SAME `null` the live path produced. Handing
+      // back the carrier here would make `result === null` take one branch live and the
+      // other on resume — a divergence in the workflow's own control flow.
+      if (suppressedRevivals.has(detailed as object)) return null;
       return mode.detailed ? detailed : detailed.value;
     } catch (err) {
       if (
@@ -2087,6 +2132,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
       const wire = toWireSchema(opts.schema);
       const outcome = await rt.runHuman({
         kind: "ask",
+        ...(opts.key !== undefined ? { key: opts.key } : {}),
         question: opts.question,
         ...(opts.detail !== undefined ? { detail: opts.detail } : {}),
         schemaJson: wire.json,
@@ -2100,6 +2146,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     approve: async (opts) => {
       const outcome = await rt.runHuman({
         kind: "approve",
+        ...(opts.key !== undefined ? { key: opts.key } : {}),
         question: opts.action,
         ...(opts.detail !== undefined ? { detail: opts.detail } : {}),
         schemaJson: {
@@ -2118,6 +2165,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
       const wire = toWireSchema(opts.schema);
       const outcome = await rt.runHuman({
         kind: "review",
+        ...(opts.key !== undefined ? { key: opts.key } : {}),
         question: opts.question ?? "Review the attached artifact",
         schemaJson: wire.json,
         realSchema: opts.schema,
@@ -2447,7 +2495,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
             if (state && value.applied) state.integrated = true;
             if (state && !value.applied) state.discarded = true;
           },
-          execute: async () => {
+          execute: async (io) => {
             // Snapshot and apply are NESTED journaled steps: a resume mid-ask
             // re-executes this integrate step against a tree the first apply
             // already conflicted — a fresh snapshot would capture the markers
@@ -2455,34 +2503,52 @@ export function buildCtx(rt: RunRuntime): Ctx {
             // stack onto them. Served completions reuse the PRE-conflict
             // snapshot (pinned under refs/weft/snapshots, gc-safe) and the
             // first pass's apply outcome without touching the tree again.
-            const { baseTree, snapRef } = await rt.runStep<{ baseTree: string; snapRef: string }>({
-              kind: "sideeffect",
-              label: `integrate:snapshot:${patch.key}`,
-              payload: { op: "integrate.snapshot", key: patch.key, ref: patch.ref },
-              execute: async () => ({
-                value: {
-                  baseTree: await treeHash(rt.cwd),
-                  // Rollback snapshot must include untracked files (stash-create
-                  // cannot): a user's pre-existing untracked file that a patch
-                  // collides with is restored on skip/abort, never deleted as
-                  // patch-created. The patch's own targets ride along
-                  // force-added, so even an IGNORED pre-existing collision file
-                  // is restorable rather than removed.
-                  snapRef: await integrationBaseCommit(rt.cwd, patch.files),
-                },
-              }),
+            //
+            // EXCEPT when this step is RE-ESTABLISHING: `verifyServe` refused the
+            // journaled completion because the tree no longer carries the patch, so
+            // serving the nested pair from that same journal hands back the first
+            // pass's `{ok:true}` without touching anything, and the run re-journals
+            // `patch.merged` with resultTree === baseTree. That is a green run whose
+            // tree lacks the change — and it is PERMANENT, because the new completion
+            // now matches the untouched tree and every later replay serves it happily.
+            // A re-establishing pass has to do the work again; its predecessor's
+            // snapshot describes a tree that no longer exists anyway.
+            //
+            // `reExecuting` is set only when a journaled COMPLETION was refused, so a
+            // mid-ask resume (parent still incomplete) keeps the reuse above intact.
+            const reEstablishing = io.reExecuting === true;
+            const takeSnapshot = async () => ({
+              baseTree: await treeHash(rt.cwd),
+              // Rollback snapshot must include untracked files (stash-create
+              // cannot): a user's pre-existing untracked file that a patch
+              // collides with is restored on skip/abort, never deleted as
+              // patch-created. The patch's own targets ride along
+              // force-added, so even an IGNORED pre-existing collision file
+              // is restorable rather than removed.
+              snapRef: await integrationBaseCommit(rt.cwd, patch.files),
             });
-            const applied = await rt.runStep<ApplyOutcome>({
-              kind: "sideeffect",
-              label: `integrate:apply:${patch.key}`,
-              payload: { op: "integrate.apply", key: patch.key, ref: patch.ref },
-              execute: async () => ({
-                value: await applyPatchToTree({
-                  repoRoot: rt.cwd,
-                  patch: await rt.host.blobs.getText(patch.ref),
-                }),
-              }),
-            });
+            const runApply = async () =>
+              applyPatchToTree({
+                repoRoot: rt.cwd,
+                patch: await rt.host.blobs.getText(patch.ref),
+              });
+
+            const { baseTree, snapRef } = reEstablishing
+              ? await takeSnapshot()
+              : await rt.runStep<{ baseTree: string; snapRef: string }>({
+                  kind: "sideeffect",
+                  label: `integrate:snapshot:${patch.key}`,
+                  payload: { op: "integrate.snapshot", key: patch.key, ref: patch.ref },
+                  execute: async () => ({ value: await takeSnapshot() }),
+                });
+            const applied = reEstablishing
+              ? await runApply()
+              : await rt.runStep<ApplyOutcome>({
+                  kind: "sideeffect",
+                  label: `integrate:apply:${patch.key}`,
+                  payload: { op: "integrate.apply", key: patch.key, ref: patch.ref },
+                  execute: async () => ({ value: await runApply() }),
+                });
             if (applied.ok) {
               const resultTree = await treeHash(rt.cwd);
               await rt.append([

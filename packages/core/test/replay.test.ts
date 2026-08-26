@@ -685,3 +685,158 @@ describe("replay identity: a cache hit must not lie", () => {
     expect(calls).toBe(2);
   });
 });
+
+describe("regression: a human answer is never served to the wrong gate", () => {
+  // Human steps carry no `key` — `ask`/`approve`/`review` and `gateStep` expose none — so
+  // two gates asking the same question are identical by content. `matchHuman` used to
+  // serve the first unconsumed entry for a hash, so deleting the first of two identical
+  // gates slid the survivor onto the deleted one's answer: a recorded DENIAL replayed as
+  // an APPROVAL, with nothing in the journal to say it had happened.
+  const Verdict = z.object({ second: z.boolean(), done: z.boolean() });
+
+  // A trailing gate keeps run 1 SUSPENDED rather than completed, which is the state a
+  // resume actually finds.
+  const threeGates = async (ctx: any) => {
+    await ctx.human.approve({ action: "ship?" });
+    const b = await ctx.human.approve({ action: "ship?" });
+    const c = await ctx.human.approve({ action: "done?" });
+    return { second: b.approved, done: c.approved };
+  };
+  const firstGateDeleted = async (ctx: any) => {
+    const b = await ctx.human.approve({ action: "ship?" });
+    const c = await ctx.human.approve({ action: "done?" });
+    return { second: b.approved, done: c.approved };
+  };
+
+  test("deleting one of two identically worded gates re-asks instead of reusing its answer", async () => {
+    let steps = threeGates;
+    const def = defineWorkflow(
+      { name: "gates", description: "gates", input: z.object({}), output: Verdict },
+      async (ctx) => steps(ctx as never),
+    );
+
+    const t1 = testEngine();
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(def, { input: {}, cwd, defHash: "bundle-v1" });
+
+    // Approve the first "ship?", DENY the second, and leave "done?" outstanding.
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected a gate, got ${o1.status}`);
+    await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    const o2 = await h1.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error(`expected the second gate, got ${o2.status}`);
+    await t1.engine.answer(h1.runId, o2.pending[0]!.id, { approved: false });
+    const o3 = await h1.outcome();
+    if (o3.status !== "waiting_for_human") throw new Error(`expected the third gate, got ${o3.status}`);
+
+    // The script loses its FIRST gate; the survivor now sits where the approved one was.
+    steps = firstGateDeleted;
+    await t1.engine.shutdown();
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def, defHash: "bundle-v2" });
+    const o4 = await h2.outcome();
+
+    // It must ask again rather than hand the survivor the deleted gate's `true`.
+    expect(o4.status).toBe("waiting_for_human");
+    if (o4.status !== "waiting_for_human") throw new Error("expected a fresh request");
+    const recs = await records(t2.journal, h1.runId);
+    expect(
+      recs.some(
+        (r) => r.ev.type === "replay.diverged" && /ambiguous keyless identity \(human\)/.test(r.ev.reason),
+      ),
+    ).toBe(true);
+
+    // The denial the operator actually gave is what the re-ask lands on.
+    await t2.engine.answer(h1.runId, o4.pending[0]!.id, { approved: false });
+    const o5 = await h2.outcome();
+    if (o5.status !== "waiting_for_human") throw new Error(`expected the trailing gate, got ${o5.status}`);
+    await t2.engine.answer(h1.runId, o5.pending[0]!.id, { approved: true });
+    expect(await h2.result).toEqual({ second: false, done: true });
+  });
+
+  test("an unedited script still serves both identical gates from the journal", async () => {
+    const def = defineWorkflow(
+      { name: "gates-stable", description: "gates", input: z.object({}), output: Verdict },
+      async (ctx) => threeGates(ctx as never),
+    );
+    const t1 = testEngine();
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(def, { input: {}, cwd, defHash: "bundle-v1" });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected a gate");
+    await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    const o2 = await h1.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the second gate");
+    await t1.engine.answer(h1.runId, o2.pending[0]!.id, { approved: false });
+    const o3 = await h1.outcome();
+    if (o3.status !== "waiting_for_human") throw new Error("expected the third gate");
+
+    // Same bundle hash: positions are trusted, so both answers replay in place — no
+    // re-ask, no divergence, and only the outstanding gate is still pending.
+    await t1.engine.shutdown();
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def, defHash: "bundle-v1" });
+    const o4 = await h2.outcome();
+    expect(o4.status).toBe("waiting_for_human");
+    const recs = await records(t2.journal, h1.runId);
+    expect(recs.filter((r) => r.ev.type === "human.requested")).toHaveLength(3);
+    expect(recs.some((r) => r.ev.type === "replay.diverged")).toBe(false);
+    if (o4.status !== "waiting_for_human") throw new Error("expected the trailing gate");
+    await t2.engine.answer(h1.runId, o4.pending[0]!.id, { approved: true });
+    expect(await h2.result).toEqual({ second: false, done: true });
+  });
+});
+
+describe("a `key` disambiguates two identically worded gates", () => {
+  const Verdict = z.object({ second: z.boolean(), done: z.boolean() });
+
+  test("keyed gates survive an edit that would otherwise re-open them", async () => {
+    // Same wording, different meaning — the case the keyless guard has to re-ask about
+    // and a `key` should make reusable.
+    const bothGates = async (ctx: any) => {
+      await ctx.human.approve({ action: "ship?", key: "gate:staging" });
+      const b = await ctx.human.approve({ action: "ship?", key: "gate:prod" });
+      const c = await ctx.human.approve({ action: "done?" });
+      return { second: b.approved, done: c.approved };
+    };
+    const prodOnly = async (ctx: any) => {
+      const b = await ctx.human.approve({ action: "ship?", key: "gate:prod" });
+      const c = await ctx.human.approve({ action: "done?" });
+      return { second: b.approved, done: c.approved };
+    };
+
+    let steps = bothGates;
+    const def = defineWorkflow(
+      { name: "keyed", description: "keyed", input: z.object({}), output: Verdict },
+      async (ctx) => steps(ctx as never),
+    );
+
+    const t1 = testEngine();
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(def, { input: {}, cwd, defHash: "bundle-v1" });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the staging gate");
+    await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    const o2 = await h1.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the prod gate");
+    await t1.engine.answer(h1.runId, o2.pending[0]!.id, { approved: false });
+    const o3 = await h1.outcome();
+    if (o3.status !== "waiting_for_human") throw new Error("expected the trailing gate");
+    await t1.engine.shutdown();
+
+    // Drop the staging gate. The keys make the survivor identifiable, so its own
+    // journaled DENIAL is served — no re-ask, no divergence.
+    steps = prodOnly;
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def, defHash: "bundle-v2" });
+    const o4 = await h2.outcome();
+    if (o4.status !== "waiting_for_human") throw new Error(`expected the trailing gate, got ${o4.status}`);
+    const recs = await records(t2.journal, h1.runId);
+    expect(recs.some((r) => r.ev.type === "replay.diverged")).toBe(false);
+    // Three requests from run 1 and nothing new: the prod gate replayed in place.
+    expect(recs.filter((r) => r.ev.type === "human.requested")).toHaveLength(3);
+
+    await t2.engine.answer(h1.runId, o4.pending[0]!.id, { approved: true });
+    expect(await h2.result).toEqual({ second: false, done: true });
+  });
+});

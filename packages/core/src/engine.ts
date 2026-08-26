@@ -41,6 +41,13 @@ const CANCEL_DRAIN_MS = 5_000;
 /** How long shutdown() waits for each run to unwind before leaving it claimed. */
 const SHUTDOWN_DRAIN_MS = 5_000;
 
+/**
+ * How long a completing run waits for steps its body stopped awaiting — a `Promise.race`
+ * loser, a lane of a raw `Promise.all` whose sibling rejected, a floating step. Short:
+ * this is a workflow bug, and the terminal record should not wait long on one.
+ */
+const TERMINAL_DRAIN_MS = 5_000;
+
 /** First journal format that enables implicit task context on agent steps. */
 const TASK_CONTEXT_VERSION = 1;
 
@@ -89,6 +96,58 @@ function hasImplicitTaskContext(records: JournalRecord[]): boolean {
  *
  * Cleared as soon as the race settles, so a run that drains early never delays the exit.
  */
+/**
+ * Wait, bounded, for a runtime's own outstanding work to finish.
+ *
+ * `drive()` cannot use {@link drainWithin} for this: the promise it would race IS
+ * `drive()`'s own. And it deliberately does not ABORT first, the way `cancel()` and
+ * `shutdown()` do — every run in a tree shares one AbortController, so a child
+ * completing normally would tear down its parent. Waiting is the part that matters
+ * here: it keeps a step's `step.completed` from landing after the run's terminal
+ * record, and keeps the ownership claim held while that step is still executing.
+ *
+ * `liveStepCount()` excludes steps that called `markWaiting()`, so a workflow that stops
+ * awaiting a `ctx.sleep`, a signal, or an in-step gate — a `Promise.race` it lost, an
+ * early return — hits the zero fast path while that wait is still armed, and the timer
+ * then appends `timer.fired` and `step.completed` after the run's terminal record.
+ * `includeWaits` is what covers that.
+ *
+ * It is a caller's decision because ONE counter serves two very different waits. A
+ * sub-workflow step bridges its child's suspension into the parent's `waitingSteps`, and
+ * a terminal root with a descendant still suspended on a person is a supported state,
+ * not an abandoned wait — that child's records land in the CHILD's journal, and its
+ * question has to stay answerable. Live children are the only reason a wait legitimately
+ * outlives the body, so `drive()` passes `children.size === 0`: no children means every
+ * standing wait is genuinely orphaned.
+ *
+ * A wait longer than the bound still forfeits the release rather than being abandoned
+ * quietly — the claim then expires on its TTL, which is the same position `shutdown()`
+ * takes on a step that outlives its drain.
+ *
+ * Polled rather than event-driven because the runtime's idle listeners fire only while a
+ * run has pending waits, which is one of the two cases this has to cover and not the
+ * other. The timer is referenced for the same reason `drainWithin`'s is.
+ */
+function drainSteps(
+  rt: { liveStepCount(): number; hasPendingWaits(): boolean },
+  ms: number,
+  includeWaits: boolean,
+): Promise<boolean> {
+  const outstanding = (): boolean => rt.liveStepCount() > 0 || (includeWaits && rt.hasPendingWaits());
+  if (!outstanding()) return Promise.resolve(true);
+  return new Promise<boolean>((resolve) => {
+    const done = (value: boolean) => {
+      clearInterval(poll);
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const poll = setInterval(() => {
+      if (!outstanding()) done(true);
+    }, 10);
+    const timer = setTimeout(() => done(false), ms);
+  });
+}
+
 function drainWithin(result: Promise<unknown>, ms: number): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
@@ -845,17 +904,63 @@ export class Engine implements EngineHost {
     }
   }
 
-  /** The run's ownership claim now belongs to another process: stop this copy. */
+  /** The root of `active`'s run tree, found by walking up through `children` links. */
+  private rootOf(active: ActiveRun): ActiveRun {
+    const guard = new Set<string>([active.runtime.runId]);
+    let current = active;
+    for (;;) {
+      let parent: ActiveRun | undefined;
+      for (const candidate of this.active.values()) {
+        if (candidate.children.has(current.runtime.runId)) {
+          parent = candidate;
+          break;
+        }
+      }
+      if (!parent || guard.has(parent.runtime.runId)) return current;
+      guard.add(parent.runtime.runId);
+      current = parent;
+    }
+  }
+
+  /** `active` and every live descendant, depth-first, each visited once. */
+  private *treeOf(active: ActiveRun, seen = new Set<string>()): Iterable<ActiveRun> {
+    if (seen.has(active.runtime.runId)) return;
+    seen.add(active.runtime.runId);
+    yield active;
+    for (const childId of active.children) {
+      const child = this.active.get(childId);
+      if (child) yield* this.treeOf(child, seen);
+    }
+  }
+
+  /**
+   * The run's ownership claim now belongs to another process: stop this copy.
+   *
+   * Fencing is a TREE property, not a per-run one. Every run in the tree shares one
+   * AbortController, so fencing only the run that noticed leaves its parent and
+   * siblings to see that abort as an ordinary cancellation and journal a DURABLE
+   * `run.cancelled` — the exact opposite of the fence's contract, and it fires
+   * precisely when the system is under the stress the fence exists for. A parent
+   * cannot continue without the child that was taken from it anyway, and its journal
+   * must stay resumable so a later owner can re-adopt the whole tree.
+   */
   private fenceLostRun(active: ActiveRun, reason?: string): void {
-    if (active.leaseTimer) clearInterval(active.leaseTimer);
-    active.tail?.abort();
-    active.runtime.fence(
-      new StepError(
-        "detached",
-        `run ${active.runtime.runId}: ${reason ?? "ownership claim lost to another process"} — stopping this copy without a journaled outcome`,
-        { step: { kind: "workflow", runId: active.runtime.runId } },
-      ),
-    );
+    const lostId = active.runtime.runId;
+    for (const member of this.treeOf(this.rootOf(active))) {
+      if (member.leaseTimer) clearInterval(member.leaseTimer);
+      member.tail?.abort();
+      const why =
+        member.runtime.runId === lostId
+          ? (reason ?? "ownership claim lost to another process")
+          : `run ${lostId} in this tree lost its ownership claim`;
+      member.runtime.fence(
+        new StepError(
+          "detached",
+          `run ${member.runtime.runId}: ${why} — stopping this copy without a journaled outcome`,
+          { step: { kind: "workflow", runId: member.runtime.runId } },
+        ),
+      );
+    }
   }
 
   private outcomeOf(active: ActiveRun): Promise<RunOutcome> {
@@ -909,10 +1014,18 @@ export class Engine implements EngineHost {
     const span = tracer.startSpan(`weft.run ${rt.workflowName}`, {
       attributes: { "weft.run_id": rt.runId, "weft.workflow": rt.workflowName },
     });
+    let drained = true;
     try {
       rt.setStatus("executing");
       const ctx = buildCtx(rt);
       const rawOutput = await def.run(ctx, input);
+      // The body settled, but a step it stopped awaiting can still be running: still
+      // spending, still writing to the repository, and still about to append. Appending
+      // the terminal record over the top of that produces a journal whose `run.completed`
+      // precedes a `step.completed`, and releasing the claim frees the run for another
+      // process while this one is mid-step. `cancel()` and `shutdown()` already refuse to
+      // do that; this is the path every run takes.
+      drained = await drainSteps(rt, TERMINAL_DRAIN_MS, active.children.size === 0);
       // Structured-cloneable is not enough: the journal is JSONL, and a Map quietly
       // becomes {}, a bigint makes stringify throw — the live handle would then
       // disagree with state.json and replay, or a green run would fail at append.
@@ -969,6 +1082,13 @@ export class Engine implements EngineHost {
       // run.cancelled either. The fence is the cause; the unwind error is its echo.
       if (rt.fenced) throw rt.fenced;
       if (isCancellation(err)) {
+        // Same wait as the other two exits. An abort makes a COOPERATIVE lane reject at
+        // once, so the body can land here while a step that ignores its signal runs on —
+        // and cancel() sees a body that settled promptly, drains happily, and leaves the
+        // release to the `finally` below. Without this the claim goes free with a step
+        // still executing, which is the one thing every drain in this file exists to
+        // prevent.
+        drained = await drainSteps(rt, TERMINAL_DRAIN_MS, active.children.size === 0);
         // appendTerminal dedupes: an external cancel already committed its
         // run.cancelled, and a second one would just be noise.
         await this.appendTerminal(active, [{ type: "run.cancelled" }]);
@@ -976,6 +1096,7 @@ export class Engine implements EngineHost {
         throw err;
       }
       const stepError = StepError.from(err, { kind: "workflow", runId: rt.runId });
+      drained = await drainSteps(rt, TERMINAL_DRAIN_MS, active.children.size === 0);
       const landedFail = await this.appendTerminal(active, [
         { type: "run.failed", error: stepError.serialize() },
       ]);
@@ -991,7 +1112,10 @@ export class Engine implements EngineHost {
       // Release inside this finally (not the detached cleanup chain) so anything that
       // awaited result — a cancel, a test about to resume elsewhere — sees it free.
       if (active.leaseTimer) clearInterval(active.leaseTimer);
-      await active.lease?.release().catch(() => undefined);
+      // Never release ownership over still-live work (shutdown() takes the same
+      // position): a step past the drain window forfeits the release and the claim
+      // TTL-expires instead, so no second process can start appending under it.
+      if (drained) await active.lease?.release().catch(() => undefined);
       // A fenced run's projections belong to its new owner — don't clobber them.
       if (!rt.fenced) await this.snapshot(active).catch(() => undefined);
     }

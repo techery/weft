@@ -4275,3 +4275,211 @@ describe("codex review findings, round 60 (PR #1)", () => {
     expect(symbolic.stdout.trim()).toBe("refs/heads/release");
   });
 });
+
+describe("architecture review @ 627b28e", () => {
+  const FixSummary = z.object({ summary: z.string() });
+
+  test("a reverted integration is re-applied on resume, not served from its own journal", async () => {
+    // `integrate:<key>` guards itself with verifyServe, but the snapshot/apply it does
+    // the work in were NESTED journaled steps with no guard of their own. When
+    // verifyServe correctly refused (the tree no longer carried the patch), the parent
+    // re-executed and the nested pair was served straight back from the journal —
+    // returning {ok:true} without touching the tree, then re-journaling `patch.merged`
+    // with resultTree === baseTree. A green run, a ledger saying "merged", and a tree
+    // without the change; and permanent, since the new completion matched the untouched
+    // tree from then on.
+    const t1 = testEngine();
+    t1.builder.on(
+      { key: "fix" },
+      { summary: "fixed" },
+      { writes: { "auth.ts": "export const fixed = true;\n" } },
+    );
+    const cwd = await tempRepo({ "auth.ts": "export const fixed = false;\n" });
+    const def = defineWorkflow(
+      { name: "revert", description: "r", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const p = await ctx.agent.detailed("fix the flag", {
+          schema: FixSummary,
+          key: "fix",
+          write: { paths: ["auth.ts"] },
+        });
+        await ctx.integrate([p]);
+        const go = await ctx.human.approve({ action: "done?" });
+        return { ok: go.approved };
+      },
+    );
+
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    expect(await readFile(join(cwd, "auth.ts"), "utf8")).toBe("export const fixed = true;\n");
+    await t1.engine.shutdown();
+
+    // The change is reverted out from under the suspended run — a `git checkout --`,
+    // a `git reset --hard`, or a fresh clone at the same path.
+    await writeFile(join(cwd, "auth.ts"), "export const fixed = false;\n");
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error(`expected re-suspension, got ${o2.status}`);
+    await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    expect(await h2.result).toEqual({ ok: true });
+
+    // The patch is actually back in the tree, not merely re-journaled as merged.
+    expect(await readFile(join(cwd, "auth.ts"), "utf8")).toBe("export const fixed = true;\n");
+    const recs = await records(t2.journal, h1.runId);
+    const merged = recs
+      .filter((r) => r.ev.type === "patch.merged")
+      .map((r) => r.ev as unknown as { baseTree: string; resultTree: string });
+    // A re-established merge MOVED the tree; baseTree === resultTree is the signature
+    // of the bug (a "merge" that changed nothing).
+    expect(merged.at(-1)!.baseTree).not.toBe(merged.at(-1)!.resultTree);
+    expect(recs.some((r) => r.ev.type === "replay.diverged")).toBe(true);
+  });
+
+  test("an integration the tree still carries is served, not applied twice", async () => {
+    const t1 = testEngine();
+    t1.builder.on(
+      { key: "fix" },
+      { summary: "fixed" },
+      { writes: { "auth.ts": "export const fixed = true;\n" } },
+    );
+    const cwd = await tempRepo({ "auth.ts": "export const fixed = false;\n" });
+    const def = defineWorkflow(
+      { name: "held", description: "h", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const p = await ctx.agent.detailed("fix the flag", {
+          schema: FixSummary,
+          key: "fix",
+          write: { paths: ["auth.ts"] },
+        });
+        await ctx.integrate([p]);
+        const go = await ctx.human.approve({ action: "done?" });
+        return { ok: go.approved };
+      },
+    );
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+    await t1.engine.shutdown();
+
+    // Tree untouched: the journaled merge still holds, so nothing re-applies.
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected re-suspension");
+    await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    expect(await h2.result).toEqual({ ok: true });
+    expect(await readFile(join(cwd, "auth.ts"), "utf8")).toBe("export const fixed = true;\n");
+    const recs = await records(t2.journal, h1.runId);
+    expect(recs.filter((r) => r.ev.type === "patch.merged")).toHaveLength(1);
+  });
+});
+
+describe('architecture review @ 627b28e — onError:"null" replay shape', () => {
+  test("agent.detailed under a durable suppression replays as null, exactly as it did live", async () => {
+    // The live path returns a bare `null` for both `agent` and `agent.detailed`. The
+    // replay path revived the carrier `{ value: null, ... }`, so `result === null` took
+    // one branch on the first run and the other on a resume — the workflow's own control
+    // flow diverging across a replay.
+    const seen: Array<string> = [];
+    const def = defineWorkflow(
+      { name: "suppressed", description: "s", input: z.object({}), output: z.object({ saw: z.string() }) },
+      async (ctx) => {
+        const r = await ctx.agent.detailed("try it", {
+          schema: z.object({ ok: z.boolean() }),
+          key: "flaky",
+          onError: "null",
+        });
+        seen.push(r === null ? "null" : "object");
+        await ctx.human.approve({ action: "continue?" });
+        return { saw: r === null ? "null" : "object" };
+      },
+    );
+
+    const t1 = testEngine();
+    t1.builder.on({ key: "flaky" }, () => {
+      throw new Error("provider exploded");
+    });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    expect(seen).toEqual(["null"]);
+    await t1.engine.shutdown();
+
+    // Resume: the suppression is durable, so the step is SERVED — and must be served as
+    // the same `null` the live run saw, not as its carrier.
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error(`expected re-suspension, got ${o2.status}`);
+    await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    expect(await h2.result).toEqual({ saw: "null" });
+    expect(seen).toEqual(["null", "null"]);
+  });
+});
+
+describe("architecture review @ 627b28e — a lost claim fences the tree, not one run", () => {
+  test("a child losing its ownership claim does not journal a terminal event for its parent", async () => {
+    // `fence()` means "this journal is not ours to write a terminal event into; the run
+    // stays resumable". It was enforced only on the runtime that noticed. Every run in a
+    // tree shares one AbortController, so the PARENT saw that abort as an ordinary
+    // cancellation and durably wrote run.cancelled -- a child losing its claim terminally
+    // cancelled its parent, exactly when the system was under the stress the fence is for.
+    class ChildLoseslaim extends MemoryJournalStore {
+      acquired = 0;
+      override async acquireRun(runId: string) {
+        this.acquired++;
+        // The parent keeps its claim; the child's is taken over immediately.
+        if (this.acquired === 1) return super.acquireRun(runId);
+        return { refresh: async () => false, release: async () => {} };
+      }
+    }
+
+    const child = defineWorkflow(
+      { name: "slowchild", description: "c", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        await ctx.sleep(60_000);
+        return { ok: true };
+      },
+    );
+    const parent = defineWorkflow(
+      { name: "fenceparent", description: "p", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const r = (await ctx.workflow(child, {}, { key: "c" })) as { ok: boolean };
+        return { ok: r.ok };
+      },
+    );
+
+    const journal = new ChildLoseslaim();
+    const engine = new Engine({ journal, blobs: new MemoryBlobStore(), providers: new ProviderRegistry() });
+    const cwd = await tempDir();
+    vi.useFakeTimers();
+    let parentId: string;
+    try {
+      const h = await engine.start(parent, { input: {}, cwd });
+      parentId = h.runId;
+      await vi.advanceTimersByTimeAsync(0); // the child launches and its sleep dispatches
+      await vi.advanceTimersByTimeAsync(5_000); // the refresh interval reports the child's loss
+      await expect(h.result).rejects.toMatchObject({ code: "detached" });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The parent's journal must stay exactly as a later owner would want to find it.
+    const parentRecs = await records(journal, parentId);
+    expect(parentRecs.some((r) => ["run.completed", "run.failed", "run.cancelled"].includes(r.ev.type))).toBe(
+      false,
+    );
+
+    // And so must every child journal in the tree.
+    for (const summary of await journal.list()) {
+      const recs = await records(journal, summary.runId);
+      expect(recs.some((r) => ["run.completed", "run.failed", "run.cancelled"].includes(r.ev.type))).toBe(
+        false,
+      );
+    }
+  });
+});

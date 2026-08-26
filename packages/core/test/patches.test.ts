@@ -668,3 +668,32 @@ describe("an edit that escaped the worktree", () => {
     }
   });
 });
+
+describe("git hardening in the core tree helpers", () => {
+  // `core.fsmonitor` set to a PATHNAME is a program git executes on any worktree scan,
+  // and `treeHash`/`integrationBaseCommit` run `add -A .` on every write-step dispatch
+  // and inside every `ctx.integrate`. They bypassed GitCli, which disables it on every
+  // call, so cloning an untrusted repository was enough to run repo-configured code.
+  // Verified against git 2.43: without the flag the hook fires on `add -A`.
+  async function repoWithFsmonitorHook(): Promise<{ cwd: string; marker: string }> {
+    const cwd = await tempRepo({ "a.txt": "hi\n" });
+    const marker = join(cwd, "FSMONITOR_RAN");
+    const hook = join(cwd, "hook.sh");
+    // Exits non-zero so git falls back to a normal scan: the point is whether it RAN.
+    await writeFile(hook, `#!/bin/sh\ntouch ${JSON.stringify(marker)}\nexit 1\n`, { mode: 0o755 });
+    await execa("git", ["config", "core.fsmonitor", hook], { cwd });
+    return { cwd, marker };
+  }
+
+  test("treeHash does not execute a repository-configured core.fsmonitor", async () => {
+    const { cwd, marker } = await repoWithFsmonitorHook();
+    await treeHash(cwd);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  test("integrationBaseCommit does not execute a repository-configured core.fsmonitor", async () => {
+    const { cwd, marker } = await repoWithFsmonitorHook();
+    await integrationBaseCommit(cwd);
+    expect(existsSync(marker)).toBe(false);
+  });
+});

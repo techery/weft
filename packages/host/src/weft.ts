@@ -83,11 +83,42 @@ export function mergedAllowBare(config: WeftConfig): string[] | undefined {
   return [...new Set([...DEFAULT_ALLOW_BARE, ...extra])];
 }
 
+/**
+ * `.weft/` is created inside the user's working tree, and weft's own tree helpers run
+ * `git add -A .` on every write-step dispatch and inside every `ctx.integrate`. Without
+ * this file a repo's journals and blobs fold into a git object on the first write step
+ * and are copied into every agent worktree — state that is local, rebuildable, and often
+ * large. Workflows are deliberately NOT listed: they are source and belong in the repo.
+ *
+ * Written once, never overwritten — a user who edits it owns it from then on.
+ */
+async function ensureStateIgnored(weftDir: string): Promise<void> {
+  const file = join(weftDir, ".gitignore");
+  if (existsSync(file)) return;
+  const body = [
+    "# Written by weft. Run state is local and rebuildable from nothing;",
+    "# workflows/ is source and stays tracked.",
+    "runs/",
+    "blobs/",
+    "tasks/",
+    "index.sqlite",
+    "",
+  ].join("\n");
+  try {
+    await mkdir(weftDir, { recursive: true });
+    await writeFile(file, body, { flag: "wx" });
+  } catch {
+    // A read-only checkout, a race with another host, or a file that appeared between
+    // the check and the write. Ignoring state is a convenience, never a precondition.
+  }
+}
+
 export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
   const cwd = resolve(opts.cwd);
   const config = opts.config ?? (await loadConfig(cwd));
   const weftDir = join(cwd, WEFT_DIR);
   const stores = createFsStores(weftDir);
+  await ensureStateIgnored(weftDir);
 
   const allowBare = mergedAllowBare(config);
   const registry = createWorkflowRegistry({
