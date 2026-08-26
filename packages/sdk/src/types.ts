@@ -313,6 +313,15 @@ export interface GateResult {
 export type HumanTimeoutPolicy<T> = "deny" | "escalate" | { default: T };
 
 export interface HumanAskOptions<S extends AnySchema> {
+  /**
+   * Stable identity for replay, exactly as on {@link AgentOptions.key}. A human step is
+   * otherwise identified by its CONTENT alone — question, detail, schema, risk, timeouts —
+   * so two gates that ask the same thing in different contexts ("Approve?" for staging and
+   * for prod, or one per item in a loop) are indistinguishable, and an edit that moves them
+   * makes replay re-open both rather than guess. Give each a distinct `key` and they stay
+   * reusable across the edit.
+   */
+  key?: string;
   question: string;
   schema: S;
   detail?: string;
@@ -321,6 +330,15 @@ export interface HumanAskOptions<S extends AnySchema> {
 }
 
 export interface HumanApproveOptions {
+  /**
+   * Stable identity for replay, exactly as on {@link AgentOptions.key}. A human step is
+   * otherwise identified by its CONTENT alone — question, detail, schema, risk, timeouts —
+   * so two gates that ask the same thing in different contexts ("Approve?" for staging and
+   * for prod, or one per item in a loop) are indistinguishable, and an edit that moves them
+   * makes replay re-open both rather than guess. Give each a distinct `key` and they stay
+   * reusable across the edit.
+   */
+  key?: string;
   action: string;
   detail?: string;
   timeout?: Duration;
@@ -328,6 +346,15 @@ export interface HumanApproveOptions {
 }
 
 export interface HumanReviewOptions<S extends AnySchema> {
+  /**
+   * Stable identity for replay, exactly as on {@link AgentOptions.key}. A human step is
+   * otherwise identified by its CONTENT alone — question, detail, schema, risk, timeouts —
+   * so two gates that ask the same thing in different contexts ("Approve?" for staging and
+   * for prod, or one per item in a loop) are indistinguishable, and an edit that moves them
+   * makes replay re-open both rather than guess. Give each a distinct `key` and they stay
+   * reusable across the edit.
+   */
+  key?: string;
   /** The artifact under review (markdown, a diff, a report…). Stored as a blob. */
   artifact: string;
   question?: string;

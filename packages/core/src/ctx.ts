@@ -2114,6 +2114,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
       const wire = toWireSchema(opts.schema);
       const outcome = await rt.runHuman({
         kind: "ask",
+        ...(opts.key !== undefined ? { key: opts.key } : {}),
         question: opts.question,
         ...(opts.detail !== undefined ? { detail: opts.detail } : {}),
         schemaJson: wire.json,
@@ -2127,6 +2128,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     approve: async (opts) => {
       const outcome = await rt.runHuman({
         kind: "approve",
+        ...(opts.key !== undefined ? { key: opts.key } : {}),
         question: opts.action,
         ...(opts.detail !== undefined ? { detail: opts.detail } : {}),
         schemaJson: {
@@ -2145,6 +2147,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
       const wire = toWireSchema(opts.schema);
       const outcome = await rt.runHuman({
         kind: "review",
+        ...(opts.key !== undefined ? { key: opts.key } : {}),
         question: opts.question ?? "Review the attached artifact",
         schemaJson: wire.json,
         realSchema: opts.schema,

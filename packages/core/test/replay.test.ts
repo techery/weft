@@ -786,3 +786,57 @@ describe("regression: a human answer is never served to the wrong gate", () => {
     expect(await h2.result).toEqual({ second: false, done: true });
   });
 });
+
+describe("a `key` disambiguates two identically worded gates", () => {
+  const Verdict = z.object({ second: z.boolean(), done: z.boolean() });
+
+  test("keyed gates survive an edit that would otherwise re-open them", async () => {
+    // Same wording, different meaning — the case the keyless guard has to re-ask about
+    // and a `key` should make reusable.
+    const bothGates = async (ctx: any) => {
+      await ctx.human.approve({ action: "ship?", key: "gate:staging" });
+      const b = await ctx.human.approve({ action: "ship?", key: "gate:prod" });
+      const c = await ctx.human.approve({ action: "done?" });
+      return { second: b.approved, done: c.approved };
+    };
+    const prodOnly = async (ctx: any) => {
+      const b = await ctx.human.approve({ action: "ship?", key: "gate:prod" });
+      const c = await ctx.human.approve({ action: "done?" });
+      return { second: b.approved, done: c.approved };
+    };
+
+    let steps = bothGates;
+    const def = defineWorkflow(
+      { name: "keyed", description: "keyed", input: z.object({}), output: Verdict },
+      async (ctx) => steps(ctx as never),
+    );
+
+    const t1 = testEngine();
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(def, { input: {}, cwd, defHash: "bundle-v1" });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected the staging gate");
+    await t1.engine.answer(h1.runId, o1.pending[0]!.id, { approved: true });
+    const o2 = await h1.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected the prod gate");
+    await t1.engine.answer(h1.runId, o2.pending[0]!.id, { approved: false });
+    const o3 = await h1.outcome();
+    if (o3.status !== "waiting_for_human") throw new Error("expected the trailing gate");
+    await t1.engine.shutdown();
+
+    // Drop the staging gate. The keys make the survivor identifiable, so its own
+    // journaled DENIAL is served — no re-ask, no divergence.
+    steps = prodOnly;
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def, defHash: "bundle-v2" });
+    const o4 = await h2.outcome();
+    if (o4.status !== "waiting_for_human") throw new Error(`expected the trailing gate, got ${o4.status}`);
+    const recs = await records(t2.journal, h1.runId);
+    expect(recs.some((r) => r.ev.type === "replay.diverged")).toBe(false);
+    // Three requests from run 1 and nothing new: the prod gate replayed in place.
+    expect(recs.filter((r) => r.ev.type === "human.requested")).toHaveLength(3);
+
+    await t2.engine.answer(h1.runId, o4.pending[0]!.id, { approved: true });
+    expect(await h2.result).toEqual({ second: false, done: true });
+  });
+});

@@ -191,6 +191,8 @@ export interface StepSpec<T> {
 
 interface HumanSpec {
   kind: HumanKind;
+  /** Caller-supplied replay identity; folded into the hash so two same-worded gates differ. */
+  key?: string;
   question: string;
   detail?: string;
   schemaJson: unknown;
@@ -947,7 +949,7 @@ export class RunRuntime {
       ...(spec.onTimeout !== undefined ? { onTimeout: spec.onTimeout } : {}),
       ...(spec.timeoutDefault !== undefined ? { timeoutDefault: spec.timeoutDefault } : {}),
     };
-    const hash = hashStep("human", payload);
+    const hash = hashStep("human", payload, undefined, spec.key);
     const seq = ++this.seqCounter;
 
     let match = this.replay?.matchHuman(hash, seq, this.shared.positionsTrusted !== false);
