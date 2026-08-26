@@ -149,3 +149,60 @@ describe("architecture review @ 627b28e — a terminal record never lands over l
     expect(types.filter((tp) => tp === "step.completed").length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe("codex review on PR #6 — the terminal drain must cover every kind of live work", () => {
+  const One = z.object({ v: z.number() });
+
+  test("a cancelled run keeps its claim while a step that ignored the abort runs on", async () => {
+    // `drive()`'s cancellation branch never called drainSteps, so `drained` kept its
+    // `true` initializer and the finally released the ownership claim. cancel() itself
+    // keeps the claim when it times out -- but here the BODY rejects promptly (the sleep
+    // lane observes the abort) while the zombie agent ignores it, so cancel() drains
+    // happily and drive() hands the run away with a step still executing.
+    const def = defineWorkflow(
+      { name: "zombielane", description: "z", input: z.object({}), output: One },
+      async (ctx) => {
+        await Promise.all([
+          ctx.sleep(30_000), // rejects promptly on abort
+          ctx.agent("never settles", { schema: One, key: "zombie" }),
+        ]);
+        return { v: 1 };
+      },
+    );
+    const t = testEngine({
+      builder: mock().on({ key: "zombie" }, () => new Promise<never>(() => undefined)),
+    });
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    h.result.catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 50)); // let both lanes get in flight
+
+    await t.engine.cancel(h.runId);
+
+    // The zombie is still executing, so the claim must NOT be free for another process.
+    const stolen = await t.journal.acquireRun(h.runId);
+    expect(stolen).toBeUndefined();
+  }, 30_000);
+
+  test("a run that abandons a durable wait keeps its claim too", async () => {
+    // liveStepCount() excludes WAITING steps by design, so a workflow that stops
+    // awaiting a ctx.sleep hit drainSteps' zero fast path immediately: the terminal
+    // record landed and the claim was released while the wait was still armed, and its
+    // eventual completion appends under whoever owns the run by then.
+    const def = defineWorkflow(
+      { name: "abandonedwait", description: "a", input: z.object({}), output: One },
+      async (ctx) => {
+        await Promise.race([
+          ctx.sleep(60_000), // abandoned: still armed when the body returns
+          ctx.agent("quick", { schema: One, key: "quick" }),
+        ]);
+        return { v: 2 };
+      },
+    );
+    const t = testEngine({ builder: mock().on({ key: "quick" }, { v: 2 }) });
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    expect(await h.result).toEqual({ v: 2 });
+
+    const stolen = await t.journal.acquireRun(h.runId);
+    expect(stolen).toBeUndefined();
+  }, 30_000);
+});

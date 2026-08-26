@@ -97,21 +97,44 @@ function hasImplicitTaskContext(records: JournalRecord[]): boolean {
  * Cleared as soon as the race settles, so a run that drains early never delays the exit.
  */
 /**
- * Wait, bounded, for a runtime's own in-flight steps to finish.
+ * Wait, bounded, for a runtime's own outstanding work to finish.
  *
  * `drive()` cannot use {@link drainWithin} for this: the promise it would race IS
  * `drive()`'s own. And it deliberately does not ABORT first, the way `cancel()` and
  * `shutdown()` do — every run in a tree shares one AbortController, so a child
  * completing normally would tear down its parent. Waiting is the part that matters
- * here: it keeps a step's `step.completed` from landing after `run.completed`, and
- * keeps the ownership claim held while the step is still executing.
+ * here: it keeps a step's `step.completed` from landing after the run's terminal
+ * record, and keeps the ownership claim held while that step is still executing.
  *
- * Polled rather than event-driven because the runtime's idle listeners only fire when
- * a run has pending WAITS, which a completing run does not. The timer is referenced
- * for the same reason `drainWithin`'s is.
+ * `liveStepCount()` excludes steps that called `markWaiting()`, so a workflow that stops
+ * awaiting a `ctx.sleep`, a signal, or an in-step gate — a `Promise.race` it lost, an
+ * early return — hits the zero fast path while that wait is still armed, and the timer
+ * then appends `timer.fired` and `step.completed` after the run's terminal record.
+ * `includeWaits` is what covers that.
+ *
+ * It is a caller's decision because ONE counter serves two very different waits. A
+ * sub-workflow step bridges its child's suspension into the parent's `waitingSteps`, and
+ * a terminal root with a descendant still suspended on a person is a supported state,
+ * not an abandoned wait — that child's records land in the CHILD's journal, and its
+ * question has to stay answerable. Live children are the only reason a wait legitimately
+ * outlives the body, so `drive()` passes `children.size === 0`: no children means every
+ * standing wait is genuinely orphaned.
+ *
+ * A wait longer than the bound still forfeits the release rather than being abandoned
+ * quietly — the claim then expires on its TTL, which is the same position `shutdown()`
+ * takes on a step that outlives its drain.
+ *
+ * Polled rather than event-driven because the runtime's idle listeners fire only while a
+ * run has pending waits, which is one of the two cases this has to cover and not the
+ * other. The timer is referenced for the same reason `drainWithin`'s is.
  */
-function drainSteps(rt: { liveStepCount(): number }, ms: number): Promise<boolean> {
-  if (rt.liveStepCount() === 0) return Promise.resolve(true);
+function drainSteps(
+  rt: { liveStepCount(): number; hasPendingWaits(): boolean },
+  ms: number,
+  includeWaits: boolean,
+): Promise<boolean> {
+  const outstanding = (): boolean => rt.liveStepCount() > 0 || (includeWaits && rt.hasPendingWaits());
+  if (!outstanding()) return Promise.resolve(true);
   return new Promise<boolean>((resolve) => {
     const done = (value: boolean) => {
       clearInterval(poll);
@@ -119,7 +142,7 @@ function drainSteps(rt: { liveStepCount(): number }, ms: number): Promise<boolea
       resolve(value);
     };
     const poll = setInterval(() => {
-      if (rt.liveStepCount() === 0) done(true);
+      if (!outstanding()) done(true);
     }, 10);
     const timer = setTimeout(() => done(false), ms);
   });
@@ -1002,7 +1025,7 @@ export class Engine implements EngineHost {
       // precedes a `step.completed`, and releasing the claim frees the run for another
       // process while this one is mid-step. `cancel()` and `shutdown()` already refuse to
       // do that; this is the path every run takes.
-      drained = await drainSteps(rt, TERMINAL_DRAIN_MS);
+      drained = await drainSteps(rt, TERMINAL_DRAIN_MS, active.children.size === 0);
       // Structured-cloneable is not enough: the journal is JSONL, and a Map quietly
       // becomes {}, a bigint makes stringify throw — the live handle would then
       // disagree with state.json and replay, or a green run would fail at append.
@@ -1059,6 +1082,13 @@ export class Engine implements EngineHost {
       // run.cancelled either. The fence is the cause; the unwind error is its echo.
       if (rt.fenced) throw rt.fenced;
       if (isCancellation(err)) {
+        // Same wait as the other two exits. An abort makes a COOPERATIVE lane reject at
+        // once, so the body can land here while a step that ignores its signal runs on —
+        // and cancel() sees a body that settled promptly, drains happily, and leaves the
+        // release to the `finally` below. Without this the claim goes free with a step
+        // still executing, which is the one thing every drain in this file exists to
+        // prevent.
+        drained = await drainSteps(rt, TERMINAL_DRAIN_MS, active.children.size === 0);
         // appendTerminal dedupes: an external cancel already committed its
         // run.cancelled, and a second one would just be noise.
         await this.appendTerminal(active, [{ type: "run.cancelled" }]);
@@ -1066,7 +1096,7 @@ export class Engine implements EngineHost {
         throw err;
       }
       const stepError = StepError.from(err, { kind: "workflow", runId: rt.runId });
-      drained = await drainSteps(rt, TERMINAL_DRAIN_MS);
+      drained = await drainSteps(rt, TERMINAL_DRAIN_MS, active.children.size === 0);
       const landedFail = await this.appendTerminal(active, [
         { type: "run.failed", error: stepError.serialize() },
       ]);
