@@ -94,7 +94,7 @@ export interface AgentTaskContext {
 
 /** Engine-owned task boundary. Providers can request operations but never receive storage authority. */
 export interface AgentTaskTrackerHost {
-  /** Host-owned paths providers must protect from agent writes; never journaled or shown to the model. */
+  /** Host-owned paths providers must deny direct agent reads and writes; never journaled or shown to the model. */
   protectedPaths?: readonly string[];
   /** Bind the runtime definition before any snapshot or mutation (also covers path/stdin workflows). */
   prepare?(
@@ -132,7 +132,7 @@ export interface AgentRequest {
   onMaxTurns?: "finalize" | "fail";
   /** Always populated by the engine; read-only steps get { allowEdits: false }. */
   tools: ToolPolicy;
-  /** Engine-owned host paths provider isolation must keep read-only; adapters may also hide reads. */
+  /** Engine-owned host paths provider isolation must deny for both reads and writes. */
   protectedPaths?: readonly string[];
   /**
    * Engine-issued workflow-task capability for this step. Task mutations flow

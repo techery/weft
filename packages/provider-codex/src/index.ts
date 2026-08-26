@@ -19,8 +19,10 @@
  * finalResponse, usage: { input_tokens, cached_input_tokens, output_tokens } | null }`.
  * A rename upstream lands in this file.
  */
+import { isAbsolute } from "node:path";
 import {
   Codex,
+  type CodexOptions,
   type RunResult,
   type SandboxMode,
   type ThreadOptions,
@@ -57,8 +59,13 @@ export interface CodexLike {
 }
 
 export interface CodexProviderOptions {
-  /** DI seam: tests pass a fake so no CLI is ever spawned and no session is created. */
+  /**
+   * DI seam for ordinary requests. Protected-path requests reject this shared
+   * client because the adapter cannot prove which CLI permissions configured it.
+   */
   codex?: CodexLike;
+  /** DI seam for clients whose request-specific security configuration must be observable in tests. */
+  codexFactory?: (options: CodexOptions) => CodexLike;
   /** Registry id; defaults to "codex". */
   id?: string;
 }
@@ -93,10 +100,45 @@ function sandboxFor(req: AgentRequest): SandboxMode {
   return (req.tools?.allowEdits ?? true) === true ? "workspace-write" : "read-only";
 }
 
+const PROTECTED_PROFILE = "weft_task_boundary";
+
+interface ProtectedClientConfig {
+  key: string;
+  options: CodexOptions;
+}
+
+/**
+ * Codex's legacy sandbox modes cannot deny reads beneath an otherwise readable
+ * workspace. Permission profiles can: extend the matching built-in mode, then
+ * overlay exact deny rules for every engine-owned task root.
+ */
+function protectedClientConfig(req: AgentRequest): ProtectedClientConfig | undefined {
+  if (!req.protectedPaths?.length) return undefined;
+  const relativePath = req.protectedPaths.find((path) => !isAbsolute(path));
+  if (relativePath !== undefined) {
+    throw new Error(`codex: protected path must be absolute: ${JSON.stringify(relativePath)}`);
+  }
+  const protectedPaths = [...new Set(req.protectedPaths)].sort();
+  const parent = (req.tools?.allowEdits ?? true) === true ? ":workspace" : ":read-only";
+  const filesystem = protectedPaths.map((path) => `${JSON.stringify(path)}="deny"`).join(",");
+  return {
+    key: JSON.stringify([parent, protectedPaths]),
+    options: {
+      configOverrides: [
+        `default_permissions=${JSON.stringify(PROTECTED_PROFILE)}`,
+        `permissions.${PROTECTED_PROFILE}.extends=${JSON.stringify(parent)}`,
+        `permissions.${PROTECTED_PROFILE}.filesystem={${filesystem}}`,
+      ],
+    },
+  };
+}
+
 function threadOptions(req: AgentRequest): ThreadOptions {
   return {
     workingDirectory: req.cwd,
-    sandboxMode: sandboxFor(req),
+    // A protected request uses a custom permission profile instead. Codex rejects
+    // combining default_permissions with the legacy sandbox_mode setting.
+    ...(req.protectedPaths?.length ? {} : { sandboxMode: sandboxFor(req) }),
     // A write step runs in a worktree the engine just created; the repo check would
     // second-guess a directory the engine already chose.
     skipGitRepoCheck: true,
@@ -332,10 +374,19 @@ function num(value: unknown): number {
 }
 
 class CodexProvider implements AgentProvider {
+  private readonly clients = new Map<string, CodexLike>();
+  private readonly factory: (options: CodexOptions) => CodexLike;
+
   constructor(
     readonly id: string,
-    private client: CodexLike | undefined,
-  ) {}
+    private readonly injectedClient: CodexLike | undefined,
+    factory: ((options: CodexOptions) => CodexLike) | undefined,
+  ) {
+    if (injectedClient !== undefined && factory !== undefined) {
+      throw new TypeError("codex: pass either codex or codexFactory, not both");
+    }
+    this.factory = factory ?? ((options) => new Codex(options));
+  }
 
   capabilities(): ProviderCapabilities {
     // reportsUsd false: the Codex SDK reports tokens only, so USD cost exists only
@@ -345,7 +396,7 @@ class CodexProvider implements AgentProvider {
 
   async run(req: AgentRequest, ctl: RunControl): Promise<AgentResult> {
     if (ctl.signal.aborted) throw new Error(ABORTED);
-    const thread = this.codex().startThread(threadOptions(req));
+    const thread = this.codex(req).startThread(threadOptions(req));
     return runTurn(thread, withOutputNote(req), req, ctl);
   }
 
@@ -359,14 +410,24 @@ class CodexProvider implements AgentProvider {
     // is a worse deal than a resumed one but still better than failing the step.
     if (sessionId === undefined) return this.run(req, ctl);
     if (ctl.signal.aborted) throw new Error(ABORTED);
-    const thread = this.codex().resumeThread(sessionId, threadOptions(req));
+    const thread = this.codex(req).resumeThread(sessionId, threadOptions(req));
     return runTurn(thread, repairPrompt(req, errors), req, ctl);
   }
 
   /** The SDK client is built on first use — never at createCodexProvider() time. */
-  private codex(): CodexLike {
-    this.client ??= new Codex();
-    return this.client;
+  private codex(req: AgentRequest): CodexLike {
+    const protectedConfig = protectedClientConfig(req);
+    if (protectedConfig !== undefined && this.injectedClient !== undefined) {
+      throw new Error(
+        "codex: protected paths require codexFactory so the adapter can enforce its filesystem profile",
+      );
+    }
+    const key = protectedConfig?.key ?? "default";
+    const cached = this.clients.get(key);
+    if (cached !== undefined) return cached;
+    const client = this.injectedClient ?? this.factory(protectedConfig?.options ?? {});
+    this.clients.set(key, client);
+    return client;
   }
 }
 
@@ -375,5 +436,5 @@ class CodexProvider implements AgentProvider {
  * process, no network — the first `startThread()` happens inside run().
  */
 export function createCodexProvider(opts: CodexProviderOptions = {}): AgentProvider {
-  return new CodexProvider(opts.id ?? "codex", opts.codex);
+  return new CodexProvider(opts.id ?? "codex", opts.codex, opts.codexFactory);
 }

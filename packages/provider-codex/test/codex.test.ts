@@ -1,4 +1,5 @@
 import type {
+  CodexOptions,
   Usage as CodexUsage,
   RunResult,
   ThreadItem,
@@ -264,6 +265,85 @@ describe("createCodexProvider", () => {
     await createCodexProvider({ codex }).run(request({ tools: { allowEdits: false } }), control());
 
     expect(codex.startOptions[0]?.sandboxMode).toBe("read-only");
+  });
+
+  it.each([
+    { allowEdits: false, parent: ":read-only" },
+    { allowEdits: true, parent: ":workspace" },
+  ])("denies protected task roots with a $parent permission profile", async ({ allowEdits, parent }) => {
+    const created: CodexOptions[] = [];
+    const codex = new FakeCodex([{ id: "t1", reply: turn('{"ok":true}') }]);
+    const provider = createCodexProvider({
+      codexFactory: (options) => {
+        created.push(options);
+        return codex;
+      },
+    });
+
+    await provider.run(
+      request({
+        tools: { allowEdits },
+        protectedPaths: ["/var/weft/tasks", "/repo/.weft/tasks", "/repo/.weft/tasks"],
+        taskContext: {
+          workflowId: "review",
+          workflowName: "review",
+          runId: "run-1",
+          step: "review",
+          provider: "codex",
+          mode: allowEdits ? "write" : "read",
+        },
+      }),
+      control(),
+    );
+
+    expect(created).toEqual([
+      {
+        configOverrides: [
+          'default_permissions="weft_task_boundary"',
+          `permissions.weft_task_boundary.extends=${JSON.stringify(parent)}`,
+          'permissions.weft_task_boundary.filesystem={"/repo/.weft/tasks"="deny","/var/weft/tasks"="deny"}',
+        ],
+      },
+    ]);
+    expect(codex.startOptions[0]).not.toHaveProperty("sandboxMode");
+    expect(codex.startOptions[0]).toMatchObject({
+      workingDirectory: "/repo/worktree",
+      approvalPolicy: "never",
+    });
+  });
+
+  it("reuses the same protected client when repairing its session", async () => {
+    const created: CodexOptions[] = [];
+    const codex = new FakeCodex([
+      { id: "t1", reply: turn("invalid") },
+      { id: "t1", reply: turn('{"ok":true}') },
+    ]);
+    const provider = createCodexProvider({
+      codexFactory: (options) => {
+        created.push(options);
+        return codex;
+      },
+    });
+    const req = request({ protectedPaths: ["/repo/.weft/tasks"] });
+
+    const first = await provider.run(req, control());
+    await provider.repair(first.sessionId, req, [{ path: "ok", message: "required" }], control());
+
+    expect(created).toHaveLength(1);
+    expect(codex.resumes).toHaveLength(1);
+  });
+
+  it("fails closed when protected paths are relative or a shared client's profile is unknown", async () => {
+    const codex = new FakeCodex([{ id: "t1", reply: turn("{}") }]);
+    const provider = createCodexProvider({ codex });
+
+    await expect(provider.run(request({ protectedPaths: [".weft/tasks"] }), control())).rejects.toThrow(
+      /protected path must be absolute/,
+    );
+    await expect(provider.run(request({ protectedPaths: ["/repo/.weft/tasks"] }), control())).rejects.toThrow(
+      /protected paths require codexFactory/,
+    );
+    expect(codex.threads).toHaveLength(0);
   });
 
   it("returns the raw string when the final response will not parse", async () => {
