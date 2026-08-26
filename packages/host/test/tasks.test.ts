@@ -452,6 +452,85 @@ describe("TaskStore", () => {
     expect(await dryStore.namespace("review")).toBeUndefined();
   });
 
+  it("revalidates a same-version lost-marker batch after the workflow definition changes", async () => {
+    const root = await tempRoot();
+    const taskRoot = join(root, ".weft", "tasks");
+    const oldStore = new TaskStore(taskRoot);
+    const oldBinding = await oldStore.registerWorkflow({ id: "review", name: "review" }, undefined, null, {
+      identity: "definition-a",
+    });
+    const context = {
+      workflowId: "review",
+      workflowName: "review",
+      runId: "run-old",
+      step: "review",
+      provider: "codex",
+      source: "agent" as const,
+      mode: "write" as const,
+      visibleTaskIds: [],
+      visibleDedupeKeys: [],
+      schemaBinding: oldBinding,
+      schemaVersion: 1,
+    };
+    const batchId = "run-old:agent:7";
+    const first = {
+      op: "upsert" as const,
+      dedupeKey: "src/state.ts|review|same-version",
+      create: { title: "Review state", description: "Created before the restart" },
+    };
+    const second = {
+      ...first,
+      update: { priority: "high" as const },
+      note: "Finished after the unrelated workflow edit",
+    };
+    await oldStore.applyBatch(context, batchId, [first]);
+    await unlink(
+      join(taskRoot, "review", `.batch-${createHash("sha256").update(batchId).digest("hex")}.json`),
+    );
+
+    const currentStore = new TaskStore(taskRoot);
+    await currentStore.registerWorkflow({ id: "review", name: "review" }, undefined, null, {
+      identity: "definition-b",
+    });
+    await expect(currentStore.applyBatch(context, batchId, [first, second])).resolves.toBeUndefined();
+    expect(await currentStore.list("review")).toEqual([
+      expect.objectContaining({
+        priority: "high",
+        appliedOperations: [`${batchId}:0`, `${batchId}:1`],
+        notes: [expect.objectContaining({ text: "Finished after the unrelated workflow edit" })],
+      }),
+    ]);
+
+    const incompatibleRoot = join(root, "incompatible");
+    const incompatibleOld = new TaskStore(incompatibleRoot);
+    const laneSchema = z.object({ lane: z.string() });
+    const incompatibleBinding = await incompatibleOld.registerWorkflow(
+      { id: "review", name: "review" },
+      laneSchema,
+      z.toJSONSchema(laneSchema),
+      { identity: "definition-a" },
+    );
+    const incompatibleContext = { ...context, schemaBinding: incompatibleBinding };
+    const incompatibleCurrent = new TaskStore(incompatibleRoot);
+    const ownerSchema = z.object({ owner: z.string() });
+    await incompatibleCurrent.registerWorkflow(
+      { id: "review", name: "review" },
+      ownerSchema,
+      z.toJSONSchema(ownerSchema),
+      { identity: "definition-b" },
+    );
+    await expect(
+      incompatibleCurrent.applyBatch(incompatibleContext, "incompatible", [
+        {
+          op: "create",
+          title: "Old shape",
+          description: "Must be revalidated",
+          extensions: { lane: "api" },
+        },
+      ]),
+    ).rejects.toThrow(/task extensions failed the workflow schema/);
+  });
+
   it("preflights a whole batch before writing and limits agents to observed tasks", async () => {
     const root = await tempRoot();
     const store = new TaskStore(join(root, ".weft", "tasks"));

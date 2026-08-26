@@ -843,10 +843,15 @@ export class TaskStore {
     const config = this.runtimeMigrations.get(`${context.workflowId}:${binding}`) ?? { version: 1 };
     const fromVersion = context.schemaVersion ?? 1;
     if (fromVersion === config.version) {
-      throw new Error(
-        `cannot recover task batch created with unavailable schema binding ${context.schemaBinding}; ` +
-          "the batch marker was lost and no version migration can prove equivalence",
-      );
+      // Re-enter applyBatch under the current binding. Its recovery path decodes
+      // every already-applied operation against the current schema and preflights
+      // every pending operation before another write, so an unrelated definition
+      // edit (or an unchanged/no extension schema) can finish the journaled batch
+      // while an incompatible same-version schema edit still fails closed.
+      return {
+        context: { ...context, schemaBinding: binding, schemaVersion: config.version },
+        operations,
+      };
     }
     if (fromVersion > config.version || !config.migrate) {
       throw new Error(
