@@ -18,6 +18,7 @@ import type {
   WorkflowDetail,
   WorkflowRow,
   WorkflowStats,
+  WorkflowTask,
 } from "~/api/types";
 
 export interface DaemonState {
@@ -27,6 +28,7 @@ export interface DaemonState {
   pending: PendingResponse;
   workflows: WorkflowRow[];
   workflow: Record<string, WorkflowDetail>;
+  tasks: Record<string, WorkflowTask[]>;
   stats: Record<string, WorkflowStats>;
   artifacts: Record<string, ArtifactEntry[]>;
   patch: Record<string, PatchResponse>;
@@ -150,6 +152,7 @@ export function defaultState(): DaemonState {
             },
             status: "pending",
             requestedAt: NOW - 400_000,
+            artifactRef: { $blob: "a".repeat(64), size: 28, preview: "# Changelog" },
           },
         ],
         notes: [{ kind: "risk", text: "two commits had no linked issue", evidence: "commits.json" }],
@@ -220,16 +223,23 @@ export function defaultState(): DaemonState {
           workflow: "release",
           rootRunId: "r-waiting",
           rootWorkflow: "release",
+          artifactRef: { $blob: "a".repeat(64), size: 28, preview: "# Changelog" },
         },
       ],
       unreadable: [],
     },
     workflows: [
-      { name: "release", file: ".weft/workflows/release.ts", description: "Draft and publish release notes" },
-      { name: "triage", file: ".weft/workflows/triage.ts", description: "Classify new issues" },
+      {
+        id: "release",
+        name: "release",
+        file: ".weft/workflows/release.ts",
+        description: "Draft and publish release notes",
+      },
+      { id: "triage", name: "triage", file: ".weft/workflows/triage.ts", description: "Classify new issues" },
     ],
     workflow: {
       release: {
+        id: "release",
         name: "release",
         file: ".weft/workflows/release.ts",
         description: "Draft and publish release notes",
@@ -240,17 +250,57 @@ export function defaultState(): DaemonState {
           required: ["tag"],
         },
         output: { type: "object", properties: { url: { type: "string" } } },
+        taskExtensions: null,
+        taskExtensionSchemaVersion: 1,
+        tasksConfigured: true,
         defaults: null,
       },
       triage: {
+        id: "triage",
         name: "triage",
         file: ".weft/workflows/triage.ts",
         description: "Classify new issues",
         hash: "c".repeat(64),
         input: { type: "object", properties: { window: { type: "string", enum: ["24h", "7d"] } } },
         output: { type: "object", properties: {} },
+        taskExtensions: null,
+        taskExtensionSchemaVersion: 1,
+        tasksConfigured: false,
         defaults: null,
       },
+    },
+    tasks: {
+      release: [
+        {
+          schemaVersion: 1,
+          extensionSchemaVersion: 1,
+          id: "task-1234abcd",
+          workflowId: "release",
+          dedupeKey: "changelog|release-notes|missing-source-evidence",
+          title: "Verify release notes",
+          description: "Check every note against the commit range before publishing.",
+          status: "in_progress",
+          priority: "high",
+          tags: ["release", "verification"],
+          dependencies: [],
+          relatedFiles: ["CHANGELOG.md"],
+          acceptanceCriteria: [
+            { id: "criterion-evidence", text: "Every note links to source evidence", met: true },
+            { id: "criterion-heading", text: "Version heading matches the tag", met: false },
+          ],
+          notes: [
+            { text: "Initial source scan completed", at: NOW - 120_000, actor: "review-agent" },
+            { text: "Two commits still need issue links", at: NOW - 60_000, actor: "draft-agent" },
+          ],
+          extensions: {},
+          createdAt: NOW - 500_000,
+          updatedAt: NOW - 60_000,
+          createdBy: "draft-agent",
+          updatedBy: "draft-agent",
+          revision: 3,
+        },
+      ],
+      triage: [],
     },
     stats: {
       release: {
@@ -450,13 +500,14 @@ export function fakeDaemon(overrides: Partial<DaemonState> = {}): FakeDaemon {
       }
     }
 
-    const wf = /^\/api\/workflows\/([^/]+)(\/stats)?$/.exec(route ?? "");
+    const wf = /^\/api\/workflows\/([^/]+)(\/(?:stats|tasks))?$/.exec(route ?? "");
     if (wf) {
       const name = decodeURIComponent(wf[1] ?? "");
-      if (wf[2]) {
+      if (wf[2] === "/stats") {
         const stats = state.stats[name];
         return stats ? json(stats) : json({ error: `workflow ${name} not found` }, 404);
       }
+      if (wf[2] === "/tasks") return json(state.tasks[name] ?? []);
       const detail = state.workflow[name];
       return detail ? json(detail) : json({ error: `workflow ${name} not found` }, 404);
     }

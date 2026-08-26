@@ -23,11 +23,17 @@ import { GateError } from "./rules.ts";
 /** Structurally the `WorkflowRegistry` @techery/weft-core's Engine takes (gate does not import core). */
 export interface WorkflowRegistry {
   get(name: string): Promise<WorkflowDefinition | undefined>;
+  resolve?(identity: {
+    id?: string;
+    name: string;
+  }): Promise<{ def: WorkflowDefinition; name: string; hash?: string } | undefined>;
   /** Bundle content hash of what `get(name)` returns; the engine's resume compares it. */
   hashOf?(name: string): Promise<string | undefined>;
 }
 
 export interface WorkflowListEntry {
+  /** Stable durable-state identity; defaults to `name` for older definitions. */
+  id: string;
   name: string;
   /** Absolute path to the workflow file. */
   file: string;
@@ -45,6 +51,11 @@ export interface FileWorkflowRegistry extends WorkflowRegistry {
   /** Every loadable workflow in the directory, sorted by name. Missing directory → `[]`. */
   list(): Promise<WorkflowListEntry[]>;
   load(name: string): Promise<RegistryLoadResult>;
+  /** Resolve durable run identity; an explicit ID never falls back to a callable name. */
+  resolve(identity: {
+    id?: string;
+    name: string;
+  }): Promise<{ def: WorkflowDefinition; name: string; hash?: string } | undefined>;
   hashOf(name: string): Promise<string | undefined>;
 }
 
@@ -58,6 +69,7 @@ interface CacheEntry {
   hash: string;
   def: WorkflowDefinition;
   name: string;
+  id: string;
   description: string;
 }
 
@@ -85,6 +97,7 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
       hash,
       def,
       name: def.meta.name ?? path.basename(file, path.extname(file)),
+      id: def.meta.id ?? def.meta.name ?? path.basename(file, path.extname(file)),
       description: def.meta.description,
     };
     cache.set(file, entry);
@@ -117,19 +130,45 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
     // broken file here is the one the caller asked for, so its error propagates — but a
     // file that simply is not a workflow (a `schemas.ts` next door) just does not match.
     const direct = path.join(dir, `${name}.ts`);
+    const entries: CacheEntry[] = [];
+    const matches: CacheEntry[] = [];
     if (await isFile(direct)) {
       const entry = await loadFile(direct).catch((err: unknown) => {
         if (isNotAWorkflow(err)) return undefined;
         throw err;
       });
-      if (entry?.name === name) return entry;
+      if (entry) {
+        entries.push(entry);
+        if (entry.name === name) matches.push(entry);
+      }
     }
     for (const file of await candidates()) {
       if (file === direct) continue;
       const entry = await tolerantLoad(loadFile, file);
-      if (entry?.name === name) return entry;
+      if (entry) {
+        entries.push(entry);
+        if (entry.name === name) matches.push(entry);
+      }
     }
-    return undefined;
+    assertUnique(matches, "name", name);
+    const match = matches[0];
+    if (match)
+      assertUnique(
+        entries.filter((entry) => entry.id === match.id),
+        "id",
+        match.id,
+      );
+    return match;
+  };
+
+  const findById = async (id: string): Promise<CacheEntry | undefined> => {
+    const matches: CacheEntry[] = [];
+    for (const file of await candidates()) {
+      const entry = await tolerantLoad(loadFile, file);
+      if (entry?.id === id) matches.push(entry);
+    }
+    assertUnique(matches, "id", id);
+    return matches[0];
   };
 
   return {
@@ -137,7 +176,26 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
       const entries: WorkflowListEntry[] = [];
       for (const file of await candidates()) {
         const entry = await tolerantLoad(loadFile, file);
-        if (entry) entries.push({ name: entry.name, file: entry.file, description: entry.description });
+        if (entry)
+          entries.push({ id: entry.id, name: entry.name, file: entry.file, description: entry.description });
+      }
+      const ids = new Map<string, string>();
+      const names = new Map<string, string>();
+      for (const entry of entries) {
+        const prior = ids.get(entry.id);
+        if (prior) {
+          throw new GateError(
+            `duplicate workflow id ${JSON.stringify(entry.id)} in ${prior} and ${entry.file}`,
+          );
+        }
+        ids.set(entry.id, entry.file);
+        const named = names.get(entry.name);
+        if (named) {
+          throw new GateError(
+            `duplicate workflow name ${JSON.stringify(entry.name)} in ${named} and ${entry.file}`,
+          );
+        }
+        names.set(entry.name, entry.file);
       }
       return entries.sort((a, b) => a.name.localeCompare(b.name));
     },
@@ -153,12 +211,25 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
       return entry?.def;
     },
 
+    async resolve(identity): Promise<{ def: WorkflowDefinition; name: string; hash: string } | undefined> {
+      const entry = identity.id === undefined ? await find(identity.name) : await findById(identity.id);
+      if (!entry) return undefined;
+      return { def: entry.def, name: entry.name, hash: entry.hash };
+    },
+
     async hashOf(name: string): Promise<string | undefined> {
       // Same cached fold `get` just did, so the pair names one version of one file.
       const entry = await find(name);
       return entry?.hash;
     },
   };
+}
+
+function assertUnique(entries: CacheEntry[], field: "name" | "id", value: string): void {
+  if (entries.length < 2) return;
+  throw new GateError(
+    `duplicate workflow ${field} ${JSON.stringify(value)} in ${entries.map((entry) => entry.file).join(" and ")}`,
+  );
 }
 
 async function isFile(file: string): Promise<boolean> {

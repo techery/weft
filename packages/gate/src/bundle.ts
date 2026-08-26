@@ -10,7 +10,7 @@
  * run is versioned by, and it covers every bundled module.
  */
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { type BuildFailure, build, type Loader, type Message, type Plugin } from "esbuild";
 import { checkSource, type GateDiagnostic, GateError, resolveAllowBare } from "./rules.ts";
@@ -45,9 +45,14 @@ export async function bundleWorkflow(opts: BundleOptions): Promise<BundleResult>
     throw new GateError("bundleWorkflow: pass either an entry path or inline source");
   }
 
-  const base = opts.cwd ? path.resolve(opts.cwd) : process.cwd();
-  const entry = opts.entry ? path.resolve(base, opts.entry) : undefined;
-  const cwd = opts.cwd ? base : entry ? path.dirname(entry) : base;
+  const requestedBase = opts.cwd ? path.resolve(opts.cwd) : process.cwd();
+  const requestedEntry = opts.entry ? path.resolve(requestedBase, opts.entry) : undefined;
+  // macOS commonly exposes /var as a symlink to /private/var. esbuild canonicalizes
+  // module paths, so canonicalize our comparison root as well or diagnostics under a
+  // perfectly ordinary temp directory appear as machine-specific absolute paths.
+  const entry = requestedEntry ? await realpath(requestedEntry).catch(() => requestedEntry) : undefined;
+  const requestedCwd = opts.cwd ? requestedBase : entry ? path.dirname(entry) : requestedBase;
+  const cwd = await realpath(requestedCwd).catch(() => requestedCwd);
   const allowBare = resolveAllowBare(opts.allowBare);
 
   const violations: GateDiagnostic[] = [];

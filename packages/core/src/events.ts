@@ -89,7 +89,16 @@ export type JournalEvent =
        * is the engine's own version stamp for the workflow body, always present, and is
        * what resume compares to decide whether step POSITIONS still mean anything.
        */
-      workflow: { name: string; defHash?: string; bodyHash?: string };
+      workflow: {
+        id?: string;
+        name: string;
+        defHash?: string;
+        bodyHash?: string;
+        /** Version of the implicit agent task-context envelope used by this run. */
+        taskContextVersion?: number;
+        taskSchemaBinding?: string;
+        taskSchemaVersion?: number;
+      };
       input: unknown;
       cwd: string;
       baseRef?: string;
@@ -132,7 +141,16 @@ export type JournalEvent =
       patchRef?: string;
       attempts?: number;
     }
-  | { type: "step.failed"; seq: number; error: SerializedStepError; attempts?: number }
+  /** `settle` means execution completed and only its journal-backed side effects failed. */
+  | {
+      type: "step.failed";
+      seq: number;
+      error: SerializedStepError;
+      attempts?: number;
+      phase?: "execute" | "settle";
+    }
+  /** A previously completed step's `onSettle` hook has succeeded. */
+  | { type: "step.settled"; seq: number }
   // humans & external
   | HumanRequestEvent
   | HumanAnsweredEvent

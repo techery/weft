@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+  type AgentTaskTrackerHost,
   Engine,
   type EngineConfigInput,
   MemoryBlobStore,
@@ -24,7 +25,12 @@ export interface TestEngine {
  * and "codex" (one shared rule set + call log).
  */
 export function testEngine(
-  opts: { config?: EngineConfigInput; registry?: WorkflowRegistry; builder?: MockAgentBuilder } = {},
+  opts: {
+    config?: EngineConfigInput;
+    registry?: WorkflowRegistry;
+    builder?: MockAgentBuilder;
+    taskTracker?: AgentTaskTrackerHost;
+  } = {},
 ): TestEngine {
   const journal = new MemoryJournalStore();
   const blobs = new MemoryBlobStore();
@@ -38,6 +44,7 @@ export function testEngine(
     providers,
     config: opts.config ?? {},
     ...(opts.registry ? { registry: opts.registry } : {}),
+    ...(opts.taskTracker ? { taskTracker: opts.taskTracker } : {}),
   });
   return { engine, journal, blobs, builder };
 }
@@ -51,6 +58,7 @@ export function reopen(
     builder?: MockAgentBuilder;
     /** Stand in for a blob store whose files did not survive (a pruned cache, a partial restore). */
     blobs?: MemoryBlobStore;
+    taskTracker?: AgentTaskTrackerHost;
   } = {},
 ): TestEngine {
   const builder = opts.builder ?? mock();
@@ -64,6 +72,7 @@ export function reopen(
     providers,
     config: opts.config ?? {},
     ...(opts.registry ? { registry: opts.registry } : {}),
+    ...(opts.taskTracker ? { taskTracker: opts.taskTracker } : {}),
   });
   return { engine, journal: prev.journal, blobs, builder };
 }

@@ -141,6 +141,7 @@ export interface PendingRequest {
   workflow: string;
   rootRunId: string;
   rootWorkflow: string;
+  artifactRef?: { $blob: string; size: number; preview?: string };
 }
 
 export interface PendingResponse {
@@ -150,6 +151,8 @@ export interface PendingResponse {
 
 /** `GET /api/workflows` */
 export interface WorkflowRow {
+  /** Stable identity for durable workflow-owned state. */
+  id: string;
   name: string;
   file: string;
   description: string;
@@ -161,7 +164,38 @@ export interface WorkflowDetail extends WorkflowRow {
   /** JSON Schema, or null when the declaration is not convertible. */
   input: JsonSchema | null;
   output: JsonSchema | null;
+  /** JSON Schema for workflow-owned `task.extensions`, if declared. */
+  taskExtensions: JsonSchema | null;
+  taskExtensionSchemaVersion: number;
+  tasksConfigured: boolean;
   defaults: { provider?: string; model?: string; effort?: string } | null;
+}
+
+export type TaskStatus = "todo" | "in_progress" | "blocked" | "done" | "cancelled";
+export type TaskPriority = "low" | "medium" | "high" | "critical";
+
+/** One entry of `GET /api/workflows/:name/tasks`. */
+export interface WorkflowTask {
+  schemaVersion: number;
+  extensionSchemaVersion: number;
+  id: string;
+  workflowId: string;
+  dedupeKey?: string;
+  title: string;
+  description: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  tags: string[];
+  dependencies: string[];
+  relatedFiles: string[];
+  acceptanceCriteria: Array<{ id: string; text: string; met: boolean }>;
+  notes: Array<{ text: string; at: number; actor: string }>;
+  extensions: unknown;
+  createdAt: number;
+  updatedAt: number;
+  createdBy: string;
+  updatedBy: string;
+  revision: number;
 }
 
 /** `GET /api/workflows/:name/stats` */

@@ -139,7 +139,15 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
     if (EDIT_TOOLS.has(base)) {
       if (!allowEdits) return deny(READ_ONLY_MESSAGE);
       const target = editTargetPath(input);
+      if (target !== undefined && /(?:^|[/\\])\.weft[/\\]tasks(?:[/\\]|$)/.test(target)) {
+        return deny("workflow tasks are engine-owned; return taskOperations instead of editing the store");
+      }
       if (target === undefined) {
+        if (req.taskContext) {
+          return deny(
+            `${base}: workflow tasks are engine-owned and this tool's target path could not be verified`,
+          );
+        }
         // The tool's path argument is not one this screen recognises, so there is nothing
         // to check it against. Under a STRICT scope that has to be a denial: allowing it
         // meant the boundary stopped enforcing the moment an edit tool's input shape
@@ -153,6 +161,13 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
         return allow;
       }
       const path = workspacePath(req.cwd, target);
+      // A task-aware agent's edit capability is confined to the worktree even
+      // under a WARN scope. Otherwise a lexically in-scope path can traverse a
+      // committed symlink into the integration checkout's .weft/tasks store and
+      // bypass the engine-owned settlement channel.
+      if (req.taskContext && (await resolvesOutsideWorktree(req.cwd, target))) {
+        return deny(`${path} resolves outside the worktree; workflow tasks are engine-owned`);
+      }
       if (scope && !inScope(path)) {
         // "warn" lands the edit and lets the post-hoc patch capture flag it.
         if (scope.mode === "strict") return deny(`${path} is ${scopeMessage}`);
@@ -167,6 +182,15 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
 
     if (base === "Bash") {
       const command = typeof input.command === "string" ? input.command : "";
+      // A custom task host that cannot identify its storage has no narrower
+      // shell boundary available. First-party hosts provide protectedPaths,
+      // which the SDK sandbox denies while leaving normal worktree commands
+      // such as tests, compilers and formatters available.
+      if (req.taskContext && !req.protectedPaths?.length && !isReadOnlyCommand(command)) {
+        return deny(
+          "workflow tasks are engine-owned; this task host did not expose a protected storage path, so task-aware steps may only use read-only shell commands",
+        );
+      }
       // Repository config can attach EXECUTABLE diff/textconv drivers to a plain
       // `git diff`/`log`/`show`/`blame` through .gitattributes, so every git command
       // this gate permits runs wrapped. Applied to WRITE steps too: the wrapper only

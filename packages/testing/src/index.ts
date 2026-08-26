@@ -25,8 +25,9 @@ export type {
   MockRequest,
   MockResponder,
   MockRuleOptions,
+  MockTaskEnvelope,
 } from "@techery/weft-provider-mock";
-export { mock } from "@techery/weft-provider-mock";
+export { mock, mockTaskEnvelope } from "@techery/weft-provider-mock";
 export type {
   BashFixtures,
   ExecFixtures,

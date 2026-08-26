@@ -57,8 +57,11 @@ const SCHEMAS = [
 ].join("\n");
 
 /** A clean workflow: relative import, everything time-like routed through ctx. */
-function reviewSource(opts: { name?: string; description?: string; note?: string } = {}): string {
+function reviewSource(
+  opts: { id?: string; name?: string; description?: string; note?: string } = {},
+): string {
   const meta = [
+    opts.id ? `    id: "${opts.id}",` : "",
     opts.name ? `    name: "${opts.name}",` : "",
     `    description: "${opts.description ?? "Review a target and report findings"}",`,
   ]
@@ -783,6 +786,51 @@ describe("createWorkflowRegistry", () => {
     expect(await registry.get("on-disk")).toBeUndefined();
     const loaded = await registry.load("review-pass");
     expect(loaded.file).toBe(path.join(dir, "on-disk.ts"));
+  });
+
+  it("resolves durable workflow identity after callable-name changes without name fallback", async () => {
+    const dir = await tempDir();
+    await writeReview(dir, "current.ts", { id: "durable-review", name: "current-review" });
+    await write(
+      dir,
+      "decoy.ts",
+      reviewSource({ id: "decoy-review", name: "old-review", description: "Reused old name" }),
+    );
+    const registry = createWorkflowRegistry({ dir });
+
+    const resolved = await registry.resolve({ id: "durable-review", name: "old-review" });
+    expect(resolved).toMatchObject({ name: "current-review", hash: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    expect(resolved?.def.meta.id).toBe("durable-review");
+    expect(resolved?.hash).toBe((await registry.load("current-review")).hash);
+    await expect(registry.resolve({ id: "missing-review", name: "old-review" })).resolves.toBeUndefined();
+    expect((await registry.resolve({ name: "old-review" }))?.def.meta.id).toBe("decoy-review");
+  });
+
+  it("rejects duplicate durable workflow ids", async () => {
+    const dir = await tempDir();
+    await writeReview(dir, "review.ts", { id: "shared-state" });
+    await write(dir, "ship.ts", reviewSource({ id: "shared-state", description: "Ship it" }));
+    const registry = createWorkflowRegistry({ dir });
+    await expect(registry.list()).rejects.toThrow(/duplicate workflow id "shared-state"/);
+    await expect(registry.load("review")).rejects.toThrow(/duplicate workflow id "shared-state"/);
+    await expect(registry.get("review")).rejects.toThrow(/duplicate workflow id "shared-state"/);
+    await expect(registry.resolve({ id: "shared-state", name: "review" })).rejects.toThrow(
+      /duplicate workflow id "shared-state"/,
+    );
+  });
+
+  it("rejects duplicate callable workflow names even when their durable ids differ", async () => {
+    const dir = await tempDir();
+    await writeReview(dir, "review.ts", { id: "review-one", name: "shared-name" });
+    await write(
+      dir,
+      "ship.ts",
+      reviewSource({ id: "review-two", name: "shared-name", description: "Ship it" }),
+    );
+    const registry = createWorkflowRegistry({ dir });
+
+    await expect(registry.list()).rejects.toThrow(/duplicate workflow name "shared-name"/);
+    await expect(registry.load("shared-name")).rejects.toThrow(/duplicate workflow name "shared-name"/);
   });
 
   it("caches by content hash and invalidates when the file changes", async () => {

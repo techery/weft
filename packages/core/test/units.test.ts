@@ -402,6 +402,61 @@ describe("ReplayIndex", () => {
     expect(byKey?.via).toBe("key");
     expect(byKey?.entry.output).toEqual({ tag: "cached" });
   });
+
+  test("retains completed settlement failures but drops a later execution failure", async () => {
+    const store = new MemoryJournalStore();
+    await store.append("r", [
+      { type: "step.scheduled", seq: 1, hash: "h", kind: "agent", key: "task-agent" },
+      { type: "step.completed", seq: 1, output: { taskBatchId: "batch-1" } },
+      {
+        type: "step.failed",
+        seq: 1,
+        phase: "settle",
+        error: { name: "StepError", code: "conflict", message: "settlement failed", step: {} },
+      },
+    ]);
+    const settlementRecords = [];
+    for await (const rec of store.read("r")) settlementRecords.push(rec);
+    const settlementIndex = ReplayIndex.fromRecords(settlementRecords);
+    expect(settlementIndex.matchStep(1, "h", "agent", "task-agent", "content")?.entry.output).toEqual({
+      taskBatchId: "batch-1",
+    });
+
+    await store.append("r", [
+      { type: "step.scheduled", seq: 1, hash: "h", kind: "agent", key: "task-agent" },
+      {
+        type: "step.failed",
+        seq: 1,
+        phase: "execute",
+        error: { name: "StepError", code: "timeout", message: "provider failed", step: {} },
+      },
+    ]);
+    const executionRecords = [];
+    for await (const rec of store.read("r")) executionRecords.push(rec);
+    expect(
+      ReplayIndex.fromRecords(executionRecords).matchStep(1, "h", "agent", "task-agent", "content"),
+    ).toBeUndefined();
+  });
+
+  test("recognizes legacy completed-then-failed records as settlement failures", async () => {
+    const store = new MemoryJournalStore();
+    await store.append("r", [
+      { type: "step.scheduled", seq: 1, hash: "legacy", kind: "agent" },
+      { type: "step.completed", seq: 1, output: { paid: true } },
+      {
+        type: "step.failed",
+        seq: 1,
+        error: { name: "StepError", code: "conflict", message: "old settlement failure", step: {} },
+      },
+    ]);
+    const records = [];
+    for await (const rec of store.read("r")) records.push(rec);
+    expect(
+      ReplayIndex.fromRecords(records).matchStep(1, "legacy", "agent", undefined, "content")?.entry.output,
+    ).toEqual({
+      paid: true,
+    });
+  });
 });
 
 describe("StepError ergonomics", () => {

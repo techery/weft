@@ -19,8 +19,9 @@ import {
   type RunState,
   reduceState,
 } from "@techery/weft-core";
+import { TaskStore } from "@techery/weft-host";
 import { type MockAgentBuilder, mock } from "@techery/weft-provider-mock";
-import type { WorkflowDefinition } from "@techery/weft-sdk";
+import { type WorkflowDefinition, z } from "@techery/weft-sdk";
 import {
   type BashFixtures,
   buildTestHooks,
@@ -35,8 +36,10 @@ export type AnswerFixtures = Record<string, unknown> | ((req: PendingRequest) =>
 
 export interface RunWorkflowOptions {
   input: unknown;
-  /** Registered as BOTH "claude" and "codex"; defaults to an empty mock so un-fixtured steps fail loudly. */
+  /** Fallback registered for both provider ids; defaults to an empty, fail-loud mock. */
   provider?: MockAgentBuilder;
+  /** Provider-specific fixtures override `provider`, allowing routing assertions. */
+  providers?: Record<string, MockAgentBuilder>;
   git?: GitFixtures;
   exec?: ExecFixtures;
   bash?: BashFixtures;
@@ -89,19 +92,43 @@ export async function runWorkflow<In, Out>(
   const blobs = new MemoryBlobStore();
   const builder = opts.provider ?? mock();
   const providers = new ProviderRegistry();
-  providers.register(builder.provider("claude"));
-  providers.register(builder.provider("codex"));
+  providers.register((opts.providers?.claude ?? builder).provider("claude"));
+  providers.register((opts.providers?.codex ?? builder).provider("codex"));
+  for (const [id, providerBuilder] of Object.entries(opts.providers ?? {})) {
+    if (id !== "claude" && id !== "codex") providers.register(providerBuilder.provider(id));
+  }
 
   const testHooks = buildTestHooks(opts);
+  const cwd = opts.cwd ?? (await scratchCwd());
+  const taskStore = new TaskStore(join(cwd, ".weft", "tasks"));
   const engine = new Engine({
     journal: journalStore,
     blobs,
     providers,
     config: opts.config ?? {},
     ...(testHooks !== undefined ? { testHooks } : {}),
+    taskTracker: {
+      prepare: async (workflow, extensionSchema, taskOptions) => {
+        let extensionJsonSchema: unknown | null = null;
+        if (extensionSchema) {
+          try {
+            extensionJsonSchema = z.toJSONSchema(extensionSchema as z.ZodType, {
+              io: "input",
+              unrepresentable: "any",
+            });
+          } catch {
+            extensionJsonSchema = null;
+          }
+        }
+        return taskStore.registerWorkflow(workflow, extensionSchema, extensionJsonSchema, taskOptions);
+      },
+      snapshot: (context) => taskStore.snapshot(context.workflowId, context.selector, context.schemaBinding),
+      schema: (context) => taskStore.schema(context.workflowId, context.schemaBinding),
+      validateBatch: (context, operations) => taskStore.validateBatch(context, operations),
+      applyBatch: (context, batchId, operations) => taskStore.applyBatch(context, batchId, operations),
+    },
   });
 
-  const cwd = opts.cwd ?? (await scratchCwd());
   const handle = await engine.start(def, {
     input: opts.input,
     cwd,

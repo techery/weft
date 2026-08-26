@@ -42,6 +42,7 @@ import {
   type Pipeline,
   parseDuration,
   type Risk,
+  type SchemaIssue,
   type SecretHandle,
   type Settled,
   StepError,
@@ -49,6 +50,10 @@ import {
   type Usage,
   validateSchema,
   type WorkflowDefinitionLike,
+  type WorkflowTaskSelector,
+  type WorkflowTaskSnapshot,
+  type WorkflowTaskUpdateInput,
+  type WorkflowTaskUpsertInput,
 } from "@techery/weft-sdk";
 import { execa } from "execa";
 import picomatch from "picomatch";
@@ -58,10 +63,123 @@ import { priceFor } from "./config.ts";
 import type { BlobRefJson } from "./events.ts";
 import { toWireSchema, unwrapWireValue } from "./jsonschema.ts";
 import { mapWithConcurrency } from "./limiter.ts";
-import type { AgentRequest, AgentResult } from "./provider.ts";
-import { MAX_TIMER_MS, type RunRuntime, type StepIO, sleep as sleepMs } from "./runtime.ts";
+import type { AgentRequest, AgentResult, AgentTaskContext, AgentTaskOperation } from "./provider.ts";
+import {
+  isSettlementFailure,
+  MAX_TIMER_MS,
+  type RunRuntime,
+  type StepIO,
+  sleep as sleepMs,
+} from "./runtime.ts";
 
 const RISK_ORDER: Risk[] = ["low", "medium", "high", "irreversible"];
+
+const AgentTaskOperationSchema = z.discriminatedUnion("op", [
+  z
+    .object({
+      op: z.literal("create"),
+      title: z.string().min(1),
+      description: z.string().min(1),
+      status: z.enum(["todo", "in_progress", "blocked", "done", "cancelled"]).optional(),
+      priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+      tags: z.array(z.string()).optional(),
+      dependencies: z.array(z.string()).optional(),
+      relatedFiles: z.array(z.string()).optional(),
+      acceptanceCriteria: z.array(z.string()).optional(),
+      extensions: z.unknown().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      op: z.literal("update"),
+      id: z.string(),
+      title: z.string().min(1).optional(),
+      description: z.string().min(1).optional(),
+      status: z.enum(["todo", "in_progress", "blocked", "done", "cancelled"]).optional(),
+      priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+      tags: z.array(z.string()).optional(),
+      dependencies: z.array(z.string()).optional(),
+      relatedFiles: z.array(z.string()).optional(),
+      acceptanceCriteria: z.array(z.string()).optional(),
+      resetAcceptance: z.boolean().optional(),
+      extensions: z.unknown().optional(),
+      ifRevision: z.number().int().positive().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      op: z.literal("note"),
+      id: z.string(),
+      text: z.string().min(1),
+      ifRevision: z.number().int().positive().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      op: z.literal("criterion"),
+      id: z.string(),
+      criterionId: z.string(),
+      met: z.boolean(),
+      ifRevision: z.number().int().positive().optional(),
+    })
+    .strict(),
+  z
+    .object({
+      op: z.literal("upsert"),
+      dedupeKey: z.string().min(1),
+      create: z
+        .object({
+          title: z.string().min(1),
+          description: z.string().min(1),
+          status: z.enum(["todo", "in_progress", "blocked", "done", "cancelled"]).optional(),
+          priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+          tags: z.array(z.string()).optional(),
+          dependencies: z.array(z.string()).optional(),
+          relatedFiles: z.array(z.string()).optional(),
+          acceptanceCriteria: z.array(z.string()).optional(),
+          extensions: z.unknown().optional(),
+        })
+        .strict(),
+      update: z
+        .object({
+          title: z.string().min(1).optional(),
+          description: z.string().min(1).optional(),
+          status: z.enum(["todo", "in_progress", "blocked", "done", "cancelled"]).optional(),
+          priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+          tags: z.array(z.string()).optional(),
+          dependencies: z.array(z.string()).optional(),
+          relatedFiles: z.array(z.string()).optional(),
+          acceptanceCriteria: z.array(z.string()).optional(),
+          resetAcceptance: z.boolean().optional(),
+          extensions: z.unknown().optional(),
+          ifRevision: z.number().int().positive().optional(),
+        })
+        .strict()
+        .optional(),
+      note: z.string().min(1).optional(),
+    })
+    .strict(),
+]);
+
+const AgentTaskOperationsSchema = z.array(AgentTaskOperationSchema).max(50);
+
+type AgentStepResult<T> = DetailedAgentResult<T> & {
+  taskBatchId?: string;
+  taskContext?: AgentTaskContext;
+  taskOperations?: AgentTaskOperation[];
+};
+
+function agentEnvelopeSchema(result: Record<string, unknown>, canWrite = true): Record<string, unknown> {
+  const operationsSchema = canWrite ? AgentTaskOperationsSchema : z.array(AgentTaskOperationSchema).max(0);
+  const taskOperations = z.toJSONSchema(operationsSchema, { reused: "inline" }) as Record<string, unknown>;
+  delete taskOperations.$schema;
+  return {
+    type: "object",
+    properties: { result, taskOperations },
+    required: ["result", "taskOperations"],
+    additionalProperties: false,
+  };
+}
 
 function maxRisk(a: Risk, b: Risk | undefined): Risk {
   if (!b) return a;
@@ -252,6 +370,38 @@ export function buildCtx(rt: RunRuntime): Ctx {
   const gitHandle: Git = createGit(rt.cwd);
 
   const resolveInCwd = (p: string): string => (isAbsolute(p) ? p : resolvePath(rt.cwd, p));
+  const makeTaskBatchId = (source: "agent" | "workflow-task", io: StepIO): string =>
+    `${rt.runId}:${source}:${io.seq}:${io.hash}:${io.scheduleIndex}`;
+
+  async function observeTasks(
+    context: AgentTaskContext,
+    key: string,
+  ): Promise<{ snapshot: unknown; schema: unknown }> {
+    if (!rt.host.taskTracker) {
+      throw new StepError("invalid_input", "this engine host has no workflow task tracker", {
+        step: { kind: "sideeffect", key },
+      });
+    }
+    return rt.runStep<{ snapshot: unknown; schema: unknown }>({
+      kind: "sideeffect",
+      key,
+      label: `tasks:${context.step}`,
+      payload: {
+        op: "task.observe",
+        workflowId: context.workflowId,
+        ...(context.schemaBinding ? { schemaBinding: context.schemaBinding } : {}),
+        mode: context.mode ?? "read",
+        selector: context.selector ?? {},
+      },
+      execute: async () => {
+        const [snapshot, schema] = await Promise.all([
+          rt.host.taskTracker!.snapshot(context),
+          rt.host.taskTracker!.schema(context),
+        ]);
+        return { value: { snapshot, schema } };
+      },
+    });
+  }
 
   // ---- agent --------------------------------------------------------------
 
@@ -288,6 +438,74 @@ export function buildCtx(rt: RunRuntime): Ctx {
           mode: opts.write.mode ?? ("warn" as const),
         }
       : undefined;
+    if (mode.writeInPlace && opts.tasks !== undefined && opts.tasks !== false) {
+      throw new StepError(
+        "invalid_input",
+        "ctx.agent.inPlace cannot receive workflow task authority; use an isolated agent or tasks: false",
+        { step: { kind: "agent", key: opts.key, label } },
+      );
+    }
+    // In-place providers write in the integration root, where executing the human CLI
+    // would bypass the journal boundary. Default task context is therefore isolated-only.
+    const taskAccess =
+      opts.tasks === false || !rt.host.taskTracker || mode.writeInPlace
+        ? undefined
+        : (opts.tasks ?? (rt.defaultAgentTaskContext ? {} : undefined));
+    const taskMode = taskAccess?.mode ?? "write";
+    const taskSelector: WorkflowTaskSelector | undefined = taskAccess
+      ? {
+          ...(taskAccess.ids ? { ids: taskAccess.ids } : {}),
+          ...(taskAccess.dedupeKeys ? { dedupeKeys: taskAccess.dedupeKeys } : {}),
+          ...(taskAccess.statuses
+            ? { statuses: taskAccess.statuses }
+            : taskAccess.ids || taskAccess.dedupeKeys
+              ? {}
+              : { statuses: ["todo", "in_progress", "blocked"] }),
+          ...(taskAccess.tags ? { tags: taskAccess.tags } : {}),
+          ...(taskAccess.relatedFiles ? { relatedFiles: taskAccess.relatedFiles } : {}),
+          ...(taskAccess.limit !== undefined ? { limit: taskAccess.limit } : {}),
+        }
+      : undefined;
+    const taskContextBase: AgentTaskContext | undefined = taskAccess
+      ? {
+          workflowId: rt.workflowId,
+          workflowName: rt.workflowName,
+          runId: rt.runId,
+          step: opts.key ?? label,
+          provider: providerId,
+          source: "agent",
+          mode: taskMode,
+          ...(rt.taskSchemaBinding ? { schemaBinding: rt.taskSchemaBinding } : {}),
+          schemaVersion: rt.taskSchemaVersion,
+          ...(taskSelector ? { selector: taskSelector } : {}),
+        }
+      : undefined;
+    const taskObservation = taskContextBase
+      ? await observeTasks(taskContextBase, `task-context:${opts.key ?? label}`)
+      : undefined;
+    const observedTasks =
+      taskObservation && typeof taskObservation.snapshot === "object" && taskObservation.snapshot !== null
+        ? ((taskObservation.snapshot as { tasks?: unknown }).tasks as unknown)
+        : undefined;
+    const visible = Array.isArray(observedTasks)
+      ? observedTasks.filter(
+          (task): task is { id: string; dedupeKey?: string } =>
+            typeof task === "object" &&
+            task !== null &&
+            typeof (task as { id?: unknown }).id === "string" &&
+            ((task as { dedupeKey?: unknown }).dedupeKey === undefined ||
+              typeof (task as { dedupeKey?: unknown }).dedupeKey === "string"),
+        )
+      : [];
+    const taskContext: AgentTaskContext | undefined = taskContextBase
+      ? {
+          ...taskContextBase,
+          visibleTaskIds: visible.map((task) => task.id),
+          visibleDedupeKeys: visible.flatMap((task) =>
+            task.dedupeKey === undefined ? [] : [task.dedupeKey],
+          ),
+        }
+      : undefined;
 
     const payload = {
       prompt,
@@ -298,6 +516,14 @@ export function buildCtx(rt: RunRuntime): Ctx {
       timeoutMs,
       isolation: useWorktree ? "worktree" : "none",
       write: scope ?? null,
+      taskContext: taskObservation
+        ? {
+            mode: taskMode,
+            selector: taskSelector ?? {},
+            snapshot: taskObservation.snapshot,
+            schema: taskObservation.schema,
+          }
+        : null,
     };
 
     const stepRef = { kind: "agent", key: opts.key, label, runId: rt.runId };
@@ -321,7 +547,14 @@ export function buildCtx(rt: RunRuntime): Ctx {
           attempts: entry?.attempts ?? 1,
         } as unknown as DetailedAgentResult<InferOut<S>>;
       }
-      const out = journaled as { value: unknown; files: string[]; patch: PatchRef | null };
+      const out = journaled as {
+        value: unknown;
+        files: string[];
+        patch: PatchRef | null;
+        taskBatchId?: string;
+        taskContext?: AgentTaskContext;
+        taskOperations?: AgentTaskOperation[];
+      };
       const check = await validateSchema(opts.schema, out.value);
       if (!check.ok) {
         throw new StepError(
@@ -332,24 +565,27 @@ export function buildCtx(rt: RunRuntime): Ctx {
           },
         );
       }
-      const detailed: DetailedAgentResult<InferOut<S>> = {
+      const detailed: AgentStepResult<InferOut<S>> = {
         value: check.value,
         usage: entry?.usage ?? { input: 0, output: 0 },
         files: out.files ?? [],
         ...(out.patch ? { patch: out.patch } : {}),
         attempts: entry?.attempts ?? 1,
         ...(entry?.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
+        ...(out.taskBatchId !== undefined ? { taskBatchId: out.taskBatchId } : {}),
+        ...(out.taskContext !== undefined ? { taskContext: out.taskContext } : {}),
+        ...(out.taskOperations !== undefined ? { taskOperations: out.taskOperations } : {}),
       };
       return detailed;
     };
 
     const run = () =>
-      rt.runStep<DetailedAgentResult<InferOut<S>>>({
+      rt.runStep<AgentStepResult<InferOut<S>>>({
         kind: "agent",
         ...(opts.key !== undefined ? { key: opts.key } : {}),
         label,
         payload,
-        schemaJson: wire.json,
+        schemaJson: taskContext ? agentEnvelopeSchema(wire.json, taskMode === "write") : wire.json,
         ...(opts.retry
           ? { retry: { attempts: opts.retry.attempts, backoffMs: toMs(opts.retry.backoff, 1_000) } }
           : {}),
@@ -359,7 +595,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         route: { provider: providerId, ...(model ? { model } : {}), ...(effort ? { effort } : {}) },
         ...(scope ? { scope } : {}),
         revive: (journaled, entry) => reviveDetailed(journaled, entry),
-        onSettle: (value) => {
+        onSettle: async (value) => {
           if (value.patch) {
             rt.patches.set(value.patch.key, {
               key: value.patch.key,
@@ -370,6 +606,16 @@ export function buildCtx(rt: RunRuntime): Ctx {
               integrated: false,
               discarded: false,
             });
+          }
+          if (
+            !rt.dry &&
+            rt.host.taskTracker &&
+            value.taskBatchId &&
+            value.taskContext &&
+            value.taskOperations &&
+            value.taskOperations.length > 0
+          ) {
+            await rt.host.taskTracker.applyBatch(value.taskContext, value.taskBatchId, value.taskOperations);
           }
         },
         // The concurrency permit is taken for the WHOLE lane, worktree included. Held
@@ -453,6 +699,24 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 ignoredManifestBefore = walked.manifest;
               }
               let finalPrompt = prompt;
+              if (taskContext && taskObservation) {
+                const taskCommand = `weft task --workflow ${shellArg(rt.workflowId)}`;
+                finalPrompt +=
+                  `\n\n## Workflow task tracker\n` +
+                  `This step belongs to workflow ${JSON.stringify(rt.workflowName)} ` +
+                  `(stable id ${JSON.stringify(rt.workflowId)}). The equivalent human CLI prefix is:\n` +
+                  `\`${taskCommand}\`\n\n` +
+                  `Human operators run that prefix from the repository root. Provider sandboxes must never execute ` +
+                  `the tracker CLI; the engine supplied the bounded, ` +
+                  `journaled snapshot below. ` +
+                  (taskMode === "write"
+                    ? `Return desired mutations in the required \`taskOperations\` array; the engine validates, ` +
+                      `journals, idempotently applies, and provenance-binds them after your result succeeds. `
+                    : `This step has read-only task authority, so \`taskOperations\` must be an empty array. `) +
+                  `Use an empty array when no tracker change is needed. Do not target another workflow.\n\n` +
+                  `Current task summary:\n\`\`\`json\n${JSON.stringify(taskObservation.snapshot, null, 2)}\n\`\`\`\n` +
+                  `Workflow task extension schema:\n\`\`\`json\n${JSON.stringify(taskObservation.schema, null, 2)}\n\`\`\``;
+              }
               if (scope) {
                 const also = scope.also?.length
                   ? `\nAlso allowed (incidental files): ${scope.also.join(", ")}`
@@ -483,7 +747,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
               const req: AgentRequest = {
                 prompt: finalPrompt,
                 cwd: workCwd,
-                schema: wire.json,
+                schema: taskContext ? agentEnvelopeSchema(wire.json, taskMode === "write") : wire.json,
                 label,
                 ...(opts.key !== undefined ? { key: opts.key } : {}),
                 ...(model !== undefined ? { model } : {}),
@@ -492,6 +756,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 timeoutMs,
                 onMaxTurns: opts.onMaxTurns ?? "finalize",
                 tools: { allowEdits: scope !== undefined || mode.writeInPlace === true },
+                ...(taskContext && rt.host.taskTracker?.protectedPaths?.length
+                  ? { protectedPaths: [...rt.host.taskTracker.protectedPaths] }
+                  : {}),
+                ...(taskContext ? { taskContext } : {}),
                 ...(scope
                   ? {
                       writeScope: {
@@ -771,14 +1039,26 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
                 // Journal the RAW wire value; both live and replay paths validate from raw,
                 // so schema transforms apply exactly once.
-                const journalOutput = { value: result.raw, files, patch };
-                const detailed: DetailedAgentResult<InferOut<S>> = {
+                const taskBatchId = result.taskOperations ? makeTaskBatchId("agent", io) : undefined;
+                const journalTaskContext = result.taskOperations ? taskContext : undefined;
+                const journalOutput = {
+                  value: result.raw,
+                  files,
+                  patch,
+                  ...(taskBatchId ? { taskBatchId } : {}),
+                  ...(journalTaskContext ? { taskContext: journalTaskContext } : {}),
+                  ...(result.taskOperations ? { taskOperations: result.taskOperations } : {}),
+                };
+                const detailed: AgentStepResult<InferOut<S>> = {
                   value: result.validated as InferOut<S>,
                   usage,
                   files,
                   ...(patch ? { patch } : {}),
                   attempts: result.attempts,
                   ...(result.result.sessionId !== undefined ? { sessionId: result.result.sessionId } : {}),
+                  ...(taskBatchId ? { taskBatchId } : {}),
+                  ...(journalTaskContext ? { taskContext: journalTaskContext } : {}),
+                  ...(result.taskOperations ? { taskOperations: result.taskOperations } : {}),
                 };
                 return {
                   value: detailed,
@@ -814,7 +1094,14 @@ export function buildCtx(rt: RunRuntime): Ctx {
       provider: ReturnType<typeof rt.host.providers.get>,
       req: AgentRequest,
       io: StepIO,
-    ): Promise<{ result: AgentResult; raw: unknown; validated: unknown; attempts: number; usage: Usage }> {
+    ): Promise<{
+      result: AgentResult;
+      raw: unknown;
+      validated: unknown;
+      taskOperations?: AgentTaskOperation[];
+      attempts: number;
+      usage: Usage;
+    }> {
       // Every provider turn costs real tokens — the initial call AND each repair —
       // so usage accumulates across turns, and turns preceding a failure are
       // charged too (the exhausted/error throws carry the spend for the caller).
@@ -851,13 +1138,65 @@ export function buildCtx(rt: RunRuntime): Ctx {
       }
       addUsage(result.usage);
       for (;;) {
-        const value = unwrapWireValue(result.output, wire.wrapped);
+        let carrier = result.output;
+        let taskOperations: AgentTaskOperation[] | undefined;
+        const envelopeIssues: SchemaIssue[] = [];
+        if (taskContext) {
+          if (typeof carrier !== "object" || carrier === null || Array.isArray(carrier)) {
+            envelopeIssues.push({ path: "", message: "expected { result, taskOperations }" });
+          } else {
+            const envelope = carrier as { result?: unknown; taskOperations?: unknown };
+            if (!("result" in envelope)) envelopeIssues.push({ path: "result", message: "required" });
+            const operations = AgentTaskOperationsSchema.safeParse(envelope.taskOperations);
+            if (!operations.success) {
+              envelopeIssues.push(
+                ...operations.error.issues.map((issue) => ({
+                  path: ["taskOperations", ...issue.path].join("."),
+                  message: issue.message,
+                })),
+              );
+            } else if (taskMode === "read" && operations.data.length > 0) {
+              envelopeIssues.push({
+                path: "taskOperations",
+                message: "read-only task authority requires an empty array",
+              });
+            } else {
+              taskOperations = operations.data as AgentTaskOperation[];
+            }
+            carrier = envelope.result;
+          }
+        }
+        const value = unwrapWireValue(carrier, wire.wrapped);
         const check = await validateSchema(opts.schema, value);
-        if (check.ok) return { result, raw: value, validated: check.value, attempts, usage: used };
+        const issues = [...envelopeIssues, ...(check.ok ? [] : check.issues)];
+        if (
+          check.ok &&
+          issues.length === 0 &&
+          taskContext &&
+          taskOperations &&
+          taskOperations.length > 0 &&
+          rt.host.taskTracker?.validateBatch
+        ) {
+          try {
+            await rt.host.taskTracker.validateBatch(taskContext, taskOperations);
+          } catch (err) {
+            issues.push({ path: "taskOperations", message: (err as Error).message });
+          }
+        }
+        if (check.ok && issues.length === 0) {
+          return {
+            result,
+            raw: value,
+            validated: check.value,
+            ...(taskOperations ? { taskOperations } : {}),
+            attempts,
+            usage: used,
+          };
+        }
         if (attempts > repairMax) {
           throw new StepError(
             "schema_repair_exhausted",
-            `${label} — schema repair exhausted (${repairMax} attempts): ${check.issues
+            `${label} — schema repair exhausted (${repairMax} attempts): ${issues
               .map((i) => `${i.path}: ${i.message}`)
               .join("; ")}`,
             { step: stepRef, attempts, detail: { usage: used } },
@@ -866,7 +1205,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         attempts++;
         await io.appendAttempt(`schema repair ${attempts - 1}/${repairMax}`);
         try {
-          result = await provider.repair(result.sessionId, req, check.issues, { signal: io.signal });
+          result = await provider.repair(result.sessionId, req, issues, { signal: io.signal });
         } catch (err) {
           if (isCancellation(err) || err instanceof StepError) throw err;
           // The failing repair turn's own spend rides the error too.
@@ -885,7 +1224,12 @@ export function buildCtx(rt: RunRuntime): Ctx {
       const detailed = await run();
       return mode.detailed ? detailed : detailed.value;
     } catch (err) {
-      if (opts.onError === "null" && err instanceof StepError && !isCancellation(err)) {
+      if (
+        opts.onError === "null" &&
+        err instanceof StepError &&
+        !isCancellation(err) &&
+        !isSettlementFailure(err)
+      ) {
         rt.recordDrop(err);
         // The suppression must be DURABLE: with only step.failed on record, a
         // resume re-runs this paid optional step, and a now-successful attempt
@@ -1026,6 +1370,8 @@ export function buildCtx(rt: RunRuntime): Ctx {
     opts: SubWorkflowOptions = {},
   ): Promise<unknown> {
     const name = typeof defOrName === "string" ? defOrName : (defOrName.meta.name ?? "inline");
+    const workflowIdentity =
+      typeof defOrName === "string" ? name : (defOrName.meta.id ?? defOrName.meta.name ?? "inline");
     if (rt.depth + 1 > config.limits.maxDepth) {
       throw new StepError(
         "depth_exceeded",
@@ -1043,7 +1389,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
       // validates {} for the former and null for the latter, so collapsing them
       // would serve a completed child's output across a real input change.
       payload: {
-        workflow: name,
+        workflow: workflowIdentity,
         input: input === undefined ? { $omitted: true } : input,
         budget: opts.budget ?? null,
       },
@@ -2368,6 +2714,97 @@ export function buildCtx(rt: RunRuntime): Ctx {
       })
       .then((r) => r.value);
 
+  const workflowTaskContext = (
+    step: string,
+    mode: "read" | "write",
+    selector?: WorkflowTaskSelector,
+  ): AgentTaskContext => ({
+    workflowId: rt.workflowId,
+    workflowName: rt.workflowName,
+    runId: rt.runId,
+    step,
+    provider: "workflow",
+    source: "workflow",
+    mode,
+    ...(rt.taskSchemaBinding ? { schemaBinding: rt.taskSchemaBinding } : {}),
+    schemaVersion: rt.taskSchemaVersion,
+    ...(selector ? { selector } : {}),
+  });
+
+  const applyWorkflowTaskOperation = async (key: string, operation: AgentTaskOperation): Promise<void> => {
+    if (!rt.host.taskTracker) {
+      throw new StepError("invalid_input", "this engine host has no workflow task tracker", {
+        step: { kind: "sideeffect", key },
+      });
+    }
+    const context = workflowTaskContext(key, "write");
+    await rt.runStep<{ context: AgentTaskContext; batchId: string; operations: AgentTaskOperation[] }>({
+      kind: "sideeffect",
+      key,
+      label: `task:${operation.op}`,
+      payload: { op: `task.${operation.op}`, operation },
+      execute: async (io) => ({
+        value: await (async () => {
+          await rt.host.taskTracker!.validateBatch?.(context, [operation]);
+          return {
+            context,
+            batchId: makeTaskBatchId("workflow-task", io),
+            operations: [operation],
+          };
+        })(),
+      }),
+      onSettle: async (value) => {
+        if (!rt.dry) {
+          await rt.host.taskTracker!.applyBatch(value.context, value.batchId, value.operations);
+        }
+      },
+    });
+  };
+
+  const tasks: Ctx["tasks"] = {
+    observe: async <Extensions>(selector: WorkflowTaskSelector, opts: { key: string }) => {
+      const observed = await observeTasks(workflowTaskContext(opts.key, "read", selector), opts.key);
+      return observed.snapshot as WorkflowTaskSnapshot<Extensions>;
+    },
+    upsert: async <Extensions>(
+      dedupeKey: string,
+      input: WorkflowTaskUpsertInput<Extensions>,
+      opts: { key: string },
+    ) => {
+      await applyWorkflowTaskOperation(opts.key, {
+        op: "upsert",
+        dedupeKey,
+        create: input.create,
+        ...(input.update ? { update: input.update } : {}),
+        ...(input.note !== undefined ? { note: input.note } : {}),
+      });
+    },
+    update: async <Extensions>(
+      id: string,
+      input: WorkflowTaskUpdateInput<Extensions>,
+      opts: { key: string },
+    ) => {
+      await applyWorkflowTaskOperation(opts.key, { op: "update", id, ...input });
+    },
+    note: async (id, text, opts) => {
+      await applyWorkflowTaskOperation(opts.key, {
+        op: "note",
+        id,
+        text,
+        ...(opts.ifRevision !== undefined ? { ifRevision: opts.ifRevision } : {}),
+      });
+    },
+    setCriterion: async (id, criterionId, met, opts) => {
+      await applyWorkflowTaskOperation(opts.key, {
+        op: "criterion",
+        id,
+        criterionId,
+        met,
+        ...(opts.ifRevision !== undefined ? { ifRevision: opts.ifRevision } : {}),
+      });
+    },
+  };
+
   // ---- assemble -----------------------------------------------------------
 
   const ctx: Ctx = {
@@ -2389,6 +2826,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     integrate,
     discard,
     note,
+    tasks,
     signal: signalFn,
     sleep: sleepFn,
     now: nowFn,
@@ -2407,4 +2845,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
     },
   };
   return ctx;
+}
+
+/** POSIX-safe shell spelling for the command copied into agent instructions. */
+function shellArg(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
 }

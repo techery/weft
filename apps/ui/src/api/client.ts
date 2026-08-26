@@ -18,6 +18,7 @@ import type {
   WorkflowDetail,
   WorkflowRow,
   WorkflowStats,
+  WorkflowTask,
 } from "./types";
 
 /**
@@ -98,6 +99,8 @@ export const api = {
   workflows: () => request<WorkflowRow[]>("/api/workflows"),
   workflow: (name: string) => request<WorkflowDetail>(`/api/workflows/${encodeURIComponent(name)}`),
   workflowStats: (name: string) => request<WorkflowStats>(`/api/workflows/${encodeURIComponent(name)}/stats`),
+  workflowTasks: (name: string) =>
+    request<WorkflowTask[]>(`/api/workflows/${encodeURIComponent(name)}/tasks`),
 
   artifacts: (runId: string) => request<ArtifactEntry[]>(`/api/runs/${encodeURIComponent(runId)}/artifacts`),
 

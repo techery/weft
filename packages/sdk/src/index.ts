@@ -12,8 +12,15 @@ export type {
   InferWorkflowOutput,
   WorkflowDefinition,
   WorkflowMeta,
+  WorkflowTaskSchemaConfig,
 } from "./define.ts";
-export { defineWorkflow, isWorkflowDefinition } from "./define.ts";
+export {
+  assertWorkflowId,
+  defineWorkflow,
+  isWorkflowDefinition,
+  isWorkflowId,
+  WORKFLOW_ID_PATTERN,
+} from "./define.ts";
 export type { Duration } from "./duration.ts";
 export { formatDuration, parseDuration } from "./duration.ts";
 export type { SerializedStepError, StepErrorCode, StepRef } from "./errors.ts";
@@ -38,6 +45,7 @@ export { failures, okValues } from "./settled.ts";
 export type {
   AgentFn,
   AgentOptions,
+  AgentTaskAccess,
   BashFn,
   BudgetView,
   CheckOptions,
@@ -85,5 +93,18 @@ export type {
   SubWorkflowOptions,
   Usage,
   WorkflowDefinitionLike,
+  WorkflowTaskCreateInput,
+  WorkflowTaskCriterion,
+  WorkflowTaskNote,
+  WorkflowTaskPriority,
+  WorkflowTaskRecord,
+  WorkflowTaskSelector,
+  WorkflowTaskSnapshot,
+  WorkflowTaskStatus,
+  WorkflowTaskStepOptions,
+  WorkflowTaskSummary,
+  WorkflowTasksApi,
+  WorkflowTaskUpdateInput,
+  WorkflowTaskUpsertInput,
   WriteScope,
 } from "./types.ts";

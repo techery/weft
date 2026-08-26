@@ -105,6 +105,68 @@ describe("defineWorkflow", () => {
       defineWorkflow({ description: undefined as never, input: z.any(), output: z.any() }, async () => ({})),
     ).toThrow(/description/);
   });
+
+  test("rejects path-like durable ids and names", () => {
+    const base = { description: "test", input: z.object({}), output: z.object({}) };
+    expect(() => defineWorkflow({ ...base, id: "team/review" }, async () => ({}))).toThrow(/meta.id/);
+    expect(() => defineWorkflow({ ...base, name: "review.ts" }, async () => ({}))).toThrow(/meta.name/);
+    expect(() => defineWorkflow({ ...base, id: "stable-review" }, async () => ({}))).not.toThrow();
+  });
+
+  test("validates workflow task schema evolution metadata", () => {
+    const base = { description: "test", input: z.object({}), output: z.object({}) };
+    expect(() => defineWorkflow({ ...base, tasks: { schemaVersion: 0 } }, async () => ({}))).toThrow(
+      /positive integer/,
+    );
+    expect(() =>
+      defineWorkflow(
+        {
+          ...base,
+          tasks: {
+            extensions: z.object({ owner: z.string() }),
+            semanticRevision: "platform-owner-v2",
+            schemaVersion: 2,
+            migrate: () => ({ owner: "platform" }),
+          },
+        },
+        async () => ({}),
+      ),
+    ).not.toThrow();
+    expect(() =>
+      defineWorkflow(
+        {
+          ...base,
+          tasks: { extensions: z.object({ owner: z.string() }) } as never,
+        },
+        async () => ({}),
+      ),
+    ).toThrow(/semanticRevision/);
+    expect(() =>
+      defineWorkflow(
+        {
+          ...base,
+          tasks: {
+            extensions: z.object({ owner: z.string() }),
+            semanticRevision: "   ",
+          },
+        },
+        async () => ({}),
+      ),
+    ).toThrow(/semanticRevision/);
+    expect(() =>
+      defineWorkflow(
+        {
+          ...base,
+          tasks: {
+            semanticRevision: "retire-owner-v3",
+            schemaVersion: 3,
+            migrate: () => ({}),
+          },
+        },
+        async () => ({}),
+      ),
+    ).not.toThrow();
+  });
 });
 
 describe("settled helpers", () => {

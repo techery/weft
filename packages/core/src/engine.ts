@@ -41,6 +41,34 @@ const CANCEL_DRAIN_MS = 5_000;
 /** How long shutdown() waits for each run to unwind before leaving it claimed. */
 const SHUTDOWN_DRAIN_MS = 5_000;
 
+/** First journal format that enables implicit task context on agent steps. */
+const TASK_CONTEXT_VERSION = 1;
+
+/**
+ * Runs written before task tracking existed have no version marker and used the
+ * agent's original result schema directly. Feature-preview runs written before
+ * the marker did journal a task observation, so retain their envelope too.
+ */
+function hasImplicitTaskContext(records: JournalRecord[]): boolean {
+  const created = records.find((record) => record.ev.type === "run.created")?.ev;
+  if (created?.type === "run.created" && (created.workflow.taskContextVersion ?? 0) > 0) return true;
+  if (
+    records.some(
+      (record) =>
+        record.ev.type === "step.scheduled" &&
+        record.ev.kind === "sideeffect" &&
+        typeof record.ev.payload === "object" &&
+        record.ev.payload !== null &&
+        (record.ev.payload as { op?: unknown }).op === "task.observe",
+    )
+  ) {
+    return true;
+  }
+  // No historical agent identity can be invalidated before the first agent is
+  // scheduled, so an old run suspended earlier may safely adopt the new default.
+  return !records.some((record) => record.ev.type === "step.scheduled" && record.ev.kind === "agent");
+}
+
 /**
  * Races a run's completion against a deadline: `true` if it unwound, `false` if the
  * bound expired.
@@ -95,6 +123,18 @@ function definitionHash(def: WorkflowDefinition): string {
   return sha256Hex(`${def.meta.name ?? ""}\n${def.run.toString()}`);
 }
 
+/** Task-schema lineage follows durable identity and executable semantics, never display names. */
+function taskDefinitionHash(def: WorkflowDefinition, workflowId: string): string {
+  const taskConfig = def.meta.tasks;
+  if (
+    (taskConfig?.extensions !== undefined || taskConfig?.migrate !== undefined) &&
+    (typeof taskConfig.semanticRevision !== "string" || taskConfig.semanticRevision.trim() === "")
+  ) {
+    throw new Error(`workflow ${workflowId} task extensions and migrations require tasks.semanticRevision`);
+  }
+  return sha256Hex(`task-contract-v1\n${workflowId}\n${taskConfig?.semanticRevision ?? "core-fields-only"}`);
+}
+
 /**
  * Whether the script being resumed is the one the journal was written by. A run created
  * before this was journaled carries none; treat that as unchanged, because the only
@@ -127,8 +167,29 @@ function versionUnchanged(
   );
 }
 
+/** A journaled stable ID is the authority even when its old callable name still resolves. */
+function assertResumedWorkflowIdentity(
+  runId: string,
+  journaled: { id?: string; name: string },
+  def: WorkflowDefinition,
+): void {
+  if (journaled.id === undefined) return; // Legacy journals recorded names only.
+  const currentId = def.meta.id ?? def.meta.name ?? journaled.name;
+  if (currentId !== journaled.id) {
+    throw new Error(
+      `run ${runId}: workflow identity mismatch — journal belongs to ${JSON.stringify(journaled.id)}, ` +
+        `but ${JSON.stringify(journaled.name)} now resolves to ${JSON.stringify(currentId)}`,
+    );
+  }
+}
+
 export interface WorkflowRegistry {
   get(name: string): Promise<WorkflowDefinition | undefined>;
+  /** Resolve a journaled workflow identity. Stable IDs are authoritative when present. */
+  resolve?(identity: {
+    id?: string;
+    name: string;
+  }): Promise<{ def: WorkflowDefinition; name: string; hash?: string } | undefined>;
   /**
    * The bundle content hash of what `get(name)` would return right now, when the registry
    * knows one.
@@ -142,12 +203,28 @@ export interface WorkflowRegistry {
   hashOf?(name: string): Promise<string | undefined>;
 }
 
+async function resolveRegistryWorkflow(
+  registry: WorkflowRegistry,
+  identity: { id?: string; name: string },
+): Promise<{ def: WorkflowDefinition; name: string; hash?: string } | undefined> {
+  if (registry.resolve) return registry.resolve(identity);
+  const def = await registry.get(identity.name);
+  if (!def) return undefined;
+  const hash = await registry.hashOf?.(identity.name);
+  return {
+    def,
+    name: def.meta.name ?? identity.name,
+    ...(hash !== undefined ? { hash } : {}),
+  };
+}
+
 export interface EngineOptions {
   journal: JournalStore;
   blobs: BlobStore;
   providers: ProviderRegistry;
   config?: EngineConfigInput;
   registry?: WorkflowRegistry;
+  taskTracker?: import("./provider.ts").AgentTaskTrackerHost;
   clock?: () => number;
   /** Test seams for @techery/weft-testing fixtures; never set in production hosts. */
   testHooks?: import("./hooks.ts").TestHooks;
@@ -222,6 +299,7 @@ export class Engine implements EngineHost {
   readonly providers: ProviderRegistry;
   readonly journal: JournalStore;
   readonly blobs: BlobStore;
+  readonly taskTracker?: import("./provider.ts").AgentTaskTrackerHost;
   readonly testHooks?: import("./hooks.ts").TestHooks;
   readonly globalLimiter: Semaphore;
   private readonly providerLimiters = new Map<string, Semaphore>();
@@ -235,6 +313,7 @@ export class Engine implements EngineHost {
     this.journal = opts.journal;
     this.blobs = opts.blobs;
     this.providers = opts.providers;
+    if (opts.taskTracker) this.taskTracker = opts.taskTracker;
     this.config = resolveConfig(opts.config);
     this.registry = opts.registry;
     this.clockFn = opts.clock ?? Date.now;
@@ -264,6 +343,8 @@ export class Engine implements EngineHost {
       throw new Error(`run ${runId} already exists — use resume()`);
     }
     const name = def.meta.name ?? "workflow";
+    const workflowId = def.meta.id ?? name;
+    const bodyHash = definitionHash(def);
     // The RAW input is what gets journaled, so it must survive the JSONL round
     // trip; the schema is reapplied to it on every execution (below and on each
     // resume), so a transform's output — a Date, a class — never needs to.
@@ -286,6 +367,11 @@ export class Engine implements EngineHost {
         { step: { kind: "workflow", runId } },
       );
     }
+    const taskSchemaBinding = await this.taskTracker?.prepare?.(
+      { id: workflowId, name },
+      def.meta.tasks?.extensions,
+      { ...def.meta.tasks, identity: taskDefinitionHash(def, workflowId) },
+    );
     const shared: SharedRunResources = {
       budget: new Budget(opts.budget ?? {}),
       abort: new AbortController(),
@@ -296,6 +382,10 @@ export class Engine implements EngineHost {
       host: this,
       runId,
       workflowName: name,
+      workflowId,
+      ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
+      taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
+      defaultAgentTaskContext: this.taskTracker !== undefined,
       cwd: opts.cwd,
       depth: 0,
       shared,
@@ -313,9 +403,13 @@ export class Engine implements EngineHost {
           type: "run.created",
           runId,
           workflow: {
+            id: workflowId,
             name,
             ...(opts.defHash !== undefined ? { defHash: opts.defHash } : {}),
-            bodyHash: definitionHash(def),
+            bodyHash,
+            ...(this.taskTracker ? { taskContextVersion: TASK_CONTEXT_VERSION } : {}),
+            ...(taskSchemaBinding && def.meta.tasks ? { taskSchemaBinding } : {}),
+            ...(def.meta.tasks ? { taskSchemaVersion: def.meta.tasks.schemaVersion ?? 1 } : {}),
           },
           // Raw, not inputCheck.value: a transformed value (string → Date) would
           // serialize lossily and hand a resumed execution a different input type.
@@ -351,18 +445,24 @@ export class Engine implements EngineHost {
     if (created?.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
 
     let def = opts.def;
+    let workflowName = def?.meta.name ?? created.workflow.name;
     // The caller's hash names the definition the CALLER brought; a registry lookup here
     // brings its own, and mixing them would compare one script's stamp against another's.
     let bundleHash = opts.def !== undefined ? opts.defHash : undefined;
     if (!def && this.registry) {
-      def = await this.registry.get(created.workflow.name);
-      if (def) bundleHash = await this.registry.hashOf?.(created.workflow.name);
+      const resolved = await resolveRegistryWorkflow(this.registry, created.workflow);
+      if (resolved) {
+        def = resolved.def;
+        workflowName = resolved.name;
+        bundleHash = resolved.hash;
+      }
     }
     if (!def) {
       throw new Error(
         `run ${runId}: no definition for "${created.workflow.name}" (pass def or configure a registry)`,
       );
     }
+    assertResumedWorkflowIdentity(runId, created.workflow, def);
     const resumeOpts: ResumeOptions = {
       ...opts,
       ...(bundleHash !== undefined ? { defHash: bundleHash } : {}),
@@ -383,7 +483,16 @@ export class Engine implements EngineHost {
     // still executing would run it twice.
     const lease = await this.claimRun(runId);
     try {
-      return await this.resumeSetup(runId, records, created, def, resumeOpts, inputCheck.value, lease);
+      return await this.resumeSetup(
+        runId,
+        records,
+        created,
+        def,
+        workflowName,
+        resumeOpts,
+        inputCheck.value,
+        lease,
+      );
     } catch (err) {
       // Setup failed before drive() (whose finally owns the release from launch
       // on): the claim must not outlive an execution that never started.
@@ -398,6 +507,7 @@ export class Engine implements EngineHost {
     records: JournalRecord[],
     created: Extract<JournalEvent, { type: "run.created" }>,
     def: WorkflowDefinition,
+    workflowName: string,
     opts: ResumeOptions,
     input: unknown,
     lease: RunLease | undefined,
@@ -459,10 +569,20 @@ export class Engine implements EngineHost {
         descendants.samples +
         (restoreTokens > replay.totalUsage.tokens || restoreUsd > replay.totalUsage.usd ? 1 : 0),
     );
+    const resumedWorkflowId = created.workflow.id ?? def.meta.id ?? created.workflow.name;
+    const taskSchemaBinding = await this.taskTracker?.prepare?.(
+      { id: resumedWorkflowId, name: workflowName },
+      def.meta.tasks?.extensions,
+      { ...def.meta.tasks, identity: taskDefinitionHash(def, resumedWorkflowId) },
+    );
     const runtime = new RunRuntime({
       host: this,
       runId,
-      workflowName: created.workflow.name,
+      workflowName,
+      workflowId: resumedWorkflowId,
+      ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
+      taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
+      defaultAgentTaskContext: hasImplicitTaskContext(records),
       cwd: created.cwd,
       depth: created.depth,
       shared,
@@ -971,14 +1091,19 @@ export class Engine implements EngineHost {
     this.active.get(runtime.runId)?.pending.set(request.id, request);
   }
 
-  /** True when the journal at childId was created BY this parent for this workflow. */
-  private async ownsChildJournal(childId: string, parentRunId: string, workflow: string): Promise<boolean> {
+  /** True when the journal at childId was created BY this parent for this durable workflow. */
+  private async ownsChildJournal(
+    childId: string,
+    parentRunId: string,
+    workflow: { id: string; name: string },
+  ): Promise<boolean> {
     for await (const rec of this.journal.read(childId)) {
-      return (
-        rec.ev.type === "run.created" &&
-        rec.ev.parentRunId === parentRunId &&
-        rec.ev.workflow.name === workflow
-      );
+      if (rec.ev.type !== "run.created" || rec.ev.parentRunId !== parentRunId) return false;
+      // Stable IDs survive display-name edits. Journals written before workflow
+      // IDs were recorded retain their historical name-only ownership check.
+      return rec.ev.workflow.id !== undefined
+        ? rec.ev.workflow.id === workflow.id
+        : rec.ev.workflow.name === workflow.name;
     }
     return false;
   }
@@ -1073,6 +1198,8 @@ export class Engine implements EngineHost {
         step: { kind: "workflow", key: spec.key ?? spec.name, runId: parent.runId },
       });
     }
+    const childWorkflowName = def.meta.name ?? spec.name;
+    const childWorkflowId = def.meta.id ?? childWorkflowName;
 
     const shared: SharedRunResources = {
       // Every child gets its OWN scope, capped or not: the budget.sampled
@@ -1087,7 +1214,13 @@ export class Engine implements EngineHost {
 
     let childId = spec.childRunId;
     let resuming = await this.journal.exists(childId);
-    if (resuming && !(await this.ownsChildJournal(childId, parent.runId, def.meta.name ?? spec.name))) {
+    if (
+      resuming &&
+      !(await this.ownsChildJournal(childId, parent.runId, {
+        id: childWorkflowId,
+        name: childWorkflowName,
+      }))
+    ) {
       // An eight-hex collision with an UNRELATED run: adopting it would replay a
       // stranger's input and append terminal records into their journal. Nothing
       // of ours lives there — take a fresh, free id (the completed step journals
@@ -1207,10 +1340,23 @@ export class Engine implements EngineHost {
     }
     const input = check.value;
 
+    const bodyHash = definitionHash(def);
+    const taskSchemaBinding = await this.taskTracker?.prepare?.(
+      { id: childWorkflowId, name: childWorkflowName },
+      def.meta.tasks?.extensions,
+      {
+        ...def.meta.tasks,
+        identity: taskDefinitionHash(def, childWorkflowId),
+      },
+    );
     const runtime = new RunRuntime({
       host: this,
       runId: childId,
-      workflowName: def.meta.name ?? spec.name,
+      workflowName: childWorkflowName,
+      workflowId: childWorkflowId,
+      ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
+      taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
+      defaultAgentTaskContext: resuming ? hasImplicitTaskContext(records) : this.taskTracker !== undefined,
       cwd: parent.cwd,
       depth: parent.depth + 1,
       shared,
@@ -1229,7 +1375,14 @@ export class Engine implements EngineHost {
           // its own journal, its own replay, and its own call sites to move. No bundle
           // hash exists here — a child definition is a value in the parent's module, not
           // something a host resolved and hashed — so the body hash is the whole check.
-          workflow: { name: def.meta.name ?? spec.name, bodyHash: definitionHash(def) },
+          workflow: {
+            id: def.meta.id ?? def.meta.name ?? spec.name,
+            name: def.meta.name ?? spec.name,
+            bodyHash,
+            ...(this.taskTracker ? { taskContextVersion: TASK_CONTEXT_VERSION } : {}),
+            ...(taskSchemaBinding && def.meta.tasks ? { taskSchemaBinding } : {}),
+            ...(def.meta.tasks ? { taskSchemaVersion: def.meta.tasks.schemaVersion ?? 1 } : {}),
+          },
           input: rawInput,
           cwd: parent.cwd,
           depth: parent.depth + 1,
@@ -1805,13 +1958,31 @@ export class Engine implements EngineHost {
     const created = records.find((r) => r.ev.type === "run.created")?.ev;
     if (created?.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
     let def = opts.def;
-    if (!def && this.registry) def = await this.registry.get(created.workflow.name);
+    let workflowName = def?.meta.name ?? created.workflow.name;
+    if (!def && this.registry) {
+      const resolved = await resolveRegistryWorkflow(this.registry, created.workflow);
+      if (resolved) {
+        def = resolved.def;
+        workflowName = resolved.name;
+      }
+    }
     if (!def) throw new Error(`run ${runId}: no definition for "${created.workflow.name}"`);
+    assertResumedWorkflowIdentity(runId, created.workflow, def);
 
+    const replayWorkflowId = created.workflow.id ?? def.meta.id ?? created.workflow.name;
+    const taskSchemaBinding = await this.taskTracker?.prepare?.(
+      { id: replayWorkflowId, name: workflowName },
+      def.meta.tasks?.extensions,
+      { ...def.meta.tasks, identity: taskDefinitionHash(def, replayWorkflowId), persist: false },
+    );
     const runtime = new RunRuntime({
       host: this,
       runId,
-      workflowName: created.workflow.name,
+      workflowName,
+      workflowId: replayWorkflowId,
+      ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
+      taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
+      defaultAgentTaskContext: hasImplicitTaskContext(records),
       cwd: created.cwd,
       depth: created.depth,
       shared: {

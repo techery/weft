@@ -10,11 +10,27 @@ exports[`runWorkflow > journal.toJSON() is snapshot-stable across runs 1`] = `
     "status": "ok",
   },
   {
+    "key": "task-context:review:a.ts",
+    "kind": "sideeffect",
+    "label": "tasks:review:a.ts",
+    "phase": "Review",
+    "seq": 2,
+    "status": "ok",
+  },
+  {
     "key": "review:a.ts",
     "kind": "agent",
     "label": "review:a.ts",
     "phase": "Review",
-    "seq": 2,
+    "seq": 3,
+    "status": "ok",
+  },
+  {
+    "key": "task-context:refute:a.ts:3",
+    "kind": "sideeffect",
+    "label": "tasks:refute:a.ts:3",
+    "phase": "Refute",
+    "seq": 4,
     "status": "ok",
   },
   {
@@ -22,7 +38,7 @@ exports[`runWorkflow > journal.toJSON() is snapshot-stable across runs 1`] = `
     "kind": "agent",
     "label": "refute:a.ts:3",
     "phase": "Refute",
-    "seq": 3,
+    "seq": 5,
     "status": "ok",
   },
 ]

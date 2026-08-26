@@ -27,7 +27,9 @@ import type { RunIndex } from "@techery/weft-index-sqlite";
 import { type MockAgentBuilder, mock } from "@techery/weft-provider-mock";
 import type { WorkflowDefinition } from "@techery/weft-sdk";
 import { createFsStores } from "@techery/weft-store-fs";
+import * as z from "zod";
 import { loadConfig, WEFT_DIR, type WeftConfig } from "./config.ts";
+import { TaskStore } from "./tasks.ts";
 
 /** Derived, rebuildable, and safe to delete — never a source of truth. */
 export const INDEX_FILE = "index.sqlite";
@@ -44,6 +46,8 @@ export interface Weft {
   /** `<cwd>/.weft` — stores, workflows, and the derived index live under it. */
   weftDir: string;
   runsDir: string;
+  /** Workflow-scoped durable context used by the task CLI and workflow manager. */
+  tasks: TaskStore;
   /**
    * The scripted builder behind the `mock` provider. In mock mode it also answers as
    * `claude` and `codex`, so a workflow's normal routing lands on fixtures.
@@ -109,6 +113,21 @@ export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
     providers.register(mockBuilder.provider("mock"));
   }
 
+  const taskDefinition = async (workflowId: string): Promise<WorkflowDefinition | undefined> => {
+    // A malformed workflow must not degrade into "no task schema": that would let an
+    // extension write bypass the declaration precisely when the declaration fails to load.
+    const direct = await registry.get(workflowId);
+    if (direct && (direct.meta.id ?? direct.meta.name ?? workflowId) === workflowId) return direct;
+    for (const entry of await registry.list()) {
+      const candidate = await registry.get(entry.name);
+      if (candidate?.meta.id === workflowId) return candidate;
+    }
+    return undefined;
+  };
+  const taskRoot = join(weftDir, "tasks");
+  const tasks = new TaskStore(taskRoot, async (workflowId) =>
+    taskDefinition(workflowId).then((def) => def?.meta.tasks?.extensions),
+  );
   const engine = new Engine({
     journal: stores.journal,
     blobs: stores.blobs,
@@ -117,6 +136,29 @@ export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
     // The registry is what lets resume and ctx.workflow("name", …) find a definition by
     // name, in a process that never saw the file.
     registry,
+    taskTracker: {
+      protectedPaths: [taskRoot],
+      prepare: async (workflow, extensionSchema, taskOptions) => {
+        let jsonSchema: unknown | null = null;
+        if (extensionSchema) {
+          try {
+            jsonSchema = z.toJSONSchema(extensionSchema as z.ZodType, {
+              io: "input",
+              unrepresentable: "any",
+            });
+          } catch {
+            jsonSchema = null;
+          }
+        }
+        return tasks.registerWorkflow(workflow, extensionSchema, jsonSchema, taskOptions);
+      },
+      snapshot: (context) => tasks.snapshot(context.workflowId, context.selector, context.schemaBinding),
+      // prepare() persisted this representation from the exact definition the
+      // engine is executing, including path/stdin workflows the registry cannot find.
+      schema: (context) => tasks.schema(context.workflowId, context.schemaBinding),
+      validateBatch: (context, operations) => tasks.validateBatch(context, operations),
+      applyBatch: (context, batchId, operations) => tasks.applyBatch(context, batchId, operations),
+    },
   });
 
   let index: Promise<RunIndex> | undefined;
@@ -134,6 +176,7 @@ export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
     cwd,
     weftDir,
     runsDir: stores.runsDir,
+    tasks,
     mockBuilder,
     async reindex(): Promise<RunIndex> {
       const idx = await openIndex();

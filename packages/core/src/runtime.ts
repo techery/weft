@@ -31,10 +31,25 @@ import type {
 } from "./events.ts";
 import { jsonUnsafeAt, unwrapWireValue, wrapWireValue } from "./jsonschema.ts";
 import type { Semaphore } from "./limiter.ts";
-import type { ProviderRegistry } from "./provider.ts";
+import type { AgentTaskTrackerHost, ProviderRegistry } from "./provider.ts";
 import { type CompletedEntry, OrderedDelivery, type ReplayIndex, type ReuseMode } from "./replay.ts";
 import type { BlobStore, JournalStore } from "./stores.ts";
 import { isBlobBeyondRepair } from "./stores.ts";
+
+// `onError: "null"` is allowed to suppress execution failures, but never a
+// post-completion settlement failure: the completed output is the durable
+// instruction for retrying partially applied side effects. Keep this marker
+// process-local so it cannot become part of the public StepError wire format.
+const settlementFailures = new WeakSet<StepError>();
+
+export function isSettlementFailure(err: unknown): boolean {
+  return err instanceof StepError && settlementFailures.has(err);
+}
+
+function markSettlementFailure(err: StepError): StepError {
+  settlementFailures.add(err);
+  return err;
+}
 
 // ---------------------------------------------------------------------------
 // Host seam (implemented by Engine)
@@ -51,6 +66,7 @@ export interface PendingRequest {
   createdAt: number;
   deadline?: number;
   confirmToken?: string;
+  artifactRef?: BlobRefJson;
 }
 
 export interface ChildRunSpec {
@@ -75,6 +91,7 @@ export interface EngineHost {
   readonly providers: ProviderRegistry;
   readonly journal: JournalStore;
   readonly blobs: BlobStore;
+  readonly taskTracker?: AgentTaskTrackerHost;
   readonly testHooks?: import("./hooks.ts").TestHooks;
   readonly globalLimiter: Semaphore;
   providerLimiter(id: string): Semaphore;
@@ -116,6 +133,10 @@ export interface PatchState {
 
 export interface StepIO {
   seq: number;
+  /** Canonical identity of this step's kind, payload, schema, and explicit key. */
+  hash: string;
+  /** Durable journal-record index for this live scheduling occurrence. */
+  scheduleIndex: number;
   attempt: number;
   signal: AbortSignal;
   scheduledAt: number;
@@ -213,6 +234,11 @@ export interface RunRuntimeOptions {
   host: EngineHost;
   runId: string;
   workflowName: string;
+  workflowId: string;
+  taskSchemaBinding?: string;
+  taskSchemaVersion?: number;
+  /** Whether agent steps with no explicit `tasks` option receive task context. */
+  defaultAgentTaskContext?: boolean;
   cwd: string;
   baseRef?: string;
   depth: number;
@@ -227,6 +253,10 @@ export class RunRuntime {
   readonly host: EngineHost;
   readonly runId: string;
   readonly workflowName: string;
+  readonly workflowId: string;
+  readonly taskSchemaBinding: string | undefined;
+  readonly taskSchemaVersion: number;
+  readonly defaultAgentTaskContext: boolean;
   readonly cwd: string;
   readonly baseRef: string | undefined;
   readonly depth: number;
@@ -280,6 +310,10 @@ export class RunRuntime {
     this.host = opts.host;
     this.runId = opts.runId;
     this.workflowName = opts.workflowName;
+    this.workflowId = opts.workflowId;
+    this.taskSchemaBinding = opts.taskSchemaBinding;
+    this.taskSchemaVersion = opts.taskSchemaVersion ?? 1;
+    this.defaultAgentTaskContext = opts.defaultAgentTaskContext ?? false;
     this.cwd = opts.cwd;
     this.baseRef = opts.baseRef;
     this.depth = opts.depth;
@@ -569,7 +603,24 @@ export class RunRuntime {
           await this.delivery.deliver(entry.order);
           const loaded = structuredClone(stored);
           const value = spec.revive ? await spec.revive(loaded, entry) : (loaded as T);
-          await spec.onSettle?.(value, { served: true, entry });
+          try {
+            await spec.onSettle?.(value, { served: true, entry });
+            if (spec.onSettle && !entry.settled) {
+              await this.append([{ type: "step.settled", seq: entry.seq }]);
+            }
+          } catch (err) {
+            const stepError = markSettlementFailure(StepError.from(err, { ...ref, seq: entry.seq }));
+            await this.append([
+              {
+                type: "step.failed",
+                seq: entry.seq,
+                error: stepError.serialize(),
+                attempts: 1,
+                phase: "settle",
+              },
+            ]);
+            throw stepError;
+          }
           return value;
         }
       }
@@ -668,6 +719,7 @@ export class RunRuntime {
       let attempt = 0;
       for (;;) {
         attempt++;
+        let completed = false;
         // Per-attempt abort: a step timeout aborts THIS attempt's signal so the
         // provider tears down its session; a retry gets a fresh controller.
         const stepAbort = new AbortController();
@@ -677,6 +729,8 @@ export class RunRuntime {
         try {
           const io: StepIO = {
             seq,
+            hash,
+            scheduleIndex: scheduled[0]!.i,
             attempt,
             signal: stepAbort.signal,
             scheduledAt,
@@ -712,7 +766,9 @@ export class RunRuntime {
               attempts: outcome.attempts ?? attempt,
             },
           ]);
+          completed = true;
           await spec.onSettle?.(outcome.value, { served: false });
+          if (spec.onSettle) await this.append([{ type: "step.settled", seq }]);
           return outcome.value;
         } catch (err) {
           unmarkWaiting();
@@ -720,11 +776,13 @@ export class RunRuntime {
             this.signal.aborted && !isCancellation(err)
               ? new CancelledError("run cancelled", ref)
               : StepError.from(err, ref);
+          if (completed) markSettlementFailure(stepError);
           // An error BUILT inside execute() carries its own step ref, usually
           // without the seq only this runner knows: enrich it so downstream
           // consumers (drops, durable suppression) can address the step.
           if (stepError.step.seq === undefined) (stepError.step as { seq?: number }).seq = seq;
           const retryable =
+            !completed &&
             !isCancellation(stepError) &&
             stepError.code !== "budget_exceeded" &&
             stepError.code !== "gate_denied" &&
@@ -732,7 +790,13 @@ export class RunRuntime {
             attempt < maxAttempts;
           if (!retryable) {
             await this.append([
-              { type: "step.failed", seq, error: stepError.serialize(), attempts: attempt },
+              {
+                type: "step.failed",
+                seq,
+                error: stepError.serialize(),
+                attempts: attempt,
+                phase: completed ? "settle" : "execute",
+              },
             ]);
             throw stepError;
           }

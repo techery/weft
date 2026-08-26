@@ -387,6 +387,13 @@ describe("the tool gate", () => {
     };
     expect(await ask(options, "Read", { file_path: `${CWD}/src/a.ts` })).toEqual({ behavior: "allow" });
     expect(await ask(options, "Bash", { command: "rg -n 'todo' src 2>&1" })).toEqual({ behavior: "allow" });
+    expect(
+      await ask(options, "Bash", {
+        command: "weft --cwd '/repo' task --workflow 'review' --json list",
+      }),
+    ).toMatchObject({ behavior: "deny" });
+    expect(await ask(options, "Bash", { command: "weft run review" })).toMatchObject({ behavior: "deny" });
+    expect(await ask(options, "Bash", { command: "weft task list" })).toMatchObject({ behavior: "deny" });
     await allowedGitRead("git log --oneline | head -5 && git diff");
     expect(await ask(options, "Bash", { command: "find src -name '*.ts'" })).toEqual({ behavior: "allow" });
     await allowedGitRead("git cat-file -p HEAD:README.md");
@@ -426,6 +433,146 @@ describe("the tool gate", () => {
     expect(await ask(options, `mcp__${MCP_SERVER_NAME}__${STRUCTURED_OUTPUT_TOOL}`, { result: {} })).toEqual({
       behavior: "allow",
     });
+  });
+
+  test("a protected sandbox isolates task storage without disabling the write shell", async () => {
+    const taskRoot = `${CWD}/.weft/tasks`;
+    const options = await gateContext(
+      request({
+        tools: { allowEdits: true },
+        writeScope: { paths: ["src/**"], mode: "warn" },
+        protectedPaths: [taskRoot],
+        taskContext: {
+          workflowId: "review",
+          workflowName: "review",
+          runId: "run-1",
+          step: "review",
+          provider: "claude",
+          mode: "write",
+        },
+      }),
+    );
+
+    expect(options.sandbox).toEqual({
+      enabled: true,
+      failIfUnavailable: true,
+      autoAllowBashIfSandboxed: false,
+      allowUnsandboxedCommands: false,
+      filesystem: { denyRead: [taskRoot], denyWrite: [taskRoot] },
+    });
+    for (const command of [
+      "pnpm test",
+      "pnpm exec tsc --noEmit",
+      "pnpm exec biome format --write src",
+      "node scripts/generate.mjs",
+    ]) {
+      expect(await ask(options, "Bash", { command }), command).toEqual({ behavior: "allow" });
+    }
+    expect(await ask(options, "Bash", { command: "rg -n 'TODO' src" })).toEqual({ behavior: "allow" });
+    expect(
+      await ask(options, "Edit", { file_path: `${CWD}/.weft/tasks/review/task-deadbeef.json` }),
+    ).toMatchObject({ behavior: "deny", message: expect.stringContaining("engine-owned") });
+    expect(await ask(options, "Edit", { path: `${CWD}/src/unknown.ts` })).toMatchObject({
+      behavior: "deny",
+      message: expect.stringContaining("could not be verified"),
+    });
+  });
+
+  test("the protected sandbox hides task storage from read-only task agents", async () => {
+    const taskRoot = `${CWD}/.weft/tasks`;
+    const options = await gateContext(
+      request({
+        tools: { allowEdits: false },
+        protectedPaths: [taskRoot],
+        taskContext: {
+          workflowId: "review",
+          workflowName: "review",
+          runId: "run-1",
+          step: "review",
+          provider: "claude",
+          mode: "read",
+        },
+      }),
+    );
+
+    expect(options.sandbox).toEqual({
+      enabled: true,
+      failIfUnavailable: true,
+      autoAllowBashIfSandboxed: false,
+      allowUnsandboxedCommands: false,
+      filesystem: { denyRead: [taskRoot], denyWrite: [taskRoot] },
+    });
+  });
+
+  test("task hosts without a protected path retain the fail-closed shell fallback", async () => {
+    const options = await gateContext(
+      request({
+        tools: { allowEdits: true },
+        taskContext: {
+          workflowId: "review",
+          workflowName: "review",
+          runId: "run-1",
+          step: "review",
+          provider: "claude",
+          mode: "write",
+        },
+      }),
+    );
+    expect(await ask(options, "Bash", { command: "pnpm test" })).toMatchObject({
+      behavior: "deny",
+      message: expect.stringContaining("did not expose a protected storage path"),
+    });
+  });
+
+  test("relative protected paths fail closed before starting the SDK query", async () => {
+    await expect(
+      gateContext(
+        request({
+          protectedPaths: [".weft/tasks"],
+          taskContext: {
+            workflowId: "review",
+            workflowName: "review",
+            runId: "run-1",
+            step: "review",
+            provider: "claude",
+            mode: "write",
+          },
+        }),
+      ),
+    ).rejects.toThrow(/protected path must be absolute/);
+  });
+
+  test("task-aware warn scopes deny edits through symlinks outside the worktree", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "weft-task-gate-"));
+    const outside = await mkdtemp(join(tmpdir(), "weft-task-store-"));
+    await mkdir(join(cwd, "src"));
+    await symlink(outside, join(cwd, "src", "task-link"), "dir");
+    try {
+      const options = await gateContext(
+        request({
+          cwd,
+          tools: { allowEdits: true },
+          writeScope: { paths: ["src/**"], mode: "warn" },
+          taskContext: {
+            workflowId: "review",
+            workflowName: "review",
+            runId: "run-1",
+            step: "review",
+            provider: "claude",
+            mode: "write",
+          },
+        }),
+      );
+      expect(
+        await ask(options, "Edit", { file_path: join(cwd, "src", "task-link", "review", "task.json") }),
+      ).toMatchObject({ behavior: "deny", message: expect.stringContaining("engine-owned") });
+      expect(await ask(options, "Edit", { file_path: join(cwd, "src", "ordinary.ts") })).toEqual({
+        behavior: "allow",
+      });
+    } finally {
+      await rm(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await rm(outside, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
   });
 
   test("strict write scope denies out-of-scope edits and allows scope plus also", async () => {

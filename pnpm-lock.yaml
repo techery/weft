@@ -365,6 +365,9 @@ importers:
       '@techery/weft-core':
         specifier: workspace:*
         version: link:../core
+      '@techery/weft-host':
+        specifier: workspace:*
+        version: link:../host
       '@techery/weft-provider-mock':
         specifier: workspace:*
         version: link:../provider-mock

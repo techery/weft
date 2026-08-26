@@ -86,6 +86,11 @@ export function buildJournalView(records: JournalRecord[]): JournalView {
         if (view) view.status = "failed";
         break;
       }
+      case "step.settled": {
+        const view = bySeq.get(ev.seq);
+        if (view) view.status = "ok";
+        break;
+      }
       case "human.requested": {
         const view: StepView = {
           seq: ev.seq,

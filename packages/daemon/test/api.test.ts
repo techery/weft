@@ -30,10 +30,20 @@ const GATED = `import { defineWorkflow, z } from "@techery/weft-sdk";
 
 export default defineWorkflow(
   {
+    id: "gated-state",
     name: "gated",
     description: "asks a person before it lands anything",
     input: z.object({ note: z.string().default("hi"), count: z.number().int().optional() }),
     output: z.object({ approved: z.boolean(), at: z.number() }),
+    tasks: {
+      extensions: z.object({ ownerTeam: z.string(), estimate: z.number().int() }),
+      semanticRevision: "gated-task-fields-v2",
+      schemaVersion: 2,
+      migrate: (value) => {
+        const old = value as Record<string, unknown>;
+        return { ...old, estimate: typeof old.estimate === "number" ? old.estimate : 1 };
+      },
+    },
   },
   async (ctx) => {
     ctx.phase("Review");
@@ -177,6 +187,9 @@ describe("GET /api/workflows", () => {
       hash: string;
       input: { type: string; properties: Record<string, { type?: string; default?: unknown }> };
       output: { properties: Record<string, unknown> };
+      taskExtensions: { properties: Record<string, { type?: string }> };
+      taskExtensionSchemaVersion: number;
+      tasksConfigured: boolean;
     };
     expect(body.name).toBe("gated");
     expect(body.hash).toMatch(/^[0-9a-f]{8,}$/);
@@ -187,6 +200,41 @@ describe("GET /api/workflows", () => {
     expect(Object.keys(body.output.properties)).toEqual(["approved", "at"]);
     // Converted on the OUTPUT side: what a run produced, not what a caller may send.
     expect((body.output as { required?: string[] }).required).toEqual(["approved", "at"]);
+    expect(body.taskExtensions.properties.ownerTeam?.type).toBe("string");
+    expect(body.taskExtensionSchemaVersion).toBe(2);
+    expect(body.tasksConfigured).toBe(true);
+  });
+
+  it("lists every durable task for the selected workflow", async () => {
+    const h = await open(await repo(), registerWorkflowRoutes);
+    const loaded = await h.weft.registry.load("gated");
+    const task = await h.weft.tasks.create(
+      "gated-state",
+      {
+        dedupeKey: "gate|decision|missing-evidence",
+        title: "Review gate evidence",
+        description: "Carry the decision context into the next workflow step.",
+        acceptanceCriteria: ["decision is recorded"],
+        extensions: { ownerTeam: "platform", estimate: 2 },
+      },
+      loaded.def.meta.tasks?.extensions,
+    );
+    const res = await h.app.request("/api/workflows/gated/tasks");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Array<{
+      id: string;
+      dedupeKey?: string;
+      title: string;
+      extensions: unknown;
+    }>;
+    expect(body).toEqual([
+      expect.objectContaining({
+        id: task.id,
+        dedupeKey: "gate|decision|missing-evidence",
+        title: "Review gate evidence",
+        extensions: { ownerTeam: "platform", estimate: 2 },
+      }),
+    ]);
   });
 
   it("404s a workflow that is not in the registry", async () => {
@@ -194,6 +242,9 @@ describe("GET /api/workflows", () => {
     const res = await h.app.request("/api/workflows/nope");
     expect(res.status).toBe(404);
     expect((await res.json()) as { error: string }).toMatchObject({ error: "workflow nope not found" });
+    const tasks = await h.app.request("/api/workflows/nope/tasks");
+    expect(tasks.status).toBe(404);
+    expect((await tasks.json()) as { error: string }).toMatchObject({ error: "workflow nope not found" });
   });
 
   it("scores a workflow over its own runs, and says nothing rather than guessing at zero", async () => {

@@ -10,10 +10,24 @@ import type {
   AgentProvider,
   AgentRequest,
   AgentResult,
+  AgentTaskOperation,
   ProviderCapabilities,
   RunControl,
 } from "@techery/weft-core";
 import type { SchemaIssue, Usage } from "@techery/weft-sdk";
+
+const MOCK_ENVELOPE = Symbol("weft.mock.taskEnvelope");
+
+export interface MockTaskEnvelope {
+  readonly [MOCK_ENVELOPE]: true;
+  result: unknown;
+  taskOperations: AgentTaskOperation[];
+}
+
+/** Explicitly model the structured task envelope a real provider returns. */
+export function mockTaskEnvelope(result: unknown, taskOperations: AgentTaskOperation[]): MockTaskEnvelope {
+  return { [MOCK_ENVELOPE]: true, result, taskOperations };
+}
 
 /**
  * Fixture globs are plain string patterns, not path patterns: `*` matches ANY
@@ -36,6 +50,7 @@ export interface MockRequest {
   model?: string;
   effort?: string;
   writeScope?: { paths: string[]; also?: string[]; mode: "warn" | "strict" };
+  protectedPaths?: readonly string[];
   /** 1 on the first call; >1 on repair calls, with the validation issues. */
   attempt: number;
   issues?: SchemaIssue[];
@@ -43,6 +58,7 @@ export interface MockRequest {
 
 export type MockResponder =
   | ((req: MockRequest) => unknown | Promise<unknown>)
+  | MockTaskEnvelope
   | Record<string, unknown>
   | unknown[]
   | string
@@ -153,6 +169,7 @@ export class MockProvider implements AgentProvider {
       ...(req.model !== undefined ? { model: req.model } : {}),
       ...(req.effort !== undefined ? { effort: req.effort } : {}),
       ...(req.writeScope !== undefined ? { writeScope: req.writeScope } : {}),
+      ...(req.protectedPaths !== undefined ? { protectedPaths: req.protectedPaths } : {}),
       ...(issues !== undefined ? { issues } : {}),
     };
     this.builder.calls.push(mockReq);
@@ -174,10 +191,31 @@ export class MockProvider implements AgentProvider {
       await fs.mkdir(dirname(target), { recursive: true });
       await fs.writeFile(target, content);
     }
-    const output =
+    const fixtureOutput =
       typeof rule.respond === "function"
         ? await (rule.respond as (r: MockRequest) => unknown)(mockReq)
         : rule.respond;
+    const schemaProperties =
+      typeof req.schema === "object" && req.schema !== null
+        ? (req.schema as { properties?: Record<string, unknown> }).properties
+        : undefined;
+    const explicitEnvelope =
+      typeof fixtureOutput === "object" &&
+      fixtureOutput !== null &&
+      MOCK_ENVELOPE in fixtureOutput &&
+      (fixtureOutput as MockTaskEnvelope)[MOCK_ENVELOPE] === true;
+    // Host-backed engines use the same structured envelope real providers see.
+    // Existing fixtures describe the workflow result, so wrap them automatically;
+    // a fixture that explicitly returns an envelope can exercise task operations.
+    const output =
+      schemaProperties?.taskOperations !== undefined
+        ? explicitEnvelope
+          ? {
+              result: (fixtureOutput as MockTaskEnvelope).result,
+              taskOperations: (fixtureOutput as MockTaskEnvelope).taskOperations,
+            }
+          : { result: fixtureOutput, taskOperations: [] }
+        : fixtureOutput;
     const sessionId = `mock-${this.id}-${++this.sessionCounter}`;
     this.sessions.set(sessionId, req);
     const filesTouched = rule.opts.filesTouched ?? Object.keys(rule.opts.writes ?? {});

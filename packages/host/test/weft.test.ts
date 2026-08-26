@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { mockTaskEnvelope } from "@techery/weft-provider-mock";
+import { defineWorkflow, z } from "@techery/weft-sdk";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   createWeft,
@@ -46,6 +48,11 @@ async function mockWeft(): Promise<{ weft: Weft; root: string }> {
 }
 
 describe("createWeft", () => {
+  it("marks the durable task root as protected provider storage", async () => {
+    const { weft, root } = await mockWeft();
+    expect(weft.engine.taskTracker?.protectedPaths).toEqual([path.join(root, ".weft", "tasks")]);
+  });
+
   it("persists an inline script with its run and reconstructs it for a later resume", async () => {
     const { weft } = await mockWeft();
     const source = `import { defineWorkflow, z } from "@techery/weft-sdk";
@@ -118,6 +125,97 @@ export default defineWorkflow(
     expect(await resumed.result).toEqual({ ok: true });
   });
 
+  it("binds path workflow task schemas into prompts and durable namespaces", async () => {
+    const { weft, root } = await mockWeft();
+    await write(
+      root,
+      "flows/tracked.ts",
+      `import { defineWorkflow, z } from "@techery/weft-sdk";
+export default defineWorkflow(
+  {
+    id: "path-tracked",
+    description: "path workflow with task extensions",
+    input: z.object({}),
+    output: z.object({ ok: z.boolean() }),
+    tasks: { extensions: z.object({ ownerTeam: z.string() }), semanticRevision: "owner-team-v1" },
+  },
+  async (ctx) => ctx.agent("Track this", { key: "path-task", schema: z.object({ ok: z.boolean() }) }),
+);
+`,
+    );
+    weft.mockBuilder?.on(
+      { key: "path-task" },
+      mockTaskEnvelope({ ok: true }, [
+        {
+          op: "create",
+          title: "Path task",
+          description: "Persist outside the registry",
+          extensions: { ownerTeam: "runtime" },
+        },
+      ]),
+    );
+    const { def } = await resolveWorkflow(weft, "./flows/tracked.ts");
+    const run = await weft.engine.start(def, { input: {}, cwd: weft.cwd });
+    await expect(run.result).resolves.toEqual({ ok: true });
+    expect(weft.mockBuilder?.calls[0]?.prompt).toContain('"ownerTeam"');
+    expect(await weft.tasks.namespace("path-tracked")).toMatchObject({
+      id: "path-tracked",
+      extensionSchemaDeclared: true,
+      extensionSchema: { type: "object", properties: { ownerTeam: { type: "string" } } },
+    });
+    expect(await weft.tasks.list("path-tracked")).toEqual([
+      expect.objectContaining({ extensions: { ownerTeam: "runtime" } }),
+    ]);
+  });
+
+  it("keeps suspended runs on their exact executable task contract", async () => {
+    const { weft } = await mockWeft();
+    await weft.tasks.create("concurrent-contract", {
+      title: "Normalize",
+      description: "Both resident definitions read the same durable input",
+      extensions: { source: "API" },
+    });
+    const workflow = (semanticRevision: string, prefix: string) =>
+      defineWorkflow(
+        {
+          id: "concurrent-contract",
+          name: "concurrent-contract",
+          description: "exercise concurrent executable task contracts",
+          input: z.object({}),
+          output: z.object({ normalized: z.string() }),
+          tasks: {
+            extensions: z
+              .object({ source: z.string() })
+              .transform(({ source }) => ({ normalized: `${prefix}:${source.toLowerCase()}` })),
+            semanticRevision,
+          },
+        },
+        async (ctx) => {
+          await ctx.human.approve({ action: `continue ${semanticRevision}` });
+          const snapshot = await ctx.tasks.observe({}, { key: "observe-contract" });
+          const extensions = snapshot.tasks[0]?.extensions as { normalized: string };
+          return { normalized: extensions.normalized };
+        },
+      );
+    const previous = await weft.engine.start(workflow("transform-v1", "previous"), {
+      input: {},
+      cwd: weft.cwd,
+    });
+    const previousOutcome = await previous.outcome();
+    if (previousOutcome.status !== "waiting_for_human") throw new Error("expected previous suspension");
+    const current = await weft.engine.start(workflow("transform-v2", "current"), {
+      input: {},
+      cwd: weft.cwd,
+    });
+    const currentOutcome = await current.outcome();
+    if (currentOutcome.status !== "waiting_for_human") throw new Error("expected current suspension");
+
+    await weft.engine.answer(current.runId, currentOutcome.pending[0]!.id, { approved: true });
+    await expect(current.result).resolves.toEqual({ normalized: "current:api" });
+    await weft.engine.answer(previous.runId, previousOutcome.pending[0]!.id, { approved: true });
+    await expect(previous.result).resolves.toEqual({ normalized: "previous:api" });
+  });
+
   it("a recorded path ref that no longer resolves SURFACES instead of silently falling back", async () => {
     const { weft } = await mockWeft();
     // The run recorded "./flows/moved.ts", and that file has since moved away.
@@ -180,6 +278,39 @@ export default defineWorkflow(
     await expect(resumed.result).resolves.toEqual(output);
   });
 
+  it("resumes a renamed registry workflow in a fresh process by durable id", async () => {
+    const root = await tempRoot();
+    const source = (name: string) => `import { defineWorkflow, z } from "@techery/weft-sdk";
+export default defineWorkflow(
+  {
+    id: "durable-renamed-review",
+    name: ${JSON.stringify(name)},
+    description: "renameable registry workflow",
+    input: z.object({}),
+    output: z.object({ approved: z.boolean() }),
+  },
+  async (ctx) => ctx.human.approve({ action: "Continue after rename?" }),
+);
+`;
+    await write(root, ".weft/workflows/review.ts", source("old-review-name"));
+    const first = await createWeft({ cwd: root, providers: "mock" });
+    opened.push(first);
+    const { def } = await resolveWorkflow(first, "old-review-name");
+    const run = await first.engine.start(def, { input: {}, cwd: root });
+    const outcome = await run.outcome();
+    if (outcome.status !== "waiting_for_human") throw new Error("expected suspension");
+    await first.engine.shutdown();
+
+    await write(root, ".weft/workflows/review.ts", source("new-review-name"));
+    const later = await createWeft({ cwd: root, providers: "mock" });
+    opened.push(later);
+    await later.engine.answer(run.runId, outcome.pending[0]!.id, { approved: true });
+    const resumed = await later.engine.resume(run.runId);
+
+    await expect(resumed.result).resolves.toEqual({ approved: true });
+    expect((await later.tasks.namespace("durable-renamed-review"))?.name).toBe("new-review-name");
+  });
+
   it("routes agent steps to one shared mock builder in mock mode", async () => {
     const { weft, root } = await mockWeft();
     await write(
@@ -189,6 +320,7 @@ export default defineWorkflow(
 
       export default defineWorkflow(
         {
+          id: "verdict-stable",
           description: "asks one agent for a verdict",
           input: z.object({}),
           output: z.object({ verdict: z.string() }),
@@ -200,12 +332,38 @@ export default defineWorkflow(
 
     // The default provider is "claude"; in mock mode the builder answers for it.
     expect(weft.engine.providers.ids().sort()).toEqual(["claude", "codex", "mock"]);
-    weft.mockBuilder?.on({ key: "verdict" }, { verdict: "fine" });
+    weft.mockBuilder?.on(
+      { key: "verdict" },
+      mockTaskEnvelope({ verdict: "fine" }, [
+        {
+          op: "create",
+          title: "Record verdict",
+          description: "Carry the verdict into later workflow steps.",
+          acceptanceCriteria: ["verdict is journaled"],
+        },
+      ]),
+    );
 
     const { def } = await resolveWorkflow(weft, "verdict");
     const run = await weft.engine.start(def, { input: {}, cwd: weft.cwd });
     await expect(run.result).resolves.toEqual({ verdict: "fine" });
     expect(weft.mockBuilder?.calls.map((c) => c.key)).toEqual(["verdict"]);
+    expect((await weft.tasks.list("verdict-stable")).map((task) => task.title)).toEqual(["Record verdict"]);
+    expect(await weft.tasks.namespace("verdict-stable")).toMatchObject({
+      id: "verdict-stable",
+      name: "verdict",
+      extensionSchemaDeclared: false,
+    });
+    expect(weft.mockBuilder?.calls[0]?.prompt).toContain("Current task summary");
+
+    // Replaying the completed step reapplies the journaled batch through onSettle;
+    // TaskStore's batch marker keeps the create exactly-once.
+    await weft.engine.shutdown();
+    const later = await createWeft({ cwd: root, providers: "mock" });
+    opened.push(later);
+    const resumed = await later.engine.resume(run.runId, { def });
+    await expect(resumed.result).resolves.toEqual({ verdict: "fine" });
+    expect(await later.tasks.list("verdict-stable")).toHaveLength(1);
   });
 
   it("gives the engine the registry, so sub-workflows resolve by name", async () => {

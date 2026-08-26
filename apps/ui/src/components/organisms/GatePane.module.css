@@ -67,6 +67,14 @@
   max-width: 660px;
   text-wrap: pretty;
 }
+.artifactLink {
+  width: fit-content;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-accent-700);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 .answersHead {
   padding-top: 2px;
 }

@@ -129,6 +129,25 @@ export default defineWorkflow(
 );
 `;
 
+const TRACKED = `import { defineWorkflow, z } from "@techery/weft-sdk";
+
+export default defineWorkflow(
+  {
+    name: "tracked",
+    description: "has workflow-specific task fields",
+    input: z.object({}),
+    output: z.object({}),
+    tasks: {
+      extensions: z.object({ lane: z.enum(["api", "ui"]), estimate: z.number().int() }),
+      semanticRevision: "tracked-task-fields-v2",
+      schemaVersion: 2,
+      migrate: (value) => value,
+    },
+  },
+  async () => ({}),
+);
+`;
+
 // ---------------------------------------------------------------------------
 
 describe("weft run", () => {
@@ -559,6 +578,364 @@ describe("bin/weft.js", () => {
     expect(stdout).toContain("weft");
     expect(stdout).toContain("Commands:");
     expect(stdout).toContain("doctor");
+  });
+});
+
+describe("weft task", () => {
+  it("manages a workflow-bound task and validates its extension schema", async () => {
+    const root = await tempRoot();
+    await write(root, ".weft/workflows/tracked.ts", TRACKED);
+
+    const created = await cli(
+      "--cwd",
+      root,
+      "--mock",
+      "task",
+      "--workflow",
+      "tracked",
+      "--actor",
+      "planner",
+      "--json",
+      "create",
+      "--title",
+      "Wire task context",
+      "--description",
+      "Share context between agent steps",
+      "--dedupe-key",
+      "context-wiring",
+      "--tag",
+      "context",
+      "--file",
+      "packages/core/src/ctx.ts",
+      "--acceptance",
+      "agents receive the CLI command",
+      "--extensions",
+      '{"lane":"api","estimate":3}',
+    );
+    const task = JSON.parse(created.text) as {
+      id: string;
+      revision: number;
+      dedupeKey?: string;
+      extensionSchemaVersion: number;
+    };
+    expect(task.id).toMatch(/^task-[0-9a-f]{32}$/);
+    expect(task.dedupeKey).toBe("context-wiring");
+    expect(task.extensionSchemaVersion).toBe(2);
+    expect(existsSync(path.join(root, ".weft/tasks/tracked/.workflow.json"))).toBe(true);
+
+    const upserted = await cli(
+      "--cwd",
+      root,
+      "--mock",
+      "task",
+      "--workflow",
+      "tracked",
+      "--json",
+      "upsert",
+      "--dedupe-key",
+      "context-wiring",
+      "--title",
+      "Wire reviewed task context",
+      "--description",
+      "Share verified context between agent steps",
+      "--tag",
+      "reviewed",
+      "--file",
+      "packages/core/src/ctx.ts",
+      "--acceptance",
+      "agents receive bounded task context",
+      "--extensions",
+      '{"lane":"api","estimate":5}',
+      "--note",
+      "review recurrence",
+    );
+    expect(JSON.parse(upserted.text)).toMatchObject({
+      id: task.id,
+      title: "Wire reviewed task context",
+      revision: 2,
+    });
+    expect(JSON.parse(upserted.text)).not.toHaveProperty("appliedOperations");
+
+    const filtered = await cli(
+      "--cwd",
+      root,
+      "--mock",
+      "task",
+      "--workflow",
+      "tracked",
+      "--json",
+      "list",
+      "--dedupe-key",
+      "context-wiring",
+      "--file",
+      "packages/core/src/ctx.ts",
+    );
+    expect(JSON.parse(filtered.text)).toHaveLength(1);
+
+    const occurrence = JSON.parse(
+      (
+        await cli(
+          "--cwd",
+          root,
+          "--mock",
+          "task",
+          "--workflow",
+          "tracked",
+          "--json",
+          "upsert",
+          "--dedupe-key",
+          "context-wiring",
+          "--title",
+          "Wire reviewed task context",
+          "--description",
+          "Share verified context between agent steps",
+          "--note",
+          "seen again without replacing collections",
+        )
+      ).text,
+    ) as { tags: string[]; relatedFiles: string[]; acceptanceCriteria: unknown[] };
+    expect(occurrence.tags).toEqual(["reviewed"]);
+    expect(occurrence.relatedFiles).toEqual(["packages/core/src/ctx.ts"]);
+    expect(occurrence.acceptanceCriteria).toHaveLength(1);
+
+    await cli(
+      "--cwd",
+      root,
+      "--mock",
+      "task",
+      "--workflow",
+      "tracked",
+      "note",
+      task.id,
+      "daemon endpoint is wired",
+    );
+    await cli("--cwd", root, "--mock", "task", "--workflow", "tracked", "accept", task.id, "1");
+    const listed = await cli("--cwd", root, "--mock", "task", "--workflow", "tracked", "--json", "list");
+    const tasks = JSON.parse(listed.text) as Array<{
+      notes: Array<{ text: string }>;
+      acceptanceCriteria: Array<{ met: boolean }>;
+      extensions: unknown;
+    }>;
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.notes.map((note) => note.text)).toEqual([
+      "review recurrence",
+      "seen again without replacing collections",
+      "daemon endpoint is wired",
+    ]);
+    expect(tasks[0]?.acceptanceCriteria[0]?.met).toBe(true);
+    expect(tasks[0]?.extensions).toEqual({ lane: "api", estimate: 5 });
+
+    await expect(
+      cli(
+        "--cwd",
+        root,
+        "--mock",
+        "task",
+        "--workflow",
+        "tracked",
+        "create",
+        "--title",
+        "Duplicate context",
+        "--description",
+        "Must keep one logical task",
+        "--dedupe-key",
+        "context-wiring",
+        "--extensions",
+        '{"lane":"api","estimate":3}',
+      ),
+    ).rejects.toThrow(/dedupe key/);
+
+    const schema = await cli("--cwd", root, "--mock", "task", "--workflow", "tracked", "schema");
+    expect(JSON.parse(schema.text)).toMatchObject({
+      type: "object",
+      properties: { lane: { type: "string" }, estimate: { type: "integer" } },
+    });
+
+    await cli(
+      "--cwd",
+      root,
+      "--mock",
+      "task",
+      "--workflow",
+      "tracked",
+      "update",
+      task.id,
+      "--clear-tags",
+      "--clear-files",
+      "--clear-acceptance",
+    );
+    const cleared = JSON.parse(
+      (await cli("--cwd", root, "--mock", "task", "--workflow", "tracked", "--json", "show", task.id)).text,
+    ) as { tags: string[]; relatedFiles: string[]; acceptanceCriteria: unknown[] };
+    expect(cleared).toMatchObject({ tags: [], relatedFiles: [], acceptanceCriteria: [] });
+
+    const invalidStatus = await cli(
+      "--cwd",
+      root,
+      "--mock",
+      "task",
+      "--workflow",
+      "tracked",
+      "list",
+      "--status",
+      "in-progress",
+    ).catch(() => undefined);
+    expect(invalidStatus).toBeUndefined();
+
+    const invalid = await cli(
+      "--cwd",
+      root,
+      "--mock",
+      "task",
+      "--workflow",
+      "tracked",
+      "create",
+      "--title",
+      "Bad task",
+      "--description",
+      "wrong extension",
+      "--extensions",
+      '{"lane":"docs","estimate":1}',
+    ).catch((err: unknown) => String(err));
+    expect(String(invalid)).toMatch(/task extensions failed/);
+  });
+
+  it("resolves a stable workflow id before another workflow's callable name", async () => {
+    const root = await tempRoot();
+    await write(
+      root,
+      ".weft/workflows/name-owner.ts",
+      `import { defineWorkflow, z } from "@techery/weft-sdk";
+export default defineWorkflow(
+  {
+    id: "name-owner",
+    name: "shared-ref",
+    description: "owns the callable name",
+    input: z.object({}),
+    output: z.object({}),
+    tasks: {
+      extensions: z.object({ lane: z.literal("name") }),
+      semanticRevision: "name-owner-v1",
+    },
+  },
+  async () => ({}),
+);`,
+    );
+    await write(
+      root,
+      ".weft/workflows/id-owner.ts",
+      `import { defineWorkflow, z } from "@techery/weft-sdk";
+export default defineWorkflow(
+  {
+    id: "shared-ref",
+    name: "id-owner",
+    description: "owns the durable id",
+    input: z.object({}),
+    output: z.object({}),
+    tasks: {
+      extensions: z.object({ lane: z.literal("id") }),
+      semanticRevision: "id-owner-v1",
+    },
+  },
+  async () => ({}),
+);`,
+    );
+
+    const created = await cli(
+      "--cwd",
+      root,
+      "--mock",
+      "task",
+      "--workflow",
+      "shared-ref",
+      "--json",
+      "create",
+      "--title",
+      "Use stable identity",
+      "--description",
+      "Never cross workflow task namespaces",
+      "--extensions",
+      '{"lane":"id"}',
+    );
+
+    expect(JSON.parse(created.text)).toMatchObject({
+      workflowId: "shared-ref",
+      extensions: { lane: "id" },
+    });
+    const namespace = JSON.parse(
+      await readFile(path.join(root, ".weft/tasks/shared-ref/.workflow.json"), "utf8"),
+    ) as { id: string; name: string };
+    expect(namespace).toMatchObject({ id: "shared-ref", name: "id-owner" });
+    expect(existsSync(path.join(root, ".weft/tasks/name-owner"))).toBe(false);
+  });
+
+  it("reopens a durable namespace for a path or stdin workflow without a registry file", async () => {
+    const root = await tempRoot();
+    const namespaceFile = ".weft/tasks/inline-review/.workflow.json";
+    await write(
+      root,
+      namespaceFile,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        id: "inline-review",
+        name: "inline",
+        extensionSchemaDeclared: false,
+        extensionSchema: null,
+      })}\n`,
+    );
+    const created = await cli(
+      "--cwd",
+      root,
+      "--mock",
+      "task",
+      "--workflow",
+      "inline-review",
+      "--json",
+      "create",
+      "--title",
+      "Persist inline context",
+      "--description",
+      "Keep the namespace after the run process exits",
+    );
+    const task = JSON.parse(created.text) as { id: string };
+    const shown = await cli(
+      "--cwd",
+      root,
+      "--mock",
+      "task",
+      "--workflow",
+      "inline-review",
+      "--json",
+      "show",
+      task.id,
+    );
+    expect(JSON.parse(shown.text)).toMatchObject({ workflowId: "inline-review" });
+
+    await write(
+      root,
+      namespaceFile,
+      `${JSON.stringify({
+        schemaVersion: 1,
+        id: "inline-review",
+        name: "inline",
+        extensionSchemaDeclared: true,
+        extensionSchema: { type: "object", properties: { lane: { type: "string" } } },
+      })}\n`,
+    );
+    await expect(
+      cli(
+        "--cwd",
+        root,
+        "--mock",
+        "task",
+        "--workflow",
+        "inline-review",
+        "update",
+        task.id,
+        "--extensions",
+        '{"lane":"api"}',
+      ),
+    ).rejects.toThrow(/workflow definition is not available to validate/);
   });
 });
 

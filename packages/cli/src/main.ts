@@ -26,6 +26,7 @@ import { resumeCommand } from "./commands/resume.ts";
 import { runCommand } from "./commands/run.ts";
 import { skillCommand } from "./commands/skill.ts";
 import { statusCommand } from "./commands/status.ts";
+import { taskCommand } from "./commands/task.ts";
 import { uiCommand } from "./commands/ui.ts";
 import { type CliIo, warn } from "./io.ts";
 
@@ -70,6 +71,7 @@ export function buildProgram(io: CliIo = consoleIo): Command {
     newCommand,
     skillCommand,
     doctorCommand,
+    taskCommand,
     uiCommand,
   ]) {
     program.addCommand(factory(io));

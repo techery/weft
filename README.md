@@ -126,10 +126,15 @@ import { Finding, Verdict } from "./schemas.ts";   // relative imports are bundl
 
 export default defineWorkflow(
   {
+    id: "review",                                               // stable durable task namespace
     // `name` derives from the filename: "review".
     description: "Review changed files; keep only findings that survive refutation",
     input: z.object({ base: z.string().default("main") }),      // --base main; the engine validates it
     output: z.object({ confirmed: z.array(Finding) }),          // and validates the result on the way out
+    tasks: {
+      extensions: z.object({ ownerTeam: z.string() }),          // optional typed task-specific context
+      semanticRevision: "owner-team-v1",                       // bump when its executable behavior changes
+    },
   },
   async (ctx, { base }) => {
     ctx.phase("Scope");                                          // phases group steps in the live tree
@@ -177,7 +182,9 @@ merge, and a required `pnpm test` check that gates the run's completion.
 ## How it works
 
 Everything that leaves the sandbox is a step. The engine executes it, appends the outcome to an append-only
-journal, and hands the workflow a validated value. There is no other persisted state.
+journal, and hands the workflow a validated value. Workflow task records live under `.weft/tasks/` so every
+run of a workflow shares them. Agent-requested task mutations travel inside the validated step result, are
+journaled with that step, and are applied idempotently by the engine only after the step succeeds.
 
 Resume re-executes your code from the top and serves completed steps out of the journal, so the process can
 die between any two of them. Replay is edit-tolerant: a step is reused when its inputs still hash the same
@@ -203,6 +210,46 @@ lands until the workflow calls `ctx.integrate()`. A run that ends with un-integr
 
 Only `journal.jsonl` has to survive; every other file in that directory is rebuilt from it.
 
+## Workflow task context
+
+Every task-aware agent step receives a bounded task snapshot plus the workflow-bound CLI prefix for a human
+operator running at the repository root:
+
+```bash
+weft task --workflow review --json list
+```
+
+Providers return desired changes in the structured `taskOperations` result field; they never receive direct
+storage authority and must not invoke the CLI themselves, so retries and replay cannot duplicate notes or
+creates. People use the same workflow-bound CLI (`schema`, filtered `list`, `show`, `create`, semantic `upsert`,
+`update`, `note`, `accept`, `unaccept`, and guarded `remove --yes`).
+
+Workflow authors control the context and authority per step. `tasks: false` removes task context,
+`tasks: { mode: "read", relatedFiles: [file], tags: ["code-review"] }` injects only relevant history and
+rejects mutations, and write mode allows validated operations. Workflow-owned `ctx.tasks.observe`, `upsert`,
+`update`, `note`, and `setCriterion` are journaled steps. Observations therefore remain replay-stable across a
+suspension, while mutations settle through the same idempotent engine boundary as agent-requested operations.
+`upsert` uses a workflow-scoped semantic `dedupeKey`, which is useful for recurring findings whose line numbers
+or wording can change between runs.
+
+Tasks carry a title, description, status (`todo`, `in_progress`, `blocked`, `done`, `cancelled`), priority,
+tags, dependencies, related files, stable-ID acceptance criteria, append-only notes, actor/timestamps, and a
+revision. Writes may use optimistic `--if-revision` guards. Mutations are serialized per workflow so parallel
+steps cannot lose notes or race dependency edits. A batch is preflighted as a unit and each operation carries a
+durable idempotency key: a crash can expose an applied prefix, but replay skips that prefix and converges the
+remaining operations without duplicating them. Set `meta.id` once to keep the task namespace stable across
+file/name changes. A workflow may declare `tasks.extensions`; that Standard Schema validates workflow-specific
+context while the core fields remain stable. It must also declare a `tasks.semanticRevision`: keep it stable for
+display-name and unrelated workflow edits, and change it whenever validation, defaults, refinements, transforms,
+or migration behavior changes. When the persisted representation changes, also increment `tasks.schemaVersion`
+and provide `tasks.migrate(value, fromVersion)`. Each run remains bound to its exact executable task contract,
+and migrated values are persisted on the next mutation. The workflow manager renders all tasks from
+`GET /api/workflows/:name/tasks`.
+
+See [`examples/08-task-backed-code-review`](./examples/08-task-backed-code-review) for the recommended review
+shape: typed same-run claims, a consolidation pass, independent refutation, human selection, then durable task
+upserts with first/last-seen provenance and occurrence notes.
+
 ## Packages
 
 | Package | Owns |
@@ -217,7 +264,7 @@ Only `journal.jsonl` has to survive; every other file in that directory is rebui
 | `@techery/weft-stdlib` | Typed patterns: `adversarialVerify`, `judgePanel`, `loopUntilDry`, `integrationLedger`, `finalReport`, … |
 | `@techery/weft-testing` | `runWorkflow` harness, mock fixtures, journal assertions, store conformance suites. |
 | `@techery/weft-host` | Engine assembly shared by the hosts: config loading, stores, providers, workflow registry. |
-| `@techery/weft`, `@techery/weft-mcp`, `@techery/weft-daemon` | Hosts. CLI: run, resume, ls, status, answer, cancel, report, replay, check, explain, diff, new, skill, ui, doctor. MCP: `weft.run/wait/answer/resume/list/report/types`. Daemon: serves the web UI and wakes suspended runs. |
+| `@techery/weft`, `@techery/weft-mcp`, `@techery/weft-daemon` | Hosts. CLI: run, resume, task, ls, status, answer, cancel, report, replay, check, explain, diff, new, skill, ui, doctor. MCP: `weft.run/wait/answer/resume/list/report/types`. Daemon: serves the web UI and wakes suspended runs. |
 
 ## Apps
 
@@ -235,7 +282,7 @@ The daemon's HTTP surface is what it reads from:
 | --- | --- |
 | `GET /api/meta` | repo, version, resolved defaults, limits, approval tiers, wired providers |
 | `GET /api/pending` | every question waiting on a person, across every run, oldest first — plus any journal it could not read, rather than an empty list |
-| `GET /api/workflows` · `/:name` · `/:name/stats` | the registry; a workflow's input/output as JSON Schema; its 30-day success rate, percentiles and recent runs |
+| `GET /api/workflows` · `/:name` · `/:name/stats` · `/:name/tasks` | registry and schemas; 30-day stats; durable workflow tasks |
 | `POST /api/runs` | start a registry workflow — name, input, `budget`, `reuse` |
 | `GET /api/runs` | the journal index; `?spend=1` adds tokens, dollars and step counts |
 | `GET /api/runs/:id` · `/report` · `/tree` · `/pending` · `/events` | one run: state, report, tree, its questions, and the journal as SSE |
@@ -321,6 +368,10 @@ test("keeps only findings that survive refutation", async () => {
 
 `runWorkflow` also takes `exec`, `bash`, `fetch`, `env`, and `answers` fixtures, so a workflow with human
 steps and shell checks runs end to end in a unit test.
+
+Ordinary mock values are always treated as the workflow result, even when their domain schema contains fields
+named `result` and `taskOperations`. To exercise agent-requested tracker mutations explicitly, wrap the fixture
+with `mockTaskEnvelope(result, operations)` from `@techery/weft-testing`.
 
 ## Status and honest deviations
 

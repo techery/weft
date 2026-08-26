@@ -23,6 +23,18 @@ export { parseBudget } from "./budget.ts";
 export type { WeftConfig } from "./config.ts";
 export { CONFIG_FILE, configPath, loadConfig, parseConfig, WEFT_DIR } from "./config.ts";
 export { rejectUnknownInput } from "./input.ts";
+export type {
+  CreateTaskInput,
+  TaskCriterion,
+  TaskNote,
+  TaskPriority,
+  TaskStatus,
+  TaskWorkflowNamespace,
+  UpdateTaskInput,
+  UpsertTaskInput,
+  WorkflowTask,
+} from "./tasks.ts";
+export { TASK_PRIORITIES, TASK_STATUSES, TaskStore } from "./tasks.ts";
 export type { CreateWeftOptions, PersistedDef, ResolvedWorkflow, Weft } from "./weft.ts";
 export {
   createWeft,
