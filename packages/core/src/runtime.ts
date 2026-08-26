@@ -133,6 +133,10 @@ export interface PatchState {
 
 export interface StepIO {
   seq: number;
+  /** Canonical identity of this step's kind, payload, schema, and explicit key. */
+  hash: string;
+  /** Durable journal-record index for this live scheduling occurrence. */
+  scheduleIndex: number;
   attempt: number;
   signal: AbortSignal;
   scheduledAt: number;
@@ -725,6 +729,8 @@ export class RunRuntime {
         try {
           const io: StepIO = {
             seq,
+            hash,
+            scheduleIndex: scheduled[0]!.i,
             attempt,
             signal: stepAbort.signal,
             scheduledAt,

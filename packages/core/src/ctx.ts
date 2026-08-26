@@ -370,6 +370,8 @@ export function buildCtx(rt: RunRuntime): Ctx {
   const gitHandle: Git = createGit(rt.cwd);
 
   const resolveInCwd = (p: string): string => (isAbsolute(p) ? p : resolvePath(rt.cwd, p));
+  const makeTaskBatchId = (source: "agent" | "workflow-task", io: StepIO): string =>
+    `${rt.runId}:${source}:${io.seq}:${io.hash}:${io.scheduleIndex}`;
 
   async function observeTasks(
     context: AgentTaskContext,
@@ -1037,7 +1039,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
                 // Journal the RAW wire value; both live and replay paths validate from raw,
                 // so schema transforms apply exactly once.
-                const taskBatchId = result.taskOperations ? `${rt.runId}:agent:${io.seq}` : undefined;
+                const taskBatchId = result.taskOperations ? makeTaskBatchId("agent", io) : undefined;
                 const journalTaskContext = result.taskOperations ? taskContext : undefined;
                 const journalOutput = {
                   value: result.raw,
@@ -2746,7 +2748,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
           await rt.host.taskTracker!.validateBatch?.(context, [operation]);
           return {
             context,
-            batchId: `${rt.runId}:workflow-task:${io.seq}`,
+            batchId: makeTaskBatchId("workflow-task", io),
             operations: [operation],
           };
         })(),

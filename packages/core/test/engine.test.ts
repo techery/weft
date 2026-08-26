@@ -220,16 +220,143 @@ describe("engine end to end", () => {
     expect(dryPreparedWithoutPersistence).toBe(true);
   });
 
+  test("an edited agent step settles fresh task operations under a new batch identity", async () => {
+    const settled = new Set<string>();
+    const applied: Array<{ batchId: string; title: string }> = [];
+    const taskTracker = {
+      snapshot: async () => ({ total: 0, truncated: false, tasks: [] }),
+      schema: async () => null,
+      validateBatch: async () => undefined,
+      applyBatch: async (_context: unknown, batchId: string, operations: unknown[]) => {
+        if (settled.has(batchId)) return;
+        settled.add(batchId);
+        const create = operations[0] as { title: string };
+        applied.push({ batchId, title: create.title });
+      },
+    };
+    const definition = (prompt: string) =>
+      defineWorkflow(
+        {
+          id: "edited-agent-task-batch",
+          description: "edited agent task batch",
+          input: z.object({}),
+          output: z.object({ version: z.string() }),
+        },
+        async (ctx) => {
+          const result = await ctx.agent(prompt, {
+            key: "record",
+            schema: z.object({ version: z.string() }),
+            tasks: { mode: "write" },
+          });
+          await ctx.human.approve({ action: "Continue?" });
+          return result;
+        },
+      );
+
+    const first = testEngine({ taskTracker });
+    first.builder.on(
+      { key: "record" },
+      mockTaskEnvelope({ version: "v1" }, [
+        { op: "create", title: "First finding", description: "Original step result" },
+      ]),
+    );
+    const handle = await first.engine.start(definition("Review version one"), {
+      input: {},
+      cwd: await tempDir(),
+    });
+    const outcome = await handle.outcome();
+    if (outcome.status !== "waiting_for_human") throw new Error("expected suspension");
+    await first.engine.shutdown();
+    await reopen(first, { taskTracker }).engine.answer(handle.runId, outcome.pending[0]!.id, {
+      approved: true,
+    });
+
+    const resumed = reopen(first, { taskTracker });
+    resumed.builder.on(
+      { key: "record" },
+      mockTaskEnvelope({ version: "v2" }, [
+        { op: "create", title: "Second finding", description: "Edited step result" },
+      ]),
+    );
+    const resumedHandle = await resumed.engine.resume(handle.runId, {
+      def: definition("Review version two"),
+    });
+
+    expect(await resumedHandle.result).toEqual({ version: "v2" });
+    expect(applied.map((entry) => entry.title)).toEqual(["First finding", "Second finding"]);
+    expect(new Set(applied.map((entry) => entry.batchId)).size).toBe(2);
+  });
+
+  test("an edited workflow task step settles under a new batch identity", async () => {
+    const settled = new Set<string>();
+    const applied: Array<{ batchId: string; title: string }> = [];
+    const taskTracker = {
+      snapshot: async () => ({ total: 0, truncated: false, tasks: [] }),
+      schema: async () => null,
+      validateBatch: async () => undefined,
+      applyBatch: async (_context: unknown, batchId: string, operations: unknown[]) => {
+        if (settled.has(batchId)) return;
+        settled.add(batchId);
+        const upsert = operations[0] as { create: { title: string } };
+        applied.push({ batchId, title: upsert.create.title });
+      },
+    };
+    const definition = (title: string) =>
+      defineWorkflow(
+        {
+          id: "edited-workflow-task-batch",
+          description: "edited workflow task batch",
+          input: z.object({}),
+          output: z.object({ title: z.string() }),
+        },
+        async (ctx) => {
+          await ctx.tasks.upsert(
+            "review-finding",
+            { create: { title, description: "Track the current workflow result" } },
+            { key: "tasks:record" },
+          );
+          await ctx.human.approve({ action: "Continue?" });
+          return { title };
+        },
+      );
+
+    const first = testEngine({ taskTracker });
+    const handle = await first.engine.start(definition("First workflow finding"), {
+      input: {},
+      cwd: await tempDir(),
+    });
+    const outcome = await handle.outcome();
+    if (outcome.status !== "waiting_for_human") throw new Error("expected suspension");
+    await first.engine.shutdown();
+    await reopen(first, { taskTracker }).engine.answer(handle.runId, outcome.pending[0]!.id, {
+      approved: true,
+    });
+
+    const resumed = reopen(first, { taskTracker });
+    const resumedHandle = await resumed.engine.resume(handle.runId, {
+      def: definition("Second workflow finding"),
+    });
+
+    expect(await resumedHandle.result).toEqual({ title: "Second workflow finding" });
+    expect(applied.map((entry) => entry.title)).toEqual([
+      "First workflow finding",
+      "Second workflow finding",
+    ]);
+    expect(new Set(applied.map((entry) => entry.batchId)).size).toBe(2);
+  });
+
   test("a post-completion task conflict retries the journaled batch without rerunning the agent", async () => {
     let applyCalls = 0;
+    const batchIds: string[] = [];
     const appliedOperations: unknown[][] = [];
     const t = testEngine({
       taskTracker: {
         snapshot: async () => ({ total: 0, truncated: false, tasks: [] }),
         schema: async () => null,
         validateBatch: async () => undefined,
-        applyBatch: async (_context, _batchId, operations) => {
+        applyBatch: async (_context, batchId, operations) => {
           applyCalls++;
+          batchIds.push(batchId);
           if (applyCalls === 1) {
             // Model a host that durably applied the first operation before a
             // later write failed. Resume must replay this exact batch.
@@ -271,6 +398,7 @@ describe("engine end to end", () => {
     const resumedHandle = await resumed.engine.resume(handle.runId, { def });
     expect(await resumedHandle.result).toEqual({});
     expect(applyCalls).toBe(2);
+    expect(batchIds[1]).toBe(batchIds[0]);
     expect(appliedOperations[1]).toEqual(appliedOperations[0]);
     expect(t.builder.calls.filter((call) => call.key === "record")).toHaveLength(1);
     expect(resumed.builder.calls.filter((call) => call.key === "record")).toHaveLength(0);
