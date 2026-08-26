@@ -25,7 +25,7 @@ import {
 } from "@techery/weft-gate";
 import type { RunIndex } from "@techery/weft-index-sqlite";
 import { type MockAgentBuilder, mock } from "@techery/weft-provider-mock";
-import type { WorkflowDefinition } from "@techery/weft-sdk";
+import type { CompiledUiCatalog, WorkflowDefinition } from "@techery/weft-sdk";
 import { createFsStores } from "@techery/weft-store-fs";
 import * as z from "zod";
 import { loadConfig, WEFT_DIR, type WeftConfig } from "./config.ts";
@@ -258,6 +258,26 @@ export async function persistInlineScript(weft: Weft, runId: string, code: strin
   await writeFile(join(dir, "script.ts"), code, "utf8");
 }
 
+/** Persist an inline workflow's browser asset graph so a later process can resume future UI calls. */
+export async function persistUiCatalog(weft: Weft, runId: string, catalog: CompiledUiCatalog): Promise<void> {
+  const assets = [];
+  for (const asset of catalog.assets) {
+    const stored = await weft.engine.blobs.put(asset.code, {
+      kind: "ui-bundle",
+      contentType: "text/javascript; charset=utf-8",
+    });
+    if (stored.hash !== asset.hash) throw new Error(`UI asset hash mismatch for ${asset.id}`);
+    assets.push({ ...asset, code: undefined, blobRef: stored.hash });
+  }
+  const dir = join(weft.runsDir, runId);
+  await mkdir(dir, { recursive: true });
+  await writeFile(
+    join(dir, "ui-manifest.json"),
+    JSON.stringify({ buildHash: catalog.buildHash, assets }),
+    "utf8",
+  );
+}
+
 /** True when a workflow ref is a file path rather than a registry name. */
 export function isWorkflowPathRef(ref: string): boolean {
   return looksLikePath(ref);
@@ -300,7 +320,9 @@ export async function persistedDefOf(weft: Weft, runId: string): Promise<Persist
     const def = await inlineDefOf(weft, runId);
     // An inline run's script is journaled with it, so it cannot have changed and there
     // is nothing for a hash to catch.
-    return def === undefined ? undefined : { def };
+    if (def === undefined) return undefined;
+    const uiCatalog = await persistedUiCatalogOf(weft, runId);
+    return { def, ...(uiCatalog !== undefined ? { uiCatalog } : {}) };
   }
   const parsed = JSON.parse(raw) as { ref?: unknown };
   if (typeof parsed.ref !== "string") {
@@ -309,13 +331,18 @@ export async function persistedDefOf(weft: Weft, runId: string): Promise<Persist
   // A moved file or a failed gate throws here — the caller must see WHY the
   // recorded definition is unavailable, never a quiet fallback.
   const resolved = await resolveWorkflow(weft, parsed.ref);
-  return { def: resolved.def, ...(resolved.hash !== undefined ? { hash: resolved.hash } : {}) };
+  return {
+    def: resolved.def,
+    ...(resolved.hash !== undefined ? { hash: resolved.hash } : {}),
+    ...(resolved.uiCatalog !== undefined ? { uiCatalog: resolved.uiCatalog } : {}),
+  };
 }
 
 /** A run's recorded definition, with the bundle hash where the ref could produce one. */
 export interface PersistedDef {
   def: WorkflowDefinition;
   hash?: string;
+  uiCatalog?: CompiledUiCatalog;
 }
 
 /**
@@ -332,6 +359,7 @@ export function resumeOptions(persisted: PersistedDef | undefined): ResumeOption
   return {
     def: persisted.def,
     ...(persisted.hash !== undefined ? { defHash: persisted.hash } : {}),
+    ...(persisted.uiCatalog !== undefined ? { uiCatalog: persisted.uiCatalog } : {}),
   };
 }
 
@@ -355,6 +383,34 @@ export async function inlineDefOf(weft: Weft, runId: string): Promise<WorkflowDe
   return instantiateBundle(code, { filename: file, ...(allowBare ? { allowBare } : {}) });
 }
 
+async function persistedUiCatalogOf(weft: Weft, runId: string): Promise<CompiledUiCatalog | undefined> {
+  let raw: string;
+  try {
+    raw = await readFile(join(weft.runsDir, runId, "ui-manifest.json"), "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+    throw err;
+  }
+  const manifest = JSON.parse(raw) as {
+    buildHash?: unknown;
+    assets?: Array<Omit<CompiledUiCatalog["assets"][number], "code"> & { blobRef?: unknown }>;
+  };
+  if (typeof manifest.buildHash !== "string" || !Array.isArray(manifest.assets)) {
+    throw new Error(`run ${runId}: invalid ui-manifest.json`);
+  }
+  const assets = await Promise.all(
+    manifest.assets.map(async (asset) => {
+      if (typeof asset.blobRef !== "string")
+        throw new Error(`run ${runId}: UI manifest asset has no blob ref`);
+      const code = await weft.engine.blobs.getText(asset.blobRef);
+      const { blobRef: _blobRef, ...meta } = asset;
+      return { ...meta, code } as CompiledUiCatalog["assets"][number];
+    }),
+  );
+  return { buildHash: manifest.buildHash, assets };
+}
+
 /** `.weft/workflows` unless the config points elsewhere; relative paths are repo-relative. */
 function workflowsDir(cwd: string, weftDir: string, config: WeftConfig): string {
   const dir = config.workflows?.dir;
@@ -370,6 +426,7 @@ export interface ResolvedWorkflow {
   name: string;
   /** Bundle content hash — the version a run pins (`defHash` on `engine.start`). */
   hash?: string;
+  uiCatalog?: CompiledUiCatalog;
 }
 
 /**
@@ -391,7 +448,7 @@ export async function resolveWorkflow(weft: Weft, ref: string): Promise<Resolved
     });
     if (hit) {
       const name = hit.def.meta.name ?? ref;
-      return { def: named(hit.def, name), name, hash: hit.hash };
+      return { def: named(hit.def, name), name, hash: hit.hash, uiCatalog: hit.uiCatalog };
     }
     throw await unknownRef(weft, ref);
   }
@@ -400,7 +457,12 @@ export async function resolveWorkflow(weft: Weft, ref: string): Promise<Resolved
   if (!existsSync(file)) throw await unknownRef(weft, ref, file);
   const allowBare = mergedAllowBare(weft.config);
   const loaded = await loadWorkflow({ entry: file, ...(allowBare ? { allowBare } : {}) });
-  return { def: named(loaded.def, loaded.name), name: loaded.name, hash: loaded.hash };
+  return {
+    def: named(loaded.def, loaded.name),
+    name: loaded.name,
+    hash: loaded.hash,
+    uiCatalog: loaded.uiCatalog,
+  };
 }
 
 /**

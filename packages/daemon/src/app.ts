@@ -26,6 +26,7 @@ import { registerBlobRoutes } from "./api/blobs.ts";
 import { registerConfigRoutes } from "./api/config.ts";
 import { registerMetaRoutes } from "./api/meta.ts";
 import { registerPendingRoutes } from "./api/pending.ts";
+import { registerPresentationRoutes } from "./api/presentations.ts";
 import { registerStartRoutes } from "./api/starts.ts";
 import { registerWorkflowRoutes } from "./api/workflows.ts";
 import { detailOf } from "./detail.ts";
@@ -307,6 +308,7 @@ export function createApp(weft: Weft, opts: CreateAppOptions = {}): Hono {
   registerWorkflowRoutes(app, weft);
   registerStartRoutes(app, weft);
   registerBlobRoutes(app, weft);
+  registerPresentationRoutes(app, weft);
   registerArtifactRoutes(app, weft);
   registerConfigRoutes(app, weft);
 

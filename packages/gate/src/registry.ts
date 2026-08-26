@@ -15,7 +15,7 @@
  */
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import type { WorkflowDefinition } from "@techery/weft-sdk";
+import type { CompiledUiCatalog, WorkflowDefinition } from "@techery/weft-sdk";
 import { bundleWorkflow } from "./bundle.ts";
 import { instantiateBundle } from "./load.ts";
 import { GateError } from "./rules.ts";
@@ -26,7 +26,9 @@ export interface WorkflowRegistry {
   resolve?(identity: {
     id?: string;
     name: string;
-  }): Promise<{ def: WorkflowDefinition; name: string; hash?: string } | undefined>;
+  }): Promise<
+    { def: WorkflowDefinition; name: string; hash?: string; uiCatalog?: CompiledUiCatalog } | undefined
+  >;
   /** Bundle content hash of what `get(name)` returns; the engine's resume compares it. */
   hashOf?(name: string): Promise<string | undefined>;
 }
@@ -44,6 +46,8 @@ export interface RegistryLoadResult {
   def: WorkflowDefinition;
   /** Content hash of the bundle — the version a run pins. */
   hash: string;
+  buildHash: string;
+  uiCatalog: CompiledUiCatalog;
   file: string;
 }
 
@@ -55,7 +59,9 @@ export interface FileWorkflowRegistry extends WorkflowRegistry {
   resolve(identity: {
     id?: string;
     name: string;
-  }): Promise<{ def: WorkflowDefinition; name: string; hash?: string } | undefined>;
+  }): Promise<
+    { def: WorkflowDefinition; name: string; hash?: string; uiCatalog?: CompiledUiCatalog } | undefined
+  >;
   hashOf(name: string): Promise<string | undefined>;
 }
 
@@ -67,6 +73,8 @@ export interface RegistryOptions {
 interface CacheEntry {
   file: string;
   hash: string;
+  buildHash: string;
+  uiCatalog: CompiledUiCatalog;
   def: WorkflowDefinition;
   name: string;
   id: string;
@@ -80,13 +88,13 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
   const cache = new Map<string, CacheEntry>();
 
   const loadFile = async (file: string): Promise<CacheEntry> => {
-    const { code, hash } = await bundleWorkflow({
+    const { code, hash, buildHash, uiCatalog } = await bundleWorkflow({
       entry: file,
       cwd: dir,
       ...(allowBare ? { allowBare } : {}),
     });
     const cached = cache.get(file);
-    if (cached?.hash === hash) return cached;
+    if (cached?.hash === hash && cached.buildHash === buildHash) return cached;
 
     const def = await instantiateBundle(code, {
       filename: file,
@@ -95,6 +103,8 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
     const entry: CacheEntry = {
       file,
       hash,
+      buildHash,
+      uiCatalog,
       def,
       name: def.meta.name ?? path.basename(file, path.extname(file)),
       id: def.meta.id ?? def.meta.name ?? path.basename(file, path.extname(file)),
@@ -203,7 +213,13 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
     async load(name: string): Promise<RegistryLoadResult> {
       const entry = await find(name);
       if (!entry) throw new GateError(`workflow "${name}" not found in ${dir}`);
-      return { def: entry.def, hash: entry.hash, file: entry.file };
+      return {
+        def: entry.def,
+        hash: entry.hash,
+        buildHash: entry.buildHash,
+        uiCatalog: entry.uiCatalog,
+        file: entry.file,
+      };
     },
 
     async get(name: string): Promise<WorkflowDefinition | undefined> {
@@ -211,10 +227,14 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
       return entry?.def;
     },
 
-    async resolve(identity): Promise<{ def: WorkflowDefinition; name: string; hash: string } | undefined> {
+    async resolve(
+      identity,
+    ): Promise<
+      { def: WorkflowDefinition; name: string; hash: string; uiCatalog: CompiledUiCatalog } | undefined
+    > {
       const entry = identity.id === undefined ? await find(identity.name) : await findById(identity.id);
       if (!entry) return undefined;
-      return { def: entry.def, name: entry.name, hash: entry.hash };
+      return { def: entry.def, name: entry.name, hash: entry.hash, uiCatalog: entry.uiCatalog };
     },
 
     async hashOf(name: string): Promise<string | undefined> {

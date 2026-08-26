@@ -12,8 +12,10 @@
 import { createHash } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
+import type { CompiledUiCatalog } from "@techery/weft-sdk";
 import { type BuildFailure, build, type Loader, type Message, type Plugin } from "esbuild";
 import { checkSource, type GateDiagnostic, GateError, resolveAllowBare } from "./rules.ts";
+import { compileUiCatalog, discoverUiViews, uiMessageToDiagnostic } from "./ui-bundle.ts";
 
 export interface BundleOptions {
   /** Path to the workflow file; relative paths resolve against `cwd`. */
@@ -30,6 +32,10 @@ export interface BundleResult {
   code: string;
   /** SHA-256 hex of `code` — the workflow's content version. */
   hash: string;
+  /** Hash of browser assets and metadata; intentionally independent from the Node definition hash. */
+  buildHash: string;
+  /** Browser programs discovered through `.ui.tsx` imports. */
+  uiCatalog: CompiledUiCatalog;
   /** Non-fatal notes (esbuild warnings). Rule violations throw, so they never appear here. */
   diagnostics: GateDiagnostic[];
 }
@@ -54,6 +60,7 @@ export async function bundleWorkflow(opts: BundleOptions): Promise<BundleResult>
   const requestedCwd = opts.cwd ? requestedBase : entry ? path.dirname(entry) : requestedBase;
   const cwd = await realpath(requestedCwd).catch(() => requestedCwd);
   const allowBare = resolveAllowBare(opts.allowBare);
+  const ui = discoverUiViews(cwd);
 
   const violations: GateDiagnostic[] = [];
   const gatePlugin: Plugin = {
@@ -97,7 +104,7 @@ export async function bundleWorkflow(opts: BundleOptions): Promise<BundleResult>
       absWorkingDir: cwd,
       logLevel: "silent",
       legalComments: "none",
-      plugins: [gatePlugin],
+      plugins: [ui.plugin, gatePlugin],
     });
     warnings = result.warnings;
     code = result.outputFiles[0]?.text ?? "";
@@ -110,10 +117,19 @@ export async function bundleWorkflow(opts: BundleOptions): Promise<BundleResult>
 
   if (violations.length > 0) throw GateError.fromDiagnostics(sortDiagnostics(violations));
 
+  const compiledUi = await compileUiCatalog(cwd, ui.entries.values()).catch((err: unknown) => {
+    if (err instanceof GateError) throw err;
+    throw esbuildFailure(err, cwd);
+  });
   return {
     code,
     hash: createHash("sha256").update(code).digest("hex"),
-    diagnostics: warnings.map((w) => messageToDiagnostic(w, "esbuild-warning", cwd)),
+    buildHash: compiledUi.catalog.buildHash,
+    uiCatalog: compiledUi.catalog,
+    diagnostics: [
+      ...warnings.map((w) => messageToDiagnostic(w, "esbuild-warning", cwd)),
+      ...compiledUi.warnings.map((w) => uiMessageToDiagnostic(w, cwd)),
+    ],
   };
 }
 

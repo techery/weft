@@ -41,7 +41,6 @@ export type {
 export { isZodSchema, validateSchema } from "./schema.ts";
 export type { Settled } from "./settled.ts";
 export { failures, okValues } from "./settled.ts";
-
 export type {
   AgentFn,
   AgentOptions,
@@ -108,3 +107,16 @@ export type {
   WorkflowTaskUpsertInput,
   WriteScope,
 } from "./types.ts";
+export type {
+  CompiledUiAsset,
+  CompiledUiCatalog,
+  CompiledUiViewToken,
+  DisplayUiView,
+  InputUiView,
+  JsonPrimitive,
+  JsonValue,
+  UiApi,
+  UiRenderOptions,
+  UiViewMode,
+  UiViewRef,
+} from "./ui.ts";

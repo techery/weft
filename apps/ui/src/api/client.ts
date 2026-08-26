@@ -147,4 +147,14 @@ export const api = {
       if (!res.ok) throw new ApiError(res.status, `blob ${ref} is not readable`);
       return res.text();
     }),
+
+  blobJson: (ref: string) =>
+    fetch(`/api/blobs/${encodeURIComponent(ref)}?as=json`).then(async (res) => {
+      if (GATEWAY.has(res.status)) throw new ApiError(res.status, UNREACHABLE);
+      if (!res.ok) throw new ApiError(res.status, `blob ${ref} is not readable`);
+      return (await res.json()) as unknown;
+    }),
+
+  presentationFrameUrl: (runId: string, presentationId: string) =>
+    `/api/runs/${encodeURIComponent(runId)}/presentations/${encodeURIComponent(presentationId)}/frame`,
 };

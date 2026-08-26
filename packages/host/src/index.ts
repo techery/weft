@@ -44,6 +44,7 @@ export {
   mergedAllowBare,
   persistedDefOf,
   persistInlineScript,
+  persistUiCatalog,
   persistWorkflowRef,
   reserveRunId,
   resolveWorkflow,
@@ -70,6 +71,7 @@ export type {
   StartOptions,
   StepState,
   TreeNode,
+  UiPresentation,
   WorkflowRegistry,
 } from "@techery/weft-core";
 export { Engine, ProviderRegistry, reduceState, renderReport, renderTree } from "@techery/weft-core";
@@ -107,7 +109,7 @@ export type {
   MockRuleOptions,
 } from "@techery/weft-provider-mock";
 export { mock } from "@techery/weft-provider-mock";
-export type { WorkflowDefinition } from "@techery/weft-sdk";
+export type { CompiledUiCatalog, WorkflowDefinition } from "@techery/weft-sdk";
 export { StepError } from "@techery/weft-sdk";
 export type { FsStores } from "@techery/weft-store-fs";
 export { createFsStores } from "@techery/weft-store-fs";

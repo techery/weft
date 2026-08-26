@@ -6,6 +6,7 @@ import type { Duration } from "./duration.ts";
 import type { StepError } from "./errors.ts";
 import type { AnySchema, InferIn, InferOut } from "./schema.ts";
 import type { Settled } from "./settled.ts";
+import type { InputUiView, UiApi } from "./ui.ts";
 
 // ---------------------------------------------------------------------------
 // Routing & effort
@@ -312,7 +313,7 @@ export interface GateResult {
  */
 export type HumanTimeoutPolicy<T> = "deny" | "escalate" | { default: T };
 
-export interface HumanAskOptions<S extends AnySchema> {
+export interface HumanAskOptions<S extends AnySchema, Props = never> {
   /**
    * Stable identity for replay, exactly as on {@link AgentOptions.key}. A human step is
    * otherwise identified by its CONTENT alone — question, detail, schema, risk, timeouts —
@@ -327,6 +328,8 @@ export interface HumanAskOptions<S extends AnySchema> {
   detail?: string;
   timeout?: Duration;
   onTimeout?: HumanTimeoutPolicy<InferIn<S>>;
+  /** Optional workflow-provided presentation; the host remains the submission authority. */
+  ui?: { view: InputUiView<Props, InferIn<S>>; props: Props };
 }
 
 export interface HumanApproveOptions {
@@ -345,7 +348,7 @@ export interface HumanApproveOptions {
   onTimeout?: HumanTimeoutPolicy<{ approved: boolean; note?: string }>;
 }
 
-export interface HumanReviewOptions<S extends AnySchema> {
+export interface HumanReviewOptions<S extends AnySchema, Props = never> {
   /**
    * Stable identity for replay, exactly as on {@link AgentOptions.key}. A human step is
    * otherwise identified by its CONTENT alone — question, detail, schema, risk, timeouts —
@@ -361,13 +364,15 @@ export interface HumanReviewOptions<S extends AnySchema> {
   schema: S;
   timeout?: Duration;
   onTimeout?: HumanTimeoutPolicy<InferIn<S>>;
+  /** Optional workflow-provided presentation; the host remains the submission authority. */
+  ui?: { view: InputUiView<Props, InferIn<S>>; props: Props };
 }
 
 export interface HumanApi {
   /** Always asks a person; the answer is validated against the schema like any output. */
-  ask<S extends AnySchema>(opts: HumanAskOptions<S>): Promise<InferOut<S>>;
+  ask<S extends AnySchema, Props = never>(opts: HumanAskOptions<S, Props>): Promise<InferOut<S>>;
   approve(opts: HumanApproveOptions): Promise<{ approved: boolean; note?: string }>;
-  review<S extends AnySchema>(opts: HumanReviewOptions<S>): Promise<InferOut<S>>;
+  review<S extends AnySchema, Props = never>(opts: HumanReviewOptions<S, Props>): Promise<InferOut<S>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -629,6 +634,8 @@ export interface Ctx {
   // humans
   gate(req: GateRequest): Promise<GateResult>;
   human: HumanApi;
+  /** Durable custom presentations. Rendering is browser-only and never mutates workflow values. */
+  ui: UiApi;
 
   // side effects
   fs: FsApi;

@@ -1,5 +1,5 @@
 /** Lifecycle of a whole run, as the journal records it. */
-import type { JsonSchema } from "~/api/types";
+import type { JsonSchema, UiPresentation } from "~/api/types";
 
 export type RunState = "running" | "waiting" | "done" | "stopped" | "failed";
 
@@ -157,6 +157,7 @@ export type StepDetail = {
   toolsTitle: string;
   /** The dashed strip under the output — an error, or what the step is waiting on. */
   next: { k: string; v: string; goToGate: boolean } | null;
+  presentation?: UiPresentation;
 };
 
 export type GateQuestionKind = "cards" | "chips" | "choice" | "select" | "toggle" | "text" | "list" | "note";
@@ -185,6 +186,7 @@ export type Gate = {
   denyLabel: string;
   questions: GateQuestion[];
   artifactRef?: { ref: string; size: number; preview?: string };
+  ui?: UiPresentation;
 };
 
 export type Run = {

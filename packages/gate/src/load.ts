@@ -17,7 +17,7 @@
  */
 import path from "node:path";
 import vm from "node:vm";
-import { isWorkflowDefinition, type WorkflowDefinition } from "@techery/weft-sdk";
+import { type CompiledUiCatalog, isWorkflowDefinition, type WorkflowDefinition } from "@techery/weft-sdk";
 import { type BundleOptions, bundleWorkflow, INLINE_FILE } from "./bundle.ts";
 import { GateError, isAllowedBare, resolveAllowBare } from "./rules.ts";
 
@@ -30,6 +30,8 @@ export interface LoadedWorkflow {
   def: WorkflowDefinition;
   /** Content hash of the bundle: the version this run pins. */
   hash: string;
+  buildHash: string;
+  uiCatalog: CompiledUiCatalog;
   code: string;
   name: string;
 }
@@ -50,14 +52,14 @@ type ModuleFactory = (
 
 /** Bundle a workflow and execute it in the sandbox. */
 export async function loadWorkflow(opts: LoadOptions): Promise<LoadedWorkflow> {
-  const { code, hash } = await bundleWorkflow(opts);
+  const { code, hash, buildHash, uiCatalog } = await bundleWorkflow(opts);
   const entry = opts.entry ? path.resolve(opts.cwd ?? process.cwd(), opts.entry) : undefined;
   const def = await instantiateBundle(code, {
     filename: entry ?? INLINE_FILE,
     ...(opts.allowBare ? { allowBare: opts.allowBare } : {}),
   });
   const fromFile = entry ? path.basename(entry, path.extname(entry)) : undefined;
-  return { def, hash, code, name: def.meta.name ?? opts.name ?? fromFile ?? "inline" };
+  return { def, hash, buildHash, uiCatalog, code, name: def.meta.name ?? opts.name ?? fromFile ?? "inline" };
 }
 
 /**

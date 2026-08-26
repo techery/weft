@@ -8,6 +8,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import {
   type AnySchema,
   CancelledError,
+  type CompiledUiAsset,
+  type CompiledUiCatalog,
+  type CompiledUiViewToken,
   type GateResult,
   isCancellation,
   type Risk,
@@ -28,6 +31,7 @@ import type {
   JournalRecord,
   RunStatus,
   StepKind,
+  UiPresentation,
 } from "./events.ts";
 import { jsonUnsafeAt, unwrapWireValue, wrapWireValue } from "./jsonschema.ts";
 import type { Semaphore } from "./limiter.ts";
@@ -67,6 +71,7 @@ export interface PendingRequest {
   deadline?: number;
   confirmToken?: string;
   artifactRef?: BlobRefJson;
+  ui?: UiPresentation;
 }
 
 export interface ChildRunSpec {
@@ -167,6 +172,7 @@ export interface StepOutcome<T> {
   transcriptRef?: BlobRefJson;
   patchRef?: string;
   attempts?: number;
+  presentation?: UiPresentation;
 }
 
 export interface StepSpec<T> {
@@ -207,6 +213,7 @@ interface HumanSpec {
   artifactRef?: BlobRefJson;
   /** Policy auto-approval: append request+answer in one batch, never wait. */
   auto?: boolean;
+  ui?: { view: unknown; props: unknown };
 }
 
 export interface HumanOutcome {
@@ -247,6 +254,7 @@ export interface RunRuntimeOptions {
   shared: SharedRunResources;
   replay?: ReplayIndex;
   workflowDefaults?: { provider?: string; model?: string; effort?: string };
+  uiCatalog?: CompiledUiCatalog;
   /** replay --dry: serve hits, record would-run steps, never execute or append. */
   dry?: boolean;
 }
@@ -266,6 +274,8 @@ export class RunRuntime {
   readonly replay: ReplayIndex | undefined;
   readonly delivery: OrderedDelivery;
   readonly workflowDefaults: { provider?: string; model?: string; effort?: string };
+  readonly uiCatalog: CompiledUiCatalog | undefined;
+  private readonly uiAssets: Map<string, CompiledUiAsset>;
 
   currentPhase: string | undefined;
   status: RunStatus = "planning";
@@ -322,6 +332,8 @@ export class RunRuntime {
     this.shared = opts.shared;
     this.replay = opts.replay;
     this.workflowDefaults = opts.workflowDefaults ?? {};
+    this.uiCatalog = opts.uiCatalog;
+    this.uiAssets = new Map((opts.uiCatalog?.assets ?? []).map((asset) => [asset.assetKey, asset]));
     this.humanCounter = opts.replay?.maxHumanId ?? 0;
     this.dry = opts.dry ?? false;
     this.dryIndex = (opts.replay?.maxJournalIndex ?? -1) + 1;
@@ -451,6 +463,83 @@ export class RunRuntime {
     return journaled;
   }
 
+  /** Resolve an opaque workflow token through the sealed compiler catalog and persist its durable data. */
+  async prepareUiPresentation(
+    view: unknown,
+    props: unknown,
+    mode: "display" | "input",
+    id: string,
+    slot?: string,
+  ): Promise<UiPresentation> {
+    if (
+      typeof view !== "object" ||
+      view === null ||
+      (view as { kind?: unknown }).kind !== "weft.ui-view" ||
+      typeof (view as { assetKey?: unknown }).assetKey !== "string"
+    ) {
+      throw new StepError("invalid_input", "UI view is not a compiled .ui.tsx token", {
+        step: { kind: "ui", runId: this.runId },
+      });
+    }
+    const token = view as CompiledUiViewToken;
+    const asset = this.uiAssets.get(token.assetKey);
+    if (!asset) {
+      throw new StepError(
+        "invalid_input",
+        `UI asset ${token.assetKey.slice(0, 12)} is not in this workflow build`,
+        {
+          step: { kind: "ui", runId: this.runId },
+        },
+      );
+    }
+    if (asset.mode !== mode) {
+      throw new StepError(
+        "invalid_input",
+        `UI view ${JSON.stringify(asset.id)} is ${asset.mode}, not ${mode}`,
+        { step: { kind: "ui", runId: this.runId } },
+      );
+    }
+    const bad = jsonUnsafeAt(props);
+    if (bad !== undefined) {
+      throw new StepError("invalid_input", `UI props cannot be journaled as JSON at ${bad}`, {
+        step: { kind: "ui", runId: this.runId },
+      });
+    }
+    const json = canonicalJson(props);
+    const propsHash = sha256Hex(json);
+    const propsJson =
+      Buffer.byteLength(json) <= this.host.config.limits.blobThresholdBytes
+        ? ({ inline: props, hash: propsHash } as const)
+        : await this.host.blobs.put(json, { kind: "ui-props", contentType: "application/json" }).then(
+            (ref) =>
+              ({
+                ref: { $blob: ref.hash, size: ref.size, preview: json.slice(0, 200) },
+                hash: propsHash,
+              }) as const,
+          );
+    const stored = await this.host.blobs.put(asset.code, {
+      kind: "ui-bundle",
+      contentType: "text/javascript; charset=utf-8",
+    });
+    if (stored.hash !== asset.hash) {
+      throw new StepError("internal", `compiled UI asset hash mismatch for ${asset.id}`, {
+        step: { kind: "ui", runId: this.runId },
+      });
+    }
+    return {
+      id,
+      asset: {
+        id: asset.id,
+        revision: asset.revision,
+        bundleRef: { $blob: stored.hash, size: stored.size },
+        protocol: 1,
+      },
+      props: propsJson,
+      mode,
+      ...(slot !== undefined ? { slot } : {}),
+    };
+  }
+
   // -- idle / wait tracking -------------------------------------------------
 
   hasPendingWaits(): boolean {
@@ -545,7 +634,10 @@ export class RunRuntime {
         hash,
         spec.kind,
         spec.key,
-        this.shared.reuse,
+        // A UI key names the presentation slot; it is not permission to reuse stale
+        // props or an older component revision. UI replay is therefore always
+        // content-addressed even when the run opts into key-based salvage elsewhere.
+        spec.kind === "ui" ? "content" : this.shared.reuse,
         this.shared.positionsTrusted !== false,
       );
       if (match?.ambiguous) {
@@ -768,6 +860,7 @@ export class RunRuntime {
               ...(outcome.sessionId !== undefined ? { sessionId: outcome.sessionId } : {}),
               ...(outcome.transcriptRef !== undefined ? { transcriptRef: outcome.transcriptRef } : {}),
               ...(outcome.patchRef !== undefined ? { patchRef: outcome.patchRef } : {}),
+              ...(outcome.presentation !== undefined ? { presentation: outcome.presentation } : {}),
               attempts: outcome.attempts ?? attempt,
             },
           ]);
@@ -933,6 +1026,9 @@ export class RunRuntime {
         }
       }
     }
+    const preparedUi = spec.ui
+      ? await this.prepareUiPresentation(spec.ui.view, spec.ui.props, "input", "pending")
+      : undefined;
     const payload = {
       kind: spec.kind,
       question: spec.question,
@@ -948,11 +1044,20 @@ export class RunRuntime {
       ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {}),
       ...(spec.onTimeout !== undefined ? { onTimeout: spec.onTimeout } : {}),
       ...(spec.timeoutDefault !== undefined ? { timeoutDefault: spec.timeoutDefault } : {}),
+      ...(preparedUi !== undefined
+        ? {
+            ui: {
+              id: preparedUi.asset.id,
+              revision: preparedUi.asset.revision,
+              propsHash: preparedUi.props.hash,
+            },
+          }
+        : {}),
     };
     const hash = hashStep("human", payload, undefined, spec.key);
     const seq = ++this.seqCounter;
 
-    let match = this.replay?.matchHuman(hash, seq, this.shared.positionsTrusted !== false);
+    let match = this.replay?.matchHuman(hash, seq, this.shared.positionsTrusted !== false, spec.key);
     if (match?.ambiguous) {
       // Two human call sites share this question and schema, and the script moved, so
       // position cannot say which journaled answer belongs to this one. Re-ask instead
@@ -1022,6 +1127,7 @@ export class RunRuntime {
       id,
       seq,
       hash,
+      ...(spec.key !== undefined ? { key: spec.key } : {}),
       kind: spec.kind,
       question: spec.question,
       schema: spec.schemaJson ?? {},
@@ -1032,16 +1138,31 @@ export class RunRuntime {
       ...(spec.onTimeout !== undefined ? { onTimeout: spec.onTimeout } : {}),
       ...(spec.timeoutDefault !== undefined ? { timeoutDefault: spec.timeoutDefault } : {}),
       ...(spec.confirmToken !== undefined ? { confirmToken: spec.confirmToken } : {}),
+      ...(preparedUi !== undefined ? { ui: { ...preparedUi, id } } : {}),
     };
+
+    const superseded = spec.key !== undefined ? this.replay?.pendingHumanByKey(spec.key) : undefined;
+    const supersedeEvent: JournalEvent | undefined = superseded
+      ? {
+          type: "human.superseded",
+          id: superseded.id,
+          byId: id,
+          reason: "request semantics changed at the same durable key",
+        }
+      : undefined;
 
     if (spec.auto) {
       const answer = { approved: true };
       this.answeredIds.add(id); // the tailer will echo this append; never buffer it
-      await this.append([request, { type: "human.answered", id, answer, answeredBy: "policy" }]);
+      await this.append([
+        ...(supersedeEvent ? [supersedeEvent] : []),
+        request,
+        { type: "human.answered", id, answer, answeredBy: "policy" },
+      ]);
       return { answer, answeredBy: "policy" };
     }
 
-    await this.append([request]);
+    await this.append([...(supersedeEvent ? [supersedeEvent] : []), request]);
     return this.awaitAnswer(request, spec.realSchema, spec.wrapped ?? false);
   }
 
@@ -1102,6 +1223,7 @@ export class RunRuntime {
       ...(request.risk !== undefined ? { risk: request.risk } : {}),
       ...(request.deadline !== undefined ? { deadline: request.deadline } : {}),
       ...(request.confirmToken !== undefined ? { confirmToken: request.confirmToken } : {}),
+      ...(request.ui !== undefined ? { ui: request.ui } : {}),
     });
     return new Promise<HumanOutcome>((resolve, reject) => {
       const wait: PendingWait = {

@@ -1,5 +1,5 @@
 import { useAtomValue, useSetAtom } from "jotai";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { api } from "~/api/client";
 import { useAnswerGate } from "~/api/queries";
 import type { JsonSchema } from "~/api/types";
@@ -9,6 +9,7 @@ import { MonoBadge } from "~/components/atoms/MonoBadge";
 import { StatusPill } from "~/components/atoms/StatusPill";
 import { GateQuestionRow } from "~/components/molecules/GateQuestionRow";
 import { SectionHeading } from "~/components/molecules/SectionHeading";
+import { WorkflowViewFrame } from "~/components/molecules/WorkflowViewFrame";
 import { gateAnswer, VERDICT_FIELD } from "~/domain/adapt";
 import type { Gate, StepDetail } from "~/domain/types";
 import { clearGateDraftAtom, gateDraftAtom, setGateFieldAtom, toggleGateChipAtom } from "~/state/atoms";
@@ -38,13 +39,19 @@ export function GatePane({ gate, step, schema, onAnswered }: Props) {
   const toggleChip = useSetAtom(toggleGateChipAtom);
   const clearDraft = useSetAtom(clearGateDraftAtom);
   const answer = useAnswerGate();
+  const [staged, setStaged] = useState<{ gateId: string; value: unknown }>();
+  const candidate = staged?.gateId === gate.id ? staged.value : undefined;
 
   const values = useMemo(() => drafts[gate.id] ?? {}, [drafts, gate.id]);
   const runId = gate.runId ?? "";
 
-  const submit = (override?: Record<string, unknown>) => {
+  const submit = (override?: Record<string, unknown>, exact?: unknown) => {
     answer.mutate(
-      { runId, requestId: gate.id, answer: gateAnswer(schema, { ...values, ...override }) },
+      {
+        runId,
+        requestId: gate.id,
+        answer: exact === undefined ? gateAnswer(schema, { ...values, ...override }) : exact,
+      },
       {
         onSuccess: () => {
           clearDraft(gate.id);
@@ -57,7 +64,9 @@ export function GatePane({ gate, step, schema, onAnswered }: Props) {
   // Previewing the approving answer: it is the one the primary button sends, and a
   // preview that omitted the verdict would show something the run never receives.
   const payload = JSON.stringify(
-    gateAnswer(schema, gate.deniable ? { ...values, [VERDICT_FIELD]: true } : values),
+    candidate === undefined
+      ? gateAnswer(schema, gate.deniable ? { ...values, [VERDICT_FIELD]: true } : values)
+      : candidate,
   );
 
   return (
@@ -100,15 +109,40 @@ export function GatePane({ gate, step, schema, onAnswered }: Props) {
           </SectionHeading>
         </div>
 
+        {gate.ui ? (
+          <div className={styles.questions}>
+            <WorkflowViewFrame
+              key={gate.ui.id}
+              runId={runId}
+              presentation={gate.ui}
+              onCandidate={(value) => setStaged({ gateId: gate.id, value })}
+            />
+            {candidate !== undefined ? (
+              <span className={styles.detail}>
+                Candidate staged by the custom view. Review the payload below, then submit from Weft.
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className={styles.questions}>
           {gate.questions.map((question) => (
             <GateQuestionRow
               key={question.key}
               question={question}
               value={values[question.key] as never}
-              onSet={(value) => setField(gate.id, question.key, value)}
-              onToggleChip={(label) => toggleChip(gate.id, question.key, label)}
-              onToggleFlag={() => setField(gate.id, question.key, values[question.key] !== true)}
+              onSet={(value) => {
+                setStaged(undefined);
+                setField(gate.id, question.key, value);
+              }}
+              onToggleChip={(label) => {
+                setStaged(undefined);
+                toggleChip(gate.id, question.key, label);
+              }}
+              onToggleFlag={() => {
+                setStaged(undefined);
+                setField(gate.id, question.key, values[question.key] !== true);
+              }}
             />
           ))}
           {gate.questions.length === 0 ? (
@@ -140,9 +174,13 @@ export function GatePane({ gate, step, schema, onAnswered }: Props) {
           variant="primary"
           size="large"
           disabled={answer.isPending}
-          onClick={() => submit(gate.deniable ? { approved: true } : undefined)}
+          onClick={() =>
+            candidate === undefined
+              ? submit(gate.deniable ? { approved: true } : undefined)
+              : submit(undefined, candidate)
+          }
         >
-          {answer.isPending ? "Answering…" : gate.submitLabel}
+          {answer.isPending ? "Answering…" : candidate === undefined ? gate.submitLabel : "Submit and resume"}
         </Button>
       </div>
     </div>

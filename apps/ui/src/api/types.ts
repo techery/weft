@@ -30,7 +30,25 @@ export type StepKind =
   | "fs"
   | "env"
   | "check"
-  | "sleep";
+  | "sleep"
+  | "ui"
+  | "signal"
+  | "sideeffect";
+
+export interface UiPresentation {
+  id: string;
+  asset: {
+    id: string;
+    revision: string;
+    bundleRef: { $blob: string; size: number; preview?: string };
+    protocol: 1;
+  };
+  props:
+    | { inline: unknown; hash: string }
+    | { ref: { $blob: string; size: number; preview?: string }; hash: string };
+  mode: "display" | "input";
+  slot?: string;
+}
 
 export type Risk = "low" | "medium" | "high" | "irreversible";
 export type ApprovalMode = "auto" | "ask";
@@ -80,6 +98,7 @@ export interface StepState {
   transcriptRef?: { $blob: string; size: number; preview?: string };
   patchRef?: string;
   childRunId?: string;
+  presentation?: UiPresentation;
 }
 
 export interface HumanState {
@@ -90,11 +109,12 @@ export interface HumanState {
   detail?: string;
   risk?: Risk;
   schema: unknown;
-  status: "pending" | "answered";
+  status: "pending" | "answered" | "superseded";
   answer?: unknown;
   answeredBy?: string;
   requestedAt: number;
   artifactRef?: { $blob: string; size: number; preview?: string };
+  ui?: UiPresentation;
 }
 
 /** `GET /api/runs/:id`, with `?detail=1` adding `limits` and `inputs`. */
@@ -142,6 +162,7 @@ export interface PendingRequest {
   rootRunId: string;
   rootWorkflow: string;
   artifactRef?: { $blob: string; size: number; preview?: string };
+  ui?: UiPresentation;
 }
 
 export interface PendingResponse {

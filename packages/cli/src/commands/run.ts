@@ -6,10 +6,12 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  type CompiledUiCatalog,
   isWorkflowPathRef,
   loadWorkflow,
   parseBudget,
   persistInlineScript,
+  persistUiCatalog,
   persistWorkflowRef,
   rejectUnknownInput,
   reserveRunId,
@@ -45,7 +47,7 @@ export function runCommand(io: CliIo): Command {
       const weft = await openWeft(cmd);
       try {
         const input = { ...parseArgsJson(opts.args), ...parseDynamicFlags(cmd.args.slice(1)) };
-        const { def, name, hash, code } = await resolveRef(weft, ref, io);
+        const { def, name, hash, code, uiCatalog } = await resolveRef(weft, ref, io);
         await rejectUnknownInput(input, def, name);
         const reuse = parseReuse(opts.reuse);
         const budget = opts.budget === undefined ? undefined : parseBudget(opts.budget);
@@ -59,6 +61,7 @@ export function runCommand(io: CliIo): Command {
         // write into an EXISTING run's directory.
         const runId = await reserveRunId(weft);
         if (code !== undefined) await persistInlineScript(weft, runId, code);
+        if (code !== undefined && uiCatalog !== undefined) await persistUiCatalog(weft, runId, uiCatalog);
         else if (isWorkflowPathRef(ref)) await persistWorkflowRef(weft, runId, ref);
         const handle = await weft.engine
           .start(def, {
@@ -66,6 +69,7 @@ export function runCommand(io: CliIo): Command {
             input,
             cwd: weft.cwd,
             ...(hash !== undefined ? { defHash: hash } : {}),
+            ...(uiCatalog !== undefined ? { uiCatalog } : {}),
             ...(budget !== undefined ? { budget } : {}),
             ...(reuse !== undefined ? { reuse } : {}),
           })
@@ -92,6 +96,7 @@ interface ResolvedRef {
   hash?: string;
   /** The bundled source, present only for inline (stdin) scripts — persisted with the run. */
   code?: string;
+  uiCatalog?: CompiledUiCatalog;
 }
 
 /**
@@ -108,5 +113,11 @@ async function resolveRef(weft: Weft, ref: string, io: CliIo): Promise<ResolvedR
     loaded.def.meta.name === loaded.name
       ? loaded.def
       : { kind: loaded.def.kind, meta: { ...loaded.def.meta, name: loaded.name }, run: loaded.def.run };
-  return { def, name: loaded.name, hash: loaded.hash, code: loaded.code };
+  return {
+    def,
+    name: loaded.name,
+    hash: loaded.hash,
+    code: loaded.code,
+    uiCatalog: loaded.uiCatalog,
+  };
 }

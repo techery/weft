@@ -158,6 +158,8 @@ async function typecheck(files: readonly string[], cwd: string): Promise<string[
     "nodenext",
     "--moduleResolution",
     "nodenext",
+    "--jsx",
+    "react-jsx",
     "--allowImportingTsExtensions",
     "--skipLibCheck",
     ...files,

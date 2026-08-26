@@ -12,7 +12,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
 /** The authoring surface, in the order a reader wants it: ctx, then defineWorkflow, then schemas. */
-const FILES = ["types.ts", "define.ts", "schema.ts"] as const;
+const FILES = ["types.ts", "ui.ts", "define.ts", "schema.ts"] as const;
 
 /** Packages that do depend on @techery/weft-sdk, used as resolution hops. */
 const VIA = ["@techery/weft-host", "@techery/weft-core"] as const;

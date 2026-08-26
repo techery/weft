@@ -1,0 +1,65 @@
+.shell {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--color-line, #d8d6d0);
+  border-radius: 8px;
+  background: var(--color-surface, #fff);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 34px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--color-line, #d8d6d0);
+  color: var(--color-text-muted, #68645c);
+  font:
+    11px / 1.2 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+
+.header span:nth-child(2) {
+  margin-left: auto;
+}
+
+.header button,
+.fallback button {
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.frame {
+  display: block;
+  width: 100%;
+  min-height: 80px;
+  border: 0;
+  background: transparent;
+}
+
+.loading,
+.error,
+.fallback {
+  display: block;
+  padding: 12px;
+  color: var(--color-text-muted, #68645c);
+  font-size: 12px;
+}
+
+.error {
+  color: #9b2f24;
+  background: #fff2ef;
+}
+
+.fallback {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px dashed var(--color-line, #d8d6d0);
+  border-radius: 8px;
+}

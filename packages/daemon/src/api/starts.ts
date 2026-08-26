@@ -65,6 +65,7 @@ export function registerStartRoutes(app: Hono, weft: Weft): void {
         input,
         cwd: weft.cwd,
         ...(resolved.hash !== undefined ? { defHash: resolved.hash } : {}),
+        ...(resolved.uiCatalog !== undefined ? { uiCatalog: resolved.uiCatalog } : {}),
         ...(budget !== undefined ? { budget } : {}),
         ...(reuse !== undefined ? { reuse } : {}),
       };
