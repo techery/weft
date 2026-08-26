@@ -4275,3 +4275,104 @@ describe("codex review findings, round 60 (PR #1)", () => {
     expect(symbolic.stdout.trim()).toBe("refs/heads/release");
   });
 });
+
+describe("architecture review @ 627b28e", () => {
+  const FixSummary = z.object({ summary: z.string() });
+
+  test("a reverted integration is re-applied on resume, not served from its own journal", async () => {
+    // `integrate:<key>` guards itself with verifyServe, but the snapshot/apply it does
+    // the work in were NESTED journaled steps with no guard of their own. When
+    // verifyServe correctly refused (the tree no longer carried the patch), the parent
+    // re-executed and the nested pair was served straight back from the journal —
+    // returning {ok:true} without touching the tree, then re-journaling `patch.merged`
+    // with resultTree === baseTree. A green run, a ledger saying "merged", and a tree
+    // without the change; and permanent, since the new completion matched the untouched
+    // tree from then on.
+    const t1 = testEngine();
+    t1.builder.on(
+      { key: "fix" },
+      { summary: "fixed" },
+      { writes: { "auth.ts": "export const fixed = true;\n" } },
+    );
+    const cwd = await tempRepo({ "auth.ts": "export const fixed = false;\n" });
+    const def = defineWorkflow(
+      { name: "revert", description: "r", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const p = await ctx.agent.detailed("fix the flag", {
+          schema: FixSummary,
+          key: "fix",
+          write: { paths: ["auth.ts"] },
+        });
+        await ctx.integrate([p]);
+        const go = await ctx.human.approve({ action: "done?" });
+        return { ok: go.approved };
+      },
+    );
+
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    expect(await readFile(join(cwd, "auth.ts"), "utf8")).toBe("export const fixed = true;\n");
+    await t1.engine.shutdown();
+
+    // The change is reverted out from under the suspended run — a `git checkout --`,
+    // a `git reset --hard`, or a fresh clone at the same path.
+    await writeFile(join(cwd, "auth.ts"), "export const fixed = false;\n");
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error(`expected re-suspension, got ${o2.status}`);
+    await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    expect(await h2.result).toEqual({ ok: true });
+
+    // The patch is actually back in the tree, not merely re-journaled as merged.
+    expect(await readFile(join(cwd, "auth.ts"), "utf8")).toBe("export const fixed = true;\n");
+    const recs = await records(t2.journal, h1.runId);
+    const merged = recs
+      .filter((r) => r.ev.type === "patch.merged")
+      .map((r) => r.ev as unknown as { baseTree: string; resultTree: string });
+    // A re-established merge MOVED the tree; baseTree === resultTree is the signature
+    // of the bug (a "merge" that changed nothing).
+    expect(merged.at(-1)!.baseTree).not.toBe(merged.at(-1)!.resultTree);
+    expect(recs.some((r) => r.ev.type === "replay.diverged")).toBe(true);
+  });
+
+  test("an integration the tree still carries is served, not applied twice", async () => {
+    const t1 = testEngine();
+    t1.builder.on(
+      { key: "fix" },
+      { summary: "fixed" },
+      { writes: { "auth.ts": "export const fixed = true;\n" } },
+    );
+    const cwd = await tempRepo({ "auth.ts": "export const fixed = false;\n" });
+    const def = defineWorkflow(
+      { name: "held", description: "h", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const p = await ctx.agent.detailed("fix the flag", {
+          schema: FixSummary,
+          key: "fix",
+          write: { paths: ["auth.ts"] },
+        });
+        await ctx.integrate([p]);
+        const go = await ctx.human.approve({ action: "done?" });
+        return { ok: go.approved };
+      },
+    );
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error("expected suspension");
+    await t1.engine.shutdown();
+
+    // Tree untouched: the journaled merge still holds, so nothing re-applies.
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error("expected re-suspension");
+    await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    expect(await h2.result).toEqual({ ok: true });
+    expect(await readFile(join(cwd, "auth.ts"), "utf8")).toBe("export const fixed = true;\n");
+    const recs = await records(t2.journal, h1.runId);
+    expect(recs.filter((r) => r.ev.type === "patch.merged")).toHaveLength(1);
+  });
+});

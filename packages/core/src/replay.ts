@@ -336,8 +336,38 @@ export class ReplayIndex {
     return undefined;
   }
 
-  matchHuman(hash: string): HumanEntry | undefined {
-    return this.humansByHash.get(hash)?.find((e) => !e.consumed);
+  /**
+   * Humans carry no `key` — `ctx.human.ask/approve/review` and `gateStep` expose none —
+   * so two requests with the same question and schema are indistinguishable by content
+   * alone. Position is the only discriminator they have, and a position only means
+   * something while the script is unchanged. When it is not, handing over an arbitrary
+   * entry lets a SURVIVING gate consume the answer a DELETED sibling received, replaying
+   * a recorded denial as an approval with nothing in the journal to say so.
+   *
+   * So this mirrors {@link matchStep}: serve on position when positions are trusted, and
+   * otherwise report the ambiguity rather than guess. The caller re-opens the request —
+   * re-asking costs a wait, guessing costs the truth, and for a human decision that is
+   * the side that cannot be wrong.
+   */
+  matchHuman(
+    hash: string,
+    seq?: number,
+    positionsTrusted = true,
+  ): { entry: HumanEntry; ambiguous?: true } | undefined {
+    const sameHash = this.humansByHash.get(hash) ?? [];
+    const ambiguousKeyless = sameHash.length > 1;
+
+    if (seq !== undefined) {
+      const onPosition = sameHash.find((e) => !e.consumed && e.seq === seq);
+      if (onPosition) {
+        return ambiguousKeyless && !positionsTrusted
+          ? { entry: onPosition, ambiguous: true }
+          : { entry: onPosition };
+      }
+    }
+    const entry = sameHash.find((e) => !e.consumed);
+    if (!entry) return undefined;
+    return ambiguousKeyless ? { entry, ambiguous: true } : { entry };
   }
 
   matchIncompleteScheduled(hash: string, kind: StepKind): ScheduledEntry | undefined {

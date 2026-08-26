@@ -2447,7 +2447,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
             if (state && value.applied) state.integrated = true;
             if (state && !value.applied) state.discarded = true;
           },
-          execute: async () => {
+          execute: async (io) => {
             // Snapshot and apply are NESTED journaled steps: a resume mid-ask
             // re-executes this integrate step against a tree the first apply
             // already conflicted — a fresh snapshot would capture the markers
@@ -2455,34 +2455,52 @@ export function buildCtx(rt: RunRuntime): Ctx {
             // stack onto them. Served completions reuse the PRE-conflict
             // snapshot (pinned under refs/weft/snapshots, gc-safe) and the
             // first pass's apply outcome without touching the tree again.
-            const { baseTree, snapRef } = await rt.runStep<{ baseTree: string; snapRef: string }>({
-              kind: "sideeffect",
-              label: `integrate:snapshot:${patch.key}`,
-              payload: { op: "integrate.snapshot", key: patch.key, ref: patch.ref },
-              execute: async () => ({
-                value: {
-                  baseTree: await treeHash(rt.cwd),
-                  // Rollback snapshot must include untracked files (stash-create
-                  // cannot): a user's pre-existing untracked file that a patch
-                  // collides with is restored on skip/abort, never deleted as
-                  // patch-created. The patch's own targets ride along
-                  // force-added, so even an IGNORED pre-existing collision file
-                  // is restorable rather than removed.
-                  snapRef: await integrationBaseCommit(rt.cwd, patch.files),
-                },
-              }),
+            //
+            // EXCEPT when this step is RE-ESTABLISHING: `verifyServe` refused the
+            // journaled completion because the tree no longer carries the patch, so
+            // serving the nested pair from that same journal hands back the first
+            // pass's `{ok:true}` without touching anything, and the run re-journals
+            // `patch.merged` with resultTree === baseTree. That is a green run whose
+            // tree lacks the change — and it is PERMANENT, because the new completion
+            // now matches the untouched tree and every later replay serves it happily.
+            // A re-establishing pass has to do the work again; its predecessor's
+            // snapshot describes a tree that no longer exists anyway.
+            //
+            // `reExecuting` is set only when a journaled COMPLETION was refused, so a
+            // mid-ask resume (parent still incomplete) keeps the reuse above intact.
+            const reEstablishing = io.reExecuting === true;
+            const takeSnapshot = async () => ({
+              baseTree: await treeHash(rt.cwd),
+              // Rollback snapshot must include untracked files (stash-create
+              // cannot): a user's pre-existing untracked file that a patch
+              // collides with is restored on skip/abort, never deleted as
+              // patch-created. The patch's own targets ride along
+              // force-added, so even an IGNORED pre-existing collision file
+              // is restorable rather than removed.
+              snapRef: await integrationBaseCommit(rt.cwd, patch.files),
             });
-            const applied = await rt.runStep<ApplyOutcome>({
-              kind: "sideeffect",
-              label: `integrate:apply:${patch.key}`,
-              payload: { op: "integrate.apply", key: patch.key, ref: patch.ref },
-              execute: async () => ({
-                value: await applyPatchToTree({
-                  repoRoot: rt.cwd,
-                  patch: await rt.host.blobs.getText(patch.ref),
-                }),
-              }),
-            });
+            const runApply = async () =>
+              applyPatchToTree({
+                repoRoot: rt.cwd,
+                patch: await rt.host.blobs.getText(patch.ref),
+              });
+
+            const { baseTree, snapRef } = reEstablishing
+              ? await takeSnapshot()
+              : await rt.runStep<{ baseTree: string; snapRef: string }>({
+                  kind: "sideeffect",
+                  label: `integrate:snapshot:${patch.key}`,
+                  payload: { op: "integrate.snapshot", key: patch.key, ref: patch.ref },
+                  execute: async () => ({ value: await takeSnapshot() }),
+                });
+            const applied = reEstablishing
+              ? await runApply()
+              : await rt.runStep<ApplyOutcome>({
+                  kind: "sideeffect",
+                  label: `integrate:apply:${patch.key}`,
+                  payload: { op: "integrate.apply", key: patch.key, ref: patch.ref },
+                  execute: async () => ({ value: await runApply() }),
+                });
             if (applied.ok) {
               const resultTree = await treeHash(rt.cwd);
               await rt.append([

@@ -947,7 +947,26 @@ export class RunRuntime {
     const hash = hashStep("human", payload);
     const seq = ++this.seqCounter;
 
-    const entry = this.replay?.matchHuman(hash);
+    let match = this.replay?.matchHuman(hash, seq, this.shared.positionsTrusted !== false);
+    if (match?.ambiguous) {
+      // Two human call sites share this question and schema, and the script moved, so
+      // position cannot say which journaled answer belongs to this one. Re-ask instead
+      // of serving a coin flip — an approval nobody gave is the one outcome this system
+      // must never produce.
+      this.log(
+        `ambiguous replay identity for human step #${seq}: more than one journaled request ` +
+          `shares this question and schema — re-asking rather than serving one of their answers`,
+      );
+      await this.append([
+        {
+          type: "replay.diverged",
+          seq,
+          reason: "ambiguous keyless identity (human): several journaled requests share this content",
+        },
+      ]);
+      match = undefined;
+    }
+    const entry = match?.entry;
     if (entry) {
       entry.consumed = true;
       this.consumedEntries++;
