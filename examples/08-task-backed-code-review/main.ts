@@ -89,7 +89,7 @@ try {
   );
 
   const taskDir = join(cwd, ".weft", "tasks", encodeURIComponent("example.task-backed-code-review"));
-  const taskFiles = (await readdir(taskDir)).filter((file) => /^task-[a-f0-9]{8}\.json$/.test(file));
+  const taskFiles = (await readdir(taskDir)).filter((file) => /^task-[a-f0-9]{32}\.json$/.test(file));
   assert.equal(taskFiles.length, 1);
   const task = JSON.parse(await readFile(join(taskDir, taskFiles[0]!), "utf8")) as {
     dedupeKey: string;

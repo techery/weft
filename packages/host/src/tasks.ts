@@ -22,6 +22,10 @@ import { assertWorkflowId, validateSchema } from "@techery/weft-sdk";
 export const TASK_SCHEMA_VERSION = 1;
 export const TASK_NAMESPACE_SCHEMA_VERSION = 1;
 
+const TASK_ID_HEX_LENGTH = 32;
+const TASK_ID_PATTERN = /^task-(?:[a-f0-9]{8}|[a-f0-9]{32})$/;
+const TASK_FILE_PATTERN = /^task-(?:[a-f0-9]{8}|[a-f0-9]{32})\.json$/;
+
 export const TASK_STATUSES = ["todo", "in_progress", "blocked", "done", "cancelled"] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export const TASK_PRIORITIES = ["low", "medium", "high", "critical"] as const;
@@ -272,7 +276,7 @@ export class TaskStore {
     }
     const tasks = await Promise.all(
       files
-        .filter((file) => /^task-[a-f0-9]{8}\.json$/.test(file))
+        .filter((file) => TASK_FILE_PATTERN.test(file))
         .map((file) => {
           const id = file.slice(0, -5);
           return this.readTask(join(dir, file), workflowId, id, schema, config);
@@ -317,8 +321,8 @@ export class TaskStore {
     const id =
       input.id ??
       (dedupeKey
-        ? `task-${digest(`dedupe:${workflowId}:${dedupeKey}`).slice(0, 8)}`
-        : `task-${randomUUID().slice(0, 8)}`);
+        ? deterministicTaskId(`dedupe:${workflowId}:${dedupeKey}`)
+        : `task-${randomUUID().replaceAll("-", "").slice(0, TASK_ID_HEX_LENGTH)}`);
     assertId(id);
     const currentTasks = await this.list(workflowId, extensionSchema);
     const duplicate = dedupeKey
@@ -705,6 +709,7 @@ export class TaskStore {
           : `agent:${context.provider}:${context.runId}:${context.step}`;
       for (const [index, operation] of operations.entries()) {
         const operationKey = `${batchId}:${index}`;
+        if (pending.appliedOperationKeys.has(operationKey)) continue;
         if (operation.op === "upsert") {
           const update = operation.update ? agentUpdateInput(operation.update) : undefined;
           await this.upsertUnlocked(
@@ -722,7 +727,7 @@ export class TaskStore {
           continue;
         }
         if (operation.op === "create") {
-          const id = `task-${digest(operationKey).slice(0, 8)}`;
+          const id = deterministicTaskId(operationKey);
           const existing = await this.get(context.workflowId, id, extensionSchema).catch((err: unknown) => {
             if (isMissingTask(err, context.workflowId, id)) return undefined;
             throw err;
@@ -811,14 +816,14 @@ export class TaskStore {
     const byDedupeKey = new Map(
       tasks.flatMap((task) => (task.dedupeKey ? [[task.dedupeKey, task] as const] : [])),
     );
+    const appliedKeys = new Set(tasks.flatMap((task) => task.appliedOperations));
     const pending: AgentTaskOperation[] = [];
     const appliedOperationKeys = new Set<string>();
     for (const [index, operation] of operations.entries()) {
       const operationKey = `${batchId}:${index}`;
       let applied: boolean;
       if (operation.op === "create") {
-        const id = `task-${digest(operationKey).slice(0, 8)}`;
-        applied = byId.get(id)?.appliedOperations.includes(operationKey) ?? false;
+        applied = appliedKeys.has(operationKey);
       } else if (operation.op === "upsert") {
         applied = byDedupeKey.get(operation.dedupeKey)?.appliedOperations.includes(operationKey) ?? false;
       } else {
@@ -1335,6 +1340,10 @@ function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function deterministicTaskId(value: string): string {
+  return `task-${digest(value).slice(0, TASK_ID_HEX_LENGTH)}`;
+}
+
 function cleanRequired(value: string, label: string): string {
   const clean = value.trim();
   if (clean === "") throw new Error(`${label} cannot be empty`);
@@ -1352,7 +1361,7 @@ function priorityOf(value: string): TaskPriority {
 }
 
 function assertId(value: string): void {
-  if (!/^task-[a-f0-9]{8}$/.test(value)) throw new Error(`invalid task id ${JSON.stringify(value)}`);
+  if (!TASK_ID_PATTERN.test(value)) throw new Error(`invalid task id ${JSON.stringify(value)}`);
 }
 
 function assertCriterionId(value: string): void {

@@ -617,7 +617,7 @@ describe("weft task", () => {
       dedupeKey?: string;
       extensionSchemaVersion: number;
     };
-    expect(task.id).toMatch(/^task-[0-9a-f]{8}$/);
+    expect(task.id).toMatch(/^task-[0-9a-f]{32}$/);
     expect(task.dedupeKey).toBe("context-wiring");
     expect(task.extensionSchemaVersion).toBe(2);
     expect(existsSync(path.join(root, ".weft/tasks/tracked/.workflow.json"))).toBe(true);

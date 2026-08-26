@@ -9,6 +9,69 @@ import { cleanupRoots, tempRoot } from "./helpers.ts";
 afterAll(cleanupRoots);
 
 describe("TaskStore", () => {
+  it("preserves enough deterministic id entropy when legacy prefixes collide", async () => {
+    const root = await tempRoot();
+    const taskRoot = join(root, ".weft", "tasks");
+    const store = new TaskStore(taskRoot);
+    // These SHA-256 inputs share their first eight hex digits for this workflow.
+    const operations = ["collision-7408", "collision-152431"].map((dedupeKey) => ({
+      op: "upsert" as const,
+      dedupeKey,
+      create: { title: dedupeKey, description: "Distinct recurring review finding" },
+    }));
+    const context = {
+      workflowId: "review",
+      workflowName: "review",
+      runId: "run-1",
+      step: "review",
+      provider: "codex",
+    };
+
+    await store.applyBatch(context, "collision-batch", operations);
+    await store.applyBatch(context, "collision-batch", operations);
+
+    const tasks = await new TaskStore(taskRoot).list("review");
+    const byKey = new Map(tasks.map((task) => [task.dedupeKey, task]));
+    const first = byKey.get("collision-7408");
+    const second = byKey.get("collision-152431");
+
+    expect(tasks).toHaveLength(2);
+    expect(first?.id.slice(0, 13)).toBe(second?.id.slice(0, 13));
+    expect(first?.id).toMatch(/^task-[a-f0-9]{32}$/);
+    expect(second?.id).toMatch(/^task-[a-f0-9]{32}$/);
+    expect(first?.id).not.toBe(second?.id);
+  });
+
+  it("recognizes legacy task ids while settling a lost batch marker", async () => {
+    const root = await tempRoot();
+    const taskRoot = join(root, ".weft", "tasks");
+    const store = new TaskStore(taskRoot);
+    const batchId = "legacy-batch";
+    const operationKey = `${batchId}:0`;
+    const legacyId = `task-${createHash("sha256").update(operationKey).digest("hex").slice(0, 8)}`;
+    const operation = { op: "create" as const, title: "Legacy", description: "Already applied" };
+    await store.create("review", {
+      id: legacyId,
+      title: operation.title,
+      description: operation.description,
+      operationKey,
+    });
+
+    await store.applyBatch(
+      {
+        workflowId: "review",
+        workflowName: "review",
+        runId: "run-1",
+        step: "review",
+        provider: "codex",
+      },
+      batchId,
+      [operation],
+    );
+
+    expect(await store.list("review")).toEqual([expect.objectContaining({ id: legacyId })]);
+  });
+
   it("stores workflow-scoped tasks, validates extensions, and preserves concurrent notes", async () => {
     const root = await tempRoot();
     const store = new TaskStore(join(root, ".weft", "tasks"));

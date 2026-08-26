@@ -113,7 +113,7 @@ describe("task-backed code review backlog", () => {
       "Workflow task tracker",
     );
     const taskDir = join(cwd, ".weft", "tasks", encodeURIComponent(workflowId));
-    const taskFiles = (await readdir(taskDir)).filter((file) => /^task-[a-f0-9]{8}\.json$/.test(file));
+    const taskFiles = (await readdir(taskDir)).filter((file) => /^task-[a-f0-9]{32}\.json$/.test(file));
     expect(taskFiles).toHaveLength(1);
     const task = JSON.parse(await readFile(join(taskDir, taskFiles[0]!), "utf8")) as {
       dedupeKey: string;
@@ -139,7 +139,7 @@ describe("task-backed code review backlog", () => {
     });
     expect(result.output.recorded).toBe(0);
     const taskDir = join(cwd, ".weft", "tasks", encodeURIComponent(workflowId));
-    const taskFiles = (await readdir(taskDir)).filter((file) => /^task-[a-f0-9]{8}\.json$/.test(file));
+    const taskFiles = (await readdir(taskDir)).filter((file) => /^task-[a-f0-9]{32}\.json$/.test(file));
     expect(taskFiles).toEqual([]);
   });
 
