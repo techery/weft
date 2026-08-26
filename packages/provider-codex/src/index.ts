@@ -274,6 +274,16 @@ export function toStrictSchema(node: unknown): unknown {
   }
 
   const properties = out.properties;
+  // OpenAI's Zod integration rewrites discriminated-union `oneOf` to `anyOf`:
+  // discriminator literals make the branches mutually exclusive, while the
+  // Structured Outputs endpoint rejects `oneOf` in this position.
+  if (out.oneOf !== undefined) {
+    if (out.anyOf !== undefined) {
+      throw new Error("codex: schema contains both oneOf and anyOf; cannot adapt it safely");
+    }
+    out.anyOf = out.oneOf;
+    delete out.oneOf;
+  }
   if (isObjectSchema(out) && typeof properties === "object" && properties !== null) {
     if (out.additionalProperties === undefined || out.additionalProperties === false) {
       out.additionalProperties = false;

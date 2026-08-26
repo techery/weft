@@ -74,7 +74,10 @@ import {
 
 const RISK_ORDER: Risk[] = ["low", "medium", "high", "irreversible"];
 
-const AgentTaskOperationSchema = z.discriminatedUnion("op", [
+// Codex's native structured-output schema dialect rejects `oneOf`. The operation
+// variants are mutually exclusive by their `op` literal, so `anyOf` has the same
+// runtime meaning here and is portable across the provider adapters.
+const AgentTaskOperationSchema = z.union([
   z
     .object({
       op: z.literal("create"),
@@ -169,16 +172,64 @@ type AgentStepResult<T> = DetailedAgentResult<T> & {
   taskOperations?: AgentTaskOperation[];
 };
 
-function agentEnvelopeSchema(result: Record<string, unknown>, canWrite = true): Record<string, unknown> {
+function agentEnvelopeSchema(
+  result: Record<string, unknown>,
+  canWrite = true,
+  taskExtensionSchema?: unknown,
+): Record<string, unknown> {
   const operationsSchema = canWrite ? AgentTaskOperationsSchema : z.array(AgentTaskOperationSchema).max(0);
   const taskOperations = z.toJSONSchema(operationsSchema, { reused: "inline" }) as Record<string, unknown>;
   delete taskOperations.$schema;
+  bindTaskExtensionSchema(taskOperations, taskExtensionSchema);
   return {
     type: "object",
     properties: { result, taskOperations },
     required: ["result", "taskOperations"],
     additionalProperties: false,
   };
+}
+
+/**
+ * `AgentTaskOperationSchema` keeps extensions open for runtime validation, but an
+ * open Zod value becomes `{}` in JSON Schema and OpenAI rejects that as a schema
+ * node without `type`. Bind the workflow's declared extension contract into the
+ * model-facing envelope; undeclared extensions are an empty closed object.
+ */
+function bindTaskExtensionSchema(node: unknown, declared: unknown): void {
+  if (typeof node !== "object" || node === null || Array.isArray(node)) return;
+  const schema = node as Record<string, unknown>;
+  const properties = schema.properties;
+  if (typeof properties === "object" && properties !== null && !Array.isArray(properties)) {
+    const propertyMap = properties as Record<string, unknown>;
+    if (Object.hasOwn(propertyMap, "extensions")) {
+      propertyMap.extensions = cloneJsonSchema(
+        isJsonSchemaObject(declared) ? declared : EMPTY_TASK_EXTENSIONS_SCHEMA,
+      );
+    }
+    for (const child of Object.values(propertyMap)) bindTaskExtensionSchema(child, declared);
+  }
+  for (const key of ["items", "additionalProperties", "contains", "if", "then", "else", "not"]) {
+    bindTaskExtensionSchema(schema[key], declared);
+  }
+  for (const key of ["anyOf", "oneOf", "allOf", "prefixItems"]) {
+    const children = schema[key];
+    if (Array.isArray(children)) for (const child of children) bindTaskExtensionSchema(child, declared);
+  }
+}
+
+const EMPTY_TASK_EXTENSIONS_SCHEMA = {
+  type: "object",
+  properties: {},
+  required: [],
+  additionalProperties: false,
+} as const;
+
+function isJsonSchemaObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && "type" in value;
+}
+
+function cloneJsonSchema(value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 }
 
 function maxRisk(a: Risk, b: Risk | undefined): Risk {
@@ -626,7 +677,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
         ...(opts.key !== undefined ? { key: opts.key } : {}),
         label,
         payload,
-        schemaJson: taskContext ? agentEnvelopeSchema(wire.json, taskMode === "write") : wire.json,
+        schemaJson: taskContext
+          ? agentEnvelopeSchema(wire.json, taskMode === "write", taskObservation?.schema)
+          : wire.json,
         ...(opts.retry
           ? { retry: { attempts: opts.retry.attempts, backoffMs: toMs(opts.retry.backoff, 1_000) } }
           : {}),
@@ -788,7 +841,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
               const req: AgentRequest = {
                 prompt: finalPrompt,
                 cwd: workCwd,
-                schema: taskContext ? agentEnvelopeSchema(wire.json, taskMode === "write") : wire.json,
+                schema: taskContext
+                  ? agentEnvelopeSchema(wire.json, taskMode === "write", taskObservation?.schema)
+                  : wire.json,
                 label,
                 ...(opts.key !== undefined ? { key: opts.key } : {}),
                 ...(model !== undefined ? { model } : {}),

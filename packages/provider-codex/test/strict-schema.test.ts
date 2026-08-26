@@ -53,6 +53,22 @@ describe("toStrictSchema", () => {
     for (const branch of branches) expect(branch.additionalProperties).toBe(false);
   });
 
+  test("adapts discriminated unions from oneOf to OpenAI-compatible anyOf", () => {
+    const out = strict(
+      z.discriminatedUnion("kind", [
+        z.object({ kind: z.literal("a"), value: z.string() }),
+        z.object({ kind: z.literal("b"), count: z.number() }),
+      ]),
+    );
+    expect(out.oneOf).toBeUndefined();
+    const branches = (out.anyOf ?? []) as Node[];
+    expect(branches).toHaveLength(2);
+    for (const branch of branches) {
+      expect(branch.additionalProperties).toBe(false);
+      expect(branch.required).toContain("kind");
+    }
+  });
+
   test("does not clobber a meaningful additionalProperties", () => {
     // z.record's additionalProperties is a subschema, not a closed-object marker.
     const out = strict(z.object({ bag: z.record(z.string(), z.number()) }));

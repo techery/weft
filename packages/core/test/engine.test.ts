@@ -80,6 +80,10 @@ describe("engine end to end", () => {
     expect(t.builder.calls[0]!.prompt).toContain("## Workflow task tracker");
     expect(t.builder.calls[0]!.prompt).toContain("task --workflow 'planner'");
     expect(t.builder.calls[0]!.prompt).toContain("taskOperations");
+    const taskSchema = JSON.stringify(t.builder.calls[0]!.schema);
+    expect(taskSchema).toContain('"anyOf"');
+    expect(taskSchema).not.toContain('"oneOf"');
+    expect(taskSchema).toContain('"extensions":{"type":"object"');
     expect(t.builder.calls[0]!.protectedPaths).toEqual(["/host/.weft/tasks"]);
     expect(applied).toEqual([]);
     expect(
