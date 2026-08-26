@@ -2050,6 +2050,8 @@ export class Engine implements EngineHost {
         ...(h.risk !== undefined ? { risk: h.risk } : {}),
         ...(h.deadline !== undefined ? { deadline: h.deadline } : {}),
         ...(h.confirmToken !== undefined ? { confirmToken: h.confirmToken } : {}),
+        ...(h.artifactRef !== undefined ? { artifactRef: h.artifactRef } : {}),
+        ...(h.ui !== undefined ? { ui: h.ui } : {}),
       }));
     for (const { childRunId } of state.children) {
       if (seen.has(childRunId)) continue;

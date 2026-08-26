@@ -121,11 +121,46 @@ describe("custom workflow UI", () => {
       asset: { id: "test-view", revision: "1" },
       mode: "input",
     });
+    expect((await t.engine.pending(handle.runId))[0]?.ui).toEqual(waiting.pending[0]?.ui);
     await expect(t.engine.answer(handle.runId, waiting.pending[0]!.id, { choice: "nope" })).rejects.toThrow(
       /does not match/,
     );
     await t.engine.answer(handle.runId, waiting.pending[0]!.id, { choice: "a" });
     await expect(handle.result).resolves.toEqual({ choice: "a" });
+  });
+
+  test("engine.pending preserves child input views after the owner restarts", async () => {
+    const t = testEngine();
+    const Answer = z.object({ choice: z.string() });
+    const view = { kind: "weft.ui-view", assetKey } as unknown as InputUiView<
+      Record<string, never>,
+      z.input<typeof Answer>
+    >;
+    const child = defineWorkflow(
+      { name: "ui-child", description: "child", input: z.object({}), output: Answer },
+      async (ctx) =>
+        ctx.human.ask({ key: "choice", question: "Choose", schema: Answer, ui: { view, props: {} } }),
+    );
+    const parent = defineWorkflow(
+      { name: "ui-parent", description: "parent", input: z.object({}), output: Answer },
+      async (ctx) => (await ctx.workflow(child, {}, { key: "child" })) as z.output<typeof Answer>,
+    );
+    const handle = await t.engine.start(parent, {
+      input: {},
+      cwd: await tempDir(),
+      uiCatalog: catalog("1", "input"),
+    });
+    const waiting = await handle.outcome();
+    if (waiting.status !== "waiting_for_human") throw new Error("expected child human request");
+    await t.engine.shutdown();
+
+    const next = reopen(t);
+    const pending = await next.engine.pending(handle.runId);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      ui: { asset: { id: "test-view", revision: "1" }, mode: "input" },
+    });
+    expect(pending[0]?.runId).not.toBe(handle.runId);
   });
 
   test("a changed input-view revision supersedes the old same-key request", async () => {
