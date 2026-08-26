@@ -1122,4 +1122,58 @@ describe("resume across engine instances", () => {
     expect(await resumedHandle.result).toEqual({ observed: 1 });
     expect(snapshotCalls).toBe(1);
   });
+
+  test("resume and dry replay reject a registry replacement with a different stable workflow id", async () => {
+    const tracker = {
+      prepare: async () => "original-binding",
+      snapshot: async () => ({ total: 0, tasks: [] }),
+      schema: async () => null,
+      applyBatch: async () => undefined,
+    };
+    const original = defineWorkflow(
+      {
+        id: "original-review",
+        name: "review",
+        description: "original",
+        input: z.object({}),
+        output: z.object({ approved: z.boolean() }),
+      },
+      async (ctx) => ctx.human.approve({ action: "Continue the original workflow?" }),
+    );
+    const first = testEngine({ taskTracker: tracker });
+    const handle = await first.engine.start(original, { input: {}, cwd: await tempDir() });
+    expect((await handle.outcome()).status).toBe("waiting_for_human");
+    await first.engine.shutdown();
+
+    let replacementRuns = 0;
+    const replacement = defineWorkflow(
+      {
+        id: "replacement-review",
+        name: "review",
+        description: "replacement",
+        input: z.object({}),
+        output: z.object({ approved: z.boolean() }),
+      },
+      async () => {
+        replacementRuns++;
+        return { approved: true };
+      },
+    );
+    let prepares = 0;
+    const reopened = reopen(first, {
+      registry: { get: async (name) => (name === "review" ? replacement : undefined) },
+      taskTracker: {
+        ...tracker,
+        prepare: async () => {
+          prepares++;
+          return "replacement-binding";
+        },
+      },
+    });
+
+    await expect(reopened.engine.replayDry(handle.runId)).rejects.toThrow(/workflow identity mismatch/);
+    await expect(reopened.engine.resume(handle.runId)).rejects.toThrow(/workflow identity mismatch/);
+    expect(prepares).toBe(0);
+    expect(replacementRuns).toBe(0);
+  });
 });

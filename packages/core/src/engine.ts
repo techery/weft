@@ -155,6 +155,22 @@ function versionUnchanged(
   );
 }
 
+/** A journaled stable ID is the authority even when its old callable name still resolves. */
+function assertResumedWorkflowIdentity(
+  runId: string,
+  journaled: { id?: string; name: string },
+  def: WorkflowDefinition,
+): void {
+  if (journaled.id === undefined) return; // Legacy journals recorded names only.
+  const currentId = def.meta.id ?? def.meta.name ?? journaled.name;
+  if (currentId !== journaled.id) {
+    throw new Error(
+      `run ${runId}: workflow identity mismatch — journal belongs to ${JSON.stringify(journaled.id)}, ` +
+        `but ${JSON.stringify(journaled.name)} now resolves to ${JSON.stringify(currentId)}`,
+    );
+  }
+}
+
 export interface WorkflowRegistry {
   get(name: string): Promise<WorkflowDefinition | undefined>;
   /**
@@ -409,6 +425,7 @@ export class Engine implements EngineHost {
         `run ${runId}: no definition for "${created.workflow.name}" (pass def or configure a registry)`,
       );
     }
+    assertResumedWorkflowIdentity(runId, created.workflow, def);
     const resumeOpts: ResumeOptions = {
       ...opts,
       ...(bundleHash !== undefined ? { defHash: bundleHash } : {}),
@@ -1897,6 +1914,7 @@ export class Engine implements EngineHost {
     let def = opts.def;
     if (!def && this.registry) def = await this.registry.get(created.workflow.name);
     if (!def) throw new Error(`run ${runId}: no definition for "${created.workflow.name}"`);
+    assertResumedWorkflowIdentity(runId, created.workflow, def);
 
     const replayWorkflowId = created.workflow.id ?? def.meta.id ?? created.workflow.name;
     const bodyHash = definitionHash(def);
