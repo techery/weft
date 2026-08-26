@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { UI_PROTOCOL_MAX_PROPS_BYTES } from "@techery/weft-sdk/ui";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "~/api/client";
 import type { UiPresentation } from "~/api/types";
 import styles from "./WorkflowViewFrame.module.css";
@@ -11,15 +12,15 @@ type Props = {
 
 type FrameStatus = "loading" | "ready" | "error" | "disabled";
 
-const MAX_MESSAGE_BYTES = 64 * 1024;
+const MAX_FRAME_MESSAGE_BYTES = 64 * 1024;
 const MIN_HEIGHT = 80;
 const MAX_HEIGHT = 720;
 const READY_TIMEOUT_MS = 5_000;
 
-function jsonSize(value: unknown): number | undefined {
+function jsonByteSize(value: unknown): number | undefined {
   try {
     const encoded = JSON.stringify(value);
-    return encoded === undefined ? undefined : encoded.length;
+    return encoded === undefined ? undefined : new TextEncoder().encode(encoded).byteLength;
   } catch {
     return undefined;
   }
@@ -29,15 +30,38 @@ function jsonSize(value: unknown): number | undefined {
 export function WorkflowViewFrame({ runId, presentation, onCandidate }: Props) {
   const frame = useRef<HTMLIFrameElement>(null);
   const channel = useRef<MessageChannel | null>(null);
+  const initialization = useRef(0);
   const generation = useRef(0);
   const readyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastResize = useRef(0);
   const [status, setStatus] = useState<FrameStatus>("loading");
   const [height, setHeight] = useState(180);
   const [message, setMessage] = useState("");
+  const identity = JSON.stringify([
+    runId,
+    presentation.id,
+    presentation.asset.bundleRef.$blob,
+    presentation.props.hash,
+  ]);
+  const activeIdentity = useRef(identity);
+
+  useLayoutEffect(() => {
+    if (activeIdentity.current === identity) return;
+    activeIdentity.current = identity;
+    initialization.current += 1;
+    if (readyTimer.current) clearTimeout(readyTimer.current);
+    readyTimer.current = null;
+    channel.current?.port1.close();
+    channel.current?.port2.close();
+    channel.current = null;
+    setStatus("loading");
+    setMessage("");
+    setHeight(180);
+  }, [identity]);
 
   useEffect(() => {
     return () => {
+      initialization.current += 1;
       if (readyTimer.current) clearTimeout(readyTimer.current);
       channel.current?.port1.close();
       channel.current?.port2.close();
@@ -47,14 +71,21 @@ export function WorkflowViewFrame({ runId, presentation, onCandidate }: Props) {
   const initialize = useCallback(async () => {
     const target = frame.current?.contentWindow;
     if (!target || status === "disabled") return;
+    const attempt = ++initialization.current;
+    const currentIdentity = identity;
+    const isCurrent = () =>
+      initialization.current === attempt &&
+      activeIdentity.current === currentIdentity &&
+      frame.current?.contentWindow === target;
     try {
       const props =
         "inline" in presentation.props
           ? presentation.props.inline
           : await api.blobJson(presentation.props.ref.$blob);
-      const bytes = jsonSize(props);
+      if (!isCurrent()) return;
+      const bytes = jsonByteSize(props);
       if (bytes === undefined) throw new Error("presentation props must be JSON serializable");
-      if (bytes > MAX_MESSAGE_BYTES * 8) throw new Error("presentation props are too large to render");
+      if (bytes > UI_PROTOCOL_MAX_PROPS_BYTES) throw new Error("presentation props are too large to render");
       const next = new MessageChannel();
       channel.current?.port1.close();
       channel.current?.port2.close();
@@ -62,6 +93,7 @@ export function WorkflowViewFrame({ runId, presentation, onCandidate }: Props) {
       const mounted = String(++generation.current);
       if (readyTimer.current) clearTimeout(readyTimer.current);
       readyTimer.current = setTimeout(() => {
+        if (!isCurrent()) return;
         setStatus("error");
         setMessage("custom view did not become ready in time");
         next.port1.close();
@@ -71,8 +103,8 @@ export function WorkflowViewFrame({ runId, presentation, onCandidate }: Props) {
         if (typeof value !== "object" || value === null) return;
         const data = value as Record<string, unknown>;
         if (data.presentationId !== presentation.id || data.generation !== mounted) return;
-        const size = jsonSize(data);
-        if (size === undefined || size > MAX_MESSAGE_BYTES) return;
+        const size = jsonByteSize(data);
+        if (size === undefined || size > MAX_FRAME_MESSAGE_BYTES) return;
         if (data.type === "ready") {
           if (readyTimer.current) clearTimeout(readyTimer.current);
           readyTimer.current = null;
@@ -83,7 +115,7 @@ export function WorkflowViewFrame({ runId, presentation, onCandidate }: Props) {
           lastResize.current = now;
           setHeight(Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.ceil(data.height))));
         } else if (data.type === "candidate" && presentation.mode === "input") {
-          if (jsonSize(data.answer) === undefined) return;
+          if (jsonByteSize(data.answer) === undefined) return;
           onCandidate?.(data.answer);
         } else if (data.type === "error" && typeof data.message === "string") {
           if (readyTimer.current) clearTimeout(readyTimer.current);
@@ -105,12 +137,13 @@ export function WorkflowViewFrame({ runId, presentation, onCandidate }: Props) {
         [next.port2],
       );
     } catch (error) {
+      if (!isCurrent()) return;
       if (readyTimer.current) clearTimeout(readyTimer.current);
       readyTimer.current = null;
       setStatus("error");
       setMessage(error instanceof Error ? error.message : String(error));
     }
-  }, [onCandidate, presentation, status]);
+  }, [identity, onCandidate, presentation, status]);
 
   if (status === "disabled") {
     return (

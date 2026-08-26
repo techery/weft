@@ -4,6 +4,9 @@ export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue
 
 export type UiViewMode = "input" | "display";
 
+/** Maximum UTF-8 JSON payload accepted by custom UI protocol v1. */
+export const UI_PROTOCOL_MAX_PROPS_BYTES = 512 * 1024;
+
 /**
  * The opaque value workflow code receives for a `.ui.tsx` import.
  *

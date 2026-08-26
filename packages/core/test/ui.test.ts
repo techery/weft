@@ -5,6 +5,7 @@ import {
   type DisplayUiView,
   defineWorkflow,
   type InputUiView,
+  UI_PROTOCOL_MAX_PROPS_BYTES,
   z,
 } from "@techery/weft-sdk";
 import { afterAll, describe, expect, test } from "vitest";
@@ -64,6 +65,32 @@ describe("custom workflow UI", () => {
       (record) => record.ev.type === "step.completed" && record.ev.presentation !== undefined,
     );
     expect(completions).toHaveLength(1);
+  });
+
+  test("rejects UI props above the protocol byte limit before journaling a presentation", async () => {
+    const t = testEngine({ config: { limits: { blobThresholdBytes: 1 } } });
+    const view = { kind: "weft.ui-view", assetKey } as unknown as DisplayUiView<{ message: string }>;
+    const def = defineWorkflow(
+      { description: "oversized-ui", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        await ctx.ui.render({
+          key: "summary",
+          view,
+          // Multi-byte text verifies the protocol limit is measured as UTF-8 bytes.
+          props: { message: "é".repeat(UI_PROTOCOL_MAX_PROPS_BYTES / 2) },
+        });
+        return { ok: true };
+      },
+    );
+    const handle = await t.engine.start(def, {
+      input: {},
+      cwd: await tempDir(),
+      uiCatalog: catalog(),
+    });
+
+    await expect(handle.result).rejects.toThrow(/UI props are \d+ bytes; protocol limit is 524288/);
+    const state = await t.engine.state(handle.runId);
+    expect(state.steps.some((step) => step.presentation !== undefined)).toBe(false);
   });
 
   test("input views stage durable UI while the schema remains authoritative", async () => {

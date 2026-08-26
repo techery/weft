@@ -16,6 +16,7 @@ import {
   type Risk,
   StepError,
   type StepRef,
+  UI_PROTOCOL_MAX_PROPS_BYTES,
   type Usage,
   validateSchema,
 } from "@techery/weft-sdk";
@@ -506,9 +507,17 @@ export class RunRuntime {
       });
     }
     const json = canonicalJson(props);
+    const propsBytes = Buffer.byteLength(json);
+    if (propsBytes > UI_PROTOCOL_MAX_PROPS_BYTES) {
+      throw new StepError(
+        "invalid_input",
+        `UI props are ${propsBytes} bytes; protocol limit is ${UI_PROTOCOL_MAX_PROPS_BYTES}`,
+        { step: { kind: "ui", runId: this.runId } },
+      );
+    }
     const propsHash = sha256Hex(json);
     const propsJson =
-      Buffer.byteLength(json) <= this.host.config.limits.blobThresholdBytes
+      propsBytes <= this.host.config.limits.blobThresholdBytes
         ? ({ inline: props, hash: propsHash } as const)
         : await this.host.blobs.put(json, { kind: "ui-props", contentType: "application/json" }).then(
             (ref) =>

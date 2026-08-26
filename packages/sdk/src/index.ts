@@ -120,3 +120,4 @@ export type {
   UiViewMode,
   UiViewRef,
 } from "./ui.ts";
+export { UI_PROTOCOL_MAX_PROPS_BYTES } from "./ui.ts";

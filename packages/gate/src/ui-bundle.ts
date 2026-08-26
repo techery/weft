@@ -192,21 +192,32 @@ function browserImportPolicy(root: string): Plugin {
     "@techery/weft-sdk/ui",
   ]);
   const supported = /\.[cm]?[jt]sx?$/;
-  const compilerFiles = new Set(
-    [...allowedBare].flatMap((specifier) => {
-      try {
-        return [COMPILER_REQUIRE.resolve(specifier)];
-      } catch {
-        return [];
-      }
-    }),
-  );
+  const compilerFiles = new Set<string>();
   return {
     name: "weft-ui-browser-policy",
     setup(pluginBuild) {
       pluginBuild.onResolve({ filter: /.*/ }, (args) => {
         if (args.kind === "dynamic-import") {
           return { errors: [{ text: `dynamic imports are not supported in workflow UI (${args.path})` }] };
+        }
+        return null;
+      });
+      pluginBuild.onResolve({ filter: /^(?:\.{1,2}(?:\/|$)|\/)/ }, async (args) => {
+        if (compilerFiles.has(args.importer)) {
+          try {
+            const resolved = createRequire(args.importer).resolve(args.path);
+            compilerFiles.add(resolved);
+            return { path: resolved };
+          } catch (err) {
+            return {
+              errors: [{ text: `cannot resolve compiler-owned ${args.path}: ${(err as Error).message}` }],
+            };
+          }
+        }
+        const requested = path.resolve(args.resolveDir || root, args.path);
+        const file = await realpath(requested).catch(() => requested);
+        if (!inside(root, file)) {
+          return { errors: [{ text: `browser import escapes the workflow root: ${args.path}` }] };
         }
         return null;
       });
@@ -217,7 +228,9 @@ function browserImportPolicy(root: string): Plugin {
           };
         }
         try {
-          return { path: COMPILER_REQUIRE.resolve(args.path) };
+          const resolved = COMPILER_REQUIRE.resolve(args.path);
+          compilerFiles.add(resolved);
+          return { path: resolved };
         } catch (err) {
           return {
             errors: [{ text: `cannot resolve compiler-owned ${args.path}: ${(err as Error).message}` }],
@@ -228,8 +241,7 @@ function browserImportPolicy(root: string): Plugin {
         errors: [{ text: `CSS imports are not supported in workflow UI v1 (${args.path})` }],
       }));
       pluginBuild.onLoad({ filter: /.*/, namespace: "file" }, async (args) => {
-        if (args.path.includes(`${path.sep}node_modules${path.sep}`) || compilerFiles.has(args.path))
-          return null;
+        if (compilerFiles.has(args.path)) return null;
         if (!inside(root, await realpath(args.path).catch(() => args.path))) {
           return { errors: [{ text: `browser import escapes the workflow root: ${args.path}` }] };
         }

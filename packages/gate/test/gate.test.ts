@@ -438,6 +438,38 @@ describe("bundleWorkflow", () => {
     await expect(bundleWorkflow({ entry, cwd: dir })).rejects.toThrow(/dynamic imports are not supported/);
   });
 
+  it("rejects relative node_modules paths that escape the workflow root", async () => {
+    const project = await tempDir();
+    const root = path.join(project, ".weft/workflows");
+    await write(project, "node_modules/unapproved/index.js", `export default "escaped";`);
+    await write(
+      root,
+      "panel.ui.tsx",
+      [
+        `import { defineResultView } from "@techery/weft-sdk/ui";`,
+        `import escaped from "../../node_modules/unapproved/index.js";`,
+        `export default defineResultView<Record<string, never>>({`,
+        `  id: "panel", revision: "1",`,
+        `  component: () => <strong>{escaped}</strong>,`,
+        `});`,
+      ].join("\n"),
+    );
+    const entry = await write(
+      root,
+      "workflow.ts",
+      [
+        `import { defineWorkflow, z } from "@techery/weft-sdk";`,
+        `import panel from "./panel.ui.tsx";`,
+        `export default defineWorkflow(`,
+        `  { description: "ui", input: z.object({}), output: z.object({ ok: z.boolean() }) },`,
+        `  async (ctx) => { await ctx.ui.render({ key: "panel", view: panel, props: {} }); return { ok: true }; },`,
+        `);`,
+      ].join("\n"),
+    );
+
+    await expect(bundleWorkflow({ entry })).rejects.toThrow(/browser import escapes the workflow root/);
+  });
+
   it("keeps the custom React UI example compilable as three browser views", async () => {
     const loaded = await loadWorkflow({
       entry: path.join(repoRoot, "examples/09-custom-react-ui/workflow.ts"),
