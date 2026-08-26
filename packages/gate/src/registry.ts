@@ -23,6 +23,10 @@ import { GateError } from "./rules.ts";
 /** Structurally the `WorkflowRegistry` @techery/weft-core's Engine takes (gate does not import core). */
 export interface WorkflowRegistry {
   get(name: string): Promise<WorkflowDefinition | undefined>;
+  resolve?(identity: {
+    id?: string;
+    name: string;
+  }): Promise<{ def: WorkflowDefinition; name: string; hash?: string } | undefined>;
   /** Bundle content hash of what `get(name)` returns; the engine's resume compares it. */
   hashOf?(name: string): Promise<string | undefined>;
 }
@@ -47,6 +51,11 @@ export interface FileWorkflowRegistry extends WorkflowRegistry {
   /** Every loadable workflow in the directory, sorted by name. Missing directory → `[]`. */
   list(): Promise<WorkflowListEntry[]>;
   load(name: string): Promise<RegistryLoadResult>;
+  /** Resolve durable run identity; an explicit ID never falls back to a callable name. */
+  resolve(identity: {
+    id?: string;
+    name: string;
+  }): Promise<{ def: WorkflowDefinition; name: string; hash?: string } | undefined>;
   hashOf(name: string): Promise<string | undefined>;
 }
 
@@ -152,6 +161,16 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
     return match;
   };
 
+  const findById = async (id: string): Promise<CacheEntry | undefined> => {
+    const matches: CacheEntry[] = [];
+    for (const file of await candidates()) {
+      const entry = await tolerantLoad(loadFile, file);
+      if (entry?.id === id) matches.push(entry);
+    }
+    assertUnique(matches, "id", id);
+    return matches[0];
+  };
+
   return {
     async list(): Promise<WorkflowListEntry[]> {
       const entries: WorkflowListEntry[] = [];
@@ -190,6 +209,12 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
     async get(name: string): Promise<WorkflowDefinition | undefined> {
       const entry = await find(name);
       return entry?.def;
+    },
+
+    async resolve(identity): Promise<{ def: WorkflowDefinition; name: string; hash: string } | undefined> {
+      const entry = identity.id === undefined ? await find(identity.name) : await findById(identity.id);
+      if (!entry) return undefined;
+      return { def: entry.def, name: entry.name, hash: entry.hash };
     },
 
     async hashOf(name: string): Promise<string | undefined> {

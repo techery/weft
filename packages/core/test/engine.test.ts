@@ -948,6 +948,83 @@ describe("engine end to end", () => {
     expect(new Set(childRunIds)).toEqual(new Set([childRunId]));
   });
 
+  test("a renamed task-aware child replays its stable task observation", async () => {
+    let snapshotCalls = 0;
+    let snapshot = { total: 1, truncated: false, tasks: [{ id: "task-before" }] };
+    const taskTracker = {
+      prepare: async (
+        _workflow: { id: string; name: string },
+        _schema: unknown,
+        options?: { identity?: string },
+      ) => options?.identity,
+      snapshot: async () => {
+        snapshotCalls++;
+        return structuredClone(snapshot);
+      },
+      schema: async () => null,
+      applyBatch: async () => undefined,
+    };
+    const child = (name: string) =>
+      defineWorkflow(
+        {
+          id: "task-aware-child",
+          name,
+          description: "task-aware child",
+          input: z.object({}),
+          output: z.object({ observed: z.number() }),
+        },
+        async (ctx) => {
+          const observed = await ctx.tasks.observe({}, { key: "child-tasks" });
+          return ctx.agent(`Report ${observed.tasks.length} observed tasks`, {
+            key: "child-report",
+            schema: z.object({ observed: z.number() }),
+          });
+        },
+      );
+    const parent = (nested: ReturnType<typeof child>) =>
+      defineWorkflow(
+        {
+          id: "task-aware-parent",
+          name: "task-aware-parent",
+          description: "parent",
+          input: z.object({}),
+          output: z.object({ observed: z.number(), approved: z.boolean() }),
+        },
+        async (ctx) => {
+          const result = await ctx.workflow(nested, {}, { key: "task-aware-child-step" });
+          const approval = await ctx.human.approve({ action: "Finish?" });
+          return { observed: result.observed, approved: approval.approved };
+        },
+      );
+
+    const first = testEngine({ taskTracker });
+    first.builder.on({ key: "child-report" }, { observed: 1 });
+    const handle = await first.engine.start(parent(child("original-task-child")), {
+      input: {},
+      cwd: await tempDir(),
+    });
+    const outcome = await handle.outcome();
+    expect(outcome.status).toBe("waiting_for_human");
+    if (outcome.status !== "waiting_for_human") throw new Error("unreachable");
+    const callsBeforeResume = snapshotCalls;
+    snapshot = {
+      total: 2,
+      truncated: false,
+      tasks: [{ id: "task-before" }, { id: "task-created-while-suspended" }],
+    };
+
+    await first.engine.shutdown();
+    await reopen(first).engine.answer(handle.runId, outcome.pending[0]!.id, { approved: true });
+    const resumed = reopen(first, { taskTracker });
+    const resumedHandle = await resumed.engine.resume(handle.runId, {
+      def: parent(child("renamed-task-child")),
+    });
+
+    expect(await resumedHandle.result).toEqual({ observed: 1, approved: true });
+    expect(snapshotCalls).toBe(callsBeforeResume);
+    expect(resumed.builder.calls).toHaveLength(0);
+  });
+
   test("depth cap rejects nesting past 3", async () => {
     const deep: ReturnType<typeof defineWorkflow>[] = [];
     for (let i = 0; i < 5; i++) {
@@ -1303,5 +1380,94 @@ describe("resume across engine instances", () => {
     await expect(reopened.engine.resume(handle.runId)).rejects.toThrow(/workflow identity mismatch/);
     expect(prepares).toBe(0);
     expect(replacementRuns).toBe(0);
+
+    let legacyGets = 0;
+    const idAwareMiss = reopen(first, {
+      registry: {
+        resolve: async () => undefined,
+        get: async () => {
+          legacyGets++;
+          return replacement;
+        },
+      },
+      taskTracker: tracker,
+    });
+    await expect(idAwareMiss.engine.resume(handle.runId)).rejects.toThrow(/no definition/);
+    expect(legacyGets).toBe(0);
+  });
+
+  test("resume and dry replay resolve a renamed registry workflow by durable id", async () => {
+    let snapshotCalls = 0;
+    let snapshot = { total: 1, truncated: false, tasks: [{ id: "task-before" }] };
+    const prepared: Array<{ name: string; identity: string | undefined; persist: boolean | undefined }> = [];
+    const taskTracker = {
+      prepare: async (
+        workflow: { id: string; name: string },
+        _schema: unknown,
+        options?: { identity?: string; persist?: boolean },
+      ) => {
+        prepared.push({ name: workflow.name, identity: options?.identity, persist: options?.persist });
+        return options?.identity;
+      },
+      snapshot: async () => {
+        snapshotCalls++;
+        return structuredClone(snapshot);
+      },
+      schema: async () => null,
+      applyBatch: async () => undefined,
+    };
+    const workflow = (name: string) =>
+      defineWorkflow(
+        {
+          id: "durable-registry-review",
+          name,
+          description: "renameable registry workflow",
+          input: z.object({}),
+          output: z.object({ observed: z.number(), approved: z.boolean() }),
+        },
+        async (ctx) => {
+          const observed = await ctx.tasks.observe({}, { key: "registry-tasks" });
+          const approval = await ctx.human.approve({ action: "Continue renamed workflow?" });
+          return { observed: observed.tasks.length, approved: approval.approved };
+        },
+      );
+    const original = workflow("old-review-name");
+    const first = testEngine({ taskTracker });
+    const handle = await first.engine.start(original, { input: {}, cwd: await tempDir() });
+    const outcome = await handle.outcome();
+    expect(outcome.status).toBe("waiting_for_human");
+    if (outcome.status !== "waiting_for_human") throw new Error("unreachable");
+    expect(snapshotCalls).toBe(1);
+    const startIdentity = prepared[0]?.identity;
+    snapshot = {
+      total: 2,
+      truncated: false,
+      tasks: [{ id: "task-before" }, { id: "task-created-while-suspended" }],
+    };
+    await first.engine.shutdown();
+
+    const renamed = workflow("new-review-name");
+    let legacyGets = 0;
+    const registry = {
+      get: async () => {
+        legacyGets++;
+        return undefined;
+      },
+      resolve: async (identity: { id?: string; name: string }) =>
+        identity.id === "durable-registry-review"
+          ? { def: renamed, name: "new-review-name", hash: "renamed-bundle-hash" }
+          : undefined,
+    };
+    const reopened = reopen(first, { registry, taskTracker });
+    await expect(reopened.engine.replayDry(handle.runId)).resolves.toMatchObject({
+      pendingRequests: [outcome.pending[0]!.id],
+    });
+    await reopened.engine.answer(handle.runId, outcome.pending[0]!.id, { approved: true });
+    const resumedHandle = await reopened.engine.resume(handle.runId);
+
+    expect(await resumedHandle.result).toEqual({ observed: 1, approved: true });
+    expect(snapshotCalls).toBe(1);
+    expect(legacyGets).toBe(0);
+    expect(prepared.at(-1)).toMatchObject({ name: "new-review-name", identity: startIdentity });
   });
 });

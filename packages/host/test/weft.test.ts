@@ -229,6 +229,39 @@ export default defineWorkflow(
     await expect(resumed.result).resolves.toEqual(output);
   });
 
+  it("resumes a renamed registry workflow in a fresh process by durable id", async () => {
+    const root = await tempRoot();
+    const source = (name: string) => `import { defineWorkflow, z } from "@techery/weft-sdk";
+export default defineWorkflow(
+  {
+    id: "durable-renamed-review",
+    name: ${JSON.stringify(name)},
+    description: "renameable registry workflow",
+    input: z.object({}),
+    output: z.object({ approved: z.boolean() }),
+  },
+  async (ctx) => ctx.human.approve({ action: "Continue after rename?" }),
+);
+`;
+    await write(root, ".weft/workflows/review.ts", source("old-review-name"));
+    const first = await createWeft({ cwd: root, providers: "mock" });
+    opened.push(first);
+    const { def } = await resolveWorkflow(first, "old-review-name");
+    const run = await first.engine.start(def, { input: {}, cwd: root });
+    const outcome = await run.outcome();
+    if (outcome.status !== "waiting_for_human") throw new Error("expected suspension");
+    await first.engine.shutdown();
+
+    await write(root, ".weft/workflows/review.ts", source("new-review-name"));
+    const later = await createWeft({ cwd: root, providers: "mock" });
+    opened.push(later);
+    await later.engine.answer(run.runId, outcome.pending[0]!.id, { approved: true });
+    const resumed = await later.engine.resume(run.runId);
+
+    await expect(resumed.result).resolves.toEqual({ approved: true });
+    expect((await later.tasks.namespace("durable-renamed-review"))?.name).toBe("new-review-name");
+  });
+
   it("routes agent steps to one shared mock builder in mock mode", async () => {
     const { weft, root } = await mockWeft();
     await write(
