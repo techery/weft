@@ -102,8 +102,10 @@ export interface AgentTaskTrackerHost {
     extensionSchema: AnySchema | undefined,
     options?: {
       schemaVersion?: number;
+      /** Explicit identity of validator, transform, and migration behavior. */
+      semanticRevision?: string;
       migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
-      /** Stable workflow-definition identity used when JSON Schema is lossy or unavailable. */
+      /** Stable task-contract identity used when JSON Schema is lossy or unavailable. */
       identity?: string;
       /** Dry replay binds validators in memory but must not mutate the namespace. */
       persist?: boolean;

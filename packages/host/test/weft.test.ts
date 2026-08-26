@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { mockTaskEnvelope } from "@techery/weft-provider-mock";
+import { defineWorkflow, z } from "@techery/weft-sdk";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   createWeft,
@@ -136,7 +137,7 @@ export default defineWorkflow(
     description: "path workflow with task extensions",
     input: z.object({}),
     output: z.object({ ok: z.boolean() }),
-    tasks: { extensions: z.object({ ownerTeam: z.string() }) },
+    tasks: { extensions: z.object({ ownerTeam: z.string() }), semanticRevision: "owner-team-v1" },
   },
   async (ctx) => ctx.agent("Track this", { key: "path-task", schema: z.object({ ok: z.boolean() }) }),
 );
@@ -165,6 +166,54 @@ export default defineWorkflow(
     expect(await weft.tasks.list("path-tracked")).toEqual([
       expect.objectContaining({ extensions: { ownerTeam: "runtime" } }),
     ]);
+  });
+
+  it("keeps suspended runs on their exact executable task contract", async () => {
+    const { weft } = await mockWeft();
+    await weft.tasks.create("concurrent-contract", {
+      title: "Normalize",
+      description: "Both resident definitions read the same durable input",
+      extensions: { source: "API" },
+    });
+    const workflow = (semanticRevision: string, prefix: string) =>
+      defineWorkflow(
+        {
+          id: "concurrent-contract",
+          name: "concurrent-contract",
+          description: "exercise concurrent executable task contracts",
+          input: z.object({}),
+          output: z.object({ normalized: z.string() }),
+          tasks: {
+            extensions: z
+              .object({ source: z.string() })
+              .transform(({ source }) => ({ normalized: `${prefix}:${source.toLowerCase()}` })),
+            semanticRevision,
+          },
+        },
+        async (ctx) => {
+          await ctx.human.approve({ action: `continue ${semanticRevision}` });
+          const snapshot = await ctx.tasks.observe({}, { key: "observe-contract" });
+          const extensions = snapshot.tasks[0]?.extensions as { normalized: string };
+          return { normalized: extensions.normalized };
+        },
+      );
+    const previous = await weft.engine.start(workflow("transform-v1", "previous"), {
+      input: {},
+      cwd: weft.cwd,
+    });
+    const previousOutcome = await previous.outcome();
+    if (previousOutcome.status !== "waiting_for_human") throw new Error("expected previous suspension");
+    const current = await weft.engine.start(workflow("transform-v2", "current"), {
+      input: {},
+      cwd: weft.cwd,
+    });
+    const currentOutcome = await current.outcome();
+    if (currentOutcome.status !== "waiting_for_human") throw new Error("expected current suspension");
+
+    await weft.engine.answer(current.runId, currentOutcome.pending[0]!.id, { approved: true });
+    await expect(current.result).resolves.toEqual({ normalized: "current:api" });
+    await weft.engine.answer(previous.runId, previousOutcome.pending[0]!.id, { approved: true });
+    await expect(previous.result).resolves.toEqual({ normalized: "previous:api" });
   });
 
   it("a recorded path ref that no longer resolves SURFACES instead of silently falling back", async () => {

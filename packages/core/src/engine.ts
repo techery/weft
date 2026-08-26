@@ -125,7 +125,14 @@ function definitionHash(def: WorkflowDefinition): string {
 
 /** Task-schema lineage follows durable identity and executable semantics, never display names. */
 function taskDefinitionHash(def: WorkflowDefinition, workflowId: string): string {
-  return sha256Hex(`${workflowId}\n${def.run.toString()}`);
+  const taskConfig = def.meta.tasks;
+  if (
+    (taskConfig?.extensions !== undefined || taskConfig?.migrate !== undefined) &&
+    (typeof taskConfig.semanticRevision !== "string" || taskConfig.semanticRevision.trim() === "")
+  ) {
+    throw new Error(`workflow ${workflowId} task extensions and migrations require tasks.semanticRevision`);
+  }
+  return sha256Hex(`task-contract-v1\n${workflowId}\n${taskConfig?.semanticRevision ?? "core-fields-only"}`);
 }
 
 /**
@@ -1339,7 +1346,7 @@ export class Engine implements EngineHost {
       def.meta.tasks?.extensions,
       {
         ...def.meta.tasks,
-        identity: `${parent.taskSchemaBinding ?? "unbound-parent"}:${taskDefinitionHash(def, childWorkflowId)}`,
+        identity: taskDefinitionHash(def, childWorkflowId),
       },
     );
     const runtime = new RunRuntime({

@@ -124,8 +124,43 @@ describe("defineWorkflow", () => {
           ...base,
           tasks: {
             extensions: z.object({ owner: z.string() }),
+            semanticRevision: "platform-owner-v2",
             schemaVersion: 2,
             migrate: () => ({ owner: "platform" }),
+          },
+        },
+        async () => ({}),
+      ),
+    ).not.toThrow();
+    expect(() =>
+      defineWorkflow(
+        {
+          ...base,
+          tasks: { extensions: z.object({ owner: z.string() }) } as never,
+        },
+        async () => ({}),
+      ),
+    ).toThrow(/semanticRevision/);
+    expect(() =>
+      defineWorkflow(
+        {
+          ...base,
+          tasks: {
+            extensions: z.object({ owner: z.string() }),
+            semanticRevision: "   ",
+          },
+        },
+        async () => ({}),
+      ),
+    ).toThrow(/semanticRevision/);
+    expect(() =>
+      defineWorkflow(
+        {
+          ...base,
+          tasks: {
+            semanticRevision: "retire-owner-v3",
+            schemaVersion: 3,
+            migrate: () => ({}),
           },
         },
         async () => ({}),

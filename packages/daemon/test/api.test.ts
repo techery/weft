@@ -37,6 +37,7 @@ export default defineWorkflow(
     output: z.object({ approved: z.boolean(), at: z.number() }),
     tasks: {
       extensions: z.object({ ownerTeam: z.string(), estimate: z.number().int() }),
+      semanticRevision: "gated-task-fields-v2",
       schemaVersion: 2,
       migrate: (value) => {
         const old = value as Record<string, unknown>;

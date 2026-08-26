@@ -26,6 +26,7 @@ interface TaskExtensionConfig {
   version: number;
   declared: boolean;
   definitionAvailable: boolean;
+  semanticRevision?: string;
   migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
 }
 
@@ -76,6 +77,7 @@ export interface TaskWorkflowNamespace {
   extensionSchemaDeclared: boolean;
   extensionSchema: unknown | null;
   extensionSchemaVersion: number;
+  semanticRevision?: string;
 }
 
 export interface CreateTaskInput {
@@ -127,6 +129,7 @@ export class TaskStore {
     string,
     {
       version: number;
+      semanticRevision?: string;
       migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
     }
   >();
@@ -136,6 +139,7 @@ export class TaskStore {
     binding: string;
     schema: AnySchema | undefined;
     version: number;
+    semanticRevision?: string;
     migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
   }>();
 
@@ -150,6 +154,7 @@ export class TaskStore {
     extensionJsonSchema: unknown | null,
     options: {
       schemaVersion?: number;
+      semanticRevision?: string;
       migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
       identity?: string;
       persist?: boolean;
@@ -161,11 +166,18 @@ export class TaskStore {
     if (!Number.isInteger(version) || version < 1) {
       throw new Error("task extension schema version must be a positive integer");
     }
+    if (
+      (extensionSchema !== undefined || options.migrate !== undefined) &&
+      (typeof options.semanticRevision !== "string" || options.semanticRevision.trim() === "")
+    ) {
+      throw new Error("task extension semantic revision is required");
+    }
     const schemaBinding = digest(
       JSON.stringify({
         declared: extensionSchema !== undefined,
         schema: extensionJsonSchema,
         version,
+        semanticRevision: options.semanticRevision ?? null,
         migrate: options.migrate ? String(options.migrate) : null,
         identity: options.identity ?? null,
       }),
@@ -176,6 +188,7 @@ export class TaskStore {
       this.runtimeJsonSchemas.set(bindingKey, extensionJsonSchema);
       this.runtimeMigrations.set(bindingKey, {
         version,
+        ...(options.semanticRevision ? { semanticRevision: options.semanticRevision } : {}),
         ...(options.migrate ? { migrate: options.migrate } : {}),
       });
     };
@@ -190,6 +203,7 @@ export class TaskStore {
       extensionSchemaDeclared: extensionSchema !== undefined,
       extensionSchema: extensionJsonSchema,
       extensionSchemaVersion: version,
+      ...(options.semanticRevision ? { semanticRevision: options.semanticRevision } : {}),
     };
     await this.mutate(workflow.id, async () => {
       const existing = await this.namespace(workflow.id);
@@ -240,6 +254,7 @@ export class TaskStore {
       namespace.id !== workflowId ||
       typeof namespace.name !== "string" ||
       typeof namespace.extensionSchemaDeclared !== "boolean" ||
+      (namespace.semanticRevision !== undefined && typeof namespace.semanticRevision !== "string") ||
       !("extensionSchema" in namespace)
     ) {
       throw new Error(`invalid task namespace ${file}: identity or schema version mismatch`);
@@ -863,15 +878,9 @@ export class TaskStore {
     const config = this.runtimeMigrations.get(`${context.workflowId}:${binding}`) ?? { version: 1 };
     const fromVersion = context.schemaVersion ?? 1;
     if (fromVersion === config.version) {
-      // Re-enter applyBatch under the current binding. Its recovery path decodes
-      // every already-applied operation against the current schema and preflights
-      // every pending operation before another write, so an unrelated definition
-      // edit (or an unchanged/no extension schema) can finish the journaled batch
-      // while an incompatible same-version schema edit still fails closed.
-      return {
-        context: { ...context, schemaBinding: binding, schemaVersion: config.version },
-        operations,
-      };
+      throw new Error(
+        `cannot recover task batch for ${context.workflowId}: its exact executable task contract is unavailable`,
+      );
     }
     if (fromVersion > config.version || !config.migrate) {
       throw new Error(
@@ -972,6 +981,7 @@ export class TaskStore {
         null,
         {
           schemaVersion: config.version,
+          ...(config.semanticRevision ? { semanticRevision: config.semanticRevision } : {}),
           ...(config.migrate ? { migrate: config.migrate } : {}),
         },
       );
@@ -1253,6 +1263,7 @@ export class TaskStore {
         binding: schemaBinding,
         schema: this.runtimeSchemas.get(key),
         version: migration.version,
+        ...(migration.semanticRevision ? { semanticRevision: migration.semanticRevision } : {}),
         ...(migration.migrate ? { migrate: migration.migrate } : {}),
       },
       fn,
@@ -1266,6 +1277,7 @@ export class TaskStore {
         version: scoped.version,
         declared: scoped.schema !== undefined,
         definitionAvailable: true,
+        ...(scoped.semanticRevision ? { semanticRevision: scoped.semanticRevision } : {}),
         ...(scoped.migrate ? { migrate: scoped.migrate } : {}),
       };
     }
@@ -1283,6 +1295,7 @@ export class TaskStore {
       version: namespace?.extensionSchemaVersion ?? 1,
       declared: namespace?.extensionSchemaDeclared ?? false,
       definitionAvailable: false,
+      ...(namespace?.semanticRevision ? { semanticRevision: namespace.semanticRevision } : {}),
     };
   }
 }

@@ -131,7 +131,10 @@ export default defineWorkflow(
     description: "Review changed files; keep only findings that survive refutation",
     input: z.object({ base: z.string().default("main") }),      // --base main; the engine validates it
     output: z.object({ confirmed: z.array(Finding) }),          // and validates the result on the way out
-    tasks: { extensions: z.object({ ownerTeam: z.string() }) }, // optional typed task-specific context
+    tasks: {
+      extensions: z.object({ ownerTeam: z.string() }),          // optional typed task-specific context
+      semanticRevision: "owner-team-v1",                       // bump when its executable behavior changes
+    },
   },
   async (ctx, { base }) => {
     ctx.phase("Scope");                                          // phases group steps in the live tree
@@ -236,9 +239,11 @@ steps cannot lose notes or race dependency edits. A batch is preflighted as a un
 durable idempotency key: a crash can expose an applied prefix, but replay skips that prefix and converges the
 remaining operations without duplicating them. Set `meta.id` once to keep the task namespace stable across
 file/name changes. A workflow may declare `tasks.extensions`; that Standard Schema validates workflow-specific
-context while the core fields remain stable. For an incompatible change, increment `tasks.schemaVersion` and
-provide `tasks.migrate(value, fromVersion)`; each run remains bound to its exact schema fingerprint, and migrated
-values are persisted on the next mutation. The workflow manager renders all tasks from
+context while the core fields remain stable. It must also declare a `tasks.semanticRevision`: keep it stable for
+display-name and unrelated workflow edits, and change it whenever validation, defaults, refinements, transforms,
+or migration behavior changes. When the persisted representation changes, also increment `tasks.schemaVersion`
+and provide `tasks.migrate(value, fromVersion)`. Each run remains bound to its exact executable task contract,
+and migrated values are persisted on the next mutation. The workflow manager renders all tasks from
 `GET /api/workflows/:name/tasks`.
 
 See [`examples/08-task-backed-code-review`](./examples/08-task-backed-code-review) for the recommended review

@@ -1025,6 +1025,101 @@ describe("engine end to end", () => {
     expect(resumed.builder.calls).toHaveLength(0);
   });
 
+  test("task bindings follow explicit executable semantic revisions", async () => {
+    const prepared: Array<{ workflowId: string; identity?: string; semanticRevision?: string }> = [];
+    const taskTracker = {
+      prepare: async (
+        workflow: { id: string; name: string },
+        _schema: unknown,
+        options?: { identity?: string; semanticRevision?: string },
+      ) => {
+        prepared.push({
+          workflowId: workflow.id,
+          ...(options?.identity ? { identity: options.identity } : {}),
+          ...(options?.semanticRevision ? { semanticRevision: options.semanticRevision } : {}),
+        });
+        return options?.identity;
+      },
+      snapshot: async () => ({ total: 0, truncated: false, tasks: [] }),
+      schema: async () => null,
+      applyBatch: async () => undefined,
+    };
+    const extensions = z
+      .object({ source: z.string() })
+      .transform(({ source }) => ({ normalized: source.toLowerCase() }));
+    const workflow = (semanticRevision: string, description: string) =>
+      defineWorkflow(
+        {
+          id: "semantic-task-contract",
+          name: "semantic-task-contract",
+          description,
+          input: z.object({}),
+          output: z.object({}),
+          tasks: { extensions, schemaVersion: 1, semanticRevision },
+        },
+        async () => ({}),
+      );
+    const t = testEngine({ taskTracker });
+
+    await (
+      await t.engine.start(workflow("transform-v1", "first body"), {
+        input: {},
+        cwd: await tempDir(),
+      })
+    ).result;
+    await (
+      await t.engine.start(workflow("transform-v2", "same persisted shape"), {
+        input: {},
+        cwd: await tempDir(),
+      })
+    ).result;
+    await (
+      await t.engine.start(workflow("transform-v2", "unrelated metadata edit"), {
+        input: {},
+        cwd: await tempDir(),
+      })
+    ).result;
+
+    expect(prepared.map(({ semanticRevision }) => semanticRevision)).toEqual([
+      "transform-v1",
+      "transform-v2",
+      "transform-v2",
+    ]);
+    expect(prepared[0]?.identity).not.toBe(prepared[1]?.identity);
+    expect(prepared[1]?.identity).toBe(prepared[2]?.identity);
+
+    prepared.length = 0;
+    const child = defineWorkflow(
+      {
+        id: "shared-semantic-child",
+        name: "shared-semantic-child",
+        description: "same task contract from every parent",
+        input: z.object({}),
+        output: z.object({}),
+        tasks: { extensions, semanticRevision: "child-transform-v1" },
+      },
+      async () => ({}),
+    );
+    const parent = (id: string) =>
+      defineWorkflow(
+        {
+          id,
+          name: id,
+          description: "calls the shared child",
+          input: z.object({}),
+          output: z.object({}),
+        },
+        async (ctx) => ctx.workflow(child, {}, { key: "shared-child" }),
+      );
+    await (await t.engine.start(parent("semantic-parent-a"), { input: {}, cwd: await tempDir() })).result;
+    await (await t.engine.start(parent("semantic-parent-b"), { input: {}, cwd: await tempDir() })).result;
+    const childBindings = prepared
+      .filter(({ workflowId }) => workflowId === "shared-semantic-child")
+      .map(({ identity }) => identity);
+    expect(childBindings).toHaveLength(2);
+    expect(new Set(childBindings).size).toBe(1);
+  });
+
   test("depth cap rejects nesting past 3", async () => {
     const deep: ReturnType<typeof defineWorkflow>[] = [];
     for (let i = 0; i < 5; i++) {

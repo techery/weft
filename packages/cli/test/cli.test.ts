@@ -139,6 +139,7 @@ export default defineWorkflow(
     output: z.object({}),
     tasks: {
       extensions: z.object({ lane: z.enum(["api", "ui"]), estimate: z.number().int() }),
+      semanticRevision: "tracked-task-fields-v2",
       schemaVersion: 2,
       migrate: (value) => value,
     },
@@ -812,7 +813,10 @@ export default defineWorkflow(
     description: "owns the callable name",
     input: z.object({}),
     output: z.object({}),
-    tasks: { extensions: z.object({ lane: z.literal("name") }) },
+    tasks: {
+      extensions: z.object({ lane: z.literal("name") }),
+      semanticRevision: "name-owner-v1",
+    },
   },
   async () => ({}),
 );`,
@@ -828,7 +832,10 @@ export default defineWorkflow(
     description: "owns the durable id",
     input: z.object({}),
     output: z.object({}),
-    tasks: { extensions: z.object({ lane: z.literal("id") }) },
+    tasks: {
+      extensions: z.object({ lane: z.literal("id") }),
+      semanticRevision: "id-owner-v1",
+    },
   },
   async () => ({}),
 );`,

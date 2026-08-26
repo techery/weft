@@ -99,7 +99,10 @@ export default defineWorkflow(
     input: z.object({ base: z.string().default("main") }),   // becomes --base main
     output: z.object({ confirmed: z.array(Finding) }),       // validated on the way out
     defaults: { provider: "claude", effort: "high" },        // per-step opts still win
-    tasks: { extensions: z.object({ ownerTeam: z.string() }) }, // optional typed task fields
+    tasks: {
+      extensions: z.object({ ownerTeam: z.string() }),
+      semanticRevision: "review-task-fields-v1",
+    }, // optional typed task fields
   },
   async (ctx, { base }) => {
     ctx.phase("Scope");                                      // phases group steps in the tree
@@ -343,7 +346,9 @@ operations, then applies them idempotently after the step succeeds. Core fields 
 title, description, status, priority, tags, dependencies, related files, stable-ID
 acceptance criteria, append-only notes, actors, timestamps, and revision. Set \`meta.id\`
 once so path, stdin, and renamed workflows keep one namespace. A workflow's
-\`tasks.extensions\` Standard Schema validates its additional context.
+\`tasks.extensions\` Standard Schema validates its additional context. Its required
+\`tasks.semanticRevision\` changes whenever validator, transform, default, or migration
+behavior changes; \`tasks.schemaVersion\` changes only with the persisted representation.
 
 The typical loop:
 

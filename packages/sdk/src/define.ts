@@ -1,13 +1,33 @@
 import type { AnySchema, InferIn, InferOut } from "./schema.ts";
 import type { Ctx, Effort, ProviderId } from "./types.ts";
 
-export interface WorkflowTaskSchemaConfig {
-  extensions?: AnySchema;
+interface WorkflowTaskSchemaEvolution {
   /** Increment when persisted extension values need an explicit migration. Defaults to 1. */
   schemaVersion?: number;
-  /** Convert a stored older value to the current version before validation. */
-  migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
 }
+
+export type WorkflowTaskSchemaConfig =
+  | (WorkflowTaskSchemaEvolution & {
+      extensions?: undefined;
+      semanticRevision?: undefined;
+      migrate?: undefined;
+    })
+  | (WorkflowTaskSchemaEvolution & {
+      extensions?: undefined;
+      semanticRevision: string;
+      /** Convert a stored older value when retiring a previously declared extension schema. */
+      migrate: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
+    })
+  | (WorkflowTaskSchemaEvolution & {
+      extensions: AnySchema;
+      /**
+       * Stable executable-contract identity. Keep it across display-name changes; change it
+       * whenever validation, defaults, refinements, transforms, or migration behavior changes.
+       */
+      semanticRevision: string;
+      /** Convert a stored older value to the current version before validation. */
+      migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
+    });
 
 /**
  * Workflow metadata. `name` derives from the filename in module mode; override with
@@ -75,6 +95,12 @@ export function defineWorkflow<InS extends AnySchema, OutS extends AnySchema>(
   }
   if (meta.tasks?.migrate !== undefined && typeof meta.tasks.migrate !== "function") {
     throw new TypeError("defineWorkflow: tasks.migrate must be a function");
+  }
+  if (
+    (meta.tasks?.extensions !== undefined || meta.tasks?.migrate !== undefined) &&
+    (typeof meta.tasks.semanticRevision !== "string" || meta.tasks.semanticRevision.trim() === "")
+  ) {
+    throw new TypeError("defineWorkflow: tasks.semanticRevision is required for extensions and migrations");
   }
   if (typeof run !== "function") {
     throw new TypeError("defineWorkflow: run must be an async function (ctx, input) => output");

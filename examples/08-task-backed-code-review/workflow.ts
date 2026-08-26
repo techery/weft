@@ -85,7 +85,7 @@ export default defineWorkflow(
       refuted: z.number().int(),
       recorded: z.number().int(),
     }),
-    tasks: { extensions: ReviewTaskExtensions },
+    tasks: { extensions: ReviewTaskExtensions, semanticRevision: "code-review-v1" },
   },
   async (ctx, { base, include, maxFiles, reviewWith, refuteWith }) => {
     if (reviewWith === refuteWith) {

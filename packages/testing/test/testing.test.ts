@@ -135,7 +135,10 @@ describe("runWorkflow", () => {
         description: "observe child tasks",
         input: z.object({}),
         output: z.object({ count: z.number() }),
-        tasks: { extensions: z.object({ lane: z.literal("child") }) },
+        tasks: {
+          extensions: z.object({ lane: z.literal("child") }),
+          semanticRevision: "child-lane-v1",
+        },
       },
       async (ctx) => ({ count: (await ctx.tasks.observe({}, { key: "child:tasks" })).tasks.length }),
     );
@@ -145,7 +148,10 @@ describe("runWorkflow", () => {
         description: "invoke child",
         input: z.object({}),
         output: z.object({ count: z.number() }),
-        tasks: { extensions: z.object({ lane: z.literal("parent") }) },
+        tasks: {
+          extensions: z.object({ lane: z.literal("parent") }),
+          semanticRevision: "parent-lane-v1",
+        },
       },
       async (ctx) => (await ctx.workflow(child, {}, { key: "child" })) as { count: number },
     );

@@ -231,8 +231,12 @@ describe("TaskStore", () => {
       return undefined;
     };
     const store = new TaskStore(taskRoot, schemaFor);
-    await store.registerWorkflow({ id: "defaulted", name: "defaulted" }, defaulted, null);
-    await store.registerWorkflow({ id: "optional", name: "optional" }, optional, null);
+    await store.registerWorkflow({ id: "defaulted", name: "defaulted" }, defaulted, null, {
+      semanticRevision: "defaulted-v1",
+    });
+    await store.registerWorkflow({ id: "optional", name: "optional" }, optional, null, {
+      semanticRevision: "optional-v1",
+    });
 
     const defaultedTask = await store.create("defaulted", {
       title: "Default extensions",
@@ -286,7 +290,9 @@ describe("TaskStore", () => {
       .object({ source: z.string() })
       .transform(({ source }) => ({ normalized: source.trim().toLowerCase() }));
     const store = new TaskStore(join(root, ".weft", "tasks"), async () => extensions);
-    await store.registerWorkflow({ id: "release", name: "release" }, extensions, null);
+    await store.registerWorkflow({ id: "release", name: "release" }, extensions, null, {
+      semanticRevision: "normalized-source-v1",
+    });
 
     const created = await store.create("release", {
       title: "Normalize",
@@ -345,7 +351,7 @@ describe("TaskStore", () => {
       { id: "inline-review", name: "inline-review" },
       schema,
       { type: "null" },
-      { schemaVersion: 2 },
+      { schemaVersion: 2, semanticRevision: "nullable-extension-v2" },
     );
     const created = await writer.create("inline-review", {
       title: "Definition-independent lifecycle",
@@ -383,7 +389,9 @@ describe("TaskStore", () => {
       estimate: 1,
     });
     const writer = new TaskStore(taskRoot);
-    await writer.registerWorkflow({ id: "review", name: "review" }, legacy, null);
+    await writer.registerWorkflow({ id: "review", name: "review" }, legacy, null, {
+      semanticRevision: "legacy-lane-v1",
+    });
     const retained = await writer.create(
       "review",
       {
@@ -413,6 +421,7 @@ describe("TaskStore", () => {
     );
     await writer.registerWorkflow({ id: "review", name: "review" }, current, null, {
       schemaVersion: 2,
+      semanticRevision: "owner-estimate-v2",
       migrate,
     });
     const currentTask = await writer.create("review", {
@@ -475,6 +484,7 @@ describe("TaskStore", () => {
     const runtime = new TaskStore(taskRoot, async () => current);
     await runtime.registerWorkflow({ id: "review", name: "review" }, current, null, {
       schemaVersion: 2,
+      semanticRevision: "owner-estimate-v2",
       migrate,
     });
     const migrated = await runtime.update("review", retained.id, { status: "done" });
@@ -537,11 +547,13 @@ describe("TaskStore", () => {
       { id: "release", name: "release" },
       api,
       z.toJSONSchema(api),
+      { semanticRevision: "api-lane-v1" },
     );
     const uiBinding = await store.registerWorkflow(
       { id: "release", name: "release" },
       ui,
       z.toJSONSchema(ui),
+      { semanticRevision: "ui-lane-v1" },
     );
 
     const apiSnapshot = (await store.snapshot("release", {}, apiBinding)) as {
@@ -552,6 +564,115 @@ describe("TaskStore", () => {
     ]);
     await expect(store.snapshot("release", {}, uiBinding)).rejects.toThrow(/task extensions failed/);
     expect(await store.schema("release", apiBinding)).toMatchObject({ type: "object" });
+  });
+
+  it("isolates executable transforms that share a JSON schema and schema version", async () => {
+    const root = await tempRoot();
+    const store = new TaskStore(join(root, ".weft", "tasks"));
+    const transformed = (prefix: string) =>
+      z
+        .object({ source: z.string() })
+        .transform(({ source }) => ({ normalized: `${prefix}:${source.toLowerCase()}` }));
+    const previous = transformed("previous");
+    const current = transformed("current");
+    const previousJson = z.toJSONSchema(previous, {
+      io: "input",
+      unrepresentable: "any",
+    });
+    const currentJson = z.toJSONSchema(current, {
+      io: "input",
+      unrepresentable: "any",
+    });
+    expect(previousJson).toEqual(currentJson);
+    await expect(
+      store.registerWorkflow({ id: "missing-revision", name: "missing-revision" }, previous, previousJson),
+    ).rejects.toThrow(/semantic revision is required/);
+
+    const previousBinding = await store.registerWorkflow(
+      { id: "release", name: "release" },
+      previous,
+      previousJson,
+      { identity: "stable-workflow", semanticRevision: "transform-v1" },
+    );
+    const task = await store.create("release", {
+      title: "Normalize",
+      description: "Preserve the exact transform observed by each run",
+      extensions: { source: "API" },
+    });
+    const currentBinding = await store.registerWorkflow(
+      { id: "release", name: "release" },
+      current,
+      currentJson,
+      { identity: "stable-workflow", semanticRevision: "transform-v2" },
+    );
+
+    expect(currentBinding).not.toBe(previousBinding);
+    const previousSnapshot = (await store.snapshot("release", {}, previousBinding)) as {
+      tasks: Array<{ id: string; extensions: unknown }>;
+    };
+    const currentSnapshot = (await store.snapshot("release", {}, currentBinding)) as {
+      tasks: Array<{ id: string; extensions: unknown }>;
+    };
+    expect(previousSnapshot.tasks).toEqual([
+      expect.objectContaining({ id: task.id, extensions: { normalized: "previous:api" } }),
+    ]);
+    expect(currentSnapshot.tasks).toEqual([
+      expect.objectContaining({ id: task.id, extensions: { normalized: "current:api" } }),
+    ]);
+  });
+
+  it("isolates captured migration behavior behind semantic revisions", async () => {
+    const root = await tempRoot();
+    const store = new TaskStore(join(root, ".weft", "tasks"));
+    const task = await store.create("release", {
+      title: "Migrate",
+      description: "Retain the migration selected by the run binding",
+      extensions: { lane: "api" },
+    });
+    const current = z.object({ owner: z.string(), estimate: z.number().int() });
+    const migrateWith = (ownerPrefix: string) => (value: unknown) => ({
+      owner: `${ownerPrefix}:${(value as { lane: string }).lane}`,
+      estimate: 1,
+    });
+    const previousMigration = migrateWith("previous");
+    const currentMigration = migrateWith("current");
+    expect(String(previousMigration)).toBe(String(currentMigration));
+    const jsonSchema = z.toJSONSchema(current);
+    const previousBinding = await store.registerWorkflow(
+      { id: "release", name: "release" },
+      current,
+      jsonSchema,
+      {
+        schemaVersion: 2,
+        semanticRevision: "migration-v1",
+        identity: "stable-workflow",
+        migrate: previousMigration,
+      },
+    );
+    const currentBinding = await store.registerWorkflow(
+      { id: "release", name: "release" },
+      current,
+      jsonSchema,
+      {
+        schemaVersion: 2,
+        semanticRevision: "migration-v2",
+        identity: "stable-workflow",
+        migrate: currentMigration,
+      },
+    );
+
+    const previousSnapshot = (await store.snapshot("release", {}, previousBinding)) as {
+      tasks: Array<{ id: string; extensions: unknown }>;
+    };
+    const currentSnapshot = (await store.snapshot("release", {}, currentBinding)) as {
+      tasks: Array<{ id: string; extensions: unknown }>;
+    };
+    expect(previousSnapshot.tasks).toEqual([
+      expect.objectContaining({ id: task.id, extensions: { owner: "previous:api", estimate: 1 } }),
+    ]);
+    expect(currentSnapshot.tasks).toEqual([
+      expect.objectContaining({ id: task.id, extensions: { owner: "current:api", estimate: 1 } }),
+    ]);
   });
 
   it("migrates older workflow extension values before validating and persists on update", async () => {
@@ -569,6 +690,7 @@ describe("TaskStore", () => {
       z.toJSONSchema(current),
       {
         schemaVersion: 2,
+        semanticRevision: "owner-estimate-v2",
         migrate: (value) => ({ owner: (value as { lane: string }).lane, estimate: 1 }),
       },
     );
@@ -595,6 +717,7 @@ describe("TaskStore", () => {
     const current = z.object({ owner: z.string() });
     await store.registerWorkflow({ id: "review", name: "review" }, current, z.toJSONSchema(current), {
       schemaVersion: 2,
+      semanticRevision: "owner-v2",
     });
     const first = await store.create("review", {
       title: "Current task",
@@ -606,6 +729,7 @@ describe("TaskStore", () => {
     await expect(
       store.registerWorkflow({ id: "review", name: "review" }, stale, z.toJSONSchema(stale), {
         schemaVersion: 1,
+        semanticRevision: "lane-v1",
       }),
     ).rejects.toThrow(/schema downgrade from version 2 to 1/);
 
@@ -636,7 +760,7 @@ describe("TaskStore", () => {
       { id: "review", name: "review" },
       oldSchema,
       z.toJSONSchema(oldSchema),
-      { identity: "definition-a" },
+      { identity: "definition-a", semanticRevision: "lane-v1" },
     );
     const oldContext = {
       workflowId: "review",
@@ -664,6 +788,7 @@ describe("TaskStore", () => {
       z.toJSONSchema(currentSchema),
       {
         schemaVersion: 2,
+        semanticRevision: "owner-estimate-v2",
         identity: "definition-b",
         migrate: (value) => ({ owner: (value as { lane: string }).lane, estimate: 1 }),
       },
@@ -689,18 +814,27 @@ describe("TaskStore", () => {
       { id: "review", name: "review" },
       currentSchema,
       z.toJSONSchema(currentSchema),
-      { schemaVersion: 2, persist: false },
+      { schemaVersion: 2, semanticRevision: "owner-estimate-v2", persist: false },
     );
     expect(await dryStore.namespace("review")).toBeUndefined();
   });
 
-  it("revalidates a same-version lost-marker batch after the workflow definition changes", async () => {
+  it("fails closed when a lost-marker batch's exact same-version contract is unavailable", async () => {
     const root = await tempRoot();
     const taskRoot = join(root, ".weft", "tasks");
     const oldStore = new TaskStore(taskRoot);
-    const oldBinding = await oldStore.registerWorkflow({ id: "review", name: "review" }, undefined, null, {
-      identity: "definition-a",
-    });
+    const transformed = (prefix: string) =>
+      z
+        .object({ source: z.string() })
+        .transform(({ source }) => ({ normalized: `${prefix}:${source.toLowerCase()}` }));
+    const previous = transformed("previous");
+    const previousJson = z.toJSONSchema(previous, { io: "input", unrepresentable: "any" });
+    const oldBinding = await oldStore.registerWorkflow(
+      { id: "review", name: "review" },
+      previous,
+      previousJson,
+      { identity: "stable-workflow", semanticRevision: "transform-v1" },
+    );
     const context = {
       workflowId: "review",
       workflowName: "review",
@@ -718,12 +852,16 @@ describe("TaskStore", () => {
     const first = {
       op: "upsert" as const,
       dedupeKey: "src/state.ts|review|same-version",
-      create: { title: "Review state", description: "Created before the restart" },
+      create: {
+        title: "Review state",
+        description: "Created before the restart",
+        extensions: { source: "API" },
+      },
     };
     const second = {
       ...first,
       update: { priority: "high" as const },
-      note: "Finished after the unrelated workflow edit",
+      note: "Must not be applied by a different transform",
     };
     await oldStore.applyBatch(context, batchId, [first]);
     await unlink(
@@ -731,46 +869,23 @@ describe("TaskStore", () => {
     );
 
     const currentStore = new TaskStore(taskRoot);
-    await currentStore.registerWorkflow({ id: "review", name: "review" }, undefined, null, {
-      identity: "definition-b",
+    const current = transformed("current");
+    const currentJson = z.toJSONSchema(current, { io: "input", unrepresentable: "any" });
+    expect(currentJson).toEqual(previousJson);
+    await currentStore.registerWorkflow({ id: "review", name: "review" }, current, currentJson, {
+      identity: "stable-workflow",
+      semanticRevision: "transform-v2",
     });
-    await expect(currentStore.applyBatch(context, batchId, [first, second])).resolves.toBeUndefined();
+    await expect(currentStore.applyBatch(context, batchId, [first, second])).rejects.toThrow(
+      /exact executable task contract is unavailable/,
+    );
     expect(await currentStore.list("review")).toEqual([
       expect.objectContaining({
-        priority: "high",
-        appliedOperations: [`${batchId}:0`, `${batchId}:1`],
-        notes: [expect.objectContaining({ text: "Finished after the unrelated workflow edit" })],
+        priority: "medium",
+        appliedOperations: [`${batchId}:0`],
+        notes: [],
       }),
     ]);
-
-    const incompatibleRoot = join(root, "incompatible");
-    const incompatibleOld = new TaskStore(incompatibleRoot);
-    const laneSchema = z.object({ lane: z.string() });
-    const incompatibleBinding = await incompatibleOld.registerWorkflow(
-      { id: "review", name: "review" },
-      laneSchema,
-      z.toJSONSchema(laneSchema),
-      { identity: "definition-a" },
-    );
-    const incompatibleContext = { ...context, schemaBinding: incompatibleBinding };
-    const incompatibleCurrent = new TaskStore(incompatibleRoot);
-    const ownerSchema = z.object({ owner: z.string() });
-    await incompatibleCurrent.registerWorkflow(
-      { id: "review", name: "review" },
-      ownerSchema,
-      z.toJSONSchema(ownerSchema),
-      { identity: "definition-b" },
-    );
-    await expect(
-      incompatibleCurrent.applyBatch(incompatibleContext, "incompatible", [
-        {
-          op: "create",
-          title: "Old shape",
-          description: "Must be revalidated",
-          extensions: { lane: "api" },
-        },
-      ]),
-    ).rejects.toThrow(/task extensions failed the workflow schema/);
   });
 
   it("preflights a whole batch before writing and limits agents to observed tasks", async () => {
