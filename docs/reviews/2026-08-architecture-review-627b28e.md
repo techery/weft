@@ -2,6 +2,30 @@
 
 *Scope: current HEAD (627b28e), including the daemon + web UI (7d500a7) and the task-tracking subsystem (627b28e). The prior review (`docs/reviews/2026-08-dx-and-architecture.md`, commit ad5ecae) is treated as acted-on; findings it fixed are not repeated, findings it half-fixed are called out as such.*
 
+
+## Status
+
+Every item on the **Now** list below is fixed on
+`claude/project-architecture-review-ajglvu`, each with a regression test that was
+verified to fail with its fix reverted. The findings are kept as written, because the
+reasoning is the point.
+
+| Finding | Fix |
+| --- | --- |
+| C1 — `matchHuman` serves one gate's answer to another | Takes `seq` + `positionsTrusted` like `matchStep`; ambiguity journals `replay.diverged` and re-opens the request. |
+| C2 — `integrate` serves its own nested apply | A re-establishing pass (`io.reExecuting`) does the snapshot and apply directly; every other path keeps the nested journaling. |
+| H1 — `drive()` releases the claim over live work | Waits, bounded, for its own steps before the terminal record, and holds the claim if they outlive the window. Deliberately does not abort: the AbortController is tree-wide. |
+| H2 — `fence()` fences one run, tree journals `run.cancelled` | Fencing walks to the root and covers every live descendant. |
+| H3 — `treeHash`/`integrationBaseCommit` run git unhardened | All ten bare invocations go through one helper applying `-c core.fsmonitor=false` and a sanitised env. Confirmed against git 2.43 that the hook fires without it. |
+| H4 — the loopback guard trusts every localhost port | Origin must match the request's host *and port*; `Sec-Fetch-Site` closes the no-Origin cross-site GET. Still not authentication — see the commit. |
+| H5 — `.weft/` folds into a git object on every write step | `createWeft` writes `.weft/.gitignore` for `runs/`, `blobs/`, `tasks/`, `index.sqlite`; `workflows/` stays tracked. |
+| H6 — `agent.detailed` + `onError:"null"` diverges on replay | The revived carrier is marked process-locally so the caller restores the bare `null` the live path returned. |
+| M1 — `checkIdle()` skips every second waiter | Iterates a copy. |
+| Escape hatch | `ask`/`approve`/`review` now take a `key`, folded into the identity hash, so two same-worded gates stay reusable across an edit. |
+
+Not addressed: the **Next** and **Later** lists, and the per-daemon token that would
+close local (non-browser) access to the API.
+
 ---
 
 ## 1. Verdict
