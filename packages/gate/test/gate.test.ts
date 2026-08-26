@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { type Ctx, isZodSchema, validateSchema } from "@techery/weft-sdk";
 import { afterAll, describe, expect, it } from "vitest";
 import {
@@ -18,6 +19,7 @@ import { instantiateBundle } from "../src/load.ts";
 // ---------------------------------------------------------------------------
 
 const roots: string[] = [];
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 async function tempDir(): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), "weft-gate-"));
@@ -434,6 +436,18 @@ describe("bundleWorkflow", () => {
     );
 
     await expect(bundleWorkflow({ entry, cwd: dir })).rejects.toThrow(/dynamic imports are not supported/);
+  });
+
+  it("keeps the custom React UI example compilable as three browser views", async () => {
+    const loaded = await loadWorkflow({
+      entry: path.join(repoRoot, "examples/09-custom-react-ui/workflow.ts"),
+    });
+    expect(loaded.name).toBe("custom-react-ui");
+    expect(loaded.uiCatalog.assets.map(({ id, mode }) => ({ id, mode }))).toEqual([
+      { id: "example.deployment-outcome", mode: "display" },
+      { id: "example.deployment-review", mode: "input" },
+      { id: "example.deployment-plan", mode: "display" },
+    ]);
   });
 
   it("inlines relative imports and keeps @techery/weft-sdk external", async () => {
