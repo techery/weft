@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, stat, unlink, utimes, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type AnySchema, z } from "@techery/weft-sdk";
 import { afterAll, describe, expect, it } from "vitest";
@@ -366,6 +366,125 @@ describe("TaskStore", () => {
     expect((await reader.update("inline-review", created.id, { status: "done" })).extensions).toBeNull();
     await reader.remove("inline-review", created.id);
     expect(await reader.list("inline-review")).toEqual([]);
+  });
+
+  it("keeps older extension records operable when only the upgraded namespace is available", async () => {
+    const root = await tempRoot();
+    const taskRoot = join(root, ".weft", "tasks");
+    const legacy = z.object({ lane: z.string() }).default({ lane: "general" });
+    const current = z.object({ owner: z.string(), estimate: z.number().int() });
+    const migrate = (value: unknown) => ({
+      owner: value === undefined ? "general" : (value as { lane: string }).lane,
+      estimate: 1,
+    });
+    const writer = new TaskStore(taskRoot);
+    await writer.registerWorkflow({ id: "review", name: "review" }, legacy, null);
+    const retained = await writer.create(
+      "review",
+      {
+        title: "Legacy task",
+        description: "Remain usable until the definition returns",
+        acceptanceCriteria: ["Core lifecycle remains available"],
+        extensions: { lane: "api" },
+      },
+      legacy,
+    );
+    const removable = await writer.create(
+      "review",
+      {
+        title: "Removable legacy task",
+        description: "Namespace-only removal remains available",
+        extensions: { lane: "ui" },
+      },
+      legacy,
+    );
+    const omitted = await writer.create(
+      "review",
+      {
+        title: "Defaulted legacy task",
+        description: "Opaque lifecycle must preserve omitted extension input",
+      },
+      legacy,
+    );
+    await writer.registerWorkflow({ id: "review", name: "review" }, current, null, {
+      schemaVersion: 2,
+      migrate,
+    });
+    const currentTask = await writer.create("review", {
+      title: "Current task",
+      description: "Mixed-version directories remain readable",
+      extensions: { owner: "platform", estimate: 2 },
+    });
+
+    const reader = new TaskStore(taskRoot);
+    expect(await reader.list("review")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: retained.id,
+          extensionSchemaVersion: 1,
+          extensions: { lane: "api" },
+        }),
+        expect.objectContaining({
+          id: currentTask.id,
+          extensionSchemaVersion: 2,
+          extensions: { owner: "platform", estimate: 2 },
+        }),
+        expect.objectContaining({
+          id: omitted.id,
+          extensionSchemaVersion: 1,
+          extensions: undefined,
+        }),
+      ]),
+    );
+    await reader.addNote("review", retained.id, "Reviewed without the definition");
+    await reader.setCriterion("review", retained.id, 1, true);
+    await reader.update("review", retained.id, { status: "in_progress" });
+    await reader.update("review", omitted.id, { priority: "high" });
+    await reader.remove("review", removable.id);
+    await expect(
+      reader.create("review", { title: "Unsafe create", description: "Cannot validate extensions" }),
+    ).rejects.toThrow(/extension schema definition is unavailable/);
+    await expect(
+      reader.update("review", retained.id, { extensions: { owner: "unsafe", estimate: 3 } }),
+    ).rejects.toThrow(/extension schema definition is unavailable/);
+    await expect(
+      reader.upsert("review", "new-task", {
+        create: { title: "Unsafe upsert", description: "Cannot validate extensions" },
+      }),
+    ).rejects.toThrow(/extension schema definition is unavailable/);
+
+    const opaque = JSON.parse(
+      await readFile(join(taskRoot, "review", `${retained.id}.json`), "utf8"),
+    ) as Record<string, unknown>;
+    expect(opaque).toMatchObject({
+      extensionSchemaVersion: 1,
+      extensions: { lane: "api" },
+      status: "in_progress",
+    });
+    const opaqueOmitted = JSON.parse(
+      await readFile(join(taskRoot, "review", `${omitted.id}.json`), "utf8"),
+    ) as Record<string, unknown>;
+    expect(opaqueOmitted).toMatchObject({ extensionSchemaVersion: 1, priority: "high" });
+    expect(opaqueOmitted).not.toHaveProperty("extensions");
+
+    const runtime = new TaskStore(taskRoot, async () => current);
+    await runtime.registerWorkflow({ id: "review", name: "review" }, current, null, {
+      schemaVersion: 2,
+      migrate,
+    });
+    const migrated = await runtime.update("review", retained.id, { status: "done" });
+    expect(migrated).toMatchObject({
+      extensionSchemaVersion: 2,
+      extensions: { owner: "api", estimate: 1 },
+      status: "done",
+    });
+    const persisted = JSON.parse(
+      await readFile(join(taskRoot, "review", `${retained.id}.json`), "utf8"),
+    ) as Record<string, unknown>;
+    expect(persisted).toMatchObject({
+      extensionSchemaVersion: 2,
+      extensions: { owner: "api", estimate: 1 },
+    });
   });
 
   it("rejects non-JSON extension outputs before exposing task context", async () => {
@@ -862,33 +981,83 @@ describe("TaskStore", () => {
     ).rejects.toThrow(/dedupe key/);
   });
 
-  it("does not steal an old live lock, recovers a dead lock, and removes orphan temps", async () => {
+  it("releases a crashed SQLite mutex and serializes concurrent task stores", async () => {
     const root = await tempRoot();
     const taskRoot = join(root, ".weft", "tasks");
     const workflowDir = join(taskRoot, "locked");
     await mkdir(workflowDir, { recursive: true });
-    const lock = join(workflowDir, ".lock");
-    await writeFile(lock, JSON.stringify({ token: "live", pid: process.pid, createdAt: 0 }), "utf8");
-    const old = new Date(Date.now() - 60_000);
-    await utimes(lock, old, old);
-
-    const store = new TaskStore(taskRoot);
-    let settled = false;
-    const pending = store
-      .create("locked", { title: "Waited", description: "Live owner kept its lock" })
-      .finally(() => {
-        settled = true;
-      });
+    const { DatabaseSync } = await import("node:sqlite");
+    const blocker = new DatabaseSync(join(workflowDir, ".mutex.sqlite"));
+    blocker.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    const firstStore = new TaskStore(taskRoot);
+    const secondStore = new TaskStore(taskRoot);
+    let settled = 0;
+    const pending = [
+      firstStore.create("locked", { title: "First", description: "Wait for crash release" }),
+      secondStore.create("locked", { title: "Second", description: "Wait for crash release" }),
+    ].map((operation) =>
+      operation.finally(() => {
+        settled++;
+      }),
+    );
     await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(settled).toBe(false);
-    await unlink(lock);
-    await pending;
+    expect(settled).toBe(0);
+    // Closing a connection with an open transaction models the OS releasing a
+    // mutex after its owner exits; there is no stale pathname to reclaim.
+    blocker.close();
+    await Promise.all(pending);
+    expect(await firstStore.list("locked")).toHaveLength(2);
 
-    await writeFile(lock, JSON.stringify({ token: "dead", pid: 2_147_483_647, createdAt: 0 }), "utf8");
-    await utimes(lock, old, old);
     const orphan = join(workflowDir, ".task-deadbeef.crash.tmp");
     await writeFile(orphan, "partial", "utf8");
-    await store.create("locked", { title: "Recovered", description: "Dead owner was replaced" });
+    await firstStore.create("locked", { title: "Recovered", description: "Orphan temp removed" });
     await expect(stat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+
+    let active = 0;
+    let maxActive = 0;
+    let calls = 0;
+    let releaseFirst!: () => void;
+    let reportFirst!: () => void;
+    const firstEntered = new Promise<void>((resolve) => {
+      reportFirst = resolve;
+    });
+    const firstRelease = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const blockingSchema: AnySchema = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: async (value: unknown) => {
+          calls++;
+          active++;
+          maxActive = Math.max(maxActive, active);
+          if (calls === 1) {
+            reportFirst();
+            await firstRelease;
+          }
+          active--;
+          return { value };
+        },
+      },
+    };
+    const first = firstStore.create(
+      "serialized",
+      { title: "Held", description: "Hold the workflow mutex", extensions: {} },
+      blockingSchema,
+    );
+    await firstEntered;
+    const second = secondStore.create(
+      "serialized",
+      { title: "Queued", description: "Must not overlap", extensions: {} },
+      blockingSchema,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(calls).toBe(1);
+    expect(maxActive).toBe(1);
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(maxActive).toBe(1);
+    expect(await firstStore.list("serialized", blockingSchema)).toHaveLength(2);
   });
 });

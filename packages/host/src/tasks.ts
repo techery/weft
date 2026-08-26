@@ -1,18 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
-import {
-  link,
-  mkdir,
-  mkdtemp,
-  open,
-  readdir,
-  readFile,
-  rename,
-  rm,
-  stat,
-  unlink,
-  utimes,
-} from "node:fs/promises";
+import { link, mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { type AgentTaskContext, type AgentTaskOperation, jsonUnsafeAt } from "@techery/weft-core";
@@ -37,6 +25,7 @@ type HydratedWorkflowTask = WorkflowTask & { [STORED_EXTENSIONS]?: unknown };
 interface TaskExtensionConfig {
   version: number;
   declared: boolean;
+  definitionAvailable: boolean;
   migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
 }
 
@@ -335,6 +324,12 @@ export class TaskStore {
       throw new Error(`task id ${id} already exists in workflow ${workflowId}`);
     }
     const config = await this.extensionConfig(workflowId);
+    const definitionAvailable = config.definitionAvailable || extensionSchema !== undefined;
+    if (config.declared && !definitionAvailable) {
+      throw new Error(
+        `cannot create task in workflow ${workflowId}: its extension schema definition is unavailable`,
+      );
+    }
     const schemaDeclared = config.declared || extensionSchema !== undefined;
     const extensionInput = input.extensions === undefined && !schemaDeclared ? {} : input.extensions;
     const task = withStoredExtensions<WorkflowTask>(
@@ -413,11 +408,22 @@ export class TaskStore {
   ): Promise<WorkflowTask> {
     const actor = cleanRequired(input.actor ?? "cli", "actor");
     const now = Date.now();
+    const config = await this.extensionConfig(current.workflowId);
+    const definitionAvailable = config.definitionAvailable || extensionSchema !== undefined;
+    if (
+      input.extensions !== undefined &&
+      !definitionAvailable &&
+      (config.declared || current.extensionSchemaVersion < config.version)
+    ) {
+      throw new Error(
+        `cannot update task ${current.id} extensions: the workflow extension schema definition is unavailable`,
+      );
+    }
     const extensionInput = input.extensions !== undefined ? input.extensions : storedExtensionsOf(current);
     return withStoredExtensions(
       {
         ...current,
-        extensionSchemaVersion: (await this.extensionConfig(current.workflowId)).version,
+        extensionSchemaVersion: current.extensionSchemaVersion,
         ...(input.title !== undefined ? { title: cleanRequired(input.title, "title") } : {}),
         ...(input.description !== undefined
           ? { description: cleanRequired(input.description, "description") }
@@ -1077,13 +1083,16 @@ export class TaskStore {
       );
     }
     let candidate = task.extensions;
+    let extensionSchemaVersion = task.extensionSchemaVersion;
     if (task.extensionSchemaVersion < config.version) {
-      if (!config.migrate) {
+      if (config.migrate) {
+        candidate = await config.migrate(candidate, task.extensionSchemaVersion);
+        extensionSchemaVersion = config.version;
+      } else if (config.definitionAvailable || extensionSchema !== undefined) {
         throw new Error(
           `task ${task.id} needs extension migration from version ${task.extensionSchemaVersion} to ${config.version}`,
         );
       }
-      candidate = await config.migrate(candidate, task.extensionSchemaVersion);
     }
     const schemaDeclared = config.declared || extensionSchema !== undefined;
     const extensions = await extensionsOf(
@@ -1092,7 +1101,7 @@ export class TaskStore {
       schemaDeclared && extensionSchema === undefined,
     );
     return withStoredExtensions(
-      { ...task, extensionSchemaVersion: config.version, extensions },
+      { ...task, extensionSchemaVersion, extensions },
       candidate === undefined && !schemaDeclared ? {} : candidate,
     );
   }
@@ -1145,50 +1154,41 @@ export class TaskStore {
     }
   }
 
-  /** Serialize topology and note updates across CLI processes; stale crash locks self-heal. */
+  /** Serialize topology and note updates across CLI processes; process exit releases the OS lock. */
   private async mutate<T>(workflowId: string, fn: () => Promise<T>): Promise<T> {
     const dir = this.workflowDir(workflowId);
     await mkdir(dir, { recursive: true });
-    const lock = join(dir, ".lock");
-    const token = randomUUID();
-    const owner = JSON.stringify({ token, pid: process.pid, createdAt: Date.now() });
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
-    for (let attempt = 0; attempt < 200; attempt++) {
-      try {
-        handle = await open(lock, "wx");
-        await handle.writeFile(`${owner}\n`, "utf8");
-        await handle.sync();
-        break;
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-        const age = await stat(lock)
-          .then((info) => Date.now() - info.mtimeMs)
-          .catch(() => 0);
-        if (age > 30_000) {
-          const observed = await readFile(lock, "utf8").catch(() => "");
-          const pid = lockPid(observed);
-          if (pid === undefined || !processAlive(pid)) {
-            const unchanged = await readFile(lock, "utf8").catch(() => "");
-            if (unchanged === observed) await unlink(lock).catch(() => undefined);
-          }
-        }
-        await new Promise((resolve) => setTimeout(resolve, 10 + Math.min(attempt, 40)));
-      }
-    }
-    if (handle === undefined) throw new Error(`workflow ${workflowId} task store is busy`);
-    const heartbeat = setInterval(() => {
-      const now = new Date();
-      void utimes(lock, now, now).catch(() => undefined);
-    }, 5_000);
-    heartbeat.unref();
+    const { DatabaseSync } = await import("node:sqlite");
+    const database = new DatabaseSync(join(dir, ".mutex.sqlite"));
+    database.exec("PRAGMA busy_timeout = 0");
+    let acquired = false;
     try {
+      for (let attempt = 0; attempt < 200; attempt++) {
+        try {
+          database.exec("BEGIN IMMEDIATE");
+          acquired = true;
+          break;
+        } catch (err) {
+          if (!isSqliteBusy(err)) throw err;
+          await new Promise((resolve) => setTimeout(resolve, 10 + Math.min(attempt, 40)));
+        }
+      }
+      if (!acquired) throw new Error(`workflow ${workflowId} task store is busy`);
       await cleanupOrphanTemps(dir);
       return await fn();
     } finally {
-      clearInterval(heartbeat);
-      await handle.close().catch(() => undefined);
-      const current = await readFile(lock, "utf8").catch(() => "");
-      if (current.trim() === owner) await unlink(lock).catch(() => undefined);
+      if (acquired) {
+        try {
+          database.exec("ROLLBACK");
+        } catch {
+          // Closing the connection below is the final lock-release guarantee.
+        }
+      }
+      try {
+        database.close();
+      } catch {
+        // already closed
+      }
     }
   }
 
@@ -1225,7 +1225,11 @@ export class TaskStore {
       }
       return this.runtimeSchemas.get(key);
     }
-    if (!this.schemaFor) return fallback;
+    if (!this.schemaFor) {
+      if (fallback !== undefined) return fallback;
+      const binding = this.latestBindings.get(workflowId);
+      return binding ? this.runtimeSchemas.get(`${workflowId}:${binding}`) : undefined;
+    }
     return this.schemaFor(workflowId);
   }
 
@@ -1257,6 +1261,7 @@ export class TaskStore {
       return {
         version: scoped.version,
         declared: scoped.schema !== undefined,
+        definitionAvailable: true,
         ...(scoped.migrate ? { migrate: scoped.migrate } : {}),
       };
     }
@@ -1266,12 +1271,14 @@ export class TaskStore {
       return {
         ...migration,
         declared: this.runtimeSchemas.get(`${workflowId}:${binding}`) !== undefined,
+        definitionAvailable: true,
       };
     }
     const namespace = await this.namespace(workflowId);
     return {
       version: namespace?.extensionSchemaVersion ?? 1,
       declared: namespace?.extensionSchemaDeclared ?? false,
+      definitionAvailable: false,
     };
   }
 }
@@ -1623,22 +1630,11 @@ async function cleanupOrphanTemps(dir: string): Promise<void> {
   );
 }
 
-function lockPid(value: string): number | undefined {
-  try {
-    const parsed = JSON.parse(value) as { pid?: unknown };
-    return typeof parsed.pid === "number" && Number.isInteger(parsed.pid) ? parsed.pid : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
-  }
+function isSqliteBusy(err: unknown): boolean {
+  const code = (err as { errcode?: unknown })?.errcode;
+  if (code === 5 || code === 6) return true;
+  const message = err instanceof Error ? err.message.toLowerCase() : "";
+  return message.includes("database is locked") || message.includes("database table is locked");
 }
 
 async function syncDir(dir: string): Promise<void> {
