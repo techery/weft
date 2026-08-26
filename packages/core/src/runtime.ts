@@ -474,8 +474,11 @@ export class RunRuntime {
 
   private checkIdle(): void {
     if (this.inflightLive === 0 && this.hasPendingWaits()) {
-      const listeners = this.idleListeners;
-      for (const l of listeners) l();
+      // Iterate a COPY: a listener normally unregisters itself as it fires, and
+      // `offIdle` splices the live array, which shifts every later element left
+      // under the loop's index and skips every second waiter. With two waiters
+      // that means one of them never learns the run went idle.
+      for (const l of [...this.idleListeners]) l();
     }
   }
 

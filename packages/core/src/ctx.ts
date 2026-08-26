@@ -279,6 +279,33 @@ function resolveSecretValues(
 // Tree hashing (patch idempotency)
 // ---------------------------------------------------------------------------
 
+/**
+ * Safety floor for the bare git calls in this module. A pathname-valued
+ * `core.fsmonitor` is a program git executes on any worktree scan, so a repository
+ * can run code simply by being scanned — and these helpers run `add -A .` on every
+ * write-step dispatch and inside every `ctx.integrate`, which means cloning an
+ * untrusted repo would be enough. `@techery/weft-git`'s `GitCli.raw` takes exactly
+ * this position on every call it makes (packages/git/src/git.ts:100); these helpers
+ * predate it and need the same floor rather than a second opinion.
+ *
+ * The safety vars are spread LAST on purpose: callers here build `env` from
+ * `process.env`, so spreading them first would let an inherited hostile value win.
+ * None of these commands are diff-family, so `GIT_EXTERNAL_DIFF` only needs clearing.
+ */
+const GIT_SAFE_ENV: Record<string, string | undefined> = {
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_OPTIONAL_LOCKS: "0",
+  LC_ALL: "C",
+  GIT_EXTERNAL_DIFF: undefined,
+};
+
+function safeGit(args: string[], opts: { cwd: string; env?: Record<string, string | undefined> }) {
+  return execa("git", ["-c", "core.fsmonitor=false", ...args], {
+    cwd: opts.cwd,
+    env: { ...(opts.env ?? {}), ...GIT_SAFE_ENV },
+  });
+}
+
 /** Content hash of the full working tree (tracked + untracked, minus ignored). */
 export async function treeHash(cwd: string): Promise<string> {
   const indexFile = join(tmpdir(), `weft-index-${randomUUID()}`);
@@ -287,9 +314,9 @@ export async function treeHash(cwd: string): Promise<string> {
     // Seed from HEAD first (same reason as integrationBaseCommit below): on an empty
     // index a tracked file that .gitignore also matches would drop out of the hash,
     // and integrate's idempotency check would go blind to changes in it.
-    await execa("git", ["read-tree", "HEAD"], { cwd, env });
-    await execa("git", ["add", "-A", "."], { cwd, env });
-    const { stdout } = await execa("git", ["write-tree"], { cwd, env });
+    await safeGit(["read-tree", "HEAD"], { cwd, env });
+    await safeGit(["add", "-A", "."], { cwd, env });
+    const { stdout } = await safeGit(["write-tree"], { cwd, env });
     return stdout.trim();
   } finally {
     await nodeFs.rm(indexFile, { force: true }).catch(() => undefined);
@@ -318,8 +345,8 @@ export async function integrationBaseCommit(cwd: string, alsoInclude: string[] =
   try {
     // Seed from HEAD first: on an empty index a tracked file that .gitignore also
     // matches would look untracked to `add -A` and silently drop out of the tree.
-    await execa("git", ["read-tree", "HEAD"], { cwd, env });
-    await execa("git", ["add", "-A", "."], { cwd, env });
+    await safeGit(["read-tree", "HEAD"], { cwd, env });
+    await safeGit(["add", "-A", "."], { cwd, env });
     // A rollback restores its caller's target paths FROM this snapshot: a
     // pre-existing IGNORED file at one of those paths is skipped by `add -A`,
     // so the rollback would read it as patch-created and DELETE the user's
@@ -335,10 +362,10 @@ export async function integrationBaseCommit(cwd: string, alsoInclude: string[] =
       )
         present.push(file);
     }
-    if (present.length > 0) await execa("git", ["add", "-f", "--", ...present], { cwd, env });
-    const tree = (await execa("git", ["write-tree"], { cwd, env })).stdout.trim();
-    const head = (await execa("git", ["rev-parse", "HEAD"], { cwd })).stdout.trim();
-    const headTree = (await execa("git", ["rev-parse", "HEAD^{tree}"], { cwd })).stdout.trim();
+    if (present.length > 0) await safeGit(["add", "-f", "--", ...present], { cwd, env });
+    const tree = (await safeGit(["write-tree"], { cwd, env })).stdout.trim();
+    const head = (await safeGit(["rev-parse", "HEAD"], { cwd })).stdout.trim();
+    const headTree = (await safeGit(["rev-parse", "HEAD^{tree}"], { cwd })).stdout.trim();
     if (tree === headTree) return head;
     const { stdout } = await execa(
       "git",
@@ -354,7 +381,7 @@ export async function integrationBaseCommit(cwd: string, alsoInclude: string[] =
     // days (onConflict: "ask") — one `git gc --prune` while nobody holds the
     // run and the skip/abort restore path has nothing left to check out. The
     // ref is content-addressed, so re-pinning the same snapshot is idempotent.
-    await execa("git", ["update-ref", `refs/weft/snapshots/${sha}`, sha], { cwd });
+    await safeGit(["update-ref", `refs/weft/snapshots/${sha}`, sha], { cwd });
     return sha;
   } finally {
     await nodeFs.rm(indexFile, { force: true }).catch(() => undefined);
