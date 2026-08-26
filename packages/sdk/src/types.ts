@@ -90,7 +90,8 @@ export interface WorkflowTaskSummary<Extensions = unknown> {
   relatedFiles: string[];
   acceptanceCriteria: WorkflowTaskCriterion[];
   latestNote: WorkflowTaskNote | null;
-  extensions: Extensions;
+  /** Undefined schema output is represented by key absence on the journal wire. */
+  extensions?: Exclude<Extensions, undefined>;
   updatedAt: number;
 }
 

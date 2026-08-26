@@ -268,6 +268,11 @@ describe("TaskStore", () => {
     const reopened = new TaskStore(taskRoot, schemaFor);
     expect((await reopened.get("defaulted", defaultedTask.id)).extensions).toBe("general");
     expect((await reopened.get("optional", optionalTask.id)).extensions).toBeUndefined();
+    const liveSnapshot = (await reopened.snapshot("optional")) as {
+      tasks: Record<string, unknown>[];
+    };
+    expect(liveSnapshot.tasks[0]).not.toHaveProperty("extensions");
+    expect(JSON.parse(JSON.stringify(liveSnapshot))).toEqual(liveSnapshot);
     await reopened.update("optional", optionalTask.id, { status: "in_progress" });
     const updated = JSON.parse(
       await readFile(join(taskRoot, "optional", `${optionalTask.id}.json`), "utf8"),

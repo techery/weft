@@ -627,7 +627,7 @@ export class TaskStore {
     const candidates = filtered;
     const limit = Math.min(100, Math.max(1, selector.limit ?? 50));
     const selected = candidates.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
-    return {
+    const snapshot = {
       total: tasks.length,
       truncated: selected.length < candidates.length,
       tasks: selected.map((task) => ({
@@ -644,10 +644,13 @@ export class TaskStore {
         relatedFiles: task.relatedFiles,
         acceptanceCriteria: task.acceptanceCriteria,
         latestNote: task.notes.at(-1) ?? null,
-        extensions: task.extensions,
+        ...(task.extensions === undefined ? {} : { extensions: task.extensions }),
         updatedAt: task.updatedAt,
       })),
     };
+    const unsafe = jsonUnsafeAt(snapshot);
+    if (unsafe !== undefined) throw new Error(`task snapshot must be JSON-safe at ${unsafe}`);
+    return snapshot;
   }
 
   /** Apply one journaled agent batch. Replays are harmless, including after a partial crash. */
@@ -1047,6 +1050,7 @@ export class TaskStore {
         throw new Error(`task ${id} is required by ${dependents.map((task) => task.id).join(", ")}`);
       }
       await unlink(this.taskFile(workflowId, id));
+      await syncDir(this.workflowDir(workflowId));
     });
   }
 
