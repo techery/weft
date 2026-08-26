@@ -3,8 +3,8 @@
 Folders 01–07 are self-contained library tours that run offline and deterministically with
 `@techery/weft-provider-mock`; `03` also builds a throwaway git repository because write steps need real
 worktrees. Folder 08 is a production-style CLI workflow: its test uses fixtures, while an interactive run uses
-the configured review providers and the repository's durable task store. Folder 09 is a file workflow for the
-Workflow Manager and demonstrates custom React result and input views.
+the configured review providers and the repository's durable task store. Folder 09 has an offline compiler/runtime
+check plus an interactive file workflow for custom React result and input views in the Workflow Manager.
 
 ```sh
 pnpm install                                       # once, at the repo root

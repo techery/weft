@@ -9,6 +9,15 @@ This workflow demonstrates every custom-UI mode in one durable run:
 The standard schema form and raw result stay visible beside custom UI. The component never receives a final
 submission function; the Workflow Manager validates and submits the staged candidate through host-owned chrome.
 
+Run the deterministic offline contract check used by CI:
+
+```sh
+npx tsx examples/09-custom-react-ui/main.ts
+```
+
+It compiles all three real browser assets, drives the human suspension programmatically, and asserts that the
+plan and outcome presentations can be recovered from the journal and blob store.
+
 From the repository root, start the Workflow Manager in one terminal:
 
 ```sh
