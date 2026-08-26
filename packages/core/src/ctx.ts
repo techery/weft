@@ -2140,6 +2140,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         wrapped: wire.wrapped,
         ...(opts.timeout !== undefined ? { timeoutMs: parseDuration(opts.timeout) } : {}),
         ...(timeoutSpec(opts.onTimeout) ?? {}),
+        ...(opts.ui !== undefined ? { ui: opts.ui } : {}),
       });
       return outcome.answer as never;
     },
@@ -2173,8 +2174,33 @@ export function buildCtx(rt: RunRuntime): Ctx {
         artifactRef: { $blob: blob.hash, size: blob.size, preview: opts.artifact.slice(0, 200) },
         ...(opts.timeout !== undefined ? { timeoutMs: parseDuration(opts.timeout) } : {}),
         ...(timeoutSpec(opts.onTimeout) ?? {}),
+        ...(opts.ui !== undefined ? { ui: opts.ui } : {}),
       });
       return outcome.answer as never;
+    },
+  };
+
+  const ui: Ctx["ui"] = {
+    render: async (opts) => {
+      const prepared = await rt.prepareUiPresentation(opts.view, opts.props, "display", "pending", opts.slot);
+      await rt.runStep<void>({
+        kind: "ui",
+        key: opts.key,
+        label: prepared.asset.id,
+        payload: {
+          op: "ui.render",
+          slot: opts.slot ?? null,
+          view: prepared.asset.id,
+          revision: prepared.asset.revision,
+          propsHash: prepared.props.hash,
+        },
+        revive: () => undefined,
+        execute: async (io) => ({
+          value: undefined,
+          journalOutput: null,
+          presentation: { ...prepared, id: `u${io.scheduleIndex}` },
+        }),
+      });
     },
   };
 
@@ -2881,6 +2907,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     workflow: workflow as Ctx["workflow"],
     gate: (req) => rt.gateStep(req),
     human,
+    ui,
     fs,
     exec,
     bash,

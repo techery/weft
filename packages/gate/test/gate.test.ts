@@ -1,6 +1,7 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { type Ctx, isZodSchema, validateSchema } from "@techery/weft-sdk";
 import { afterAll, describe, expect, it } from "vitest";
 import {
@@ -18,6 +19,7 @@ import { instantiateBundle } from "../src/load.ts";
 // ---------------------------------------------------------------------------
 
 const roots: string[] = [];
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 async function tempDir(): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), "weft-gate-"));
@@ -358,6 +360,142 @@ describe("checkSource", () => {
 // ---------------------------------------------------------------------------
 
 describe("bundleWorkflow", () => {
+  it("builds .ui.tsx as an opaque Node token and a separately hashed browser asset", async () => {
+    const dir = await tempDir();
+    const view = await write(
+      dir,
+      "summary.ui.tsx",
+      [
+        `import { defineResultView } from "@techery/weft-sdk/ui";`,
+        `export default defineResultView<{ message: string }>({`,
+        `  id: "summary",`,
+        `  revision: "1",`,
+        `  component: ({ props }) => <strong>{props.message}</strong>,`,
+        `});`,
+      ].join("\n"),
+    );
+    const entry = await write(
+      dir,
+      "workflow.ts",
+      [
+        `import { defineWorkflow, z } from "@techery/weft-sdk";`,
+        `import summary from "./summary.ui.tsx";`,
+        `export default defineWorkflow(`,
+        `  { description: "ui", input: z.object({}), output: z.object({ ok: z.boolean() }) },`,
+        `  async (ctx) => { await ctx.ui.render({ key: "summary", view: summary, props: { message: "ok" } }); return { ok: true }; },`,
+        `);`,
+      ].join("\n"),
+    );
+
+    const first = await bundleWorkflow({ entry, cwd: dir });
+    expect(first.code).toContain('kind: "weft.ui-view"');
+    expect(first.code).not.toContain("createRoot");
+    expect(first.uiCatalog.assets).toHaveLength(1);
+    expect(first.uiCatalog.assets[0]).toMatchObject({ id: "summary", revision: "1", mode: "display" });
+    expect(first.uiCatalog.assets[0]?.code).toContain("createRoot");
+
+    await writeFile(
+      view,
+      (await readFile(view, "utf8")).replace("<strong>", "<em>").replace("</strong>", "</em>"),
+    );
+    const styled = await bundleWorkflow({ entry, cwd: dir });
+    expect(styled.hash).toBe(first.hash);
+    expect(styled.buildHash).not.toBe(first.buildHash);
+
+    await writeFile(view, (await readFile(view, "utf8")).replace('revision: "1"', 'revision: "2"'));
+    const revised = await bundleWorkflow({ entry, cwd: dir });
+    expect(revised.hash).toBe(first.hash);
+    expect(revised.uiCatalog.assets[0]?.revision).toBe("2");
+  });
+
+  it("rejects dynamic imports from the browser asset graph", async () => {
+    const dir = await tempDir();
+    await write(dir, "lazy.ts", `export const label = "late";`);
+    await write(
+      dir,
+      "panel.ui.tsx",
+      [
+        `import { defineResultView } from "@techery/weft-sdk/ui";`,
+        `export default defineResultView<Record<string, never>>({`,
+        `  id: "panel", revision: "1",`,
+        `  component: () => <button onClick={() => import("./lazy.ts")}>load</button>,`,
+        `});`,
+      ].join("\n"),
+    );
+    const entry = await write(
+      dir,
+      "workflow.ts",
+      [
+        `import { defineWorkflow, z } from "@techery/weft-sdk";`,
+        `import panel from "./panel.ui.tsx";`,
+        `export default defineWorkflow(`,
+        `  { description: "ui", input: z.object({}), output: z.object({ ok: z.boolean() }) },`,
+        `  async (ctx) => { await ctx.ui.render({ key: "panel", view: panel, props: {} }); return { ok: true }; },`,
+        `);`,
+      ].join("\n"),
+    );
+
+    await expect(bundleWorkflow({ entry, cwd: dir })).rejects.toThrow(/dynamic imports are not supported/);
+  });
+
+  it("rejects relative node_modules paths that escape the workflow root", async () => {
+    const project = await tempDir();
+    const root = path.join(project, ".weft/workflows");
+    await write(project, "node_modules/unapproved/index.js", `export default "escaped";`);
+    await write(
+      root,
+      "panel.ui.tsx",
+      [
+        `import { defineResultView } from "@techery/weft-sdk/ui";`,
+        `import escaped from "../../node_modules/unapproved/index.js";`,
+        `export default defineResultView<Record<string, never>>({`,
+        `  id: "panel", revision: "1",`,
+        `  component: () => <strong>{escaped}</strong>,`,
+        `});`,
+      ].join("\n"),
+    );
+    const entry = await write(
+      root,
+      "workflow.ts",
+      [
+        `import { defineWorkflow, z } from "@techery/weft-sdk";`,
+        `import panel from "./panel.ui.tsx";`,
+        `export default defineWorkflow(`,
+        `  { description: "ui", input: z.object({}), output: z.object({ ok: z.boolean() }) },`,
+        `  async (ctx) => { await ctx.ui.render({ key: "panel", view: panel, props: {} }); return { ok: true }; },`,
+        `);`,
+      ].join("\n"),
+    );
+
+    await expect(bundleWorkflow({ entry })).rejects.toThrow(/browser import escapes the workflow root/);
+  });
+
+  it("keeps the custom React UI example compilable as three browser views", async () => {
+    const loaded = await loadWorkflow({
+      entry: path.join(repoRoot, "examples/09-custom-react-ui/workflow.ts"),
+    });
+    expect(loaded.name).toBe("custom-react-ui");
+    expect(loaded.uiCatalog.assets.map(({ id, mode }) => ({ id, mode }))).toEqual([
+      { id: "example.deployment-outcome", mode: "display" },
+      { id: "example.deployment-review", mode: "input" },
+      { id: "example.deployment-plan", mode: "display" },
+    ]);
+  });
+
+  it("keeps every minimal API cookbook workflow gate-clean", async () => {
+    const files = [
+      "composition.ts",
+      "humans-and-waits.ts",
+      "effects.ts",
+      "git.ts",
+      "state-tasks-and-patches.ts",
+    ];
+    for (const file of files) {
+      const loaded = await loadWorkflow({ entry: path.join(repoRoot, "examples/10-api-cookbook", file) });
+      expect(loaded.def.kind, file).toBe("weft.workflow");
+    }
+  });
+
   it("inlines relative imports and keeps @techery/weft-sdk external", async () => {
     const dir = await tempDir();
     const entry = await writeReview(dir);

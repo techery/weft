@@ -29,6 +29,7 @@ export type StepKind =
   | "check"
   | "sleep"
   | "signal"
+  | "ui"
   | "sideeffect";
 
 /** Reference to a blob in the content-addressed store. */
@@ -39,6 +40,21 @@ export interface BlobRefJson {
   preview?: string;
 }
 
+export type UiPropsJson = { inline: unknown; hash: string } | { ref: BlobRefJson; hash: string };
+
+export interface UiPresentation {
+  id: string;
+  asset: {
+    id: string;
+    revision: string;
+    bundleRef: BlobRefJson;
+    protocol: 1;
+  };
+  props: UiPropsJson;
+  mode: "display" | "input";
+  slot?: string;
+}
+
 export type HumanKind = "gate" | "ask" | "approve" | "review" | "confirm";
 
 export interface HumanRequestEvent {
@@ -46,6 +62,7 @@ export interface HumanRequestEvent {
   id: string;
   seq: number;
   hash: string;
+  key?: string;
   kind: HumanKind;
   question: string;
   detail?: string;
@@ -58,6 +75,14 @@ export interface HumanRequestEvent {
   timeoutDefault?: unknown;
   /** Token the answer must echo for irreversible confirmations. */
   confirmToken?: string;
+  ui?: UiPresentation;
+}
+
+export interface HumanSupersededEvent {
+  type: "human.superseded";
+  id: string;
+  byId: string;
+  reason: string;
 }
 
 export interface HumanAnsweredEvent {
@@ -140,6 +165,7 @@ export type JournalEvent =
       transcriptRef?: BlobRefJson;
       patchRef?: string;
       attempts?: number;
+      presentation?: UiPresentation;
     }
   /** `settle` means execution completed and only its journal-backed side effects failed. */
   | {
@@ -155,6 +181,7 @@ export type JournalEvent =
   | HumanRequestEvent
   | HumanAnsweredEvent
   | HumanRejectedEvent
+  | HumanSupersededEvent
   | { type: "signal.received"; name: string; payload: unknown }
   // A delivered payload the waiting step REFUSED (schema violation): replay must
   // treat that delivery as consumed, or resume re-takes it ahead of any

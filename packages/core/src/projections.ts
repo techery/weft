@@ -3,7 +3,7 @@
  * journal — re-derivable at any time, never a source of truth.
  */
 import type { Risk, SerializedStepError, Usage } from "@techery/weft-sdk";
-import type { BlobRefJson, JournalRecord, RunStatus, StepKind } from "./events.ts";
+import type { BlobRefJson, JournalRecord, RunStatus, StepKind, UiPresentation } from "./events.ts";
 
 export interface StepState {
   seq: number;
@@ -27,22 +27,25 @@ export interface StepState {
   transcriptRef?: BlobRefJson;
   patchRef?: string;
   childRunId?: string;
+  presentation?: UiPresentation;
 }
 
 export interface HumanState {
   id: string;
   seq: number;
+  key?: string;
   kind: string;
   question: string;
   detail?: string;
   risk?: Risk;
   schema: unknown;
-  status: "pending" | "answered";
+  status: "pending" | "answered" | "superseded";
   answer?: unknown;
   answeredBy?: string;
   deadline?: number;
   confirmToken?: string;
   artifactRef?: BlobRefJson;
+  ui?: UiPresentation;
   requestedAt: number;
 }
 
@@ -215,6 +218,7 @@ export function reduceState(records: JournalRecord[]): RunState {
         if (ev.sessionId !== undefined) step.sessionId = ev.sessionId;
         if (ev.transcriptRef !== undefined) step.transcriptRef = ev.transcriptRef;
         if (ev.patchRef !== undefined) step.patchRef = ev.patchRef;
+        if (ev.presentation !== undefined) step.presentation = ev.presentation;
         if (step.kind === "check") {
           const out = ev.output as { status?: CheckState["status"]; evidence?: string } | null;
           const meta = checkMetaBySeq.get(ev.seq);
@@ -256,11 +260,13 @@ export function reduceState(records: JournalRecord[]): RunState {
           schema: ev.schema,
           status: "pending",
           requestedAt: rec.at,
+          ...(ev.key !== undefined ? { key: ev.key } : {}),
           ...(ev.detail !== undefined ? { detail: ev.detail } : {}),
           ...(ev.risk !== undefined ? { risk: ev.risk } : {}),
           ...(ev.deadline !== undefined ? { deadline: ev.deadline } : {}),
           ...(ev.confirmToken !== undefined ? { confirmToken: ev.confirmToken } : {}),
           ...(ev.artifactRef !== undefined ? { artifactRef: ev.artifactRef } : {}),
+          ...(ev.ui !== undefined ? { ui: ev.ui } : {}),
         };
         humansById.set(ev.id, human);
         state.humans.push(human);
@@ -283,6 +289,11 @@ export function reduceState(records: JournalRecord[]): RunState {
         human.status = "pending";
         delete human.answer;
         delete human.answeredBy;
+        break;
+      }
+      case "human.superseded": {
+        const human = humansById.get(ev.id);
+        if (human) human.status = "superseded";
         break;
       }
       case "note":

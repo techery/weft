@@ -39,9 +39,11 @@ export interface HumanEntry {
   id: string;
   hash: string;
   seq: number;
+  key?: string;
   request: HumanRequestEvent;
   answer?: { answer: unknown; answeredBy: "human" | "policy" | "timeout"; order: number };
   consumed: boolean;
+  superseded: boolean;
 }
 
 export interface ScheduledEntry {
@@ -69,6 +71,7 @@ export class ReplayIndex {
   readonly byKey = new Map<string, CompletedEntry[]>();
   readonly humansByHash = new Map<string, HumanEntry[]>();
   readonly humansById = new Map<string, HumanEntry>();
+  readonly humansByKey = new Map<string, HumanEntry[]>();
   readonly scheduledByHash = new Map<string, ScheduledEntry[]>();
   readonly signalsByName = new Map<string, SignalEntry[]>();
   /**
@@ -218,15 +221,33 @@ export class ReplayIndex {
           break;
         }
         case "human.requested": {
-          const entry: HumanEntry = { id: ev.id, hash: ev.hash, seq: ev.seq, request: ev, consumed: false };
+          const entry: HumanEntry = {
+            id: ev.id,
+            hash: ev.hash,
+            seq: ev.seq,
+            request: ev,
+            consumed: false,
+            superseded: false,
+            ...(ev.key !== undefined ? { key: ev.key } : {}),
+          };
           const list = index.humansByHash.get(ev.hash) ?? [];
           list.push(entry);
           index.humansByHash.set(ev.hash, list);
           index.humansById.set(ev.id, entry);
+          if (ev.key !== undefined) {
+            const keyed = index.humansByKey.get(ev.key) ?? [];
+            keyed.push(entry);
+            index.humansByKey.set(ev.key, keyed);
+          }
           index.maxSeq = Math.max(index.maxSeq, ev.seq);
           const num = /^h(\d+)$/.exec(ev.id);
           if (num) index.maxHumanId = Math.max(index.maxHumanId, Number(num[1]));
           index.entryCount++;
+          break;
+        }
+        case "human.superseded": {
+          const entry = index.humansById.get(ev.id);
+          if (entry) entry.superseded = true;
           break;
         }
         case "human.answered": {
@@ -353,9 +374,10 @@ export class ReplayIndex {
     hash: string,
     seq?: number,
     positionsTrusted = true,
+    key?: string,
   ): { entry: HumanEntry; ambiguous?: true } | undefined {
-    const sameHash = this.humansByHash.get(hash) ?? [];
-    const ambiguousKeyless = sameHash.length > 1;
+    const sameHash = (this.humansByHash.get(hash) ?? []).filter((entry) => !entry.superseded);
+    const ambiguousKeyless = key === undefined && sameHash.length > 1;
 
     if (seq !== undefined) {
       const onPosition = sameHash.find((e) => !e.consumed && e.seq === seq);
@@ -368,6 +390,13 @@ export class ReplayIndex {
     const entry = sameHash.find((e) => !e.consumed);
     if (!entry) return undefined;
     return ambiguousKeyless ? { entry, ambiguous: true } : { entry };
+  }
+
+  /** An older unanswered request at this call site whose semantics changed. */
+  pendingHumanByKey(key: string): HumanEntry | undefined {
+    return this.humansByKey
+      .get(key)
+      ?.find((entry) => !entry.consumed && !entry.superseded && entry.answer === undefined);
   }
 
   matchIncompleteScheduled(hash: string, kind: StepKind): ScheduledEntry | undefined {

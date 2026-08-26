@@ -27,6 +27,7 @@ export { registerBlobRoutes } from "./api/blobs.ts";
 export { registerConfigRoutes } from "./api/config.ts";
 export { registerMetaRoutes } from "./api/meta.ts";
 export { type PendingEntry, registerPendingRoutes } from "./api/pending.ts";
+export { registerPresentationRoutes } from "./api/presentations.ts";
 export { registerStartRoutes } from "./api/starts.ts";
 export { registerWorkflowRoutes } from "./api/workflows.ts";
 export { type CreateAppOptions, createApp } from "./app.ts";

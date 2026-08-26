@@ -9,6 +9,7 @@ import { NextStrip } from "~/components/molecules/NextStrip";
 import { DataPane } from "~/components/molecules/OutputPane";
 import { SectionHeading } from "~/components/molecules/SectionHeading";
 import { ToolCallRow } from "~/components/molecules/ToolCallRow";
+import { WorkflowViewFrame } from "~/components/molecules/WorkflowViewFrame";
 import type { Run, StepDetail } from "~/domain/types";
 import styles from "./StepPane.module.css";
 
@@ -127,6 +128,15 @@ export function StepPane({ run, step, stepId, onSelectStep, onGoToGate }: Props)
             <SectionHeading>
               <Kicker>Output</Kicker>
             </SectionHeading>
+            {step.presentation ? (
+              <div className={styles.block}>
+                <WorkflowViewFrame
+                  key={step.presentation.id}
+                  runId={run.id}
+                  presentation={step.presentation}
+                />
+              </div>
+            ) : null}
             <DataPane
               title={step.outTitle}
               note={step.outNote}

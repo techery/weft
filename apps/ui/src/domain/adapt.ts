@@ -435,6 +435,7 @@ function machineStep(
     tools: [],
     toolsTitle: "",
     next: failed && step.error?.message ? { k: "error", v: step.error.message, goToGate: false } : null,
+    ...(step.presentation !== undefined ? { presentation: step.presentation } : {}),
   };
 }
 
@@ -481,6 +482,7 @@ function humanStep(human: HumanState, waiting: boolean): StepDetail {
     tools: [],
     toolsTitle: "",
     next: waiting ? { k: "needs you", v: "This question is holding the run.", goToGate: true } : null,
+    ...(human.ui !== undefined ? { presentation: human.ui } : {}),
   };
 }
 
@@ -561,6 +563,7 @@ export function adaptGate(request: PendingRequest): Gate {
           },
         }
       : {}),
+    ...(request.ui !== undefined ? { ui: request.ui } : {}),
   };
 }
 
@@ -583,6 +586,7 @@ function adaptGateFromState(detail: RunDetail, human: HumanState | undefined): G
     ...(human.detail !== undefined ? { detail: human.detail } : {}),
     ...(human.risk !== undefined ? { risk: human.risk } : {}),
     ...(human.artifactRef !== undefined ? { artifactRef: human.artifactRef } : {}),
+    ...(human.ui !== undefined ? { ui: human.ui } : {}),
   });
 }
 

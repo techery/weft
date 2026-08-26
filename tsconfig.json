@@ -4,6 +4,7 @@
     "packages/*/src/**/*.ts",
     "packages/*/test/**/*.ts",
     "examples/**/*.ts",
+    "examples/**/*.tsx",
     ".weft/workflows/**/*.ts"
   ]
 }

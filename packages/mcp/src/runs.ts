@@ -9,7 +9,14 @@
  * daemon) has no handle here, so its journal is polled instead; the projection carries
  * the same pending requests the handle would have reported.
  */
-import type { PendingRequest, RunHandle, RunState, Weft, WorkflowDefinition } from "@techery/weft-host";
+import type {
+  CompiledUiCatalog,
+  PendingRequest,
+  RunHandle,
+  RunState,
+  Weft,
+  WorkflowDefinition,
+} from "@techery/weft-host";
 
 /** How often the journal is re-read for a run this process did not start. */
 const POLL_MS = 500;
@@ -57,6 +64,7 @@ export interface TrackedRun {
   handle: RunHandle;
   ref?: string;
   def?: WorkflowDefinition;
+  uiCatalog?: CompiledUiCatalog;
 }
 
 /** The handles this server owns. Runs it never started are served from the journal. */

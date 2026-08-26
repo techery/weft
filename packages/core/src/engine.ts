@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { trace } from "@opentelemetry/api";
 import {
   CancelledError,
+  type CompiledUiCatalog,
   isCancellation,
   isWorkflowDefinition,
   StepError,
@@ -248,7 +249,9 @@ export interface WorkflowRegistry {
   resolve?(identity: {
     id?: string;
     name: string;
-  }): Promise<{ def: WorkflowDefinition; name: string; hash?: string } | undefined>;
+  }): Promise<
+    { def: WorkflowDefinition; name: string; hash?: string; uiCatalog?: CompiledUiCatalog } | undefined
+  >;
   /**
    * The bundle content hash of what `get(name)` would return right now, when the registry
    * knows one.
@@ -265,7 +268,9 @@ export interface WorkflowRegistry {
 async function resolveRegistryWorkflow(
   registry: WorkflowRegistry,
   identity: { id?: string; name: string },
-): Promise<{ def: WorkflowDefinition; name: string; hash?: string } | undefined> {
+): Promise<
+  { def: WorkflowDefinition; name: string; hash?: string; uiCatalog?: CompiledUiCatalog } | undefined
+> {
   if (registry.resolve) return registry.resolve(identity);
   const def = await registry.get(identity.name);
   if (!def) return undefined;
@@ -297,6 +302,7 @@ export interface StartOptions {
   defHash?: string;
   budget?: { tokens?: number; usd?: number };
   reuse?: ReuseMode;
+  uiCatalog?: CompiledUiCatalog;
 }
 
 export interface ResumeOptions {
@@ -309,6 +315,7 @@ export interface ResumeOptions {
    * and the check falls back to the body hash alone.
    */
   defHash?: string;
+  uiCatalog?: CompiledUiCatalog;
 }
 
 export type RunOutcome =
@@ -450,6 +457,7 @@ export class Engine implements EngineHost {
       shared,
       ...(opts.baseRef !== undefined ? { baseRef: opts.baseRef } : {}),
       ...(def.meta.defaults !== undefined ? { workflowDefaults: def.meta.defaults } : {}),
+      ...(opts.uiCatalog !== undefined ? { uiCatalog: opts.uiCatalog } : {}),
     });
     const lease = await this.claimRun(runId);
     // The appended records flow into launch as the projection seed: the run is not
@@ -508,12 +516,14 @@ export class Engine implements EngineHost {
     // The caller's hash names the definition the CALLER brought; a registry lookup here
     // brings its own, and mixing them would compare one script's stamp against another's.
     let bundleHash = opts.def !== undefined ? opts.defHash : undefined;
+    let uiCatalog = opts.def !== undefined ? opts.uiCatalog : undefined;
     if (!def && this.registry) {
       const resolved = await resolveRegistryWorkflow(this.registry, created.workflow);
       if (resolved) {
         def = resolved.def;
         workflowName = resolved.name;
         bundleHash = resolved.hash;
+        uiCatalog = resolved.uiCatalog;
       }
     }
     if (!def) {
@@ -525,6 +535,7 @@ export class Engine implements EngineHost {
     const resumeOpts: ResumeOptions = {
       ...opts,
       ...(bundleHash !== undefined ? { defHash: bundleHash } : {}),
+      ...(uiCatalog !== undefined ? { uiCatalog } : {}),
     };
 
     // The journal holds the RAW input; reapply the schema so a transform hands the
@@ -648,6 +659,7 @@ export class Engine implements EngineHost {
       replay,
       ...(created.baseRef !== undefined ? { baseRef: created.baseRef } : {}),
       ...(def.meta.defaults !== undefined ? { workflowDefaults: def.meta.defaults } : {}),
+      ...(opts.uiCatalog !== undefined ? { uiCatalog: opts.uiCatalog } : {}),
     });
     return this.launch(runtime, def, input, records, lease);
   }
@@ -1272,6 +1284,7 @@ export class Engine implements EngineHost {
           standing = true;
         } else if (r.ev.type === "human.answered" && r.ev.id === requestId) standing = false;
         else if (r.ev.type === "human.rejected" && r.ev.id === requestId) standing = true;
+        else if (r.ev.type === "human.superseded" && r.ev.id === requestId) standing = false;
       }
       if (requested && standing) return { pending: childId };
       if (requested) out.requested ??= childId;
@@ -1307,6 +1320,7 @@ export class Engine implements EngineHost {
   ): Promise<{ output: unknown; usage: import("@techery/weft-sdk").Usage; childRunId: string }> {
     const parent = spec.parent;
     let def: WorkflowDefinition | undefined;
+    let uiCatalog: CompiledUiCatalog | undefined;
     if (spec.def !== undefined) {
       if (!isWorkflowDefinition(spec.def)) {
         throw new StepError("invalid_input", `ctx.workflow: not a workflow definition`, {
@@ -1314,8 +1328,13 @@ export class Engine implements EngineHost {
         });
       }
       def = spec.def;
+      uiCatalog = parent.uiCatalog;
     } else {
-      def = await this.registry?.get(spec.name);
+      const resolved = this.registry
+        ? await resolveRegistryWorkflow(this.registry, { name: spec.name })
+        : undefined;
+      def = resolved?.def;
+      uiCatalog = resolved?.uiCatalog;
     }
     if (!def) {
       throw new StepError("invalid_input", `workflow "${spec.name}" not found in the registry`, {
@@ -1487,6 +1506,7 @@ export class Engine implements EngineHost {
       ...(replay !== undefined ? { replay } : {}),
       ...(parent.baseRef !== undefined ? { baseRef: parent.baseRef } : {}),
       ...(def.meta.defaults !== undefined ? { workflowDefaults: def.meta.defaults } : {}),
+      ...(uiCatalog !== undefined ? { uiCatalog } : {}),
     });
     if (!resuming) {
       // Seed launch with the appended record for the same reason start() does: the
@@ -1673,10 +1693,13 @@ export class Engine implements EngineHost {
         // Distinguish "already answered" (a serialized concurrent caller lost
         // the race) from an id nobody ever requested.
         let standing = false;
+        let superseded = false;
         for (const r of active.records) {
           if (r.ev.type === "human.answered" && r.ev.id === requestId) standing = true;
           else if (r.ev.type === "human.rejected" && r.ev.id === requestId) standing = false;
+          else if (r.ev.type === "human.superseded" && r.ev.id === requestId) superseded = true;
         }
+        if (superseded) throw new Error(`run ${runId}: request ${requestId} was superseded`);
         if (standing) throw new Error(`run ${runId}: request ${requestId} is already answered`);
         throw new Error(`run ${runId}: no pending request ${requestId}`);
       }
@@ -1762,6 +1785,9 @@ export class Engine implements EngineHost {
         const owner = await this.journalRequestOwner(records, requestId, new Set([runId]));
         if (owner !== undefined) return this.answer(owner, requestId, answer, opts);
         throw new Error(`run ${runId}: no request ${requestId}`);
+      }
+      if (records.some((r) => r.ev.type === "human.superseded" && r.ev.id === requestId)) {
+        throw new Error(`run ${runId}: request ${requestId} was superseded`);
       }
       // A TERMINAL run cannot consume an answer: accepting one against a
       // journal that already holds run.cancelled/completed/failed reports
@@ -2024,6 +2050,8 @@ export class Engine implements EngineHost {
         ...(h.risk !== undefined ? { risk: h.risk } : {}),
         ...(h.deadline !== undefined ? { deadline: h.deadline } : {}),
         ...(h.confirmToken !== undefined ? { confirmToken: h.confirmToken } : {}),
+        ...(h.artifactRef !== undefined ? { artifactRef: h.artifactRef } : {}),
+        ...(h.ui !== undefined ? { ui: h.ui } : {}),
       }));
     for (const { childRunId } of state.children) {
       if (seen.has(childRunId)) continue;
@@ -2083,11 +2111,13 @@ export class Engine implements EngineHost {
     if (created?.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
     let def = opts.def;
     let workflowName = def?.meta.name ?? created.workflow.name;
+    let uiCatalog = opts.def !== undefined ? opts.uiCatalog : undefined;
     if (!def && this.registry) {
       const resolved = await resolveRegistryWorkflow(this.registry, created.workflow);
       if (resolved) {
         def = resolved.def;
         workflowName = resolved.name;
+        uiCatalog = resolved.uiCatalog;
       }
     }
     if (!def) throw new Error(`run ${runId}: no definition for "${created.workflow.name}"`);
@@ -2119,6 +2149,7 @@ export class Engine implements EngineHost {
       dry: true,
       ...(created.baseRef !== undefined ? { baseRef: created.baseRef } : {}),
       ...(def.meta.defaults !== undefined ? { workflowDefaults: def.meta.defaults } : {}),
+      ...(uiCatalog !== undefined ? { uiCatalog } : {}),
     });
     // Same input the real resume would hand the code: raw from the journal, schema reapplied.
     const inputCheck = await validateSchema(def.meta.input, created.input === undefined ? {} : created.input);

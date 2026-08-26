@@ -412,6 +412,62 @@ describe("GET /api/blobs/:ref", () => {
   });
 });
 
+describe("GET /api/runs/:id/presentations/:presentationId/frame", () => {
+  it("serves only the bundle sealed into a presentation event with strict frame headers", async () => {
+    const cwd = await repo();
+    await writeFile(
+      path.join(cwd, ".weft", "workflows", "panel.ui.tsx"),
+      [
+        `import { defineResultView } from "@techery/weft-sdk/ui";`,
+        `export default defineResultView<{ message: string }>({`,
+        `  id: "panel", revision: "1",`,
+        `  component: ({ props }) => <strong>{props.message}</strong>,`,
+        `});`,
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(
+      path.join(cwd, ".weft", "workflows", "panel.ts"),
+      [
+        `import { defineWorkflow, z } from "@techery/weft-sdk";`,
+        `import panel from "./panel.ui.tsx";`,
+        `export default defineWorkflow(`,
+        `  { name: "panel", description: "panel", input: z.object({}), output: z.object({ ok: z.boolean() }) },`,
+        `  async (ctx) => { await ctx.ui.render({ key: "panel", view: panel, props: { message: "hello" } }); return { ok: true }; },`,
+        `);`,
+      ].join("\n"),
+      "utf8",
+    );
+    const weft = await createWeft({ cwd, providers: "mock" });
+    opened.push(weft);
+    const resolved = await resolveWorkflow(weft, "panel");
+    const run = await weft.engine.start(resolved.def, {
+      input: {},
+      cwd,
+      defHash: resolved.hash,
+      uiCatalog: resolved.uiCatalog,
+    });
+    await run.result;
+    const state = await weft.engine.state(run.runId);
+    const presentation = state.steps.find((step) => step.presentation)?.presentation;
+    expect(presentation).toBeDefined();
+
+    const app = createApp(weft, { web: null });
+    const response = await app.request(`/api/runs/${run.runId}/presentations/${presentation!.id}/frame`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(response.headers.get("content-security-policy")).toContain("sandbox allow-scripts");
+    expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'self'");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(await response.text()).toContain("weft.ui.init");
+
+    await weft.engine.blobs.put("alert('not journaled')", { kind: "ui-bundle" });
+    const arbitrary = await app.request(`/api/runs/${run.runId}/presentations/not-recorded/frame`);
+    expect(arbitrary.status).toBe(404);
+  });
+});
+
 describe("GET /api/runs/:id/artifacts and /patch", () => {
   it("inventories what a run produced, and says what is still readable", async () => {
     const cwd = await repo();

@@ -14,6 +14,7 @@ import { join } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
+  type CompiledUiCatalog,
   isWorkflowPathRef,
   loadWorkflow,
   mergedAllowBare,
@@ -21,6 +22,7 @@ import {
   parseBudget,
   persistedDefOf,
   persistInlineScript,
+  persistUiCatalog,
   persistWorkflowRef,
   type RunListFilter,
   reserveRunId,
@@ -236,9 +238,16 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
         let persisted: PersistedDef | undefined;
         if (ref !== undefined) {
           const resolved = await resolveWorkflow(weft, ref);
-          persisted = { def: resolved.def, ...(resolved.hash !== undefined ? { hash: resolved.hash } : {}) };
+          persisted = {
+            def: resolved.def,
+            ...(resolved.hash !== undefined ? { hash: resolved.hash } : {}),
+            ...(resolved.uiCatalog !== undefined ? { uiCatalog: resolved.uiCatalog } : {}),
+          };
         } else if (tracked?.def !== undefined) {
-          persisted = { def: tracked.def };
+          persisted = {
+            def: tracked.def,
+            ...(tracked.uiCatalog !== undefined ? { uiCatalog: tracked.uiCatalog } : {}),
+          };
         } else {
           persisted = await persistedDefOf(weft, args.runId);
         }
@@ -248,7 +257,11 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
         });
         runs.track({
           handle,
-          ...(ref !== undefined ? { ref } : persisted !== undefined ? { def: persisted.def } : {}),
+          ...(ref !== undefined
+            ? { ref }
+            : persisted !== undefined
+              ? { def: persisted.def, uiCatalog: persisted.uiCatalog }
+              : {}),
         });
         return { runId: handle.runId, status: "resumed" };
       }),
@@ -341,8 +354,10 @@ async function startRun(weft: Weft, runs: RunStore, args: RunArgs): Promise<Trac
   // by an exclusive directory create, so a collision can never write into an
   // EXISTING run's directory.
   const runId = await reserveRunId(weft);
-  if (inline?.code !== undefined) await persistInlineScript(weft, runId, inline.code);
-  else if (args.workflow !== undefined && isWorkflowPathRef(args.workflow)) {
+  if (inline?.code !== undefined) {
+    await persistInlineScript(weft, runId, inline.code);
+    if (inline.uiCatalog !== undefined) await persistUiCatalog(weft, runId, inline.uiCatalog);
+  } else if (args.workflow !== undefined && isWorkflowPathRef(args.workflow)) {
     await persistWorkflowRef(weft, runId, args.workflow);
   }
   const handle = await weft.engine
@@ -353,6 +368,7 @@ async function startRun(weft: Weft, runs: RunStore, args: RunArgs): Promise<Trac
       input: args.input,
       cwd: weft.cwd,
       ...(resolved.hash !== undefined ? { defHash: resolved.hash } : {}),
+      ...(resolved.uiCatalog !== undefined ? { uiCatalog: resolved.uiCatalog } : {}),
       ...(args.budget !== undefined ? { budget: parseBudget(args.budget) } : {}),
       ...(args.reuse !== undefined ? { reuse: args.reuse } : {}),
     })
@@ -365,7 +381,9 @@ async function startRun(weft: Weft, runs: RunStore, args: RunArgs): Promise<Trac
     });
   return runs.track({
     handle,
-    ...(args.workflow !== undefined ? { ref: args.workflow } : { def: resolved.def }),
+    ...(args.workflow !== undefined
+      ? { ref: args.workflow }
+      : { def: resolved.def, uiCatalog: resolved.uiCatalog }),
   });
 }
 
@@ -373,7 +391,12 @@ async function startRun(weft: Weft, runs: RunStore, args: RunArgs): Promise<Trac
 async function loadInline(
   weft: Weft,
   source: string,
-): Promise<{ def: WorkflowDefinition; hash?: string; code?: string }> {
+): Promise<{
+  def: WorkflowDefinition;
+  hash?: string;
+  code?: string;
+  uiCatalog?: CompiledUiCatalog;
+}> {
   // Merged with the defaults: config extras must not cost inline code its zod.
   const allowBare = mergedAllowBare(weft.config);
   const loaded = await loadWorkflow({
@@ -382,7 +405,12 @@ async function loadInline(
     name: "inline",
     ...(allowBare ? { allowBare } : {}),
   });
-  return { def: named(loaded.def, loaded.name), hash: loaded.hash, code: loaded.code };
+  return {
+    def: named(loaded.def, loaded.name),
+    hash: loaded.hash,
+    code: loaded.code,
+    uiCatalog: loaded.uiCatalog,
+  };
 }
 
 /**

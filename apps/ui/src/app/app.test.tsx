@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type FakeDaemon, fakeDaemon } from "~/test/daemon";
 import { renderApp } from "~/test/renderApp";
@@ -111,6 +111,64 @@ describe("a run", () => {
       "href",
       `/api/blobs/${"a".repeat(64)}?as=text`,
     );
+  });
+
+  it("keeps host controls and the standard form around a workflow-provided input view", async () => {
+    const presentation = {
+      id: "h1",
+      asset: {
+        id: "release-review",
+        revision: "2",
+        bundleRef: { $blob: "e".repeat(64), size: 128 },
+        protocol: 1 as const,
+      },
+      props: { inline: { tag: "v0.9.0" }, hash: "f".repeat(64) },
+      mode: "input" as const,
+    };
+    daemon.state.detail["r-waiting"]!.humans[0]!.ui = presentation;
+    daemon.state.pending.pending[0]!.ui = presentation;
+
+    const { user } = renderApp("/runs/r-waiting?from=queue&tab=steps&step=gate:h1");
+    const view = await screen.findByRole("region", { name: "Workflow-provided view: release-review" });
+    expect(within(view).getByText(/revision 2/)).toBeInTheDocument();
+    expect(within(view).getByTitle("Workflow view release-review")).toHaveAttribute(
+      "src",
+      "/api/runs/r-waiting/presentations/h1/frame",
+    );
+    expect(screen.getByLabelText("note")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Approve/ })).toBeInTheDocument();
+
+    await user.click(within(view).getByRole("button", { name: "Disable" }));
+    expect(screen.getByText(/Custom view disabled/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Enable custom view" }));
+    const frame = await screen.findByTitle<HTMLIFrameElement>("Workflow view release-review");
+    const contentWindow = frame.contentWindow;
+    if (!contentWindow) throw new Error("test iframe has no contentWindow");
+
+    let componentPort: MessagePort | undefined;
+    let init: Record<string, unknown> | undefined;
+    contentWindow.postMessage = ((message: unknown, _origin: string, transfer?: Transferable[]) => {
+      init = message as Record<string, unknown>;
+      componentPort = transfer?.[0] as MessagePort | undefined;
+    }) as typeof contentWindow.postMessage;
+    fireEvent.load(frame);
+    await waitFor(() => expect(componentPort).toBeDefined());
+    componentPort!.postMessage({
+      type: "candidate",
+      presentationId: init!.presentationId,
+      generation: init!.generation,
+      answer: { approved: false, note: "not yet" },
+    });
+    expect(await screen.findByRole("button", { name: "Submit and resume" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Submit and resume" }));
+    const answered = await waitFor(() => {
+      const call = daemon.calls.find(
+        (candidate) => candidate.method === "POST" && candidate.path.endsWith("/answer"),
+      );
+      expect(call).toBeDefined();
+      return call!;
+    });
+    expect(answered.body).toMatchObject({ answer: { approved: false, note: "not yet" } });
   });
 
   it("keeps the attached report when the gate falls back to run detail", async () => {

@@ -102,6 +102,7 @@ jobs:
           git config --global user.email "ci@weft.invalid"
           git config --global init.defaultBranch main
       - run: pnpm install --frozen-lockfile
+      - run: pnpm verify:examples
       # Every example is deterministic and offline (03 builds a throwaway git repo).
       - name: Run all examples
         run: |

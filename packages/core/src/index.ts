@@ -41,10 +41,13 @@ export type {
   HumanAnsweredEvent,
   HumanKind,
   HumanRequestEvent,
+  HumanSupersededEvent,
   JournalEvent,
   JournalRecord,
   RunStatus,
   StepKind,
+  UiPresentation,
+  UiPropsJson,
 } from "./events.ts";
 export { isBlobRef, TERMINAL_STATUSES } from "./events.ts";
 export type { TestHooks } from "./hooks.ts";
