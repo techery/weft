@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { mockTaskEnvelope } from "@techery/weft-provider-mock";
 import { defineWorkflow, z } from "@techery/weft-sdk";
 import { afterAll, describe, expect, it } from "vitest";
@@ -18,6 +20,8 @@ import {
   type Weft,
 } from "../src/index.ts";
 import { cleanupRoots, HELLO_WORKFLOW, tempRoot, write } from "./helpers.ts";
+
+const execFileAsync = promisify(execFile);
 
 const opened: Weft[] = [];
 
@@ -515,5 +519,50 @@ describe("config hardening (codex review round 15, PR #1)", () => {
     // Top-level unknown keys stay forward-compatible on purpose.
     await write(root, ".weft/config.json", JSON.stringify({ futureSetting: true }));
     await expect(loadConfig(root)).resolves.toBeTruthy();
+  });
+});
+
+describe("`.weft/` keeps its run state out of the user's git tree", () => {
+  it("writes .weft/.gitignore, and never overwrites an existing one", async () => {
+    // weft's tree helpers run `git add -A .` on every write-step dispatch and inside
+    // every ctx.integrate, so without this the journal and blob store fold into a git
+    // object on the first write step and ride into every agent worktree.
+    const cwd = await tempRoot();
+    const git = (...args: string[]) => execFileAsync("git", args, { cwd });
+    await git("init", "-b", "main");
+
+    const weft = await createWeft({ cwd, providers: "mock" });
+    await weft.close();
+
+    const file = path.join(cwd, ".weft", ".gitignore");
+    const body = await readFile(file, "utf8");
+    for (const entry of ["runs/", "blobs/", "tasks/", "index.sqlite"]) {
+      expect(body).toContain(entry);
+    }
+    // workflows/ is source and must stay tracked — check the RULES, not the comments.
+    const rules = body
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l !== "" && !l.startsWith("#"));
+    expect(rules).not.toContain("workflows/");
+
+    // git agrees: run state is ignored, a workflow is not.
+    await write(cwd, ".weft/runs/r1/journal.jsonl", "{}\n");
+    await write(cwd, ".weft/workflows/w.ts", "export {};\n");
+    // `check-ignore` answers per path; `status` collapses a wholly untracked directory.
+    const ignores = async (rel: string): Promise<boolean> =>
+      execFileAsync("git", ["check-ignore", "-q", rel], { cwd }).then(
+        () => true,
+        () => false,
+      );
+    expect(await ignores(".weft/runs/r1/journal.jsonl")).toBe(true);
+    expect(await ignores(".weft/blobs/ab/cd")).toBe(true);
+    expect(await ignores(".weft/workflows/w.ts")).toBe(false);
+
+    // A second assembly leaves a user's edited file alone.
+    await writeFile(file, "mine\n", "utf8");
+    const again = await createWeft({ cwd, providers: "mock" });
+    await again.close();
+    expect(await readFile(file, "utf8")).toBe("mine\n");
   });
 });

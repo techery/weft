@@ -392,6 +392,14 @@ export async function integrationBaseCommit(cwd: string, alsoInclude: string[] =
 // buildCtx
 // ---------------------------------------------------------------------------
 
+/**
+ * Carriers produced by a SUPPRESSED (`onError: "null"`) replay. `revive` must return the
+ * step's carrier shape, but the live path returned a bare `null`, and a schema that
+ * permits `value: null` means the value alone cannot tell the two apart. Process-local so
+ * it never becomes part of the journal or the public result type.
+ */
+const suppressedRevivals = new WeakSet<object>();
+
 export function buildCtx(rt: RunRuntime): Ctx {
   const config = rt.host.config;
   const gitHandle: Git = createGit(rt.cwd);
@@ -567,12 +575,18 @@ export function buildCtx(rt: RunRuntime): Ctx {
         journaled !== null &&
         (journaled as { $suppressed?: boolean }).$suppressed === true
       ) {
-        return {
+        const revived = {
           value: null,
           usage: entry?.usage ?? { input: 0, output: 0 },
           files: [],
           attempts: entry?.attempts ?? 1,
         } as unknown as DetailedAgentResult<InferOut<S>>;
+        // `revive` has to hand back the step's carrier shape, but `agent.detailed`
+        // returned a bare `null` when the suppression happened live. Mark the carrier so
+        // the caller can restore that — a schema permitting `value: null` legitimately
+        // means the value alone cannot distinguish the two.
+        suppressedRevivals.add(revived as object);
+        return revived;
       }
       const out = journaled as {
         value: unknown;
@@ -1249,6 +1263,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
     try {
       const detailed = await run();
+      // A durable suppression replays as the SAME `null` the live path produced. Handing
+      // back the carrier here would make `result === null` take one branch live and the
+      // other on resume — a divergence in the workflow's own control flow.
+      if (suppressedRevivals.has(detailed as object)) return null;
       return mode.detailed ? detailed : detailed.value;
     } catch (err) {
       if (

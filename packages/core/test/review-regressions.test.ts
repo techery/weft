@@ -4376,3 +4376,47 @@ describe("architecture review @ 627b28e", () => {
     expect(recs.filter((r) => r.ev.type === "patch.merged")).toHaveLength(1);
   });
 });
+
+describe('architecture review @ 627b28e — onError:"null" replay shape', () => {
+  test("agent.detailed under a durable suppression replays as null, exactly as it did live", async () => {
+    // The live path returns a bare `null` for both `agent` and `agent.detailed`. The
+    // replay path revived the carrier `{ value: null, ... }`, so `result === null` took
+    // one branch on the first run and the other on a resume — the workflow's own control
+    // flow diverging across a replay.
+    const seen: Array<string> = [];
+    const def = defineWorkflow(
+      { name: "suppressed", description: "s", input: z.object({}), output: z.object({ saw: z.string() }) },
+      async (ctx) => {
+        const r = await ctx.agent.detailed("try it", {
+          schema: z.object({ ok: z.boolean() }),
+          key: "flaky",
+          onError: "null",
+        });
+        seen.push(r === null ? "null" : "object");
+        await ctx.human.approve({ action: "continue?" });
+        return { saw: r === null ? "null" : "object" };
+      },
+    );
+
+    const t1 = testEngine();
+    t1.builder.on({ key: "flaky" }, () => {
+      throw new Error("provider exploded");
+    });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(def, { input: {}, cwd });
+    const o1 = await h1.outcome();
+    if (o1.status !== "waiting_for_human") throw new Error(`expected suspension, got ${o1.status}`);
+    expect(seen).toEqual(["null"]);
+    await t1.engine.shutdown();
+
+    // Resume: the suppression is durable, so the step is SERVED — and must be served as
+    // the same `null` the live run saw, not as its carrier.
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def });
+    const o2 = await h2.outcome();
+    if (o2.status !== "waiting_for_human") throw new Error(`expected re-suspension, got ${o2.status}`);
+    await t2.engine.answer(h1.runId, o2.pending[0]!.id, { approved: true });
+    expect(await h2.result).toEqual({ saw: "null" });
+    expect(seen).toEqual(["null", "null"]);
+  });
+});
