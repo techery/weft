@@ -627,6 +627,44 @@ describe("the loopback guard", () => {
     });
     expect(sameOrigin.status).toBe(200);
   });
+
+  it("treats another localhost PORT as cross-site, not as one trusted loopback", async () => {
+    const h = await open(await repo());
+    // A dev server on :3000 is a different origin. A CORS-simple POST from it carries
+    // an honest loopback Origin, which "any loopback passes" waved straight through --
+    // enough to start runs and satisfy human approval gates.
+    for (const origin of ["http://127.0.0.1:3000", "http://localhost:5173"]) {
+      const res = await h.app.request("/api/runs/deadbeef/cancel", {
+        method: "POST",
+        headers: { host: "127.0.0.1:4100", origin },
+      });
+      expect(res.status, origin).toBe(403);
+    }
+    // The daemon's own page is still served.
+    const own = await h.app.request("/api/runs", {
+      headers: { host: "localhost:4100", origin: "http://localhost:4100" },
+    });
+    expect(own.status).toBe(200);
+  });
+
+  it("refuses a cross-site request that carries no Origin at all", async () => {
+    const h = await open(await repo());
+    // A no-cors GET (<img>, <script>, a form) omits Origin entirely, so the Host and
+    // Origin checks never see it -- and this surface has a GET that writes.
+    for (const site of ["cross-site", "same-site"]) {
+      const res = await h.app.request("/api/workflows", {
+        headers: { host: "127.0.0.1:4100", "sec-fetch-site": site },
+      });
+      expect(res.status, site).toBe(403);
+    }
+    // The UI, and a URL typed into the address bar, both still pass.
+    for (const site of ["same-origin", "none"]) {
+      const res = await h.app.request("/api/runs", {
+        headers: { host: "127.0.0.1:4100", "sec-fetch-site": site },
+      });
+      expect(res.status, site).toBe(200);
+    }
+  });
 });
 
 describe("startDaemon", () => {
