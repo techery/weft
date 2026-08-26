@@ -4,6 +4,7 @@
  * caller could get an answer and the projection never said the run was cancelled.
  */
 
+import type { JournalRecord } from "@techery/weft-core";
 import { mock } from "@techery/weft-provider-mock";
 import { defineWorkflow, z } from "@techery/weft-sdk";
 import { afterAll, describe, expect, test } from "vitest";
@@ -104,4 +105,47 @@ describe("cancel() against a non-cooperative step", () => {
       ]),
     ).rejects.toThrow(/active in another process/);
   }, 30_000);
+});
+
+describe("architecture review @ 627b28e — a terminal record never lands over live work", () => {
+  const One = z.object({ n: z.number() });
+
+  test("a rejecting fan-out lane does not let run.failed overtake its sibling's step", async () => {
+    // `drive()` appended the terminal record and released the ownership claim as soon as
+    // the BODY settled. A raw Promise.all whose fast lane rejects leaves the slow lane
+    // running: it kept spending, kept appending to a journal that was already terminal,
+    // and the freed claim let a second process resume and interleave into the same file.
+    const t = testEngine();
+    t.builder.on({ key: "slow" }, { n: 1 }, { delayMs: 300 });
+    t.builder.on({ key: "fast" }, () => {
+      throw new Error("provider exploded");
+    });
+
+    const def = defineWorkflow(
+      { name: "race", description: "r", input: z.object({}), output: One },
+      async (ctx) => {
+        // Deliberately raw Promise.all, not ctx.parallel: the body settles on the
+        // rejection while the other lane is still in flight.
+        const [a] = await Promise.all([
+          ctx.agent("slow", { schema: One, key: "slow" }),
+          ctx.agent("fast", { schema: One, key: "fast" }),
+        ]);
+        return a;
+      },
+    );
+
+    const h = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(h.result).rejects.toBeTruthy();
+
+    const recs: JournalRecord[] = [];
+    for await (const rec of t.journal.read(h.runId)) recs.push(rec);
+    const types = recs.map((r) => r.ev.type);
+    const terminal = types.findIndex((tp) => tp === "run.failed" || tp === "run.completed");
+    expect(terminal).toBeGreaterThanOrEqual(0);
+    // Nothing from a step may appear after the run's terminal record.
+    expect(types.slice(terminal + 1).filter((tp) => tp.startsWith("step."))).toEqual([]);
+
+    // And the slow lane's own completion did land — it was waited for, not dropped.
+    expect(types.filter((tp) => tp === "step.completed").length).toBeGreaterThanOrEqual(1);
+  });
 });

@@ -4420,3 +4420,66 @@ describe('architecture review @ 627b28e — onError:"null" replay shape', () => 
     expect(seen).toEqual(["null", "null"]);
   });
 });
+
+describe("architecture review @ 627b28e — a lost claim fences the tree, not one run", () => {
+  test("a child losing its ownership claim does not journal a terminal event for its parent", async () => {
+    // `fence()` means "this journal is not ours to write a terminal event into; the run
+    // stays resumable". It was enforced only on the runtime that noticed. Every run in a
+    // tree shares one AbortController, so the PARENT saw that abort as an ordinary
+    // cancellation and durably wrote run.cancelled -- a child losing its claim terminally
+    // cancelled its parent, exactly when the system was under the stress the fence is for.
+    class ChildLoseslaim extends MemoryJournalStore {
+      acquired = 0;
+      override async acquireRun(runId: string) {
+        this.acquired++;
+        // The parent keeps its claim; the child's is taken over immediately.
+        if (this.acquired === 1) return super.acquireRun(runId);
+        return { refresh: async () => false, release: async () => {} };
+      }
+    }
+
+    const child = defineWorkflow(
+      { name: "slowchild", description: "c", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        await ctx.sleep(60_000);
+        return { ok: true };
+      },
+    );
+    const parent = defineWorkflow(
+      { name: "fenceparent", description: "p", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      async (ctx) => {
+        const r = (await ctx.workflow(child, {}, { key: "c" })) as { ok: boolean };
+        return { ok: r.ok };
+      },
+    );
+
+    const journal = new ChildLoseslaim();
+    const engine = new Engine({ journal, blobs: new MemoryBlobStore(), providers: new ProviderRegistry() });
+    const cwd = await tempDir();
+    vi.useFakeTimers();
+    let parentId: string;
+    try {
+      const h = await engine.start(parent, { input: {}, cwd });
+      parentId = h.runId;
+      await vi.advanceTimersByTimeAsync(0); // the child launches and its sleep dispatches
+      await vi.advanceTimersByTimeAsync(5_000); // the refresh interval reports the child's loss
+      await expect(h.result).rejects.toMatchObject({ code: "detached" });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The parent's journal must stay exactly as a later owner would want to find it.
+    const parentRecs = await records(journal, parentId);
+    expect(parentRecs.some((r) => ["run.completed", "run.failed", "run.cancelled"].includes(r.ev.type))).toBe(
+      false,
+    );
+
+    // And so must every child journal in the tree.
+    for (const summary of await journal.list()) {
+      const recs = await records(journal, summary.runId);
+      expect(recs.some((r) => ["run.completed", "run.failed", "run.cancelled"].includes(r.ev.type))).toBe(
+        false,
+      );
+    }
+  });
+});
