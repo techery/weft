@@ -800,7 +800,8 @@ describe("engine end to end", () => {
     const childScheduled = parentRecords.find(
       (record) => record.ev.type === "step.scheduled" && record.ev.kind === "workflow",
     );
-    const childRunId = childScheduled?.ev.type === "step.scheduled" ? childScheduled.ev.childRunId : undefined;
+    const childRunId =
+      childScheduled?.ev.type === "step.scheduled" ? childScheduled.ev.childRunId : undefined;
     expect(childRunId).toEqual(expect.any(String));
 
     await first.engine.shutdown();
