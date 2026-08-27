@@ -107,13 +107,24 @@ afterAll(async () => {
 async function repo(config?: unknown): Promise<string> {
   const cwd = await mkdtemp(path.join(tmpdir(), "weft-api-"));
   roots.push(cwd);
-  await mkdir(path.join(cwd, ".weft", "workflows"), { recursive: true });
-  await writeFile(path.join(cwd, ".weft", "workflows", "gated.ts"), GATED, "utf8");
-  await writeFile(path.join(cwd, ".weft", "workflows", "quick.ts"), QUICK, "utf8");
+  await writeWorkflow(cwd, "gated", GATED);
+  await writeWorkflow(cwd, "quick", QUICK);
   if (config !== undefined) {
     await writeFile(path.join(cwd, ".weft", "config.json"), JSON.stringify(config, null, 2), "utf8");
   }
   return cwd;
+}
+
+async function writeWorkflow(cwd: string, name: string, source: string): Promise<void> {
+  const packageDir = path.join(cwd, ".weft", "workflows", name);
+  await Promise.all([
+    mkdir(path.join(packageDir, "lib"), { recursive: true }),
+    mkdir(path.join(packageDir, "tests"), { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(path.join(packageDir, "main.ts"), source, "utf8"),
+    writeFile(path.join(packageDir, "CHANGELOG.md"), `# ${name} changelog\n`, "utf8"),
+  ]);
 }
 
 /** An engine over a throwaway repo, plus a Hono app carrying only the given modules. */
@@ -194,7 +205,7 @@ describe("GET /api/workflows", () => {
       description: string;
     }>;
     expect(body.map((w) => w.name).sort()).toEqual(["gated", "quick"]);
-    expect(body.find((w) => w.name === "gated")?.file).toBe(".weft/workflows/gated.ts");
+    expect(body.find((w) => w.name === "gated")?.file).toBe(".weft/workflows/gated/main.ts");
     expect(body.find((w) => w.name === "quick")?.description).toContain("one journaled thing");
   });
 
@@ -230,7 +241,7 @@ describe("GET /api/workflows", () => {
 
   it("exposes a permissive schema and warning for non-Zod Standard Schemas", async () => {
     const cwd = await repo();
-    await writeFile(path.join(cwd, ".weft", "workflows", "standard.ts"), STANDARD_SCHEMA, "utf8");
+    await writeWorkflow(cwd, "standard", STANDARD_SCHEMA);
     const h = await open(cwd, registerWorkflowRoutes);
 
     const res = await h.app.request("/api/workflows/standard");
@@ -460,8 +471,9 @@ describe("GET /api/blobs/:ref", () => {
 describe("GET /api/runs/:id/presentations/:presentationId/frame", () => {
   it("serves only the bundle sealed into a presentation event with strict frame headers", async () => {
     const cwd = await repo();
+    await mkdir(path.join(cwd, ".weft", "workflows", "panel", "lib"), { recursive: true });
     await writeFile(
-      path.join(cwd, ".weft", "workflows", "panel.ui.tsx"),
+      path.join(cwd, ".weft", "workflows", "panel", "lib", "panel.ui.tsx"),
       [
         `import { defineResultView } from "@techery/weft-sdk/ui";`,
         `export default defineResultView<{ message: string }>({`,
@@ -471,17 +483,17 @@ describe("GET /api/runs/:id/presentations/:presentationId/frame", () => {
       ].join("\n"),
       "utf8",
     );
-    await writeFile(
-      path.join(cwd, ".weft", "workflows", "panel.ts"),
+    await writeWorkflow(
+      cwd,
+      "panel",
       [
         `import { defineWorkflow, z } from "@techery/weft-sdk";`,
-        `import panel from "./panel.ui.tsx";`,
+        `import panel from "./lib/panel.ui.tsx";`,
         `export default defineWorkflow(`,
         `  { name: "panel", description: "panel", input: z.object({}), output: z.object({ ok: z.boolean() }) },`,
         `  async (ctx) => { await ctx.ui.render({ key: "panel", view: panel, props: { message: "hello" } }); return { ok: true }; },`,
         `);`,
       ].join("\n"),
-      "utf8",
     );
     const weft = await createWeft({ cwd, providers: "mock" });
     opened.push(weft);
@@ -807,7 +819,7 @@ const UNNAMED = `import { defineWorkflow, z } from "@techery/weft-sdk";
 
 export default defineWorkflow(
   {
-    description: "name derives from the filename",
+    description: "name derives from the package directory",
     input: z.object({ base: z.string().default("main") }),
     output: z.object({ base: z.string() }),
   },
@@ -831,7 +843,7 @@ export default defineWorkflow(
 describe("regression: a run must be journaled under its registry name", () => {
   it("names a definition that declares no meta.name, so the run stays resumable", async () => {
     const cwd = await repo();
-    await writeFile(path.join(cwd, ".weft", "workflows", "unnamed.ts"), UNNAMED, "utf8");
+    await writeWorkflow(cwd, "unnamed", UNNAMED);
     const h = await open(cwd, registerStartRoutes);
 
     const res = await h.app.request("/api/runs", {
@@ -854,7 +866,7 @@ describe("regression: a run must be journaled under its registry name", () => {
 describe("regression: input a schema would silently drop", () => {
   it("refuses a typo'd field instead of running the wrong job", async () => {
     const cwd = await repo();
-    await writeFile(path.join(cwd, ".weft", "workflows", "unnamed.ts"), UNNAMED, "utf8");
+    await writeWorkflow(cwd, "unnamed", UNNAMED);
     const h = await open(cwd, registerStartRoutes);
     const res = await h.app.request("/api/runs", {
       method: "POST",
@@ -870,7 +882,7 @@ describe("regression: input a schema would silently drop", () => {
 describe("regression: a workflow that exists but does not build", () => {
   it("reports the gate diagnostics, not a fabricated 404", async () => {
     const cwd = await repo();
-    await writeFile(path.join(cwd, ".weft", "workflows", "broken.ts"), BROKEN, "utf8");
+    await writeWorkflow(cwd, "broken", BROKEN);
     const h = await open(cwd, registerStartRoutes, registerWorkflowRoutes);
 
     const started = await h.app.request("/api/runs", {
@@ -1007,7 +1019,7 @@ export default defineWorkflow(
   },
 );
 `;
-    await writeFile(path.join(cwd, ".weft", "workflows", "siblings.ts"), siblings, "utf8");
+    await writeWorkflow(cwd, "siblings", siblings);
     const h = await open(cwd, registerPendingRoutes);
 
     const { def, hash } = await resolveWorkflow(h.weft, "siblings");

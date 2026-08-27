@@ -1,7 +1,7 @@
 /**
- * `weft check [name]` — the gate, ahead of a run. Every `.ts` file in the workflow
- * directory is bundled and instantiated exactly the way a run would do it, so a banned
- * global hiding in `./schemas.ts` fails here rather than three agent steps in.
+ * `weft check [name]` — validate package layout and run the gate ahead of a run. Every
+ * workflow package has one `main.ts`; its relative imports are bundled, so a banned global
+ * hiding under `lib/` fails here rather than three agent steps in.
  *
  * Findings print as `file:line:col  rule  message` with the fix-it underneath, and any
  * finding at all fails the command. The `tsc --noEmit` pass that catches a missing
@@ -9,7 +9,6 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -36,13 +35,26 @@ export function checkCommand(io: CliIo): Command {
       const weft = await openWeft(cmd);
       try {
         const dirs = workflowDirs(weft);
-        const files = await filesToCheck(weft.registry, dirs, name);
+        const selection = await filesToCheck(weft.registry, dirs, name);
+        const { files } = selection;
         if (files.length === 0) {
-          io.out(pc.dim(`nothing to check in ${dirs.join(", ")} — scaffold one with: weft new <name>`));
+          if (selection.issues.length === 0) {
+            io.out(pc.dim(`nothing to check in ${dirs.join(", ")} — scaffold one with: weft new <name>`));
+          }
+          for (const issue of selection.issues) renderIssue(io, issue);
+          const diagnostics = selection.issues.flatMap((issue) => issue.diagnostics);
+          if (diagnostics.length > 0) say(io, ...diagnostics.flatMap((d) => renderDiagnostic(d)));
+          if (selection.issues.length > 0) {
+            const violations =
+              diagnostics.length + selection.issues.filter((issue) => issue.diagnostics.length === 0).length;
+            io.out(pc.red(`${violations} violation${violations === 1 ? "" : "s"}`));
+            process.exitCode = 1;
+          }
           return;
         }
 
-        const findings: GateDiagnostic[] = [];
+        const findings: GateDiagnostic[] = selection.issues.flatMap((issue) => issue.diagnostics);
+        for (const issue of selection.issues) renderIssue(io, issue);
         for (const file of files) {
           const relative = path.relative(weft.cwd, file);
           const outcome = await gate(file, allowBareOf(weft));
@@ -59,9 +71,11 @@ export function checkCommand(io: CliIo): Command {
           }
         }
 
-        if (findings.length > 0) {
-          say(io, "", ...findings.flatMap((d) => renderDiagnostic(d)));
-          io.out(pc.red(`${findings.length} violation${findings.length === 1 ? "" : "s"}`));
+        if (findings.length > 0 || selection.issues.length > 0) {
+          if (findings.length > 0) say(io, "", ...findings.flatMap((d) => renderDiagnostic(d)));
+          const violations =
+            findings.length + selection.issues.filter((issue) => issue.diagnostics.length === 0).length;
+          io.out(pc.red(`${violations} violation${violations === 1 ? "" : "s"}`));
           process.exitCode = 1;
           return;
         }
@@ -119,56 +133,43 @@ function renderDiagnostic(d: GateDiagnostic): string[] {
 // ---------------------------------------------------------------------------
 
 interface NamedRegistry {
-  list(): Promise<Array<{ name: string; file: string }>>;
+  listWithIssues(): Promise<{
+    entries: Array<{ name: string; file: string }>;
+    issues: Array<{ file: string; error: string; diagnostics: GateDiagnostic[] }>;
+  }>;
 }
 
 async function filesToCheck(
   registry: NamedRegistry,
   dirs: readonly string[],
   name?: string,
-): Promise<string[]> {
+): Promise<{
+  files: string[];
+  issues: Array<{ file: string; error: string; diagnostics: GateDiagnostic[] }>;
+}> {
+  const inspection = await registry.listWithIssues();
   if (name === undefined) {
-    const files: string[] = [];
-    for (const dir of dirs) {
-      let entries: string[];
-      try {
-        entries = await readdir(dir);
-      } catch (err) {
-        // Only genuine ABSENCE means "nothing to check". Any other failure —
-        // EACCES, EIO, a stray FILE at the directory's path — would silently
-        // skip every workflow and let CI pass having validated nothing.
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
-        throw new Error(`cannot read ${dir}: ${(err as Error).message}`);
-      }
-      files.push(
-        ...entries
-          .filter((entry) => entry.endsWith(".ts") && !entry.endsWith(".d.ts"))
-          .sort()
-          .map((entry) => path.join(dir, entry)),
-      );
-    }
-    return [...new Set(files)];
+    return { files: inspection.entries.map((entry) => entry.file), issues: inspection.issues };
   }
 
-  // A workflow may rename itself, so the filename is only the first guess; the registry
-  // knows the rest — but it can only list the files that already load.
-  const hit = (await registry.list().catch(() => [])).find((entry) => entry.name === name);
-  if (hit) return [hit.file];
-  const direct = dirs.map((dir) => path.join(dir, `${name}.ts`));
-  const directHits = (
-    await Promise.all(direct.map(async (file) => ((await isFile(file)) ? file : undefined)))
-  ).filter((file): file is string => file !== undefined);
-  if (directHits.length > 0) return directHits;
+  const hit = inspection.entries.find((entry) => entry.name === name);
+  if (hit) return { files: [hit.file], issues: [] };
+  const packageDirs = dirs.map((dir) => path.join(dir, name));
+  const directIssues = inspection.issues.filter((issue) =>
+    packageDirs.some(
+      (packageDir) => issue.file === packageDir || issue.file.startsWith(`${packageDir}${path.sep}`),
+    ),
+  );
+  if (directIssues.length > 0) return { files: [], issues: directIssues };
   throw new Error(
-    `unknown workflow "${name}" — no ${direct.map((file) => path.relative(process.cwd(), file)).join(", ")} and nothing named it`,
+    `unknown workflow "${name}" — no ${packageDirs.map((dir) => path.relative(process.cwd(), dir)).join(", ")} and nothing named it`,
   );
 }
 
-async function isFile(file: string): Promise<boolean> {
-  try {
-    return (await stat(file)).isFile();
-  } catch {
-    return false;
+function renderIssue(io: CliIo, issue: { file: string; error: string; diagnostics: GateDiagnostic[] }): void {
+  io.out(`${pc.red("✗")} ${issue.file}`);
+  if (issue.diagnostics.length === 0) {
+    io.out(`  ${pc.yellow("layout")} ${issue.error}`);
   }
 }
 
@@ -178,7 +179,7 @@ async function isFile(file: string): Promise<boolean> {
 
 /**
  * A missing `schema:` is a type error, not a rule violation, so the type-checker is part of
- * `weft check`. It is advisory here: workflow files are standalone, this synthesises flags
+ * `weft check`. It is advisory here: workflow packages are standalone, this synthesises flags
  * for them rather than adopting the repo's tsconfig. An unavailable compiler or SDK is a
  * visible skip; actual diagnostics fail the command, just like gate diagnostics do.
  */

@@ -14,6 +14,15 @@ export async function tempRoot(): Promise<string> {
 export async function write(dir: string, file: string, content: string): Promise<string> {
   const target = path.join(dir, file);
   await mkdir(path.dirname(target), { recursive: true });
+  const workflowMain = file.match(/^(.*\/workflows\/[^/]+)\/main\.ts$/);
+  if (workflowMain?.[1]) {
+    const packageDir = path.join(dir, workflowMain[1]);
+    await Promise.all([
+      mkdir(path.join(packageDir, "lib"), { recursive: true }),
+      mkdir(path.join(packageDir, "tests"), { recursive: true }),
+      writeFile(path.join(packageDir, "CHANGELOG.md"), "# Test workflow changelog\n", "utf8"),
+    ]);
+  }
   await writeFile(target, content, "utf8");
   return target;
 }

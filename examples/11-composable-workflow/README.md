@@ -7,7 +7,9 @@ This prototype shows the intended organization for a substantial workflow:
 - `agents.ts` combines one prompt, one output contract, and routing defaults into reusable roles.
 - `checks.ts` owns typed verification policy independently of workflow sequencing.
 - `recipes.ts` owns schema-backed orchestration recipes whose effects remain visible in the parent journal.
-- `workflow.ts` is the policy and lifecycle layer: phases, parallel policy, gates, checks, tasks, and final output.
+- `composable-review/main.ts` is the policy and lifecycle entry point: phases, parallel policy, gates, checks, tasks, and final output.
+- `composable-review/lib/` holds its reusable prompts, agents, recipes, contracts, and checks.
+- `composable-review/tests/` and `composable-review/CHANGELOG.md` travel with the workflow package.
 
 The central shape uses immutable nested phase contexts:
 

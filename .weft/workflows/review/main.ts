@@ -5,11 +5,11 @@
  *   weft run review --base main --watch
  */
 import { defineWorkflow, z } from "@techery/weft-sdk";
-import { Finding, Verdict } from "./schemas.ts";
+import { Finding, Verdict } from "./lib/schemas.ts";
 
 export default defineWorkflow(
   {
-    // `name` derives from the filename: "review".
+    // `name` derives from the package directory: "review".
     description: "Review changed files; keep only findings that survive refutation",
     input: z.object({ base: z.string().default("main") }),
     output: z.object({ confirmed: z.array(Finding) }),

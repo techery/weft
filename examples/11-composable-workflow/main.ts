@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, runWorkflow } from "@techery/weft-testing";
-import workflow from "./workflow.ts";
+import workflow from "./composable-review/main.ts";
 
 const cwd = await mkdtemp(join(tmpdir(), "weft-composable-example-"));
 await writeFile(join(cwd, "alpha.ts"), "export const alpha = 1;\n");

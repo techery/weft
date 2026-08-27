@@ -76,7 +76,7 @@ The CLI is `@techery/weft`; the binary it installs is `weft`.
 ```bash
 npm i -g @techery/weft        # or: pnpm add -g @techery/weft · bun add -g @techery/weft
 weft doctor                   # checks node, git, provider credentials, .weft/ layout
-weft new review               # scaffold .weft/workflows/review.ts
+weft new review               # scaffold .weft/workflows/review/{main.ts,lib/,tests/,CHANGELOG.md}
 ```
 
 Without installing anything:
@@ -122,7 +122,7 @@ In a checkout of this repository:
 pnpm install
 pnpm typecheck && pnpm test
 
-# this repo ships .weft/workflows/review.ts and audit-and-fix.ts — run them with the CLI
+# this repo ships packaged review and audit-and-fix workflows — run them with the CLI
 node packages/cli/bin/weft.js check review                    # tsc + gate
 node packages/cli/bin/weft.js run review --base main --watch  # input fields become flags
 node packages/cli/bin/weft.js ui                              # localhost: runs, live tree, report, answer
@@ -130,8 +130,9 @@ node packages/cli/bin/weft.js workflow list                   # loadable definit
 node packages/cli/bin/weft.js workflow inspect review --json  # exact executable contract
 
 # Keep state in this repo while also registering workflows from other folders
-node packages/cli/bin/weft.js --extra-workflow-dir examples/08-task-backed-code-review \
-  --extra-workflow-dir examples/09-custom-react-ui ui
+node packages/cli/bin/weft.js \
+  --extra-workflow-dir examples/08-task-backed-code-review/task-backed-code-review \
+  --extra-workflow-dir examples/09-custom-react-ui/custom-react-ui ui
 
 # scaffold a simple, review, or task-aware workflow; nothing is overwritten
 node packages/cli/bin/weft.js new triage --template simple
@@ -179,17 +180,17 @@ testing harness. Start at [`examples/README.md`](./examples/README.md).
 
 ## A workflow, annotated
 
-`.weft/workflows/review.ts` — review the files changed since a base ref, have Claude find bugs, have Codex
+`.weft/workflows/review/main.ts` — review the files changed since a base ref, have Claude find bugs, have Codex
 try to refute each one, return only what survived:
 
 ```ts
 import { defineWorkflow, z } from "@techery/weft-sdk";
-import { Finding, Verdict } from "./schemas.ts";   // relative imports are bundled and hashed with the script
+import { Finding, Verdict } from "./lib/schemas.ts"; // relative imports are bundled and hashed with the script
 
 export default defineWorkflow(
   {
     id: "review",                                               // stable durable task namespace
-    // `name` derives from the filename: "review".
+    // `name` derives from the package directory: "review".
     description: "Review changed files; keep only findings that survive refutation",
     input: z.object({ base: z.string().default("main") }),      // --base main; the engine validates it
     output: z.object({ confirmed: z.array(Finding) }),          // and validates the result on the way out
@@ -238,7 +239,7 @@ export default defineWorkflow(
 );
 ```
 
-`.weft/workflows/audit-and-fix.ts` takes the same shape further: a cross-vendor refutation panel, an
+`.weft/workflows/audit-and-fix/main.ts` takes the same shape further: a cross-vendor refutation panel, an
 approval gate, parallel fixes in isolated worktrees with declared write scopes, an explicit sequential
 merge, and a required `pnpm test` check that gates the run's completion.
 
@@ -404,18 +405,19 @@ changing Weft; [RELEASING.md](./RELEASING.md) covers publishing a validated rele
 Workflow tests run with zero model calls. Fixtures match on the step key, receive the real request, and go
 through the engine's normal schema validation — a fixture that would not pass in production fails the test.
 
-Put project workflow tests under `test/workflows/` and run them with:
+Keep tests inside each workflow package's `tests/` directory and run them with:
 
 ```sh
 weft test
-weft test test/workflows/review.test.ts
+weft test .weft/workflows/review/tests/main.test.ts
 weft test --runner node
 weft test --watch
 weft test --coverage
 ```
 
-`weft test` uses locally installed Vitest when available, Bun's native runner for a Bun project, and otherwise
-Node's built-in `node:test` runner. It never installs dependencies implicitly. Use `--runner node`,
+With no pattern, `weft test` runs `.weft/workflows/*/tests/**/*.test.ts` with Node's built-in
+`node:test` runner. Explicit patterns use locally installed Vitest when available, Bun's native runner for a
+Bun project, and otherwise Node. It never installs dependencies implicitly. Use `--runner node`,
 `--runner bun`, or `--runner vitest` to select a runner explicitly. Use `weft check` separately to validate
 workflow source and schemas.
 
@@ -428,7 +430,7 @@ import { test } from "node:test";
 
 ```ts
 import { mock, runWorkflow } from "@techery/weft-testing";
-import review from "../.weft/workflows/review.ts";
+import review from "../.weft/workflows/review/main.ts";
 
 test("keeps only findings that survive refutation", async () => {
   const { output, journal } = await runWorkflow(review, {

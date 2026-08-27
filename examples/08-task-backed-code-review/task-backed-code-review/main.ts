@@ -1,7 +1,6 @@
 /**
  * A read-only code review that turns only human-approved, independently verified
- * findings into durable workflow tasks. Copy this file into `.weft/workflows/`
- * or run it by path with `weft run ./examples/08-task-backed-code-review/workflow.ts`.
+ * findings into durable workflow tasks.
  */
 import { defineWorkflow, type WorkflowTaskSummary, z } from "@techery/weft-sdk";
 

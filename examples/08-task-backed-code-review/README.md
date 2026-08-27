@@ -7,7 +7,7 @@ append occurrence evidence, preserve first-seen provenance, and reopen completed
 Run the deterministic offline demonstration with `npx tsx examples/08-task-backed-code-review/main.ts`.
 
 ```bash
-cp examples/08-task-backed-code-review/workflow.ts .weft/workflows/task-backed-code-review.ts
+cp -R examples/08-task-backed-code-review/task-backed-code-review .weft/workflows/
 weft run task-backed-code-review --watch
 weft task --workflow example.task-backed-code-review list
 weft ui

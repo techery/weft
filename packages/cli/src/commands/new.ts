@@ -1,7 +1,7 @@
 /**
- * `weft new <name>` — the scaffold. It writes a workflow that already has the shape worth
- * copying: phases, keyed fan-out, a second opinion before anything is believed, a note in
- * the ledger. It passes `weft check` as written, so the first edit starts from green.
+ * `weft new <name>` — scaffold a self-contained workflow package. Every package owns one
+ * `main.ts` entry point, supporting code under `lib/`, tests under `tests/`, and its own
+ * changelog. It passes `weft check` as written, so the first edit starts from green.
  *
  * Nothing is ever overwritten. A scaffold that clobbers a file people have been editing is
  * a scaffold nobody runs twice.
@@ -16,8 +16,8 @@ import { type CliIo, say } from "../io.ts";
 
 export function newCommand(io: CliIo): Command {
   return new Command("new")
-    .description("scaffold a workflow (plus schemas.ts) in the workflow directory")
-    .argument("<name>", "workflow name; also the filename")
+    .description("scaffold a workflow package with main.ts, lib/, tests/, and CHANGELOG.md")
+    .argument("<name>", "workflow name; also the package directory")
     .option("--template <kind>", "simple, review, or task", "review")
     .action(async (name: string, opts: { template?: string }, cmd: Command) => {
       if (!/^[a-z][a-z0-9-]*$/i.test(name)) {
@@ -30,23 +30,31 @@ export function newCommand(io: CliIo): Command {
       const weft = await openWeft(cmd);
       try {
         const dir = workflowsDir(weft);
-        const file = path.join(dir, `${name}.ts`);
-        if (existsSync(file)) {
-          throw new Error(`${path.relative(weft.cwd, file)} already exists — pick another name or edit it`);
+        const packageDir = path.join(dir, name);
+        const legacyFile = path.join(dir, `${name}.ts`);
+        if (existsSync(packageDir) || existsSync(legacyFile)) {
+          const existing = existsSync(packageDir) ? packageDir : legacyFile;
+          throw new Error(
+            `${path.relative(weft.cwd, existing)} already exists — pick another name or edit it`,
+          );
         }
-        await mkdir(dir, { recursive: true });
-        await writeFile(file, workflowTemplate(name, template as "simple" | "review" | "task"), "utf8");
-        io.out(`${pc.green("created")} ${path.relative(weft.cwd, file)}`);
-
-        if (template === "review") {
-          const schemas = path.join(dir, "schemas.ts");
-          if (existsSync(schemas)) {
-            io.out(pc.dim(`kept    ${path.relative(weft.cwd, schemas)} (already there)`));
-          } else {
-            await writeFile(schemas, SCHEMAS_TEMPLATE, "utf8");
-            io.out(`${pc.green("created")} ${path.relative(weft.cwd, schemas)}`);
-          }
-        }
+        const libDir = path.join(packageDir, "lib");
+        const testsDir = path.join(packageDir, "tests");
+        await Promise.all([mkdir(libDir, { recursive: true }), mkdir(testsDir, { recursive: true })]);
+        const files = [
+          [
+            path.join(packageDir, "main.ts"),
+            workflowTemplate(name, template as "simple" | "review" | "task"),
+          ],
+          [
+            path.join(libDir, template === "review" ? "schemas.ts" : "index.ts"),
+            template === "review" ? SCHEMAS_TEMPLATE : LIB_TEMPLATE,
+          ],
+          [path.join(testsDir, "main.test.ts"), TEST_TEMPLATE],
+          [path.join(packageDir, "CHANGELOG.md"), changelogTemplate(name)],
+        ] as const;
+        await Promise.all(files.map(([file, contents]) => writeFile(file, contents, "utf8")));
+        for (const [file] of files) io.out(`${pc.green("created")} ${path.relative(weft.cwd, file)}`);
         const runArgs =
           template === "review" ? " --base main" : template === "simple" ? ' --request "…"' : "";
         say(io, pc.dim(`next: weft check ${name} · weft run ${name}${runArgs} --watch`));
@@ -56,12 +64,12 @@ export function newCommand(io: CliIo): Command {
     });
 }
 
-/** The name comes from the filename, so the template never hard-codes `meta.name`. */
+/** The name comes from the package directory, so the template never hard-codes `meta.name`. */
 function workflowTemplate(name: string, template: "simple" | "review" | "task"): string {
   if (template === "simple") return simpleTemplate(name);
   if (template === "task") return taskTemplate(name);
   return `import { defineWorkflow, z } from "@techery/weft-sdk";
-import { Finding } from "./schemas.ts";
+import { Finding } from "./lib/schemas.ts";
 
 /**
  * ${name}: review what changed since a base ref, then keep only the findings that
@@ -182,3 +190,26 @@ export const Finding = z.object({
   severity: z.enum(["low", "medium", "high"]),
 });
 `;
+
+const LIB_TEMPLATE = `/** Supporting workflow code belongs in this directory. */
+export {};
+`;
+
+const TEST_TEMPLATE = `import assert from "node:assert/strict";
+import test from "node:test";
+import workflow from "../main.ts";
+
+test("workflow exposes a durable identity and description", () => {
+  assert.equal(typeof workflow.meta.id, "string");
+  assert.ok(workflow.meta.description.length > 0);
+});
+`;
+
+function changelogTemplate(name: string): string {
+  return `# ${name} changelog
+
+## Unreleased
+
+- Initial workflow package.
+`;
+}

@@ -20,7 +20,7 @@ function engineWith(builder: MockAgentBuilder) {
 }
 
 // The workflow takes the middle prompt as a parameter so we can "edit the script"
-// between resumes the way you would edit a .weft/workflows/*.ts file.
+// between resumes the way you would edit a .weft/workflows/*/main.ts entry.
 const mkDef = (analyzePrompt: string) =>
   defineWorkflow(
     {

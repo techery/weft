@@ -1,10 +1,10 @@
 /**
  * `weft test [pattern]` — run the consuming project's fixture-backed workflow tests.
  *
- * Weft deliberately does not require a third-party test runner. The command prefers a
- * project's locally installed Vitest for compatibility, then Bun's native runner for Bun
- * projects, and otherwise Node's built-in node:test runner. Workflow tests stay in the
- * project rather than in the CLI package.
+ * Weft deliberately does not require a third-party test runner. With no pattern it runs
+ * each workflow package's nested `.test.ts` files through Node's built-in runner. For an explicit
+ * pattern, it prefers a project's local Vitest, then Bun, then Node. Workflow tests stay
+ * with their workflow rather than in the CLI package.
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -14,6 +14,7 @@ import { globalOptions } from "../context.ts";
 import type { CliIo } from "../io.ts";
 
 export type TestRunner = "auto" | "node" | "bun" | "vitest";
+export const DEFAULT_WORKFLOW_TEST_PATTERN = ".weft/workflows/*/tests/**/*.test.ts";
 
 interface TestOptions {
   watch?: boolean;
@@ -25,24 +26,29 @@ interface TestOptions {
 export function testCommand(io: CliIo): Command {
   return new Command("test")
     .description("run the project's fixture-backed workflow tests")
-    .argument("[pattern]", "test file or directory", "test/workflows")
+    .argument("[pattern]", "test file, directory, or glob; defaults to packaged workflow tests")
     .option("--runner <runner>", "test runner: auto, node, bun, or vitest", "auto")
     .option("--watch", "keep the test runner running and watch for changes")
     .option("--coverage", "collect test coverage")
     .option("--config <file>", "Vitest configuration file")
-    .action(async (pattern: string, opts: TestOptions, cmd: Command) => {
+    .action(async (pattern: string | undefined, opts: TestOptions, cmd: Command) => {
       const { cwd } = globalOptions(cmd);
-      const runner = selectRunner(cwd, opts.runner ?? "auto");
+      const selectedPattern = pattern ?? DEFAULT_WORKFLOW_TEST_PATTERN;
+      // Scaffolded package tests use node:test and live under a hidden directory that
+      // many Vitest configurations exclude. An explicit pattern retains normal auto-detection.
+      const requestedRunner = opts.runner ?? "auto";
+      const runner =
+        pattern === undefined && requestedRunner === "auto" ? "node" : selectRunner(cwd, requestedRunner);
       if (runner !== "vitest" && opts.config !== undefined) {
         throw new Error("--config is only supported with the vitest runner");
       }
 
       const [program, programArgs] =
         runner === "node"
-          ? nodeRunnerFor(pattern, opts)
+          ? nodeRunnerFor(selectedPattern, opts)
           : runner === "bun"
-            ? bunRunnerFor(pattern, opts)
-            : runnerFor(cwd, vitestArgs(pattern, opts));
+            ? bunRunnerFor(selectedPattern, opts)
+            : runnerFor(cwd, vitestArgs(selectedPattern, opts));
 
       io.out(`running ${[program, ...programArgs].join(" ")} (${runner}) in ${cwd}`);
       const exitCode = await runChild(program, programArgs, cwd);

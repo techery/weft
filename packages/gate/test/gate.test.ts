@@ -97,6 +97,21 @@ async function writeReview(
   return write(dir, file, reviewSource(opts));
 }
 
+async function writePackageAt(dir: string, name: string, source: string): Promise<string> {
+  await write(dir, "lib/schemas.ts", SCHEMAS);
+  await write(dir, "tests/main.test.ts", "export {};\n");
+  await write(dir, "CHANGELOG.md", `# ${name} changelog\n`);
+  return write(dir, "main.ts", source.replace('"./schemas.ts"', '"./lib/schemas.ts"'));
+}
+
+async function writeWorkflowPackage(
+  root: string,
+  name: string,
+  opts: Parameters<typeof reviewSource>[0] = {},
+): Promise<string> {
+  return writePackageAt(path.join(root, name), name, reviewSource(opts));
+}
+
 /** A minimal workflow body that runs `body` at module top level or inside run(). */
 function sandboxProbe(opts: { top?: string; body?: string }): string {
   return [
@@ -515,7 +530,7 @@ describe("bundleWorkflow", () => {
 
   it("keeps the custom React UI example compilable as three browser views", async () => {
     const loaded = await loadWorkflow({
-      entry: path.join(repoRoot, "examples/09-custom-react-ui/workflow.ts"),
+      entry: path.join(repoRoot, "examples/09-custom-react-ui/custom-react-ui/main.ts"),
     });
     expect(loaded.name).toBe("custom-react-ui");
     expect(loaded.uiCatalog.assets.map(({ id, mode }) => ({ id, mode }))).toEqual([
@@ -531,16 +546,18 @@ describe("bundleWorkflow", () => {
   });
 
   it("keeps every minimal API cookbook workflow gate-clean", async () => {
-    const files = [
-      "composition.ts",
-      "humans-and-waits.ts",
-      "effects.ts",
-      "git.ts",
-      "state-tasks-and-patches.ts",
+    const packages = [
+      "example-composition",
+      "example-humans-and-waits",
+      "example-effects",
+      "example-git",
+      "example-state-tasks-and-patches",
     ];
-    for (const file of files) {
-      const loaded = await loadWorkflow({ entry: path.join(repoRoot, "examples/10-api-cookbook", file) });
-      expect(loaded.def.kind, file).toBe("weft.workflow");
+    for (const packageName of packages) {
+      const loaded = await loadWorkflow({
+        entry: path.join(repoRoot, "examples/10-api-cookbook", packageName, "main.ts"),
+      });
+      expect(loaded.def.kind, packageName).toBe("weft.workflow");
     }
   });
 
@@ -931,20 +948,20 @@ describe("sandbox", () => {
 // ---------------------------------------------------------------------------
 
 describe("createWorkflowRegistry", () => {
-  it("lists and loads workflows by file name", async () => {
+  it("lists and loads workflows by package name", async () => {
     const dir = await tempDir();
-    await writeReview(dir, "review.ts");
-    await write(dir, "ship.ts", reviewSource({ description: "Ship it" }));
+    await writeWorkflowPackage(dir, "review");
+    await writeWorkflowPackage(dir, "ship", { description: "Ship it" });
     const registry = createWorkflowRegistry({ dir });
 
     const listed = await registry.list();
     expect(listed.map((e) => e.name)).toEqual(["review", "ship"]);
     expect(listed[0]?.description).toBe("Review a target and report findings");
     expect(listed[1]?.description).toBe("Ship it");
-    expect(listed[0]?.file).toBe(path.join(dir, "review.ts"));
+    expect(listed[0]?.file).toBe(path.join(dir, "review/main.ts"));
 
     const loaded = await registry.load("review");
-    expect(loaded.file).toBe(path.join(dir, "review.ts"));
+    expect(loaded.file).toBe(path.join(dir, "review/main.ts"));
     expect(loaded.hash).toMatch(/^[0-9a-f]{64}$/);
     expect(await loaded.def.run(stubCtx, { target: "x" })).toMatchObject({ at: 1_700_000_000_000 });
 
@@ -954,23 +971,37 @@ describe("createWorkflowRegistry", () => {
     await expect(registry.load("nope")).rejects.toThrow(/not found/);
   });
 
+  it("rejects flat files and incomplete workflow packages", async () => {
+    const dir = await tempDir();
+    await write(dir, "legacy.ts", sandboxProbe({}));
+    await write(dir, "incomplete/main.ts", sandboxProbe({}));
+    const registry = createWorkflowRegistry({ dir });
+
+    const inspection = await registry.listWithIssues();
+    expect(inspection.entries).toEqual([]);
+    expect(inspection.issues.map((issue) => issue.error)).toEqual([
+      expect.stringContaining("missing lib/, tests/, CHANGELOG.md"),
+      expect.stringContaining("flat workflow files are not supported"),
+    ]);
+    await expect(registry.load("incomplete")).rejects.toThrow(/missing lib\/, tests\/, CHANGELOG\.md/);
+    await expect(registry.load("legacy")).rejects.toThrow(/flat workflow files are not supported/);
+  });
+
   it("merges additional workflow directories into one registry", async () => {
     const primary = await tempDir();
     const extra = await tempDir();
-    await writeReview(primary, "review.ts");
-    await writeReview(extra, "ship.ts", { id: "ship", description: "Ship it" });
+    await writeWorkflowPackage(primary, "review");
+    await writeWorkflowPackage(extra, "ship", { id: "ship", description: "Ship it" });
     const registry = createWorkflowRegistry({ dir: primary, extraDirs: [extra] });
 
     expect((await registry.list()).map((entry) => entry.name)).toEqual(["review", "ship"]);
-    expect((await registry.load("ship")).file).toBe(path.join(extra, "ship.ts"));
+    expect((await registry.load("ship")).file).toBe(path.join(extra, "ship/main.ts"));
   });
 
-  it("treats an extra directory with workflow.ts as one workflow package", async () => {
+  it("treats an extra workflow package directory as one workflow", async () => {
     const primary = await tempDir();
-    const extra = await tempDir();
-    await writeReview(extra, "workflow.ts", { name: "ship" });
-    await write(extra, "main.ts", sandboxProbe({ body: `const t = Date.now();` }));
-    await write(extra, "helper.ts", `export const helper = true;`);
+    const extra = path.join(await tempDir(), "ship");
+    await writePackageAt(extra, "ship", reviewSource({ name: "ship" }));
 
     const inspection = await createWorkflowRegistry({ dir: primary, extraDirs: [extra] }).listWithIssues();
 
@@ -981,42 +1012,41 @@ describe("createWorkflowRegistry", () => {
   it("rejects duplicate identities across workflow directories", async () => {
     const primary = await tempDir();
     const extra = await tempDir();
-    await writeReview(primary, "review.ts", { id: "shared" });
-    await writeReview(extra, "ship.ts", { id: "shared", description: "Ship it" });
+    await writeWorkflowPackage(primary, "review", { id: "shared" });
+    await writeWorkflowPackage(extra, "ship", { id: "shared", description: "Ship it" });
     const registry = createWorkflowRegistry({ dir: primary, extraDirs: [extra] });
 
     await expect(registry.list()).rejects.toThrow(/duplicate workflow id "shared"/);
     await expect(registry.load("review")).rejects.toThrow(/duplicate workflow id "shared"/);
   });
 
-  it("skips helper modules that are not workflows", async () => {
+  it("does not discover helper modules under lib", async () => {
     const dir = await tempDir();
-    await writeReview(dir, "review.ts"); // also writes schemas.ts beside it
-    await write(dir, "lib/util.ts", `export const two = 2;`);
+    await writeWorkflowPackage(dir, "review");
+    await write(dir, "review/lib/util.ts", `export const two = 2;`);
     const registry = createWorkflowRegistry({ dir });
     expect((await registry.list()).map((e) => e.name)).toEqual(["review"]);
     expect(await registry.get("schemas")).toBeUndefined();
   });
 
-  it("lets meta.name override the file name", async () => {
+  it("requires meta.name to match the package name", async () => {
     const dir = await tempDir();
-    await writeReview(dir, "on-disk.ts", { name: "review-pass" });
+    await writeWorkflowPackage(dir, "on-disk", { name: "review-pass" });
     const registry = createWorkflowRegistry({ dir });
 
-    expect((await registry.list()).map((e) => e.name)).toEqual(["review-pass"]);
-    expect(await registry.get("on-disk")).toBeUndefined();
-    const loaded = await registry.load("review-pass");
-    expect(loaded.file).toBe(path.join(dir, "on-disk.ts"));
+    expect(await registry.list()).toEqual([]);
+    await expect(registry.load("on-disk")).rejects.toThrow(/must be named "review-pass"/);
+    expect((await registry.listWithIssues()).issues[0]?.error).toContain("must be named");
   });
 
   it("resolves durable workflow identity after callable-name changes without name fallback", async () => {
     const dir = await tempDir();
-    await writeReview(dir, "current.ts", { id: "durable-review", name: "current-review" });
-    await write(
-      dir,
-      "decoy.ts",
-      reviewSource({ id: "decoy-review", name: "old-review", description: "Reused old name" }),
-    );
+    await writeWorkflowPackage(dir, "current-review", { id: "durable-review", name: "current-review" });
+    await writeWorkflowPackage(dir, "old-review", {
+      id: "decoy-review",
+      name: "old-review",
+      description: "Reused old name",
+    });
     const registry = createWorkflowRegistry({ dir });
 
     const resolved = await registry.resolve({ id: "durable-review", name: "old-review" });
@@ -1025,14 +1055,16 @@ describe("createWorkflowRegistry", () => {
     expect(resolved?.hash).toBe((await registry.load("current-review")).hash);
     await expect(registry.resolve({ id: "missing-review", name: "old-review" })).resolves.toBeUndefined();
     expect((await registry.resolve({ name: "old-review" }))?.def.meta.id).toBe("decoy-review");
-    expect((await registry.loadIdentity("durable-review")).file).toBe(path.join(dir, "current.ts"));
-    expect((await registry.loadIdentity("old-review")).file).toBe(path.join(dir, "decoy.ts"));
+    expect((await registry.loadIdentity("durable-review")).file).toBe(
+      path.join(dir, "current-review/main.ts"),
+    );
+    expect((await registry.loadIdentity("old-review")).file).toBe(path.join(dir, "old-review/main.ts"));
   });
 
   it("rejects ambiguous name-or-id inspection identities", async () => {
     const dir = await tempDir();
-    await writeReview(dir, "named.ts", { id: "named-id", name: "shared" });
-    await write(dir, "identified.ts", reviewSource({ id: "shared", name: "identified" }));
+    await writeWorkflowPackage(dir, "shared", { id: "named-id", name: "shared" });
+    await writeWorkflowPackage(dir, "identified", { id: "shared", name: "identified" });
     const registry = createWorkflowRegistry({ dir });
 
     await expect(registry.loadIdentity("shared")).rejects.toThrow(/ambiguous/);
@@ -1040,8 +1072,8 @@ describe("createWorkflowRegistry", () => {
 
   it("rejects duplicate durable workflow ids", async () => {
     const dir = await tempDir();
-    await writeReview(dir, "review.ts", { id: "shared-state" });
-    await write(dir, "ship.ts", reviewSource({ id: "shared-state", description: "Ship it" }));
+    await writeWorkflowPackage(dir, "review", { id: "shared-state" });
+    await writeWorkflowPackage(dir, "ship", { id: "shared-state", description: "Ship it" });
     const registry = createWorkflowRegistry({ dir });
     await expect(registry.list()).rejects.toThrow(/duplicate workflow id "shared-state"/);
     await expect(registry.load("review")).rejects.toThrow(/duplicate workflow id "shared-state"/);
@@ -1053,13 +1085,14 @@ describe("createWorkflowRegistry", () => {
 
   it("rejects duplicate callable workflow names even when their durable ids differ", async () => {
     const dir = await tempDir();
-    await writeReview(dir, "review.ts", { id: "review-one", name: "shared-name" });
-    await write(
-      dir,
-      "ship.ts",
-      reviewSource({ id: "review-two", name: "shared-name", description: "Ship it" }),
-    );
-    const registry = createWorkflowRegistry({ dir });
+    const extra = await tempDir();
+    await writeWorkflowPackage(dir, "shared-name", { id: "review-one", name: "shared-name" });
+    await writeWorkflowPackage(extra, "shared-name", {
+      id: "review-two",
+      name: "shared-name",
+      description: "Ship it",
+    });
+    const registry = createWorkflowRegistry({ dir, extraDirs: [extra] });
 
     await expect(registry.list()).rejects.toThrow(/duplicate workflow name "shared-name"/);
     await expect(registry.load("shared-name")).rejects.toThrow(/duplicate workflow name "shared-name"/);
@@ -1067,7 +1100,7 @@ describe("createWorkflowRegistry", () => {
 
   it("caches by content hash and invalidates when the file changes", async () => {
     const dir = await tempDir();
-    await writeReview(dir, "review.ts");
+    await writeWorkflowPackage(dir, "review");
     const registry = createWorkflowRegistry({ dir });
 
     const first = await registry.load("review");
@@ -1075,7 +1108,11 @@ describe("createWorkflowRegistry", () => {
     expect(second.def).toBe(first.def);
     expect(second.hash).toBe(first.hash);
 
-    await write(dir, "review.ts", reviewSource({ description: "Review, again" }));
+    await write(
+      dir,
+      "review/main.ts",
+      reviewSource({ description: "Review, again" }).replace('"./schemas.ts"', '"./lib/schemas.ts"'),
+    );
     const third = await registry.load("review");
     expect(third.hash).not.toBe(first.hash);
     expect(third.def).not.toBe(first.def);
@@ -1085,11 +1122,11 @@ describe("createWorkflowRegistry", () => {
 
   it("invalidates when a bundled relative import changes", async () => {
     const dir = await tempDir();
-    await writeReview(dir, "review.ts");
+    await writeWorkflowPackage(dir, "review");
     const registry = createWorkflowRegistry({ dir });
     const first = await registry.load("review");
 
-    await write(dir, "schemas.ts", SCHEMAS.replace("note: z.string()", "note: z.string().min(4)"));
+    await write(dir, "review/lib/schemas.ts", SCHEMAS.replace("note: z.string()", "note: z.string().min(4)"));
     const second = await registry.load("review");
     expect(second.hash).not.toBe(first.hash);
     expect(second.def).not.toBe(first.def);
@@ -1102,7 +1139,7 @@ describe("createWorkflowRegistry", () => {
 
   it("propagates a gate violation for the workflow that was asked for", async () => {
     const dir = await tempDir();
-    await write(dir, "broken.ts", sandboxProbe({ body: `const t = Date.now();` }));
+    await writePackageAt(path.join(dir, "broken"), "broken", sandboxProbe({ body: `const t = Date.now();` }));
     const registry = createWorkflowRegistry({ dir });
     await expect(registry.load("broken")).rejects.toThrow(/no-date-now/);
     expect(await registry.list()).toEqual([]);
@@ -1110,17 +1147,17 @@ describe("createWorkflowRegistry", () => {
 
   it("reports broken workflow files without hiding them from inspection", async () => {
     const dir = await tempDir();
-    await write(dir, "broken.ts", sandboxProbe({ body: `const t = Date.now();` }));
+    await writePackageAt(path.join(dir, "broken"), "broken", sandboxProbe({ body: `const t = Date.now();` }));
     const registry = createWorkflowRegistry({ dir });
 
     const inspection = await registry.listWithIssues();
     expect(inspection.entries).toEqual([]);
     expect(inspection.issues).toHaveLength(1);
     expect(inspection.issues[0]).toMatchObject({
-      file: path.join(dir, "broken.ts"),
+      file: path.join(dir, "broken/main.ts"),
       error: expect.stringContaining("no-date-now"),
       diagnostics: [
-        expect.objectContaining({ rule: "no-date-now", file: expect.stringContaining("broken.ts") }),
+        expect.objectContaining({ rule: "no-date-now", file: expect.stringContaining("main.ts") }),
       ],
     });
   });
@@ -1147,8 +1184,8 @@ describe("createWorkflowRegistry", () => {
   it("passes its allow-list down to the gate", async () => {
     const dir = await tempDir();
     await write(
-      dir,
-      "wf.ts",
+      path.join(dir, "wf"),
+      "main.ts",
       [
         `import { defineWorkflow } from "@techery/weft-sdk";`,
         `import { z } from "zod";`,
@@ -1162,6 +1199,9 @@ describe("createWorkflowRegistry", () => {
         `);`,
       ].join("\n"),
     );
+    await write(dir, "wf/lib/index.ts", "export {};\n");
+    await write(dir, "wf/tests/main.test.ts", "export {};\n");
+    await write(dir, "wf/CHANGELOG.md", "# wf changelog\n");
     expect(await createWorkflowRegistry({ dir, allowBare: [] }).list()).toEqual([]);
     expect((await createWorkflowRegistry({ dir, allowBare: ["zod"] }).list()).map((e) => e.name)).toEqual([
       "wf",

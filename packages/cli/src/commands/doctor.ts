@@ -5,7 +5,6 @@
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -42,41 +41,30 @@ export function doctorCommand(io: CliIo): Command {
         checks.push(...layoutChecks(weft.weftDir, dirs, cwd));
         checks.push(...credentialChecks());
 
-        const entries = await weft.registry.list().catch(() => []);
+        const inspection = await weft.registry.listWithIssues().catch((err: unknown) => {
+          checks.push({
+            verdict: "fail",
+            label: "workflows",
+            detail: err instanceof Error ? err.message : String(err),
+          });
+          return { entries: [], issues: [] };
+        });
+        const { entries } = inspection;
         if (entries.length === 0) {
           checks.push({ verdict: "warn", label: "registry", detail: "no workflows — try: weft new review" });
         }
         for (const entry of entries) {
           checks.push(await workflowCheck(entry, cwd, allowBareOf(weft)));
         }
-        // registry.list() silently SKIPS files that fail to load: a broken
-        // workflow beside a healthy one must not let doctor print "ready".
-        const listed = new Set(entries.map((entry) => path.resolve(entry.file)));
-        const files: string[] = [];
-        for (const dir of dirs) {
-          try {
-            files.push(
-              ...(await readdir(dir))
-                .filter((file) => file.endsWith(".ts"))
-                .map((file) => path.resolve(dir, file)),
-            );
-          } catch (err) {
-            // Only genuine ABSENCE is fine (layoutChecks already reports it). Any
-            // other failure — EACCES, EIO, a stray FILE named "workflows" — hides
-            // every workflow behind an empty scan, and "ready" over a directory
-            // nobody can read is a lie.
-            if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-              checks.push({
-                verdict: "fail",
-                label: "workflows",
-                detail: `cannot read ${path.relative(cwd, dir)}: ${(err as Error).message}`,
-              });
-            }
-          }
-        }
-        for (const file of files) {
-          if (listed.has(file)) continue;
-          checks.push(await unlistedFileCheck(file, cwd, allowBareOf(weft)));
+        for (const issue of inspection.issues) {
+          const issueName = path.extname(issue.file)
+            ? path.basename(path.dirname(issue.file))
+            : path.basename(issue.file);
+          checks.push({
+            verdict: "fail",
+            label: issueName || "workflow",
+            detail: `${issue.error} — ${path.relative(cwd, issue.file)}`,
+          });
         }
 
         say(
@@ -191,38 +179,6 @@ function credentialChecks(): Check[] {
           : "no OPENAI_API_KEY and no `codex login` — do either",
     },
   ];
-}
-
-/**
- * A file the registry did not list is either a HELPER module (`./schemas.ts`
- * bundles cleanly but exports no workflow — fine, `weft check` classifies it the
- * same way) or genuinely broken, which must fail rather than hide behind the
- * registry's silence.
- */
-async function unlistedFileCheck(
-  file: string,
-  cwd: string,
-  allowBare: { allowBare?: string[] },
-): Promise<Check> {
-  const name = path.basename(file, ".ts");
-  try {
-    await loadWorkflow({ entry: file, ...allowBare });
-    return { verdict: "ok", label: name, detail: path.relative(cwd, file) };
-  } catch (err) {
-    if (
-      err instanceof GateError &&
-      err.diagnostics.length > 0 &&
-      err.diagnostics.every((d) => d.rule === "no-workflow-export")
-    ) {
-      return { verdict: "ok", label: name, detail: `${path.relative(cwd, file)} (module, not a workflow)` };
-    }
-    const count = err instanceof GateError ? err.diagnostics.length : 0;
-    return {
-      verdict: "fail",
-      label: name,
-      detail: `${count > 0 ? `${count} gate violation(s)` : (err as Error).message} — weft check ${name}`,
-    };
-  }
 }
 
 async function workflowCheck(

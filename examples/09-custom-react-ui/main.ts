@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { Engine, MemoryBlobStore, MemoryJournalStore, ProviderRegistry } from "@techery/weft-core";
 import { loadWorkflow } from "../../packages/gate/src/index.ts";
 
-const entry = fileURLToPath(new URL("./workflow.ts", import.meta.url));
+const entry = fileURLToPath(new URL("./custom-react-ui/main.ts", import.meta.url));
 const loaded = await loadWorkflow({ entry });
 assert.deepEqual(
   loaded.uiCatalog.assets.map(({ id, mode }) => ({ id, mode })),

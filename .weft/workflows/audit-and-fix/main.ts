@@ -9,7 +9,7 @@
  * and edits reach the tree only as journaled patches (C6).
  */
 import { defineWorkflow, z } from "@techery/weft-sdk";
-import { Finding, FixResult, Verdict } from "./schemas.ts";
+import { Finding, FixResult, Verdict } from "./lib/schemas.ts";
 
 /** Cross-vendor refutation panel: two vendors, three votes, majority wins. */
 const PANEL = ["claude", "codex", "claude"] as const;

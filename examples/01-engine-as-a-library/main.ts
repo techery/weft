@@ -25,7 +25,7 @@ import { mock } from "@techery/weft-provider-mock";
 import { defineWorkflow, z } from "@techery/weft-sdk";
 
 // ---------------------------------------------------------------------------
-// The workflow — defined inline, exactly as a .weft/workflows/*.ts file would be
+// The workflow — defined inline, exactly as a .weft/workflows/*/main.ts entry would be
 // ---------------------------------------------------------------------------
 
 const Finding = z.object({

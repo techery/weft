@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { mockTaskEnvelope } from "@techery/weft-provider-mock";
@@ -42,10 +42,10 @@ async function readJournal(runDir: string): Promise<JournalLine[]> {
     .map((line) => JSON.parse(line) as JournalLine);
 }
 
-/** A repo root with `.weft/workflows/hello.ts` and a mock-wired engine over it. */
+/** A repo root with `.weft/workflows/hello/main.ts` and a mock-wired engine over it. */
 async function mockWeft(): Promise<{ weft: Weft; root: string }> {
   const root = await tempRoot();
-  await write(root, ".weft/workflows/hello.ts", HELLO_WORKFLOW);
+  await write(root, ".weft/workflows/hello/main.ts", HELLO_WORKFLOW);
   const weft = await createWeft({ cwd: root, providers: "mock" });
   opened.push(weft);
   return { weft, root };
@@ -300,7 +300,7 @@ export default defineWorkflow(
   async (ctx) => ctx.human.approve({ action: "Continue after rename?" }),
 );
 `;
-    await write(root, ".weft/workflows/review.ts", source("old-review-name"));
+    await write(root, ".weft/workflows/old-review-name/main.ts", source("old-review-name"));
     const first = await createWeft({ cwd: root, providers: "mock" });
     opened.push(first);
     const { def } = await resolveWorkflow(first, "old-review-name");
@@ -309,7 +309,11 @@ export default defineWorkflow(
     if (outcome.status !== "waiting_for_human") throw new Error("expected suspension");
     await first.engine.shutdown();
 
-    await write(root, ".weft/workflows/review.ts", source("new-review-name"));
+    await rename(
+      path.join(root, ".weft/workflows/old-review-name"),
+      path.join(root, ".weft/workflows/new-review-name"),
+    );
+    await write(root, ".weft/workflows/new-review-name/main.ts", source("new-review-name"));
     const later = await createWeft({ cwd: root, providers: "mock" });
     opened.push(later);
     await later.engine.answer(run.runId, outcome.pending[0]!.id, { approved: true });
@@ -323,7 +327,7 @@ export default defineWorkflow(
     const { weft, root } = await mockWeft();
     await write(
       root,
-      ".weft/workflows/verdict.ts",
+      ".weft/workflows/verdict/main.ts",
       `import { defineWorkflow, z } from "@techery/weft-sdk";
 
       export default defineWorkflow(
@@ -379,7 +383,7 @@ export default defineWorkflow(
     const { weft, root } = await mockWeft();
     await write(
       root,
-      ".weft/workflows/caller.ts",
+      ".weft/workflows/caller/main.ts",
       `import { defineWorkflow, z } from "@techery/weft-sdk";
 
       export default defineWorkflow(
@@ -403,7 +407,10 @@ export default defineWorkflow(
 
   it("honours a configured workflows directory", async () => {
     const root = await tempRoot();
-    await write(root, "flows/hello.ts", HELLO_WORKFLOW);
+    await write(root, "flows/hello/main.ts", HELLO_WORKFLOW);
+    await write(root, "flows/hello/lib/index.ts", "export {};\n");
+    await write(root, "flows/hello/tests/main.test.ts", "export {};\n");
+    await write(root, "flows/hello/CHANGELOG.md", "# hello changelog\n");
     const weft = await createWeft({ cwd: root, providers: "mock", config: { workflows: { dir: "flows" } } });
     opened.push(weft);
     const { name } = await resolveWorkflow(weft, "hello");
@@ -412,7 +419,10 @@ export default defineWorkflow(
 
   it("adds host-supplied workflow directories without moving state", async () => {
     const root = await tempRoot();
-    await write(root, "examples/flows/hello.ts", HELLO_WORKFLOW);
+    await write(root, "examples/flows/hello/main.ts", HELLO_WORKFLOW);
+    await write(root, "examples/flows/hello/lib/index.ts", "export {};\n");
+    await write(root, "examples/flows/hello/tests/main.test.ts", "export {};\n");
+    await write(root, "examples/flows/hello/CHANGELOG.md", "# hello changelog\n");
     const weft = await createWeft({
       cwd: root,
       providers: "mock",
@@ -522,7 +532,7 @@ describe("reindex", () => {
 describe("config hardening (codex review round 15, PR #1)", () => {
   it("config allowBare entries EXTEND the default bare imports rather than replacing them", async () => {
     const root = await tempRoot();
-    await write(root, ".weft/workflows/hello.ts", HELLO_WORKFLOW);
+    await write(root, ".weft/workflows/hello/main.ts", HELLO_WORKFLOW);
     const weft = await createWeft({
       cwd: root,
       providers: "mock",
@@ -571,7 +581,7 @@ describe("`.weft/` keeps its run state out of the user's git tree", () => {
 
     // git agrees: run state is ignored, a workflow is not.
     await write(cwd, ".weft/runs/r1/journal.jsonl", "{}\n");
-    await write(cwd, ".weft/workflows/w.ts", "export {};\n");
+    await write(cwd, ".weft/workflows/w/main.ts", "export {};\n");
     // `check-ignore` answers per path; `status` collapses a wholly untracked directory.
     const ignores = async (rel: string): Promise<boolean> =>
       execFileAsync("git", ["check-ignore", "-q", rel], { cwd }).then(
@@ -580,7 +590,7 @@ describe("`.weft/` keeps its run state out of the user's git tree", () => {
       );
     expect(await ignores(".weft/runs/r1/journal.jsonl")).toBe(true);
     expect(await ignores(".weft/blobs/ab/cd")).toBe(true);
-    expect(await ignores(".weft/workflows/w.ts")).toBe(false);
+    expect(await ignores(".weft/workflows/w/main.ts")).toBe(false);
 
     // A second assembly leaves a user's edited file alone.
     await writeFile(file, "mine\n", "utf8");

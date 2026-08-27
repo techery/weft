@@ -45,6 +45,19 @@ export default defineWorkflow(
 );
 `;
 
+async function writeWorkflow(cwd: string, name: string, source: string): Promise<string> {
+  const packageDir = path.join(cwd, ".weft", "workflows", name);
+  await Promise.all([
+    mkdir(path.join(packageDir, "lib"), { recursive: true }),
+    mkdir(path.join(packageDir, "tests"), { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(path.join(packageDir, "main.ts"), source, "utf8"),
+    writeFile(path.join(packageDir, "CHANGELOG.md"), `# ${name} changelog\n`, "utf8"),
+  ]);
+  return path.join(packageDir, "main.ts");
+}
+
 /** Alive but unanswerable for a moment: the case a long poll has to hold open. */
 const SLEEPY = `import { defineWorkflow, z } from "@techery/weft-sdk";
 
@@ -435,8 +448,7 @@ export default defineWorkflow(
 
   it("answers and resumes a run from a second session over the same repo", async () => {
     const cwd = await tempRepo();
-    await mkdir(path.join(cwd, ".weft", "workflows"), { recursive: true });
-    await writeFile(path.join(cwd, ".weft", "workflows", "gated.ts"), GATED, "utf8");
+    await writeWorkflow(cwd, "gated", GATED);
 
     // The session that starts the run: it gets as far as the question and stops there.
     const starter = await session(cwd);
@@ -472,8 +484,7 @@ export default defineWorkflow(
 
   it("wakes an ownerless suspended run after weft_answer, without weft_resume", async () => {
     const cwd = await tempRepo();
-    await mkdir(path.join(cwd, ".weft", "workflows"), { recursive: true });
-    await writeFile(path.join(cwd, ".weft", "workflows", "gated.ts"), GATED, "utf8");
+    await writeWorkflow(cwd, "gated", GATED);
 
     const starter = await session(cwd);
     const { runId } = await json<{ runId: string }>(starter, "weft_run", { workflow: "gated" });
@@ -493,9 +504,7 @@ export default defineWorkflow(
 
   it("a failed automatic wake surfaces on the next wait (codex review round 63, PR #1)", async () => {
     const cwd = await tempRepo();
-    await mkdir(path.join(cwd, ".weft", "workflows"), { recursive: true });
-    const file = path.join(cwd, ".weft", "workflows", "gated.ts");
-    await writeFile(file, GATED, "utf8");
+    const file = await writeWorkflow(cwd, "gated", GATED);
 
     const starter = await session(cwd);
     const { runId } = await json<{ runId: string }>(starter, "weft_run", { workflow: "gated" });

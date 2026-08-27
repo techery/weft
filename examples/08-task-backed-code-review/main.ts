@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { mock, runWorkflow } from "@techery/weft-testing";
-import workflow from "./workflow.ts";
+import workflow from "./task-backed-code-review/main.ts";
 
 const exec = promisify(execFile);
 const fingerprint = "src/state.ts|value|invalid-persisted-shape";

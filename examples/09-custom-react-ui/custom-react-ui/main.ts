@@ -2,14 +2,14 @@
  * Custom workflow UI: read-only presentations remain separate replayable steps,
  * while input views can stage—but never submit—a schema-validated human answer.
  *
- *   pnpm exec weft run ./examples/09-custom-react-ui/workflow.ts \
+ *   pnpm exec weft run ./examples/09-custom-react-ui/custom-react-ui/main.ts \
  *     --args '{"environment":"production","services":["api","web","worker","billing"]}' --watch
  */
 import { defineWorkflow } from "@techery/weft-sdk";
-import outcomeView from "./deployment-outcome.ui.tsx";
-import planView from "./deployment-plan.ui.tsx";
-import reviewView from "./deployment-review.ui.tsx";
-import { DeploymentDecision, DeploymentInput, DeploymentOutput } from "./schemas.ts";
+import outcomeView from "./lib/deployment-outcome.ui.tsx";
+import planView from "./lib/deployment-plan.ui.tsx";
+import reviewView from "./lib/deployment-review.ui.tsx";
+import { DeploymentDecision, DeploymentInput, DeploymentOutput } from "./lib/schemas.ts";
 
 export default defineWorkflow(
   {

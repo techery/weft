@@ -23,7 +23,7 @@ npx tsx examples/01-engine-as-a-library/main.ts    # then any example
 | 07 | [`07-testing-workflows`](./07-testing-workflows) | `@techery/weft-testing`'s `runWorkflow`: git fixtures, schema-validated mock fixtures, journal and phase assertions |
 | 08 | [`08-task-backed-code-review`](./08-task-backed-code-review) | A read-only review that consolidates and independently refutes findings, then upserts only human-selected work into a durable deduplicated backlog |
 | 09 | [`09-custom-react-ui`](./09-custom-react-ui) | Browser-compiled React views for a replayable result, schema-authoritative human input, and a composed final presentation |
-| 10 | [`10-api-cookbook`](./10-api-cookbook) | Minimal, single-purpose workflows covering every remaining public `Ctx` API |
+| 10 | [`10-api-cookbook`](./10-api-cookbook) | Minimal, single-purpose workflow packages covering every remaining public `Ctx` API |
 | 11 | [`11-composable-workflow`](./11-composable-workflow) | A full workflow composed from reusable prompts, agents, transparent recipes, immutable phase handles, scoped concurrency, checks, tasks, and approval |
 
 ## Key-feature coverage
@@ -45,6 +45,7 @@ this matrix in the same change.
 | Every remaining public workflow API | 10 · Minimal API cookbook; enforced by `pnpm verify:examples` |
 | Reusable prompt/agent/recipe/check definitions and immutable execution contexts | 11 · Composable workflow DSL |
 
-Most example *workflows* used by the CLI live separately in [`.weft/workflows/`](../.weft/workflows)
-(`review.ts`, `audit-and-fix.ts`) — those are what `weft run review` executes; the folders
-here drive the engine directly as a library.
+Examples 08–11 include complete CLI workflow packages with `main.ts`, `lib/`, `tests/`, and
+`CHANGELOG.md`. Examples 01–07 are intentionally inline library tours that drive the engine
+directly rather than participating in registry discovery. The repository-owned packages under
+[`.weft/workflows/`](../.weft/workflows) are what commands such as `weft run review` execute.

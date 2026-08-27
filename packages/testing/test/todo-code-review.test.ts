@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, test } from "vitest";
-import workflow from "../../../examples/08-task-backed-code-review/workflow.ts";
+import workflow from "../../../examples/08-task-backed-code-review/task-backed-code-review/main.ts";
 import { mock, runWorkflow } from "../src/index.ts";
 
 const exec = promisify(execFile);

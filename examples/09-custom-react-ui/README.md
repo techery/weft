@@ -43,7 +43,7 @@ pnpm exec weft ui
 Then start the example in another terminal:
 
 ```sh
-pnpm exec weft run ./examples/09-custom-react-ui/workflow.ts \
+pnpm exec weft run ./examples/09-custom-react-ui/custom-react-ui/main.ts \
   --args '{"environment":"production"}' \
   --watch
 ```

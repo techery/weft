@@ -115,9 +115,20 @@ async function bundle(): Promise<WebBundle> {
 async function repo(): Promise<string> {
   const cwd = await mkdtemp(path.join(tmpdir(), "weft-daemon-"));
   roots.push(cwd);
-  await mkdir(path.join(cwd, ".weft", "workflows"), { recursive: true });
-  await writeFile(path.join(cwd, ".weft", "workflows", "gated.ts"), GATED, "utf8");
+  await writeWorkflow(cwd, "gated", GATED);
   return cwd;
+}
+
+async function writeWorkflow(cwd: string, name: string, source: string): Promise<void> {
+  const packageDir = path.join(cwd, ".weft", "workflows", name);
+  await Promise.all([
+    mkdir(path.join(packageDir, "lib"), { recursive: true }),
+    mkdir(path.join(packageDir, "tests"), { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(path.join(packageDir, "main.ts"), source, "utf8"),
+    writeFile(path.join(packageDir, "CHANGELOG.md"), `# ${name} changelog\n`, "utf8"),
+  ]);
 }
 
 async function open(cwd: string, appOpts: CreateAppOptions = { web: null }): Promise<Harness> {
@@ -693,7 +704,7 @@ describe("startDaemon", () => {
 
   it("reports and answers a CHILD's pending request through the selected parent", async () => {
     const cwd = await repo();
-    await writeFile(path.join(cwd, ".weft", "workflows", "nested.ts"), NESTED, "utf8");
+    await writeWorkflow(cwd, "nested", NESTED);
     const h = await open(cwd);
     const { def } = await resolveWorkflow(h.weft, "nested");
     const run = await h.weft.engine.start(def, { input: {}, cwd });
@@ -721,7 +732,7 @@ describe("startDaemon", () => {
 
   it("answering a CHILD after a daemon restart wakes the ROOT, not just the child", async () => {
     const cwd = await repo();
-    await writeFile(path.join(cwd, ".weft", "workflows", "nested.ts"), NESTED, "utf8");
+    await writeWorkflow(cwd, "nested", NESTED);
     const first = await open(cwd);
     const { def } = await resolveWorkflow(first.weft, "nested");
     const run = await first.weft.engine.start(def, { input: {}, cwd });

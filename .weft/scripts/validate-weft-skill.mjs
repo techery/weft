@@ -25,6 +25,18 @@ if (skill.slice(frontmatter.length + 6).trim().length < 500)
 if (!skill.includes("weft check") || !skill.includes("weft run") || !skill.includes("weft skill")) {
   fail("generated skill omits required authoring/distribution commands");
 }
+for (const required of [
+  ".weft/workflows/<name>/",
+  "main.ts",
+  "lib/",
+  "tests/",
+  "CHANGELOG.md",
+  "The directory basename is the callable registry name",
+  "fail closed on flat",
+  "ad-hoc path run",
+]) {
+  if (!skill.includes(required)) fail(`generated skill omits workflow package guidance: ${required}`);
+}
 
 console.log(`weft skill valid: ${Buffer.byteLength(skill, "utf8")} bytes`);
 

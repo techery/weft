@@ -4,7 +4,7 @@
  * result, and a sandboxed loader that turns that bundle into a `WorkflowDefinition`.
  *
  * ```ts
- * const { def, hash } = await loadWorkflow({ entry: ".weft/workflows/review.ts" });
+ * const { def, hash } = await loadWorkflow({ entry: ".weft/workflows/review/main.ts" });
  * const registry = createWorkflowRegistry({ dir: ".weft/workflows" }); // Engine's registry
  * ```
  */

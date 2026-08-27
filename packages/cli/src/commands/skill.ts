@@ -85,8 +85,11 @@ Keep claims proportional to evidence:
 \`\`\`text
 .weft/
   config.json              # optional; defaults, providers, limits, approvalPolicy, workflows.dir
-  workflows/<name>.ts      # the registry — one workflow per file, name = filename
-  workflows/schemas.ts     # shared schemas; relative imports are bundled and hashed with the script
+  workflows/<name>/        # one self-contained package; directory = workflow name
+    main.ts                # the only registry entry point
+    lib/                   # schemas and supporting TypeScript
+    tests/                 # workflow-owned tests
+    CHANGELOG.md           # workflow-owned release history
   tasks/<workflow>/<id>.json # durable context shared by a workflow's steps and runs
   blobs/<aa>/<hash>         # content-addressed patches, transcripts, and large outputs
   runs/<id>/
@@ -104,27 +107,53 @@ needed to resume inline or path-based runs.
 
 ## Author a workflow
 
-\`weft new <name>\` uses the default \`review\` template and scaffolds a workflow plus
-shared \`schemas.ts\`; it already passes \`weft check\`. Choose the smallest supported
+\`weft new <name>\` uses the default \`review\` template and scaffolds
+\`.weft/workflows/<name>/\` with \`main.ts\`, \`lib/\`, \`tests/\`, and \`CHANGELOG.md\`; it
+already passes \`weft check\`. Choose the smallest supported
 starting point explicitly when review fan-out is not the job:
 
-- \`weft new <name> --template simple\` creates one typed agent step and no shared schema file.
+- \`weft new <name> --template simple\` creates one typed agent step.
 - \`weft new <name> --template review\` creates the default find/refute workflow and creates
-  \`schemas.ts\` when it is absent.
+  \`lib/schemas.ts\`.
 - \`weft new <name> --template task\` creates a task-aware workflow using
-  \`defineTaskContract\` and no shared schema file.
+  \`defineTaskContract\`.
 
-No template overwrites an existing workflow or \`schemas.ts\`. Here is an independently
+No template overwrites an existing workflow package. Here is an independently
 authored review workflow that also demonstrates defaults and typed task extensions:
+
+### Workflow package contract
+
+Treat the package boundary as part of the executable workflow contract:
+
+- The directory basename is the callable registry name. Omit \`meta.name\`, or repeat the
+  directory name exactly; a mismatch is rejected.
+- \`main.ts\` is the only registry entry point. Put schemas and other implementation code
+  under \`lib/\`; imports from \`main.ts\` are bundled and content-hashed with the workflow.
+- Keep workflow-owned tests under \`tests/\`. With no pattern, \`weft test\` runs every
+  \`.weft/workflows/*/tests/**/*.test.ts\` using Node's test runner.
+- Record behavior and contract changes in the package's \`CHANGELOG.md\`.
+- \`weft workflow list\`, \`weft check\`, and \`weft doctor\` fail closed on flat \`*.ts\`
+  entries, missing required package members, or name mismatches.
+
+To migrate a flat \`.weft/workflows/review.ts\`, create
+\`.weft/workflows/review/{lib,tests}/\`, move the entry to \`review/main.ts\`, move supporting
+modules under \`review/lib/\` and update relative imports, move its tests under
+\`review/tests/\`, and add \`review/CHANGELOG.md\`. Then run \`weft check review\` and
+\`weft test .weft/workflows/review/tests\`.
+
+A repeatable \`--extra-workflow-dir\` may point to a registry root containing named packages
+or directly to one complete package; run/task/config state still belongs to the primary
+\`--cwd\`. A direct \`weft run ./path/to/file.ts\` is an ad-hoc path run, not a registered
+workflow package, so do not use it as evidence that registry discovery accepts the layout.
 
 \`\`\`ts
 import { defineWorkflow, z } from "@techery/weft-sdk";
-import { Finding } from "./schemas.ts";          // explicit .ts extension, always
+import { Finding } from "./lib/schemas.ts";      // explicit .ts extension, always
 
 export default defineWorkflow(
   {
     id: "review",                                           // stable durable task namespace
-    // \`name\` derives from the filename — do not set meta.name in a registry file.
+    // \`name\` derives from the package directory — omit meta.name or repeat it exactly.
     description: "Review changed files; keep only findings that survive refutation",
     input: z.object({ base: z.string().default("main") }),   // becomes --base main
     output: z.object({ confirmed: z.array(Finding) }),       // validated on the way out
@@ -435,10 +464,9 @@ workflow registries without moving run/task state), and \`--mock\` (wire the fix
 instead of Claude/Codex — an agent step then fails loudly without a fixture rather than
 inventing an answer, so it is for agent-less workflows and smoke tests).
 
-The primary workflow directory keeps the many-\`.ts\` registry convention. An extra
-workflow directory containing \`workflow.ts\` is one workflow package: \`workflow.ts\` is its
-only registry entry and sibling TypeScript files are helpers. An extra directory without
-\`workflow.ts\` remains a many-file registry.
+Every registry contains named workflow package directories. Each package must contain
+\`main.ts\`, \`lib/\`, \`tests/\`, and \`CHANGELOG.md\`. An extra workflow directory may point
+either to a registry root containing those packages or directly to one complete package.
 
 | Command | |
 | --- | --- |
@@ -453,8 +481,8 @@ only registry entry and sibling TypeScript files are helpers. An extra directory
 | \`weft explain <run> <key\\|seq>\` | one step: route, exact prompt, output, usage, attempts |
 | \`weft diff <a> <b>\` | two runs' step outputs, matched by key — field-level, not prose |
 | \`weft check [name]\` | fatal gate/bundle/UI checks plus \`tsc --noEmit\` when available. \`--no-tsc\` |
-| \`weft test [pattern]\` | run project workflow tests with Vitest, Bun, or Node's \`node:test\` (auto-detected). Defaults to \`test/workflows\`; \`--runner\`, \`--watch\`, \`--coverage\` |
-| \`weft new <name> [--template simple\\|review\\|task]\` | scaffold \`<name>.ts\`; only the default/review template also creates \`schemas.ts\`; never overwrites |
+| \`weft test [pattern]\` | run workflow tests with Vitest, Bun, or Node's \`node:test\`. With no pattern, runs \`.weft/workflows/*/tests/**/*.test.ts\` using Node; \`--runner\`, \`--watch\`, \`--coverage\` |
+| \`weft new <name> [--template simple\\|review\\|task]\` | scaffold \`<name>/{main.ts,lib/,tests/,CHANGELOG.md}\`; never overwrites |
 | \`weft workflow list\` (alias \`ls\`) | list loadable definitions and rejected workflow files |
 | \`weft workflow inspect <name-or-id> [--json]\` | print the input/output/task/default contract by callable name or stable id; \`--json\` also exposes UI metadata in the complete machine-readable contract |
 | \`weft task --workflow <id> …\` | durable task context: \`schema/list/show/create/upsert/update/note/accept/unaccept/remove\`; mutations support explicit clearing/guards |
@@ -527,7 +555,7 @@ pass in production fails the test.
 
 \`\`\`ts
 import { mock, runWorkflow } from "@techery/weft-testing";
-import review from "../.weft/workflows/review.ts";
+import review from "../.weft/workflows/review/main.ts";
 
 const { output, journal } = await runWorkflow(review, {
   input: { base: "main" },

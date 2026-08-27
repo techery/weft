@@ -1,8 +1,8 @@
 import { defineWorkflow, z } from "@techery/weft-sdk";
-import { reviewLead } from "./agents.ts";
-import { reviewQuality } from "./checks.ts";
-import { Finding, ReviewTask, Summary } from "./contracts.ts";
-import { loadReviewContext, reviewOneFile } from "./recipes.ts";
+import { reviewLead } from "./lib/agents.ts";
+import { reviewQuality } from "./lib/checks.ts";
+import { Finding, ReviewTask, Summary } from "./lib/contracts.ts";
+import { loadReviewContext, reviewOneFile } from "./lib/recipes.ts";
 
 const Input = z.object({
   objective: z.string().min(1),

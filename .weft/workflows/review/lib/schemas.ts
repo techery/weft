@@ -1,7 +1,7 @@
 /**
- * Schemas shared by the workflows in this directory.
+ * Schemas owned by the review workflow package.
  *
- * Relative imports (`./schemas.ts`) are bundled into the script and hashed with it,
+ * Relative imports (`./lib/schemas.ts`) are bundled into the script and hashed with it,
  * so editing a schema changes the workflow's definition hash — and replay knows the
  * steps that depended on it have to run again.
  */

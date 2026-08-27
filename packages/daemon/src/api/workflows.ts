@@ -46,7 +46,7 @@ const SEARCH_LIMIT = 5_000;
 const CACHE_MS = 3_000;
 
 /**
- * A registry name is a bare filename stem. Anything with a separator, a traversal segment,
+ * A registry name is a bare workflow package name. Anything with a separator, a traversal segment,
  * or a `.ts` suffix is a path, and a path is not something this endpoint resolves.
  */
 const NAME = /^[A-Za-z0-9._-]+$/;
