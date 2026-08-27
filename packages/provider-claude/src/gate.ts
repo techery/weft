@@ -23,8 +23,14 @@ import {
 /** Sent back to the agent for every denial on a read-only step, edits and shell writes alike. */
 export const READ_ONLY_MESSAGE = "this is a read-only step";
 
-/** An absolute or home-anchored path anywhere in a command (except /dev/null). */
-const OUT_OF_TREE_PATH = /(?:^|[\s='"`])(?:\/(?!dev\/null\b)|~\/|\$HOME\b)/;
+/**
+ * An absolute or home-anchored path anywhere in a command (except /dev/null).
+ * The leading class must include the shell's own operators, not just whitespace:
+ * a destination can be ATTACHED to its redirection (`>/etc/x`, `2>>/etc/x`) or
+ * follow a pipe or separator, and those spellings are the same write as the
+ * spaced form. `:` stays out so ordinary URLs (`curl http://host/p`) do not trip it.
+ */
+const OUT_OF_TREE_PATH = /(?:^|[\s='"`><|;&(])(?:\/(?!dev\/null\b)|~\/|\$HOME\b)/;
 
 /**
  * A `..` path segment anywhere in a command: relative traversal climbs out of the
@@ -105,6 +111,18 @@ export interface ToolGateOptions {
   onEdit: (path: string) => void;
 }
 
+/** The engine-owned workflow task store, in either separator spelling. */
+const TASK_STORE_PATH = /(?:^|[/\\])\.weft[/\\]tasks(?:[/\\]|$)/;
+
+function isTaskStorePath(value: string): boolean {
+  return TASK_STORE_PATH.test(value);
+}
+
+/** A `..` path SEGMENT (not a `..` inside a name, and not a `HEAD..main` range). */
+function hasParentSegment(value: string): boolean {
+  return value.split(/[/\\]/).includes("..");
+}
+
 /**
  * Resolve a tool's path argument against the step cwd and normalize it to a
  * posix-relative path — the form write-scope globs are written in. Paths outside
@@ -139,7 +157,7 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
     if (EDIT_TOOLS.has(base)) {
       if (!allowEdits) return deny(READ_ONLY_MESSAGE);
       const target = editTargetPath(input);
-      if (target !== undefined && /(?:^|[/\\])\.weft[/\\]tasks(?:[/\\]|$)/.test(target)) {
+      if (target !== undefined && isTaskStorePath(target)) {
         return deny("workflow tasks are engine-owned; return taskOperations instead of editing the store");
       }
       if (target === undefined) {
@@ -161,6 +179,20 @@ export function createToolGate({ req, onEdit }: ToolGateOptions): CanUseTool {
         return allow;
       }
       const path = workspacePath(req.cwd, target);
+      // The guard above sees the RAW argument; a non-canonical spelling of the same
+      // file (`.weft/foo/../tasks/x`, `.weft//tasks/x`) misses it and normalizes back
+      // onto the store here. Screen the normalized path too.
+      if (isTaskStorePath(path)) {
+        return deny("workflow tasks are engine-owned; return taskOperations instead of editing the store");
+      }
+      // `resolvesOutsideWorktree` collapses `..` LEXICALLY (`path.resolve`), so a `..`
+      // placed after a symlink (`sub/esc/../out`) erases the symlink from the probe and
+      // the escape reads as in-tree. The shell surface already refuses `..` outright via
+      // PARENT_TRAVERSAL; the edit surface needs the same coarse screen for the same
+      // reason — a false deny beats an unquarantined write.
+      if ((req.taskContext || scope?.mode === "strict") && hasParentSegment(target)) {
+        return deny(`${path} contains a ".." segment, which cannot be resolved safely`);
+      }
       // A task-aware agent's edit capability is confined to the worktree even
       // under a WARN scope. Otherwise a lexically in-scope path can traverse a
       // committed symlink into the integration checkout's .weft/tasks store and
