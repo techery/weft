@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import { shallowDiff } from "../src/commands/diff.ts";
-import { runnerFor } from "../src/commands/test.ts";
+import { bunRunnerFor, nodeRunnerFor, runnerFor, selectRunner } from "../src/commands/test.ts";
 import { parseDynamicFlags } from "../src/flags.ts";
 import { answerLine } from "../src/format.ts";
 import type { CliIo } from "../src/io.ts";
@@ -652,6 +652,49 @@ describe("weft test", () => {
       "pnpm",
       ["exec", "vitest", "run", "test/workflows"],
     ]);
+  });
+
+  it("falls back to Node's built-in test runner when Vitest is absent", async () => {
+    const root = await tempRoot();
+
+    expect(selectRunner(root, "auto")).toBe("node");
+    expect(nodeRunnerFor("test/workflows", { watch: false, coverage: false })).toEqual([
+      process.execPath,
+      ["--experimental-strip-types", "--test", "test/workflows"],
+    ]);
+    expect(nodeRunnerFor("test/workflows/review.test.ts", { watch: true, coverage: true })).toEqual([
+      process.execPath,
+      [
+        "--watch",
+        "--experimental-strip-types",
+        "--test",
+        "--experimental-test-coverage",
+        "test/workflows/review.test.ts",
+      ],
+    ]);
+  });
+
+  it("uses Bun's native runner for a Bun project without Vitest", async () => {
+    const root = await tempRoot();
+    await write(root, "bun.lock", "");
+
+    expect(selectRunner(root, "auto")).toBe("bun");
+    expect(bunRunnerFor("test/workflows", { watch: false, coverage: false })).toEqual([
+      "bun",
+      ["test", "test/workflows"],
+    ]);
+    expect(bunRunnerFor("test/workflows/review.test.ts", { watch: true, coverage: true })).toEqual([
+      "bun",
+      ["test", "--watch", "--coverage", "test/workflows/review.test.ts"],
+    ]);
+  });
+
+  it("allows explicitly selecting Vitest or Node", async () => {
+    const root = await tempRoot();
+
+    expect(selectRunner(root, "node")).toBe("node");
+    expect(selectRunner(root, "bun")).toBe("bun");
+    expect(selectRunner(root, "vitest")).toBe("vitest");
   });
 });
 

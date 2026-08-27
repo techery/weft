@@ -409,11 +409,22 @@ Put project workflow tests under `test/workflows/` and run them with:
 ```sh
 weft test
 weft test test/workflows/review.test.ts
+weft test --runner node
 weft test --watch
+weft test --coverage
 ```
 
-`weft test` delegates to the locally installed Vitest through the project's package manager; it never installs
-dependencies implicitly. Use `weft check` separately to validate workflow source and schemas.
+`weft test` uses locally installed Vitest when available, Bun's native runner for a Bun project, and otherwise
+Node's built-in `node:test` runner. It never installs dependencies implicitly. Use `--runner node`,
+`--runner bun`, or `--runner vitest` to select a runner explicitly. Use `weft check` separately to validate
+workflow source and schemas.
+
+Node-runner tests use Node's built-in APIs, so they do not import Vitest:
+
+```ts
+import assert from "node:assert/strict";
+import { test } from "node:test";
+```
 
 ```ts
 import { mock, runWorkflow } from "@techery/weft-testing";

@@ -453,7 +453,7 @@ only registry entry and sibling TypeScript files are helpers. An extra directory
 | \`weft explain <run> <key\\|seq>\` | one step: route, exact prompt, output, usage, attempts |
 | \`weft diff <a> <b>\` | two runs' step outputs, matched by key — field-level, not prose |
 | \`weft check [name]\` | fatal gate/bundle/UI checks plus \`tsc --noEmit\` when available. \`--no-tsc\` |
-| \`weft test [pattern]\` | run project workflow tests through the locally installed Vitest. Defaults to \`test/workflows\`; \`--watch\`, \`--coverage\` |
+| \`weft test [pattern]\` | run project workflow tests with Vitest, Bun, or Node's \`node:test\` (auto-detected). Defaults to \`test/workflows\`; \`--runner\`, \`--watch\`, \`--coverage\` |
 | \`weft new <name> [--template simple\\|review\\|task]\` | scaffold \`<name>.ts\`; only the default/review template also creates \`schemas.ts\`; never overwrites |
 | \`weft workflow list\` (alias \`ls\`) | list loadable definitions and rejected workflow files |
 | \`weft workflow inspect <name-or-id> [--json]\` | print the input/output/task/default contract by callable name or stable id; \`--json\` also exposes UI metadata in the complete machine-readable contract |
