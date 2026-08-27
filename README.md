@@ -49,6 +49,10 @@ Status: design preview. See [Status and honest deviations](#status-and-honest-de
   `ctx.pipeline(...).run({ concurrency, errors })` bound concurrent work while preserving lane order. Choose
   `ctx.successes()` for a recorded tolerant result or `ctx.all()` to fail after every lane settles; journal
   shell, callback, trusted-prior, and deliberately skipped checks through `ctx.check`.
+- **Reusable composition without hidden effects.** `definePrompt`, `defineAgent`, `defineRecipe`, `defineCheck`,
+  and `defineCheckSuite` separate prompt text, agent roles, orchestration recipes, and verification policy.
+  Immutable `ctx.phase()` and `ctx.scope()` handles carry execution policy safely across concurrent lanes while
+  nested effects and suite members remain independently inspectable.
 - **Workflow-scoped durable work.** Task records carry lifecycle, dependencies, acceptance criteria, notes,
   provenance, and typed workflow extensions. `defineTaskContract` makes the stored schema, executable revision,
   migration, and default agent authority explicit.

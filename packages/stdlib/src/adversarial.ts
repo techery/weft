@@ -100,7 +100,7 @@ export async function adversarialVerify<T>(
     }
   }
 
-  // Settled entries, not ctx.ok(): a branch that failed is a refute vote, not a drop.
+  // Settled entries, not ctx.successes(): a branch that failed is a refute vote, not a drop.
   const settled = await ctx.parallel(tasks);
 
   const survived: T[] = [];

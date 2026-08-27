@@ -1,7 +1,7 @@
 /**
  * Look at one subject through several lenses at once. Each mode is an independent
  * agent with its own key, so a lens that fails costs only that lens: the failure is
- * dropped through ctx.ok (which records it) and named in the run log.
+ * collected through ctx.successes (which records it) and named in the run log.
  */
 import type { AnySchema, Ctx, InferOut } from "@techery/weft-sdk";
 import { z } from "@techery/weft-sdk";
@@ -85,7 +85,7 @@ export async function multiModalSweep<S extends AnySchema>(
   );
 
   const dropped = modes.filter((_mode, i) => settled[i]?.ok !== true).map((mode) => mode.name);
-  const kept = ctx.ok(settled);
+  const kept = ctx.successes(settled);
   if (dropped.length > 0) {
     ctx.log(`multiModalSweep: dropped ${dropped.length}/${modes.length} mode(s): ${dropped.join(", ")}`);
   }

@@ -24,7 +24,7 @@ describe("a hung provider call", () => {
           ...Array.from({ length: 4 }, (_, i) => ctx.agent(`healthy ${i}`, { schema: Value, key: `ok${i}` })),
         ]);
         return {
-          ok: ctx.ok(settled).length,
+          ok: ctx.successes(settled).length,
           failed: settled.filter((s) => !s.ok).map((s) => (s.ok ? "" : s.error.code)),
         };
       },
@@ -69,7 +69,7 @@ describe("a hung provider call", () => {
           ...Array.from({ length: 3 }, (_, i) => ctx.agent(`healthy ${i}`, { schema: Value, key: `ok${i}` })),
         ]);
         return {
-          ok: ctx.ok(settled).length,
+          ok: ctx.successes(settled).length,
           failed: settled.filter((s) => !s.ok).map((s) => (s.ok ? "" : s.error.code)),
         };
       },

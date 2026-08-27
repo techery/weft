@@ -4,6 +4,8 @@ import type { Ctx, Effort, ProviderId } from "./types.ts";
 interface WorkflowTaskSchemaEvolution {
   /** Increment when persisted extension values need an explicit migration. Defaults to 1. */
   schemaVersion?: number;
+  /** Default task authority for agent steps. Omitted means read-only; writes require an explicit opt-in. */
+  agentAccess?: false | "read" | "write";
 }
 
 export type WorkflowTaskSchemaConfig =
@@ -33,7 +35,11 @@ export type WorkflowTaskSchemaConfig =
  * Workflow metadata. `name` derives from the filename in module mode; override with
  * `name:` for inline scripts or explicit registration.
  */
-export interface WorkflowMeta<InS extends AnySchema, OutS extends AnySchema> {
+export interface WorkflowMeta<
+  InS extends AnySchema,
+  OutS extends AnySchema,
+  Tasks extends WorkflowTaskSchemaConfig | undefined = WorkflowTaskSchemaConfig | undefined,
+> {
   /**
    * Stable identity for durable workflow-owned state. Unlike `name`, this must not
    * change when a workflow file is renamed. It defaults to the resolved registry
@@ -51,10 +57,26 @@ export interface WorkflowMeta<InS extends AnySchema, OutS extends AnySchema> {
    * lifecycle fields (status, dependencies, acceptance criteria, timestamps); this
    * schema lets a workflow add typed context without weakening those invariants.
    */
-  tasks?: WorkflowTaskSchemaConfig;
+  tasks?: Tasks;
 }
 
-export interface WorkflowDefinition<In = any, Out = any> {
+export type InferWorkflowTaskExtensionInput<Tasks> = Tasks extends {
+  extensions: infer S extends AnySchema;
+}
+  ? InferIn<S>
+  : unknown;
+
+export type InferWorkflowTaskExtensions<Tasks> = Tasks extends { extensions: infer S extends AnySchema }
+  ? InferOut<S>
+  : unknown;
+
+export interface WorkflowDefinition<
+  In = any,
+  Out = any,
+  TaskExtensions = unknown,
+  RawIn = In,
+  TaskExtensionInput = TaskExtensions,
+> {
   readonly kind: "weft.workflow";
   readonly meta: {
     id?: string;
@@ -65,20 +87,51 @@ export interface WorkflowDefinition<In = any, Out = any> {
     defaults?: { provider?: ProviderId; model?: string; effort?: Effort };
     tasks?: WorkflowTaskSchemaConfig;
   };
-  readonly run: (ctx: Ctx, input: In) => Promise<Out>;
+  readonly run: (ctx: Ctx<any>, input: In) => Promise<Out>;
+  /** Type-only carrier for the raw value accepted by the input schema. */
+  readonly __input?: RawIn;
+  /** Type-only carrier used to recover the workflow's declared task extension type. */
+  readonly __taskExtensions?: TaskExtensions;
+  /** Type-only carrier for raw task extension values accepted by mutations. */
+  readonly __taskExtensionInput?: TaskExtensionInput;
 }
 
-export type InferWorkflowInput<D> = D extends WorkflowDefinition<infer In, unknown> ? In : never;
-export type InferWorkflowOutput<D> = D extends WorkflowDefinition<unknown, infer Out> ? Out : never;
+export type InferWorkflowInput<D> = D extends { readonly __input?: infer In } ? In : never;
+export type InferWorkflowOutput<D> = D extends {
+  readonly run: (...args: any[]) => Promise<infer Out>;
+}
+  ? Out
+  : never;
 
 /**
  * Define a workflow: Zod (or any Standard Schema) input/output, and a plain async
  * run function. The engine validates input before the run and output after it.
  */
 export function defineWorkflow<InS extends AnySchema, OutS extends AnySchema>(
+  meta: WorkflowMeta<InS, OutS, undefined>,
+  run: (ctx: Ctx<unknown>, input: InferOut<InS>) => Promise<InferIn<OutS>>,
+): WorkflowDefinition<InferOut<InS>, InferOut<OutS>, unknown, InferIn<InS>, unknown>;
+export function defineWorkflow<
+  InS extends AnySchema,
+  OutS extends AnySchema,
+  Tasks extends WorkflowTaskSchemaConfig,
+>(
+  meta: WorkflowMeta<InS, OutS, Tasks> & { tasks: Tasks },
+  run: (
+    ctx: Ctx<InferWorkflowTaskExtensionInput<Tasks>, InferWorkflowTaskExtensions<Tasks>>,
+    input: InferOut<InS>,
+  ) => Promise<InferIn<OutS>>,
+): WorkflowDefinition<
+  InferOut<InS>,
+  InferOut<OutS>,
+  InferWorkflowTaskExtensions<Tasks>,
+  InferIn<InS>,
+  InferWorkflowTaskExtensionInput<Tasks>
+>;
+export function defineWorkflow<InS extends AnySchema, OutS extends AnySchema>(
   meta: WorkflowMeta<InS, OutS>,
-  run: (ctx: Ctx, input: InferOut<InS>) => Promise<InferIn<OutS>>,
-): WorkflowDefinition<InferOut<InS>, InferOut<OutS>> {
+  run: (ctx: Ctx<any>, input: InferOut<InS>) => Promise<InferIn<OutS>>,
+): WorkflowDefinition<InferOut<InS>, InferOut<OutS>, any> {
   if (!meta || typeof meta.description !== "string") {
     throw new TypeError("defineWorkflow: meta.description is required");
   }
@@ -87,6 +140,9 @@ export function defineWorkflow<InS extends AnySchema, OutS extends AnySchema>(
   }
   if (meta.id !== undefined) assertWorkflowId(meta.id, "meta.id");
   if (meta.name !== undefined) assertWorkflowId(meta.name, "meta.name");
+  if (meta.tasks !== undefined && meta.id === undefined) {
+    throw new TypeError("defineWorkflow: meta.id is required when tasks are configured");
+  }
   if (
     meta.tasks?.schemaVersion !== undefined &&
     (!Number.isInteger(meta.tasks.schemaVersion) || meta.tasks.schemaVersion < 1)
@@ -108,7 +164,28 @@ export function defineWorkflow<InS extends AnySchema, OutS extends AnySchema>(
   return Object.freeze({
     kind: "weft.workflow" as const,
     meta: Object.freeze({ ...meta }),
-    run: run as (ctx: Ctx, input: InferOut<InS>) => Promise<InferOut<OutS>>,
+    run: run as (ctx: Ctx<any>, input: InferOut<InS>) => Promise<InferOut<OutS>>,
+  });
+}
+
+/** Declare a task contract with explicit stored-data and executable-contract version names. */
+export function defineTaskContract<S extends AnySchema>(config: {
+  schema: S;
+  revision: string;
+  version?: number;
+  agentAccess?: false | "read" | "write";
+  migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
+}): WorkflowTaskSchemaEvolution & {
+  extensions: S;
+  semanticRevision: string;
+  migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
+} {
+  return Object.freeze({
+    extensions: config.schema,
+    semanticRevision: config.revision,
+    ...(config.version !== undefined ? { schemaVersion: config.version } : {}),
+    ...(config.agentAccess !== undefined ? { agentAccess: config.agentAccess } : {}),
+    ...(config.migrate !== undefined ? { migrate: config.migrate } : {}),
   });
 }
 

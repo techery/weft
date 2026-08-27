@@ -13,6 +13,7 @@ import { readdir, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { promisify } from "node:util";
+import { toWireSchema } from "@techery/weft-core";
 import { type GateDiagnostic, GateError, loadWorkflow } from "@techery/weft-host";
 import { Command } from "commander";
 import pc from "picocolors";
@@ -44,14 +45,17 @@ export function checkCommand(io: CliIo): Command {
         const findings: GateDiagnostic[] = [];
         for (const file of files) {
           const relative = path.relative(weft.cwd, file);
-          const diagnostics = await gate(file, allowBareOf(weft));
-          if (diagnostics === "helper") {
+          const outcome = await gate(file, allowBareOf(weft));
+          if (outcome === "helper") {
             io.out(`${pc.dim("-")} ${pc.dim(`${relative} (module, not a workflow)`)}`);
-          } else if (diagnostics.length === 0) {
+          } else if (outcome.diagnostics.length === 0) {
             io.out(`${pc.green("✓")} ${relative}`);
+            for (const warning of outcome.warnings) {
+              io.out(`  ${pc.yellow("schema")} ${warning}`);
+            }
           } else {
             io.out(`${pc.red("✗")} ${relative}`);
-            findings.push(...diagnostics);
+            findings.push(...outcome.diagnostics);
           }
         }
 
@@ -61,7 +65,11 @@ export function checkCommand(io: CliIo): Command {
           process.exitCode = 1;
           return;
         }
-        if (opts.tsc !== false) say(io, ...(await typecheck(files, weft.cwd)));
+        if (opts.tsc !== false) {
+          const result = await typecheck(files, weft.cwd);
+          say(io, ...result.lines);
+          if (result.failed) process.exitCode = 1;
+        }
       } finally {
         await weft.close();
       }
@@ -69,17 +77,33 @@ export function checkCommand(io: CliIo): Command {
 }
 
 /** Gate one file. `"helper"` = it bundles cleanly but exports no workflow (a `./lib` module). */
-async function gate(file: string, allowBare: { allowBare?: string[] }): Promise<GateDiagnostic[] | "helper"> {
+async function gate(
+  file: string,
+  allowBare: { allowBare?: string[] },
+): Promise<{ diagnostics: GateDiagnostic[]; warnings: string[] } | "helper"> {
   try {
-    await loadWorkflow({ entry: file, ...allowBare });
-    return [];
+    const { def } = await loadWorkflow({ entry: file, ...allowBare });
+    const schemas = [
+      ["input", def.meta.input],
+      ["output", def.meta.output],
+      ...(def.meta.tasks?.extensions ? ([["tasks.extensions", def.meta.tasks.extensions]] as const) : []),
+    ] as const;
+    return {
+      diagnostics: [],
+      warnings: schemas.flatMap(([label, schema]) =>
+        toWireSchema(schema).lints.map((warning) => `${label}: ${warning}`),
+      ),
+    };
   } catch (err) {
     if (!(err instanceof GateError)) throw err;
     if (err.diagnostics.length === 0) {
-      return [{ rule: "gate", message: err.message, file, line: 0, column: 0 }];
+      return {
+        diagnostics: [{ rule: "gate", message: err.message, file, line: 0, column: 0 }],
+        warnings: [],
+      };
     }
     if (err.diagnostics.every((d) => d.rule === "no-workflow-export")) return "helper";
-    return err.diagnostics;
+    return { diagnostics: err.diagnostics, warnings: [] };
   }
 }
 
@@ -149,18 +173,26 @@ async function isFile(file: string): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
-// tsc — best effort, never fatal
+// tsc — best effort when unavailable, authoritative when it runs
 // ---------------------------------------------------------------------------
 
 /**
  * A missing `schema:` is a type error, not a rule violation, so the type-checker is part of
  * `weft check`. It is advisory here: workflow files are standalone, this synthesises flags
- * for them rather than adopting the repo's tsconfig, and anything it reports is printed as
- * a note without failing the command.
+ * for them rather than adopting the repo's tsconfig. An unavailable compiler or SDK is a
+ * visible skip; actual diagnostics fail the command, just like gate diagnostics do.
  */
-async function typecheck(files: readonly string[], cwd: string): Promise<string[]> {
+async function typecheck(
+  files: readonly string[],
+  cwd: string,
+): Promise<{ lines: string[]; failed: boolean }> {
   const tsc = resolveTsc();
-  if (!tsc) return [pc.dim("tsc: typescript is not installed here — skipping the type-check pass")];
+  if (!tsc) {
+    return {
+      lines: [pc.dim("tsc: typescript is not installed here — skipping the type-check pass")],
+      failed: false,
+    };
+  }
   const args = [
     tsc,
     "--noEmit",
@@ -179,16 +211,28 @@ async function typecheck(files: readonly string[], cwd: string): Promise<string[
   ];
   try {
     await run(process.execPath, args, { cwd });
-    return [pc.dim("tsc: no type errors")];
+    return { lines: [pc.dim("tsc: no type errors")], failed: false };
   } catch (err) {
     const output = `${(err as { stdout?: string }).stdout ?? ""}${(err as { stderr?: string }).stderr ?? ""}`;
     const lines = output.split("\n").filter((line) => line.trim() !== "");
     // Without `@techery/weft-sdk` on disk every `ctx` parameter is implicitly `any`, so the whole
     // report is one missing install echoed a hundred times. Say that instead.
-    if (lines.some((line) => line.includes("TS2307") && line.includes("@techery/weft-sdk"))) {
-      return [pc.dim("tsc: @techery/weft-sdk is not installed here — skipping the type-check pass")];
+    const sdkMissing = lines.some((line) => line.includes("TS2307") && line.includes("@techery/weft-sdk"));
+    const actionable = lines.filter(
+      (line) =>
+        !(line.includes("TS2307") && line.includes("@techery/weft-sdk")) &&
+        !(sdkMissing && line.includes("TS7006") && line.includes("implicitly has an 'any' type")),
+    );
+    if (sdkMissing && actionable.length === 0) {
+      return {
+        lines: [pc.dim("tsc: @techery/weft-sdk is not installed here — skipping the type-check pass")],
+        failed: false,
+      };
     }
-    return [pc.yellow("tsc (advisory):"), ...lines.map((line) => pc.dim(`  ${line}`))];
+    return {
+      lines: [pc.red("tsc:"), ...lines.map((line) => pc.dim(`  ${line}`))],
+      failed: true,
+    };
   }
 }
 

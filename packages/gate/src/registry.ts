@@ -18,7 +18,7 @@ import path from "node:path";
 import type { CompiledUiCatalog, WorkflowDefinition } from "@techery/weft-sdk";
 import { bundleWorkflow } from "./bundle.ts";
 import { instantiateBundle } from "./load.ts";
-import { GateError, type GateDiagnostic } from "./rules.ts";
+import { type GateDiagnostic, GateError } from "./rules.ts";
 
 /** Structurally the `WorkflowRegistry` @techery/weft-core's Engine takes (gate does not import core). */
 export interface WorkflowRegistry {
@@ -58,6 +58,8 @@ export interface WorkflowInspection {
 
 export interface RegistryLoadResult {
   def: WorkflowDefinition;
+  /** Callable registry name after filename/default resolution. */
+  name: string;
   /** Content hash of the bundle — the version a run pins. */
   hash: string;
   buildHash: string;
@@ -71,6 +73,8 @@ export interface FileWorkflowRegistry extends WorkflowRegistry {
   /** Every loadable workflow plus files rejected by the gate, sorted by path. */
   listWithIssues(): Promise<WorkflowInspection>;
   load(name: string): Promise<RegistryLoadResult>;
+  /** Load by callable name or durable ID, rejecting cross-namespace ambiguity. */
+  loadIdentity(identity: string): Promise<RegistryLoadResult>;
   /** Resolve durable run identity; an explicit ID never falls back to a callable name. */
   resolve(identity: {
     id?: string;
@@ -101,7 +105,8 @@ interface CacheEntry {
 
 /** Open a registry over `dir`. Nothing is read until the first call. */
 export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegistry {
-  const dirs = [...new Set([opts.dir, ...(opts.extraDirs ?? [])].map((dir) => path.resolve(dir)))];
+  const primaryDir = path.resolve(opts.dir);
+  const dirs = [...new Set([primaryDir, ...(opts.extraDirs ?? []).map((dir) => path.resolve(dir))])];
   const allowBare = opts.allowBare;
   const cache = new Map<string, CacheEntry>();
 
@@ -147,10 +152,13 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
         cause: err,
       });
     }
-    return names
-      .filter((n) => n.endsWith(".ts") && !n.endsWith(".d.ts"))
-      .sort()
-      .map((n) => path.join(dir, n));
+    const candidates = names.filter((n) => n.endsWith(".ts") && !n.endsWith(".d.ts")).sort();
+    // An extra directory with `workflow.ts` is a workflow package: sibling TypeScript
+    // files are its entry point and helpers, not additional registry definitions. The
+    // primary `.weft/workflows` directory keeps the many-files registry convention, and
+    // an extra directory without `workflow.ts` does too.
+    const selected = dir !== primaryDir && candidates.includes("workflow.ts") ? ["workflow.ts"] : candidates;
+    return selected.map((n) => path.join(dir, n));
   };
 
   const candidates = async (): Promise<string[]> => {
@@ -164,7 +172,8 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
     // file that simply is not a workflow (a `schemas.ts` next door) just does not match.
     const entries: CacheEntry[] = [];
     const matches: CacheEntry[] = [];
-    const directFiles = dirs.map((dir) => path.join(dir, `${name}.ts`));
+    const candidateFiles = await candidates();
+    const directFiles = candidateFiles.filter((file) => path.basename(file) === `${name}.ts`);
     for (const direct of directFiles) {
       if (await isFile(direct)) {
         const entry = await loadFile(direct).catch((err: unknown) => {
@@ -177,7 +186,7 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
         }
       }
     }
-    for (const file of await candidates()) {
+    for (const file of candidateFiles) {
       if (directFiles.includes(file)) continue;
       const entry = await tolerantLoad(loadFile, file);
       if (entry) {
@@ -205,6 +214,15 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
     assertUnique(matches, "id", id);
     return matches[0];
   };
+
+  const resultOf = (entry: CacheEntry): RegistryLoadResult => ({
+    def: entry.def,
+    name: entry.name,
+    hash: entry.hash,
+    buildHash: entry.buildHash,
+    uiCatalog: entry.uiCatalog,
+    file: entry.file,
+  });
 
   return {
     async list(): Promise<WorkflowListEntry[]> {
@@ -256,13 +274,19 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
     async load(name: string): Promise<RegistryLoadResult> {
       const entry = await find(name);
       if (!entry) throw new GateError(`workflow "${name}" not found in ${dirs.join(", ")}`);
-      return {
-        def: entry.def,
-        hash: entry.hash,
-        buildHash: entry.buildHash,
-        uiCatalog: entry.uiCatalog,
-        file: entry.file,
-      };
+      return resultOf(entry);
+    },
+
+    async loadIdentity(identity: string): Promise<RegistryLoadResult> {
+      const [named, identified] = await Promise.all([find(identity), findById(identity)]);
+      if (named && identified && named.file !== identified.file) {
+        throw new GateError(
+          `workflow identity ${JSON.stringify(identity)} is ambiguous: it is the name of ${named.file} and the id of ${identified.file}`,
+        );
+      }
+      const entry = named ?? identified;
+      if (!entry) throw new GateError(`workflow "${identity}" not found in ${dirs.join(", ")}`);
+      return resultOf(entry);
     },
 
     async get(name: string): Promise<WorkflowDefinition | undefined> {

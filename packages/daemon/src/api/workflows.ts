@@ -23,6 +23,7 @@
  * seconds of CPU per poll.
  */
 import { relative } from "node:path";
+import { toWireSchema } from "@techery/weft-core";
 import type { IndexedRun, RunIndex, Weft, WorkflowDefinition } from "@techery/weft-host";
 import type { Hono } from "hono";
 import * as z from "zod";
@@ -156,15 +157,23 @@ export function registerWorkflowRoutes(app: Hono, weft: Weft): void {
         throw err;
       });
       const meta = loaded.def.meta;
+      const input = jsonSchemaOf(loaded.def, "input");
+      const output = jsonSchemaOf(loaded.def, "output");
+      const taskExtensions = taskSchemaOf(loaded.def);
       return c.json({
         id: meta.id ?? meta.name ?? name,
         name: meta.name ?? name,
         file: relative(weft.cwd, loaded.file),
         hash: loaded.hash,
         description: meta.description,
-        input: jsonSchemaOf(loaded.def, "input"),
-        output: jsonSchemaOf(loaded.def, "output"),
-        taskExtensions: taskSchemaOf(loaded.def),
+        input: input.schema,
+        output: output.schema,
+        taskExtensions: taskExtensions.schema,
+        schemaWarnings: [
+          ...input.warnings.map((warning) => `input: ${warning}`),
+          ...output.warnings.map((warning) => `output: ${warning}`),
+          ...taskExtensions.warnings.map((warning) => `taskExtensions: ${warning}`),
+        ],
         taskExtensionSchemaVersion: loaded.def.meta.tasks?.schemaVersion ?? 1,
         tasksConfigured: loaded.def.meta.tasks !== undefined,
         defaults: meta.defaults ?? null,
@@ -243,7 +252,7 @@ export function registerWorkflowRoutes(app: Hono, weft: Weft): void {
       await weft.tasks.registerWorkflow(
         { id: workflowId, name: loaded.def.meta.name ?? name },
         loaded.def.meta.tasks?.extensions,
-        taskSchemaOf(loaded.def),
+        taskSchemaOf(loaded.def).schema,
         loaded.def.meta.tasks,
       );
       const tasks = (await weft.tasks.list(workflowId)).map(
@@ -282,34 +291,45 @@ function isRegistryMiss(err: unknown): boolean {
 }
 
 /**
- * A workflow declares any Standard Schema; only a Zod one converts. Anything else — and
- * any conversion Zod itself refuses — reports `null`, because a client that cannot build a
- * form still wants the name and the description.
+ * A workflow declares any Standard Schema. Zod converts precisely; other vendors and
+ * unrepresentable schemas expose the same permissive provider schema the runtime uses,
+ * plus warnings, rather than an unexplained `null`.
  *
  * Each side is converted in its own direction. The input side is what a caller must send;
  * the output side is what a run actually produced, and asking for the input side of an
  * output schema describes a shape no client will ever see — defaults reported as required
  * fields that are optional, transformed values typed as their pre-transform input.
  */
-function jsonSchemaOf(def: WorkflowDefinition, which: "input" | "output"): unknown {
+function jsonSchemaOf(
+  def: WorkflowDefinition,
+  which: "input" | "output",
+): { schema: unknown; warnings: string[] } {
   try {
-    return z.toJSONSchema(def.meta[which] as z.ZodType, {
-      io: which === "input" ? "input" : "output",
-      unrepresentable: "any",
-    });
+    return {
+      schema: z.toJSONSchema(def.meta[which] as z.ZodType, {
+        io: which === "input" ? "input" : "output",
+        unrepresentable: "any",
+      }),
+      warnings: [],
+    };
   } catch {
-    return null;
+    const wire = toWireSchema(def.meta[which]);
+    return { schema: wire.json, warnings: wire.lints };
   }
 }
 
 /** Workflow-specific task extensions use their input shape at the CLI boundary. */
-function taskSchemaOf(def: WorkflowDefinition): unknown {
+function taskSchemaOf(def: WorkflowDefinition): { schema: unknown | null; warnings: string[] } {
   const schema = def.meta.tasks?.extensions;
-  if (schema === undefined) return null;
+  if (schema === undefined) return { schema: null, warnings: [] };
   try {
-    return z.toJSONSchema(schema as z.ZodType, { io: "input", unrepresentable: "any" });
+    return {
+      schema: z.toJSONSchema(schema as z.ZodType, { io: "input", unrepresentable: "any" }),
+      warnings: [],
+    };
   } catch {
-    return null;
+    const wire = toWireSchema(schema);
+    return { schema: wire.json, warnings: wire.lints };
   }
 }
 

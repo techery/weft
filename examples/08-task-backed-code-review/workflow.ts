@@ -246,7 +246,7 @@ export default defineWorkflow(
     const kept = ranked.filter((finding) => requested.has(finding.fingerprint));
     const existingTasks: WorkflowTaskSummary<ReviewTaskExtensions>[] = [];
     for (const [batchIndex, batch] of chunks(kept, 100).entries()) {
-      const observed = await ctx.tasks.observe<ReviewTaskExtensions>(
+      const observed = await ctx.tasks.observe(
         { dedupeKeys: batch.map((finding) => finding.fingerprint), limit: 100 },
         { key: `record:existing:${batchIndex}` },
       );

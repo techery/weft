@@ -25,7 +25,7 @@ const review = defineWorkflow(
     const paths = files.filter((f) => f.status !== "D").map((f) => f.path);
 
     ctx.phase("Find");
-    const found = ctx.ok(
+    const found = ctx.successes(
       await ctx.parallel(
         paths.map((f) =>
           ctx.agent(`Review ${f} for correctness bugs.`, {
@@ -38,7 +38,7 @@ const review = defineWorkflow(
     const findings = found.flatMap((r) => r.findings);
 
     ctx.phase("Verify");
-    const confirmed = ctx.ok(
+    const confirmed = ctx.successes(
       await ctx
         .pipeline(findings)
         .step((f) =>

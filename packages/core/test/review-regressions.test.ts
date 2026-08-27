@@ -178,7 +178,7 @@ describe("review regressions: replay & durability", () => {
         output: z.object({ merged: z.array(z.string()) }),
       },
       async (ctx) => {
-        const fixes = ctx.ok(
+        const fixes = ctx.successes(
           await ctx.parallel([
             ctx.agent.detailed("a", { schema: FixResult, key: "fix:1", write: { paths: ["a.txt"] } }),
             ctx.agent.detailed("b", { schema: FixResult, key: "fix:2", write: { paths: ["b.txt"] } }),
@@ -336,7 +336,7 @@ describe("review regressions: semantics", () => {
         const settled = await ctx.parallel(
           Array.from({ length: 6 }, (_, i) => ctx.bash(`sleep 0.15 && echo ${i}`, { key: `b${i}` })),
         );
-        return { n: ctx.ok(settled).length };
+        return { n: ctx.successes(settled).length };
       },
     );
     const started = Date.now();
@@ -867,7 +867,13 @@ describe("codex review findings, round 4 (PR #1)", () => {
     expect(await h.result).toEqual({});
     const state = await t.engine.state(h.runId);
     expect(state.checks).toEqual([
-      { name: "stuck", status: "fail", required: false, evidence: "check timed out after 150ms" },
+      {
+        name: "stuck",
+        status: "fail",
+        disposition: "executed",
+        required: false,
+        evidence: "check timed out after 150ms",
+      },
     ]);
     // The fn was told to stop: abort-aware callbacks do not keep working past the timeout.
     expect(sawAbort).toBe(true);

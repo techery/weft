@@ -195,10 +195,6 @@ export class MockProvider implements AgentProvider {
       typeof rule.respond === "function"
         ? await (rule.respond as (r: MockRequest) => unknown)(mockReq)
         : rule.respond;
-    const schemaProperties =
-      typeof req.schema === "object" && req.schema !== null
-        ? (req.schema as { properties?: Record<string, unknown> }).properties
-        : undefined;
     const explicitEnvelope =
       typeof fixtureOutput === "object" &&
       fixtureOutput !== null &&
@@ -208,7 +204,7 @@ export class MockProvider implements AgentProvider {
     // Existing fixtures describe the workflow result, so wrap them automatically;
     // a fixture that explicitly returns an envelope can exercise task operations.
     const output =
-      schemaProperties?.taskOperations !== undefined
+      req.taskContext !== undefined
         ? explicitEnvelope
           ? {
               result: (fixtureOutput as MockTaskEnvelope).result,

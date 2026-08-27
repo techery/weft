@@ -179,7 +179,7 @@ describe("write steps, patches, integration", () => {
     const def = defineWorkflow(
       { description: "conflict", input: z.object({}), output: z.object({}) },
       async (ctx) => {
-        const fixes = ctx.ok(
+        const fixes = ctx.successes(
           await ctx.parallel([
             ctx.agent.detailed("one", { schema: FixResult, key: "fix:1", write: { paths: ["shared.txt"] } }),
             ctx.agent.detailed("two", { schema: FixResult, key: "fix:2", write: { paths: ["shared.txt"] } }),
@@ -601,7 +601,7 @@ describe("ctx.git steps", () => {
         const { files } = await ctx.git.changedSince(base);
         const paths = files.filter((f) => f.status !== "D").map((f) => f.path);
         expect(paths.sort()).toEqual(["src/a.ts", "src/new.ts"]);
-        const found = ctx.ok(
+        const found = ctx.successes(
           await ctx.parallel(
             paths.map((f) =>
               ctx.agent(`Review ${f}`, {

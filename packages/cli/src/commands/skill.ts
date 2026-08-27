@@ -1,6 +1,6 @@
 /**
  * `weft skill` — the document an agent should read before it writes or runs a workflow.
- * It is a Claude Code / Codex skill: YAML frontmatter plus the whole authoring surface,
+ * It is a portable Agent Skill: YAML frontmatter plus the whole authoring surface,
  * so the useful thing to do with it is redirect it somewhere an agent will find it
  * (`weft skill > .claude/skills/weft/SKILL.md`).
  *
@@ -24,6 +24,7 @@ export function skillCommand(io: CliIo): Command {
       [
         "",
         "The output is a SKILL.md — frontmatter included — so put it where an agent reads:",
+        "  weft skill > .agents/skills/weft/SKILL.md  # Codex (repository skill)",
         "  weft skill > .claude/skills/weft/SKILL.md",
         "  weft skill | pbcopy",
       ].join("\n"),
@@ -41,18 +42,17 @@ export function skillCommand(io: CliIo): Command {
 const SKILL_MD = `---
 name: weft
 description: >-
-  Author, run, resume, and debug Weft workflows — durable, journaled, schema-validated
-  multi-agent coding workflows written as ordinary TypeScript. Use when the repo has a
-  \`.weft/\` directory, when editing anything under \`.weft/workflows/\`, when the \`weft\`
-  CLI or \`@techery/weft-sdk\` / \`-core\` / \`-stdlib\` / \`-testing\` appears, or when asked to
-  orchestrate several agents over a codebase durably rather than in one session.
+  Author, check, run, resume, replay, test, and diagnose durable Weft workflows written
+  in TypeScript. Use for repositories with Weft workflow source, the \`weft\` CLI, or
+  \`@techery/weft-*\` packages; do not use for generic one-session agent delegation.
 ---
 
 # Weft
 
 A workflow is an ordinary TypeScript program. \`await\` is a sequential edge, \`ctx.parallel\`
-fans out and joins, \`ctx.pipeline\` runs independent lanes, \`if\` on a typed field is a
-conditional edge, \`while\` is a bounded loop. There is no graph DSL to keep in sync.
+fans out and joins, \`ctx.pipeline\` runs independent lanes, and \`if\` on a typed field is a
+conditional edge. Use ordinary TypeScript loops, but give them an explicit bound or a
+journaled stopping condition. There is no graph DSL to keep in sync.
 
 Everything that leaves the sandbox is a **step**: the engine executes it, appends the
 outcome to an append-only journal, and hands your code a schema-validated value. Resume
@@ -63,6 +63,23 @@ stopped.
 Two things break workflows more often than everything else combined. Read
 [Determinism](#determinism) and [Keys and replay](#keys-and-replay) before writing code.
 
+## Establish what is actually available
+
+Treat source, registration, and tests as implementation evidence; treat README and design
+documents as explanations that can lag. This checkout currently labels Weft a design preview
+and says its packages are not published to npm. Use \`node packages/cli/bin/weft.js …\` in a
+Weft checkout, or a locally linked \`weft …\`. Use \`npx @techery/weft\` or
+\`@techery/weft-mcp\` only after independently confirming that the required package/version
+is published and installed.
+
+Keep claims proportional to evidence:
+
+- \`weft check\`, a typecheck, and unit tests prove only those static or fixture-backed checks.
+- A completed local run and its journal/report prove that run, not package publication or a
+  deployed host.
+- Claim provider, daemon, browser, or custom-view behavior only after exercising that path.
+- Keep roadmap/design claims labelled as such; never present them as current runtime behavior.
+
 ## Layout
 
 \`\`\`text
@@ -71,21 +88,34 @@ Two things break workflows more often than everything else combined. Read
   workflows/<name>.ts      # the registry — one workflow per file, name = filename
   workflows/schemas.ts     # shared schemas; relative imports are bundled and hashed with the script
   tasks/<workflow>/<id>.json # durable context shared by a workflow's steps and runs
+  blobs/<aa>/<hash>         # content-addressed patches, transcripts, and large outputs
   runs/<id>/
     journal.jsonl          # the truth — every step, request, answer, patch (secrets redacted)
-    script.ts              # what ran, bundled, with a source map back to your .ts lines
-    blobs/<hash>           # patches, transcripts, large step outputs
+    script.ts              # persisted provenance for inline workflows, when applicable
+    workflow.json          # persisted path provenance, when applicable
     state.json             # projection: status, steps, scopes, checks
     tree.json              # projection: the live tree the UIs render
     report.md              # projection: outcome, changes, checks, ledger, remaining risk
 \`\`\`
 
-Only \`journal.jsonl\` has to survive. Every other file in a run directory is rebuilt from
-it, so never hand-edit one and never treat one as input.
+\`state.json\`, \`tree.json\`, and \`report.md\` are rebuildable journal projections; do not
+hand-edit them. Preserve the journal, shared blobs, and persisted workflow/UI provenance
+needed to resume inline or path-based runs.
 
 ## Author a workflow
 
-\`weft new <name>\` scaffolds a file that already passes \`weft check\`. The shape:
+\`weft new <name>\` uses the default \`review\` template and scaffolds a workflow plus
+shared \`schemas.ts\`; it already passes \`weft check\`. Choose the smallest supported
+starting point explicitly when review fan-out is not the job:
+
+- \`weft new <name> --template simple\` creates one typed agent step and no shared schema file.
+- \`weft new <name> --template review\` creates the default find/refute workflow and creates
+  \`schemas.ts\` when it is absent.
+- \`weft new <name> --template task\` creates a task-aware workflow using
+  \`defineTaskContract\` and no shared schema file.
+
+No template overwrites an existing workflow or \`schemas.ts\`. Here is an independently
+authored review workflow that also demonstrates defaults and typed task extensions:
 
 \`\`\`ts
 import { defineWorkflow, z } from "@techery/weft-sdk";
@@ -110,26 +140,47 @@ export default defineWorkflow(
     const paths = files.filter((f) => f.status !== "D").map((f) => f.path);
 
     ctx.phase("Find");
-    const found = ctx.ok(                                    // Settled<T>[] -> T[], drops recorded
+    const found = ctx.all(                                   // every lane must succeed
       await ctx.parallel(
-        paths.map((file) => () =>                            // a THUNK, so \`concurrency\` applies
+        paths,
+        (file) =>
           ctx.agent(\`Review \${file} for correctness bugs. Cite file:line.\`, {
             schema: z.object({ findings: z.array(Finding) }), // required on every agent step
             key: \`find:\${file}\`,                             // stable identity for replay
           }),
-        ),
-        { concurrency: 4 },
+        { concurrency: 4, errors: "throw" },
       ),
     );
 
-    return { confirmed: found.flatMap((r) => r.findings) };
+    const findings = found.flatMap((r) => r.findings);
+
+    ctx.phase("Verify");
+    const confirmed = ctx.all(
+      await ctx.pipeline(findings)
+        .step((finding) =>
+          ctx.agent(
+            \`Try to refute this finding: \${finding.claim} (\${finding.file}:\${finding.line})\`,
+            {
+              schema: z.object({ survives: z.boolean(), why: z.string() }),
+              key: \`refute:\${finding.file}:\${finding.line}:\${finding.claim}\`,
+            },
+          ),
+        )
+        .filter((verdict) => verdict.survives)
+        .map((_verdict, finding) => finding)
+        .run({ concurrency: 4, errors: "throw" }),
+    );
+
+    ctx.phase("Report");
+    return { confirmed };
   },
 );
 \`\`\`
 
-\`schema\` is required on \`ctx.agent\`, on every \`ctx.human.*\`, and on the workflow's own
-\`input\`/\`output\`. Invalid model output is repaired in the same session with the validation
-errors fed back, not thrown away. Zod is the default; any Standard Schema V1 library works.
+\`schema\` is required on \`ctx.agent\`, \`ctx.human.ask/review\`, and the workflow's own
+\`input\`/\`output\`; \`ctx.gate\` and \`ctx.human.approve\` have fixed result shapes. Invalid
+model output is repaired in the same session with the validation errors fed back, not
+thrown away. Zod is the default; any Standard Schema V1 library works.
 
 ## Determinism
 
@@ -154,15 +205,23 @@ There is no scope analysis: a local variable named \`fetch\` is still a finding.
 the false positive is cheaper than the miss. Extra bare imports go in \`.weft/config.json\`
 under \`workflows.allowBare\`; \`@techery/weft-sdk\` is always allowed and cannot be removed.
 
-Run \`weft check\` after every edit. It bundles and instantiates every \`.ts\` file in the
-workflow directory exactly the way a run would, so a banned global hiding in \`./schemas.ts\`
-fails there instead of three agent steps in, then runs \`tsc --noEmit\` (which is what
-catches a missing \`schema:\`).
+Run \`weft check\` after every edit. Its gate bundles and instantiates workflow candidates
+the way a run would, so gate, bundle, custom-UI compile, and banned-global errors fail before
+provider work. It then attempts a standalone \`tsc --noEmit\` pass: an unavailable compiler
+or SDK is a visible non-failing skip, but actionable TypeScript diagnostics fail the command.
+Also run the repository's real typecheck and tests because the standalone pass synthesizes
+flags instead of adopting the repository's full TypeScript and test configuration.
 
 ## Keys and replay
 
 A step's identity is its **kind + payload + schema + \`key\`**. That is the whole cache key.
 
+- The runtime enforces one shared explicit-key namespace for \`ctx.agent\`, \`ctx.workflow\`,
+  \`ctx.exec\`/\`ctx.bash\`, and \`ctx.fetch\`. Reusing a key across those calls or kinds in
+  one run fails with \`invalid_input\` before the second step dispatches.
+- \`ctx.human.ask\`/\`approve\`/\`review\` keys are replay identities too, but human requests
+  are not included in that duplicate-key guard. Keep them distinct from every other keyed
+  call; do not rely on cross-kind rejection to catch a collision.
 - Without a \`key\`, identity is content alone. The auto label (\`Find/agent#2\`) is cosmetic
   and identity ignores it — so two call sites that can produce the same prompt, schema and
   routing are indistinguishable on replay, and the engine **re-runs both** rather than
@@ -190,19 +249,24 @@ Durations are \`"250ms"\`, \`"90s"\`, \`"10m"\`, \`"2h"\`, \`"7d"\`, or a number
 | --- | --- |
 | \`ctx.agent(prompt, { schema, key, label, provider, model, effort, isolation, write, maxTurns, timeout, retry, repair, onMaxTurns, onError })\` | the validated value |
 | \`ctx.agent.detailed(prompt, opts)\` | \`{ value, usage, files, patch, attempts, sessionId }\` |
-| \`ctx.parallel(tasks, { concurrency })\` | \`Settled<T>[]\`, in input order |
-| \`ctx.pipeline(items).step(fn).filter(fn).map(fn).run({ concurrency })\` | \`Settled<T>[]\` |
-| \`ctx.ok(settled)\` | \`T[]\` — narrows, and records what it dropped |
+| \`ctx.parallel(tasks, { concurrency, errors })\` | \`Settled<T>[]\`, in input order |
+| \`ctx.parallel(items, mapper, { concurrency, errors })\` | bounded mapper fan-out as \`Settled<T>[]\` |
+| \`ctx.pipeline(items).step(fn).filter(fn).map(fn).run({ concurrency, errors })\` | \`Settled<T>[]\` |
+| \`ctx.successes(settled)\` | \`T[]\` — tolerant; records dropped failures |
+| \`ctx.all(settled)\` | \`T[]\` or throws the first failure after all lanes settle |
 | \`ctx.workflow(def \\| name, input, { budget, key, label })\` | the child's output |
 
-\`effort\` is \`low \\| medium \\| high \\| xhigh \\| max\`; \`provider\` is \`"claude"\` or \`"codex"\`
-(one option on one step is all a cross-vendor panel takes). \`onError: "null"\` resolves to
-\`T | null\` instead of throwing \`StepError\`.
+\`effort\` is \`low \\| medium \\| high \\| xhigh \\| max\`. The standard host wires
+\`"claude"\` and \`"codex"\` (and a fail-loud \`"mock"\` fixture route); the SDK's
+\`ProviderId\` also permits host-registered strings. \`onError: "null"\` resolves to \`T | null\`
+instead of throwing \`StepError\`.
 
-Prefer \`ctx.pipeline\` over two \`ctx.parallel\` calls: a pipeline has no barrier between
-stages, so lane A can be in stage 3 while lane B is still in stage 1. Reach for the barrier
-only when a stage genuinely needs every prior result at once (dedup across all of them, an
-early exit on a total count, a prompt that compares findings to each other).
+\`errors: "settle"\` is the default; \`"throw"\` surfaces a failed lane after every lane has
+settled. A concurrency cap works with mapper form or thunks, not promises that have already
+started. Prefer \`ctx.pipeline\` over two \`ctx.parallel\` calls: a pipeline has no barrier
+between stages, so lane A can be in stage 3 while lane B is still in stage 1. Reach for the
+barrier only when a stage genuinely needs every prior result at once (dedup across all of
+them, an early exit on a total count, a prompt that compares findings to each other).
 
 **Humans** — durable suspensions. The answer can arrive hours later, from another process.
 
@@ -213,8 +277,9 @@ early exit on a total count, a prompt that compares findings to each other).
 | \`ctx.human.approve({ action, detail, timeout, onTimeout })\` | \`{ approved, note? }\` |
 | \`ctx.human.review({ artifact, question, schema, timeout, onTimeout })\` | the validated answer |
 
-\`risk\` is \`low \\| medium \\| high \\| irreversible\`; \`low\` auto-approves by policy and is
-still recorded. \`onTimeout\` is \`"deny"\`, \`"escalate"\`, or \`{ default: <value> }\`.
+\`risk\` is \`low \\| medium \\| high \\| irreversible\`. By default, \`low\` auto-approves
+and is still recorded; configured action-pattern or risk-tier approval policies can require
+a human instead. \`onTimeout\` is \`"deny"\`, \`"escalate"\`, or \`{ default: <value> }\`.
 
 **Side effects**
 
@@ -237,13 +302,61 @@ never lower.
 
 | Call | Returns |
 | --- | --- |
-| \`ctx.check(name, { exec, fn, required, trustPrior, timeout })\` | \`{ status, evidence? }\` |
+| \`ctx.check(name, { exec \\| fn \\| trustPrior \\| skip, required, timeout })\` | \`{ status, evidence? }\` |
+| \`ctx.check.exec/fn/trust/skip(…)\` | named helpers for the same four exclusive check modes |
+| \`ctx.check(defineCheck(…), input?, { key, policy, timeout, trust, waive })\` | run a reusable static or schema-backed check |
+| \`ctx.check(defineCheckSuite(…), { keyPrefix, concurrency })\` | run reusable static checks; returns \`{ passed, results }\` while journaling each member |
 | \`ctx.integrate(results, { order, onConflict })\` | \`{ merged, conflicts, quarantined, skipped }\` |
 | \`ctx.discard(results)\` | void — the explicit "these patches are not landing" |
 | \`ctx.note({ kind: "decision" \\| "claim" \\| "risk", text, evidence })\` | void; shows up in the report |
 
-\`check\` status is \`pass \\| fail \\| trust-prior \\| skipped\`, and a failing \`required: true\`
-check gates the run's completion. The ledger's arrays hold **step keys**, not file paths.
+\`check\` status is \`pass \\| fail\`; \`disposition\` records \`executed \\| trusted \\| waived\`. A failing
+\`policy: "required"\` check gates completion. The ledger's arrays hold **step keys**, not file paths.
+Parameterized reusable checks declare \`input: z.object(…)\`; Weft infers the invocation type and validates it
+before passing parsed input directly to \`run(input, { signal })\` or \`command(input)\`.
+
+**Workflow tasks** — durable context shared by runs in the workflow's stable \`meta.id\`
+namespace.
+
+| Call | Returns |
+| --- | --- |
+| \`ctx.tasks.observe(selector, { key })\` | replay-stable \`{ total, truncated, tasks }\` snapshot |
+| \`ctx.tasks.upsert({ dedupeKey, key, set, note? })\` | void; recurring create/update is atomic |
+| \`ctx.tasks.update(id, patch, { key })\` | void |
+| \`ctx.tasks.note(id, text, { key, ifRevision? })\` | void; appends context |
+| \`ctx.tasks.setCriterion(id, criterionId, met, { key, ifRevision? })\` | void |
+
+Workflows that configure \`meta.tasks\` give agent steps a bounded read-only task snapshot by
+default. Set \`meta.tasks.agentAccess: "write"\` only when mutation should be the workflow-wide
+default, or set \`tasks: { mode: "write" }\` on the particular agent step that needs to mutate
+tasks. Use \`tasks: false\` on a step to omit context, or pass an explicit read selector when it
+needs only part of the snapshot, such as \`tasks: { mode: "read", statuses: ["blocked"] }\`.
+The engine validates, journals, and applies structured
+\`taskOperations\` idempotently only after a write-authorized step succeeds; in read mode that
+array must be empty. Use workflow-owned \`ctx.tasks\` calls when the program, rather than the
+provider, owns the lifecycle transition.
+
+Task core fields remain engine-owned. Optional \`meta.tasks.extensions\` adds typed workflow
+context and requires a stable \`semanticRevision\`; configuring tasks also requires a stable
+\`meta.id\`. Write the fields directly or use
+\`defineTaskContract({ schema, revision, version?, agentAccess?, migrate? })\`. Change the
+semantic revision when validation,
+defaults, transforms, refinements, or migration behavior changes. Increment
+\`schemaVersion\` only when persisted representation changes, and supply
+\`migrate(value, fromVersion)\` for older values. Keep \`meta.id\` stable across file/name
+changes; recovery fails closed if the exact executable extension contract is unavailable.
+
+**Custom workflow UI** — optional browser presentation, never workflow authority.
+
+- Import a directly referenced \`.ui.tsx\` token. Define it with \`defineUiView\` (human input)
+  or \`defineResultView\` (read-only output) from \`@techery/weft-sdk/ui\`.
+- Publish a display view with \`await ctx.ui.render({ key, slot?, view, props })\`; attach an
+  input view with \`ctx.human.ask({ key, question, schema, ui: { view, props } })\`.
+- Props must be bounded JSON. An input component can only \`propose(answer)\`; host-owned
+  controls validate and submit it. The standard form/raw result remains the fallback.
+- Browser assets have their own compile/import policy. A source check proves compilation,
+  not that the frame painted or accepted a candidate; verify the daemon/browser path when
+  making a UI claim.
 
 **Waits, journaled globals, structure**
 
@@ -261,16 +374,17 @@ gets its own git worktree, its diff is captured as a patch blob, out-of-scope fi
 flagged, and **nothing lands until \`ctx.integrate()\`**.
 
 \`\`\`ts
-const fixes = ctx.ok(
+const fixes = ctx.all(
   await ctx.parallel(
-    bugs.map((bug) => () =>
+    bugs,
+    (bug) =>
       ctx.agent.detailed(\`Fix and add a focused test: \${bug.claim} (\${bug.file}:\${bug.line})\`, {
         schema: FixResult,
         isolation: "worktree",
         write: { paths: [bug.file, "**/*.test.ts"], also: ["pnpm-lock.yaml"], mode: "warn" },
         key: \`fix:\${bug.file}\`,
       }),
-    ),
+    { concurrency: 4, errors: "throw" },
   ),
 );
 const ledger = await ctx.integrate(fixes, { order: "sequential", onConflict: "ask" });
@@ -288,8 +402,10 @@ fails** — integrate them or \`ctx.discard\` them.
 Tokens and USD come from real provider usage and enforce hard ceilings shared with
 sub-workflows. \`weft run --budget "500k,$5"\`; a child takes \`{ budget: { fraction: 0.3 } }\`
 or an absolute slice, and the call that would overrun is refused rather than truncated.
-\`ctx.workflow(def, input)\` is typed from the definition; \`ctx.workflow("name", input)\`
-resolves through the registry and returns \`unknown\` — prefer the definition.
+\`ctx.workflow(def, input)\` is typed from the definition. A directly supplied child
+definition must declare a stable \`meta.id\` or \`meta.name\`; prefer \`meta.id\` for replay
+identity. \`ctx.workflow("name", input)\` resolves through the registry and returns \`unknown\`
+— prefer the definition when it has that stable identity.
 
 ## Stdlib patterns
 
@@ -300,14 +416,17 @@ replay and inspect exactly like hand-written code.
 | Function | What it does |
 | --- | --- |
 | \`adversarialVerify(ctx, { claims, describe, refuters, keyFor })\` | N refuters per claim; a strict majority kills it. Returns \`{ survived, refuted }\` |
-| \`judgePanel(ctx, { task, angles, attemptSchema, keyPrefix })\` | independent attempts from different angles, scored, best synthesized |
+| \`judgePanel(ctx, { task, angles, attemptSchema, keyPrefix })\` | independent attempts from different angles, panel-scored; highest-ranked existing attempt returned |
 | \`loopUntilDry(ctx, { find, keyOf, dryRounds, maxRounds })\` | keep finding until K consecutive rounds turn up nothing new |
 | \`multiModalSweep(ctx, { subject, modes, schema, keyPrefix })\` | one agent per lens, each blind to the others |
 | \`completenessCritic(ctx, { produced, instructions })\` | "what is missing" — its answer is the next round of work |
 | \`finalReport(ctx, { title, sections })\` | a markdown report string, logged as it is built |
 
-Each also exports a schema builder (\`adversarialVerifyResultSchema(Claim)\`, …) so the
-pattern's shape can be a workflow's \`output:\` directly.
+Result-schema builders are exported for \`adversarialVerify\`, \`judgePanel\`, and
+\`multiModalSweep\` (for example \`adversarialVerifyResultSchema(Claim)\`).
+\`completenessCritic\` has the fixed \`CompletenessGapsSchema\`; \`finalReport\` exports
+\`FinalReportOptionsSchema\` and \`ReportSectionSchema\` for its inputs. \`loopUntilDry\` has no
+result-schema export, so declare the enclosing workflow's actual output schema yourself.
 
 ## CLI
 
@@ -315,6 +434,11 @@ Global flags: \`--cwd <dir>\` (repo root), repeatable \`--extra-workflow-dir <di
 workflow registries without moving run/task state), and \`--mock\` (wire the fixture provider
 instead of Claude/Codex — an agent step then fails loudly without a fixture rather than
 inventing an answer, so it is for agent-less workflows and smoke tests).
+
+The primary workflow directory keeps the many-\`.ts\` registry convention. An extra
+workflow directory containing \`workflow.ts\` is one workflow package: \`workflow.ts\` is its
+only registry entry and sibling TypeScript files are helpers. An extra directory without
+\`workflow.ts\` remains a many-file registry.
 
 | Command | |
 | --- | --- |
@@ -328,9 +452,11 @@ inventing an answer, so it is for agent-less workflows and smoke tests).
 | \`weft report <run>\` | the generated markdown report |
 | \`weft explain <run> <key\\|seq>\` | one step: route, exact prompt, output, usage, attempts |
 | \`weft diff <a> <b>\` | two runs' step outputs, matched by key — field-level, not prose |
-| \`weft check [name]\` | gate + \`tsc --noEmit\` over the workflow directory. \`--no-tsc\` |
-| \`weft new <name>\` | scaffold \`<name>.ts\` (+ \`schemas.ts\`); never overwrites |
-| \`weft task --workflow <id> …\` | durable task context: \`schema/list/show/create/update/note/accept/unaccept/remove\`; list fields have explicit \`--clear-*\` flags |
+| \`weft check [name]\` | fatal gate/bundle/UI checks plus \`tsc --noEmit\` when available. \`--no-tsc\` |
+| \`weft new <name> [--template simple\\|review\\|task]\` | scaffold \`<name>.ts\`; only the default/review template also creates \`schemas.ts\`; never overwrites |
+| \`weft workflow list\` (alias \`ls\`) | list loadable definitions and rejected workflow files |
+| \`weft workflow inspect <name-or-id> [--json]\` | print the input/output/task/default contract by callable name or stable id; \`--json\` also exposes UI metadata in the complete machine-readable contract |
+| \`weft task --workflow <id> …\` | durable task context: \`schema/list/show/create/upsert/update/note/accept/unaccept/remove\`; mutations support explicit clearing/guards |
 | \`weft skill\` | print this document |
 | \`weft doctor\` | node, git, \`.weft\` layout, provider credentials, every workflow |
 | \`weft ui\` | serve the local web UI. \`--port\` (default 4781) |
@@ -340,16 +466,10 @@ prints its output, a failed one exits 1 with the step key and the \`weft explain
 a run that parks on a person prints the exact \`weft answer <run> <id> '<json>'\` command and
 exits. Parking is not losing — answer it, then \`weft resume <run>\`.
 
-Every agent step receives its workflow-bound task CLI prefix, a bounded current snapshot,
-and the extension JSON Schema in its instructions. Providers request changes through the
-required structured \`taskOperations\` field; the engine validates and journals those
-operations, then applies them idempotently after the step succeeds. Core fields cover
-title, description, status, priority, tags, dependencies, related files, stable-ID
-acceptance criteria, append-only notes, actors, timestamps, and revision. Set \`meta.id\`
-once so path, stdin, and renamed workflows keep one namespace. A workflow's
-\`tasks.extensions\` Standard Schema validates its additional context. Its required
-\`tasks.semanticRevision\` changes whenever validator, transform, default, or migration
-behavior changes; \`tasks.schemaVersion\` changes only with the persisted representation.
+The task CLI is for human/operator mutations. Providers do not invoke it; they request
+validated structured operations through the agent result envelope. Use \`--json\` for
+machine-readable task output, \`--if-revision\` where offered to avoid overwriting a newer
+record, and \`remove --yes\` only for a task with no dependents.
 
 The typical loop:
 
@@ -362,11 +482,11 @@ weft report 9c4f1a7e                        # outcome, changes, checks, ledger, 
 weft explain 9c4f1a7e find:src/auth.ts      # why did that agent say that
 \`\`\`
 
-## From inside a Claude Code or Codex session (MCP)
+## Optional MCP host loop
 
-\`\`\`json
-{ "mcpServers": { "weft": { "command": "npx", "args": ["-y", "@techery/weft-mcp"] } } }
-\`\`\`
+Use this only when a callable Weft MCP server is actually installed or built; an MCP config
+snippet is configuration, not publication or runtime proof. The implemented tool loop is
+vendor-neutral:
 
 1. \`weft_run { workflow | source, input }\` returns \`{ runId }\` immediately; the run
    continues in the background.
@@ -375,16 +495,32 @@ weft explain 9c4f1a7e find:src/auth.ts      # why did that agent say that
    then \`weft_answer\` on \`awaiting.runId\` (the request's *owning* run — often a child of the
    one you waited on; request ids are run-local) and wait again on the original \`runId\`.
    Never answer on the user's behalf.
-4. \`{ status: "complete", output }\` ends the loop. \`{ status: "running" }\` only means the
-   poll timed out — wait again.
+4. \`{ status: "complete", output }\` ends successfully. \`{ status: "failed", error }\` and
+   \`{ status: "cancelled" }\` are also terminal: report the failure or cancellation and stop.
+   \`{ status: "running" }\` only means the poll timed out — wait again.
 
 \`weft_report\`, \`weft_list\`, \`weft_resume\`, and \`weft_types\` (the SDK source, for writing an
 inline \`source\` workflow) round it out. Every reply is JSON: read its fields rather than
 summarizing prose.
 
+## Distribute this skill
+
+\`weft skill\` writes only this complete document to stdout and does not need \`.weft\`
+state. Choose a destination owned by the consuming agent/repository and create it outside
+this command when desired, for example:
+
+\`\`\`bash
+weft skill > .agents/skills/weft/SKILL.md  # Codex repository skill
+weft skill > .claude/skills/weft/SKILL.md
+\`\`\`
+
+These are distribution examples, not directories Weft creates or owns. The document uses
+only ordinary source inspection, shell commands, CLI/MCP interfaces, and Agent Skills
+frontmatter; no private vendor tool is required.
+
 ## Testing
 
-Workflow tests run with zero model calls. Fixtures match on the step key, receive the real
+\`runWorkflow\` tests run with zero model calls. Fixtures match on the step key, receive the real
 request, and go through the engine's normal schema validation — a fixture that would not
 pass in production fails the test.
 
@@ -394,36 +530,51 @@ import review from "../.weft/workflows/review.ts";
 
 const { output, journal } = await runWorkflow(review, {
   input: { base: "main" },
-  provider: mock().on({ key: "find:*" }, (req) => ({
-    findings: req.prompt.includes("a.ts") ? [{ file: "a.ts", line: 3, claim: "off-by-one" }] : [],
-  })),
+  provider: mock()
+    .on({ key: "find:*" }, (req) => ({
+      findings: req.prompt.includes("a.ts")
+        ? [{ file: "a.ts", line: 3, claim: "off-by-one", severity: "medium" }]
+        : [],
+    }))
+    .on({ key: "refute:*" }, { survives: true, why: "verified from the source" }),
   git: { changedSince: { files: [{ path: "a.ts", status: "M" }] } },
 });
 
 expect(output.confirmed).toHaveLength(1);
-expect(journal.steps({ kind: "agent" })).toHaveLength(1);
+expect(journal.steps({ kind: "agent" })).toHaveLength(2);
 expect(journal.step("find:a.ts").prompt).toContain("Cite file:line");
 \`\`\`
 
 Fixture keys are plain globs, not path patterns: \`*\` matches any characters, \`/\` included,
 so \`find:*\` matches \`find:src/auth/login.ts\`. \`runWorkflow\` also takes \`exec\`, \`bash\`,
-\`fetch\`, \`env\`, \`answers\`, \`budget\`, \`config\` and \`cwd\` fixtures, so a workflow with
-human steps and shell checks runs end to end in a unit test. An un-fixtured step fails
-loudly; it is never invented.
+\`fetch\`, \`env\`, \`answers\`, \`signals\`, \`taskSeeds\`, \`budget\`, \`config\` and \`cwd\`
+fixtures; its result includes the final typed \`tasks\` snapshot. Thus workflows with human
+steps, signals, task state, and shell checks can run end to end in a unit test when the
+needed fixtures are supplied.
+
+The mock agent is fail-closed, and a missing human answer or signal also fails loudly.
+Side-effect fixture tables are interceptors, not a host sandbox: an unmatched \`git\`,
+\`exec\`, \`bash\`, or \`fetch\` fixture falls through to the real host implementation, and
+omitting the \`env\` table reads \`process.env\`. Fixture every effect the test must isolate and
+use an appropriate temporary \`cwd\`. This proves the in-memory engine path with the supplied
+fixtures. It does not prove real provider credentials, subprocess/network availability, the
+filesystem host, MCP transport, daemon routes, or browser rendering; exercise those paths
+separately when the requested claim depends on them.
 
 ## Failure modes worth knowing
 
 - **A step with no \`key\` in a fan-out.** It replays as a miss and costs money again. Key
   everything you fan out, from the item rather than the index.
-- **A missing \`schema:\`.** The gate's AST rules will not catch it; \`weft check\`'s \`tsc\` pass
-  will. Run \`weft check\`, not just the gate.
+- **A missing \`schema:\`.** The AST gate does not catch it; \`weft check\` catches the
+  TypeScript error when its compiler/SDK pass is available. Treat a visible skip as incomplete
+  evidence and run the repository's real typecheck.
 - **Promises instead of thunks in \`ctx.parallel\`.** A promise has already started, so
-  \`concurrency\` cannot cap it. Pass \`() => ctx.agent(…)\`.
+  \`concurrency\` cannot cap it. Pass items plus a mapper, or \`() => ctx.agent(…)\` thunks.
 - **Un-integrated patches.** The run fails at the end. \`ctx.integrate\` or \`ctx.discard\`.
 - **Reading \`ledger.merged\` as file paths.** They are step keys.
 - **A bare import you "need".** Put the helper in a relative file, or add the package to
   \`workflows.allowBare\` in \`.weft/config.json\` — do not work around the gate.
-- **Editing a run directory.** Everything but \`journal.jsonl\` is a projection and is
-  overwritten on the next command.
+- **Editing run state.** Do not hand-edit the journal or its projections; preserve shared
+  blobs and persisted workflow/UI provenance needed for replay.
 - **Guessing at a human answer.** \`weft answer\` validates against the journaled schema and
   tells you what it wanted; a gate exists because someone has to decide.`;

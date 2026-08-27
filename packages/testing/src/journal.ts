@@ -98,7 +98,7 @@ export function buildJournalView(records: JournalRecord[]): JournalView {
           key: ev.id,
           label: ev.question,
           status: "running",
-          ...(currentPhase !== undefined ? { phase: currentPhase } : {}),
+          ...((ev.phase ?? currentPhase) !== undefined ? { phase: ev.phase ?? currentPhase } : {}),
         };
         bySeq.set(ev.seq, view);
         humansById.set(ev.id, view);

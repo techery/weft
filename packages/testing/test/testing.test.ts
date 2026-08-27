@@ -2,7 +2,18 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemoryBlobStore, MemoryJournalStore } from "@techery/weft-core";
-import { defineWorkflow, StepError, z } from "@techery/weft-sdk";
+import {
+  defineAgent,
+  defineCheck,
+  defineCheckSuite,
+  definePrompt,
+  defineRecipe,
+  defineStep,
+  defineWorkflow,
+  prompt,
+  StepError,
+  z,
+} from "@techery/weft-sdk";
 import { FsBlobStore, FsJournalStore } from "@techery/weft-store-fs";
 import { afterAll, describe, expect, test } from "vitest";
 import { blobStoreConformance, journalStoreConformance } from "../src/conformance.ts";
@@ -26,6 +37,324 @@ afterAll(async () => {
   );
 });
 
+describe("composable workflow DSL", () => {
+  const echoPrompt = definePrompt({
+    name: "echo-value",
+    input: z.object({ value: z.string(), context: z.string() }),
+    render: ({ value, context }) => [
+      prompt.section("Role", "Return the requested value."),
+      prompt.section("Value", value),
+      prompt.section("Bounded context", context),
+    ],
+  });
+  const echoAgent = defineAgent({
+    name: "echo-agent",
+    prompt: echoPrompt,
+    schema: z.object({ value: z.string() }),
+    defaults: { effort: "low", tasks: false },
+  });
+  const echoStep = defineStep<{ key: string; value: string }, string>({
+    name: "echo-step",
+    run: async (ctx, input) => {
+      const result = await ctx.agent(
+        echoAgent,
+        { value: input.value, context: `run:${ctx.run.id}` },
+        { key: input.key },
+      );
+      return result.value;
+    },
+  });
+
+  test("phase handles isolate concurrent calls and scopes compose agents, parallel policy, recipes, and humans", async () => {
+    let activeReviewCalls = 0;
+    let maxReviewCalls = 0;
+    const provider = mock()
+      .on({ key: "phase-a" }, { value: "A" })
+      .on({ key: "phase-b" }, { value: "B" })
+      .on({ key: "review:*" }, async (request) => {
+        activeReviewCalls++;
+        maxReviewCalls = Math.max(maxReviewCalls, activeReviewCalls);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        activeReviewCalls--;
+        return { value: request.key!.slice("review:".length) };
+      });
+    const workflow = defineWorkflow(
+      {
+        name: "composable-prototype",
+        description: "exercise immutable execution contexts and reusable definitions",
+        input: z.object({}),
+        output: z.object({ values: z.array(z.string()), approved: z.boolean() }),
+      },
+      async (ctx) => {
+        const phaseA = ctx.phase("Phase A").scope({ agent: { provider: "codex", effort: "high" } });
+        const phaseB = ctx.phase("Phase B");
+        const first = await ctx.parallel([
+          () => phaseA.step(echoStep, { key: "phase-a", value: "A" }),
+          () => phaseB.step(echoStep, { key: "phase-b", value: "B" }),
+        ]);
+
+        const review = ctx.phase("Review");
+        const reviewers = review.phase("Files").scope({
+          parallel: { concurrency: 1, errors: "throw" },
+        });
+        const reviewed = await reviewers.parallel(["one", "two"], (value) =>
+          reviewers.step(echoStep, { key: `review:${value}`, value }),
+        );
+        const approval = await ctx.phase("Approve").human.approve({
+          key: "approve",
+          action: "Approve the composed result?",
+        });
+        return { values: [...ctx.all(first), ...reviewers.all(reviewed)], approved: approval.approved };
+      },
+    );
+
+    const result = await runWorkflow(workflow, {
+      input: {},
+      provider,
+      answers: { "Approve the composed result?": { approved: true } },
+    });
+
+    expect(result.output).toEqual({ values: ["A", "B", "one", "two"], approved: true });
+    expect(result.journal.step("phase-a").phase).toBe("Phase A");
+    expect(result.journal.step("phase-b").phase).toBe("Phase B");
+    expect(result.journal.step("review:one").phase).toBe("Review / Files");
+    expect(maxReviewCalls).toBe(1);
+    expect(provider.calls.find((call) => call.key === "phase-a")).toMatchObject({
+      effort: "high",
+    });
+    const human = result.journal.records.find((record) => record.ev.type === "human.requested")?.ev;
+    expect(human).toMatchObject({ type: "human.requested", key: "approve", phase: "Approve" });
+  });
+
+  test("runs reusable checks and suites as independently journaled phase steps", async () => {
+    let active = 0;
+    let maxActive = 0;
+    let configuredCoverage: number | undefined;
+    const validation = (name: string) =>
+      defineCheck({
+        name,
+        policy: "required",
+        run: async () => {
+          active++;
+          maxActive = Math.max(maxActive, active);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          active--;
+          return { status: "pass" as const, evidence: `${name} passed` };
+        },
+      });
+    const quality = defineCheckSuite({
+      name: "quality",
+      checks: [validation("lint"), validation("tests")],
+      concurrency: 1,
+    });
+    const coverage = defineCheck({
+      name: "coverage",
+      policy: "required",
+      input: z.object({ actual: z.coerce.number(), minimum: z.number() }),
+      run: ({ actual, minimum }) => {
+        configuredCoverage = actual;
+        return {
+          status: actual >= minimum ? "pass" : "fail",
+          details: [{ kind: "metric", name: "coverage", actual, expected: minimum, unit: "%" }],
+        };
+      },
+    });
+    const metrics = defineCheckSuite({
+      name: "metrics",
+      input: z.object({ actual: z.union([z.string(), z.number()]), minimum: z.number() }),
+      checks: (input, use) => ({ coverage: use(coverage, input) }),
+    });
+    const workflow = defineWorkflow(
+      {
+        name: "reusable-checks",
+        description: "exercise reusable checks and suites",
+        input: z.object({}),
+        output: z.object({ suitePassed: z.boolean(), coverage: z.string() }),
+      },
+      async (ctx) => {
+        const verify = ctx.phase("Verify");
+        const suite = await verify.check(quality, { keyPrefix: "quality" });
+        const measured = await verify.check(metrics, { actual: "95", minimum: 90 }, { keyPrefix: "metrics" });
+        return { suitePassed: suite.passed, coverage: measured.results.coverage.status };
+      },
+    );
+
+    const result = await runWorkflow(workflow, { input: {} });
+
+    expect(result.output).toEqual({ suitePassed: true, coverage: "pass" });
+    expect(result.journal.step("quality:lint")).toMatchObject({ kind: "check", phase: "Verify" });
+    expect(result.journal.step("quality:tests")).toMatchObject({ kind: "check", phase: "Verify" });
+    expect(result.journal.step("metrics:coverage")).toMatchObject({ kind: "check", phase: "Verify" });
+    expect(result.journal.steps({ kind: "check", phase: "Verify" })).toHaveLength(3);
+    expect(maxActive).toBe(1);
+    expect(configuredCoverage).toBe(95);
+  });
+
+  test("aggregates non-required suite failures without hiding successful members", async () => {
+    const quality = defineCheckSuite({
+      name: "advisory-quality",
+      checks: [
+        defineCheck({ name: "lint", run: () => false }),
+        defineCheck({
+          name: "tests",
+          run: () => ({ status: "pass", evidence: "12 tests passed" }),
+        }),
+      ],
+    });
+    const workflow = defineWorkflow(
+      {
+        name: "advisory-check-suite",
+        description: "return the aggregate status of an advisory suite",
+        input: z.object({}),
+        output: z.object({ passed: z.boolean(), lint: z.string(), tests: z.string() }),
+      },
+      async (ctx) => {
+        const result = await ctx.check(quality, { keyPrefix: "advisory" });
+        return {
+          passed: result.passed,
+          lint: result.results.lint.status,
+          tests: result.results.tests.status,
+        };
+      },
+    );
+
+    const result = await runWorkflow(workflow, { input: {} });
+
+    expect(result.output).toEqual({ passed: false, lint: "fail", tests: "pass" });
+    expect(result.journal.step("advisory:lint").output).toEqual({
+      status: "fail",
+      disposition: "executed",
+    });
+    expect(result.journal.step("advisory:tests").output).toEqual({
+      status: "pass",
+      disposition: "executed",
+      evidence: "12 tests passed",
+    });
+  });
+
+  test("rejects invalid reusable-check input before executing the check", async () => {
+    let executed = false;
+    const nonEmpty = defineCheck({
+      name: "non-empty",
+      input: z.object({ value: z.string().min(1) }),
+      run: ({ value }) => {
+        executed = true;
+        return value.length > 0;
+      },
+    });
+    const workflow = defineWorkflow(
+      {
+        name: "invalid-check-input",
+        description: "fail closed before a reusable check executes",
+        input: z.object({}),
+        output: z.object({}),
+      },
+      async (ctx) => {
+        await ctx.check(nonEmpty, { value: "" }, { key: "non-empty" });
+        return {};
+      },
+    );
+
+    await expect(runWorkflow(workflow, { input: {} })).rejects.toThrow(
+      /check:non-empty: input failed schema validation.*value/,
+    );
+    expect(executed).toBe(false);
+  });
+
+  test("rejects an invalid executed-check status instead of recording a false pass", async () => {
+    const invalid = defineCheck({
+      name: "invalid-status",
+      run: () => ({ status: "skipped" }) as unknown as { status: "pass" },
+    });
+    const workflow = defineWorkflow(
+      {
+        name: "invalid-check-output",
+        description: "fail closed on malformed check output",
+        input: z.object({}),
+        output: z.object({}),
+      },
+      async (ctx) => {
+        await ctx.check(invalid, { key: "invalid-status" });
+        return {};
+      },
+    );
+
+    await expect(runWorkflow(workflow, { input: {} })).rejects.toThrow(/returned an invalid status/);
+  });
+
+  test("validates and transforms transparent recipe input and output", async () => {
+    const double = defineRecipe({
+      name: "double",
+      input: z.object({ value: z.coerce.number() }),
+      output: z.object({ doubled: z.number() }),
+      run: async (_ctx, { value }) => ({ doubled: value * 2 }),
+    });
+    const workflow = defineWorkflow(
+      {
+        name: "schema-recipe",
+        description: "exercise a schema-backed transparent recipe",
+        input: z.object({}),
+        output: z.object({ doubled: z.number() }),
+      },
+      async (ctx) => ctx.phase("Compute").recipe(double, { value: "21" }),
+    );
+
+    await expect(runWorkflow(workflow, { input: {} })).resolves.toMatchObject({
+      output: { doubled: 42 },
+    });
+  });
+
+  test("validates and transforms reusable-agent prompt input before rendering", async () => {
+    const numberPrompt = definePrompt({
+      name: "number-prompt",
+      input: z.object({ value: z.coerce.number() }),
+      render: ({ value }) => `Type: ${typeof value}; value: ${value}`,
+    });
+    const numberAgent = defineAgent({
+      name: "number-agent",
+      prompt: numberPrompt,
+      schema: z.object({ ok: z.boolean() }),
+    });
+    const workflow = defineWorkflow(
+      {
+        name: "schema-prompt",
+        description: "exercise schema-backed prompt input",
+        input: z.object({}),
+        output: z.object({ ok: z.boolean() }),
+      },
+      async (ctx) => ctx.agent(numberAgent, { value: "3" }, { key: "number" }),
+    );
+    const provider = mock().on({ key: "number" }, { ok: true });
+
+    const result = await runWorkflow(workflow, { input: {}, provider });
+
+    expect(result.output).toEqual({ ok: true });
+    expect(provider.calls[0]?.prompt).toContain("Type: number; value: 3");
+  });
+
+  test("fails a recipe whose raw output violates its output schema", async () => {
+    const invalid = defineRecipe({
+      name: "invalid-output",
+      input: z.object({}),
+      output: z.object({ value: z.number() }),
+      run: async () => ({ value: "not a number" }) as unknown as { value: number },
+    });
+    const workflow = defineWorkflow(
+      {
+        name: "invalid-recipe-output",
+        description: "fail closed on recipe output",
+        input: z.object({}),
+        output: z.object({ value: z.number() }),
+      },
+      async (ctx) => ctx.recipe(invalid, {}),
+    );
+
+    await expect(runWorkflow(workflow, { input: {} })).rejects.toThrow(
+      /recipe:invalid-output: output failed schema validation/,
+    );
+  });
+});
+
 // ---------------------------------------------------------------------------
 // The developer guide's example workflow
 // ---------------------------------------------------------------------------
@@ -44,7 +373,7 @@ const review = defineWorkflow(
     const { files } = await ctx.git.changedSince(base);
 
     ctx.phase("Review");
-    const reviewed = ctx.ok(
+    const reviewed = ctx.successes(
       await ctx.parallel(
         files.map(
           (f) => () =>
@@ -58,7 +387,7 @@ const review = defineWorkflow(
     const findings = reviewed.flatMap((r) => r.findings);
 
     ctx.phase("Refute");
-    const verdicts = ctx.ok(
+    const verdicts = ctx.successes(
       await ctx.parallel(
         findings.map(
           (f) => () =>
@@ -88,6 +417,39 @@ function reviewProvider() {
 const changedSince = { changedSince: { files: [{ path: "a.ts", status: "M" }] } };
 
 describe("runWorkflow", () => {
+  test("accepts raw transformed workflow inputs and task extension seeds", async () => {
+    const transformed = defineWorkflow(
+      {
+        id: "testing-transforms",
+        description: "exercise raw and parsed test-harness boundaries",
+        input: z.string().transform((value) => ({ value })),
+        output: z.object({ value: z.string() }),
+        tasks: {
+          extensions: z.object({
+            owner: z.string().default("platform"),
+            code: z.string().transform((value) => ({ value })),
+          }),
+          semanticRevision: "testing-transforms-v1",
+        },
+      },
+      async (_ctx, input) => ({ value: input.value }),
+    );
+
+    const result = await runWorkflow(transformed, {
+      input: "raw-input",
+      taskSeeds: [
+        {
+          title: "Seed",
+          description: "Seed transformed task data",
+          extensions: { code: "ABC" },
+        },
+      ],
+    });
+
+    expect(result.output).toEqual({ value: "raw-input" });
+    expect(result.tasks.tasks[0]?.extensions).toEqual({ owner: "platform", code: { value: "ABC" } });
+  });
+
   test("keeps only findings that survive refutation", async () => {
     const { output, journal, state, runId } = await runWorkflow(review, {
       input: { base: "main" },
@@ -286,6 +648,104 @@ describe("human answers", () => {
       async (ctx) => ({ got: (await ctx.signal("deploy", z.object({ sha: z.string() }))).sha }),
     );
     await expect(runWorkflow(waiter, { input: {} })).rejects.toThrow(/waiting for signal:deploy/);
+
+    const delivered = await runWorkflow(waiter, {
+      input: {},
+      signals: { deploy: { sha: "abc123" } },
+    });
+    expect(delivered.output).toEqual({ got: "abc123" });
+    expect(delivered.journal.steps({ kind: "signal" })[0]?.output).toEqual({ sha: "abc123" });
+  });
+
+  test("task seeds are validated and the final task snapshot is returned", async () => {
+    const taskWorkflow = defineWorkflow(
+      {
+        id: "testing-task-fixtures",
+        description: "update a seeded task",
+        input: z.object({}),
+        output: z.object({ count: z.number() }),
+        tasks: {
+          extensions: z.object({ lane: z.enum(["api", "ui"]) }),
+          semanticRevision: "lane-v1",
+        },
+      },
+      async (ctx) => {
+        const before = await ctx.tasks.observe({}, { key: "tasks:before" });
+        await ctx.tasks.update(
+          before.tasks[0]!.id,
+          { status: "in_progress", extensions: { lane: "ui" } },
+          { key: "tasks:update" },
+        );
+        return { count: before.tasks.length };
+      },
+    );
+
+    const result = await runWorkflow(taskWorkflow, {
+      input: {},
+      taskSeeds: [
+        {
+          id: "task-1234abcd",
+          title: "Seeded work",
+          description: "Available before the first workflow step",
+          extensions: { lane: "api" },
+        },
+      ],
+    });
+
+    expect(result.output).toEqual({ count: 1 });
+    expect(result.tasks.tasks[0]).toMatchObject({
+      id: "task-1234abcd",
+      status: "in_progress",
+      extensions: { lane: "ui" },
+    });
+  });
+
+  test("concise task upsert converges an existing deduplicated task on set", async () => {
+    const taskWorkflow = defineWorkflow(
+      {
+        id: "concise-task-upsert",
+        description: "refresh a recurring task without duplicate create/update objects",
+        input: z.object({}),
+        output: z.object({}),
+      },
+      async (ctx) => {
+        await ctx.tasks.upsert({
+          dedupeKey: "review:auth",
+          key: "tasks:record",
+          set: {
+            title: "Review authentication",
+            description: "Current review summary",
+            status: "done",
+            relatedFiles: ["src/auth.ts"],
+          },
+          note: "Review completed.",
+        });
+        return {};
+      },
+    );
+
+    const result = await runWorkflow(taskWorkflow, {
+      input: {},
+      taskSeeds: [
+        {
+          id: "task-1234abcd",
+          dedupeKey: "review:auth",
+          title: "Old title",
+          description: "Old summary",
+          status: "blocked",
+        },
+      ],
+    });
+
+    expect(result.tasks.tasks[0]).toMatchObject({
+      id: "task-1234abcd",
+      dedupeKey: "review:auth",
+      title: "Review authentication",
+      description: "Current review summary",
+      status: "done",
+      relatedFiles: ["src/auth.ts"],
+      latestNote: expect.objectContaining({ text: "Review completed." }),
+    });
   });
 });
 

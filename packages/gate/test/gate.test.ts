@@ -922,6 +922,19 @@ describe("createWorkflowRegistry", () => {
     expect((await registry.load("ship")).file).toBe(path.join(extra, "ship.ts"));
   });
 
+  it("treats an extra directory with workflow.ts as one workflow package", async () => {
+    const primary = await tempDir();
+    const extra = await tempDir();
+    await writeReview(extra, "workflow.ts", { name: "ship" });
+    await write(extra, "main.ts", sandboxProbe({ body: `const t = Date.now();` }));
+    await write(extra, "helper.ts", `export const helper = true;`);
+
+    const inspection = await createWorkflowRegistry({ dir: primary, extraDirs: [extra] }).listWithIssues();
+
+    expect(inspection.entries.map((entry) => entry.name)).toEqual(["ship"]);
+    expect(inspection.issues).toEqual([]);
+  });
+
   it("rejects duplicate identities across workflow directories", async () => {
     const primary = await tempDir();
     const extra = await tempDir();
@@ -969,6 +982,17 @@ describe("createWorkflowRegistry", () => {
     expect(resolved?.hash).toBe((await registry.load("current-review")).hash);
     await expect(registry.resolve({ id: "missing-review", name: "old-review" })).resolves.toBeUndefined();
     expect((await registry.resolve({ name: "old-review" }))?.def.meta.id).toBe("decoy-review");
+    expect((await registry.loadIdentity("durable-review")).file).toBe(path.join(dir, "current.ts"));
+    expect((await registry.loadIdentity("old-review")).file).toBe(path.join(dir, "decoy.ts"));
+  });
+
+  it("rejects ambiguous name-or-id inspection identities", async () => {
+    const dir = await tempDir();
+    await writeReview(dir, "named.ts", { id: "named-id", name: "shared" });
+    await write(dir, "identified.ts", reviewSource({ id: "shared", name: "identified" }));
+    const registry = createWorkflowRegistry({ dir });
+
+    await expect(registry.loadIdentity("shared")).rejects.toThrow(/ambiguous/);
   });
 
   it("rejects duplicate durable workflow ids", async () => {

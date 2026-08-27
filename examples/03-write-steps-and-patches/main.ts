@@ -55,7 +55,7 @@ const fixPass = defineWorkflow(
   },
   async (ctx) => {
     ctx.phase("Fix");
-    const fixes = ctx.ok(
+    const fixes = ctx.successes(
       await ctx.parallel([
         ctx.agent.detailed("Fix the retry loop in auth.ts and nothing else.", {
           schema: FixResult,

@@ -110,7 +110,7 @@ export async function judgePanel<S extends AnySchema>(
       }),
     ),
   );
-  const attempts: Attempt[] = ctx.ok(attemptSettled);
+  const attempts: Attempt[] = ctx.successes(attemptSettled);
   if (attempts.length === 0) {
     throw new StepError("internal", `judgePanel: all ${angles.length} attempts failed; nothing to judge`);
   }
@@ -127,7 +127,7 @@ export async function judgePanel<S extends AnySchema>(
       }),
     ),
   );
-  const verdicts = ctx.ok(judgeSettled);
+  const verdicts = ctx.successes(judgeSettled);
 
   const totals: number[] = new Array<number>(total).fill(0);
   const counts: number[] = new Array<number>(total).fill(0);

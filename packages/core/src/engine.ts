@@ -49,17 +49,28 @@ const SHUTDOWN_DRAIN_MS = 5_000;
  */
 const TERMINAL_DRAIN_MS = 5_000;
 
-/** First journal format that enables implicit task context on agent steps. */
-const TASK_CONTEXT_VERSION = 1;
+/** Journal format where workflow metadata controls default agent task authority. */
+const TASK_CONTEXT_VERSION = 2;
+
+type DefaultTaskAccess = false | "read" | "write";
+
+function configuredTaskAccess(def: WorkflowDefinition): DefaultTaskAccess {
+  if (!def.meta.tasks) return false;
+  return def.meta.tasks.agentAccess ?? "read";
+}
 
 /**
  * Runs written before task tracking existed have no version marker and used the
  * agent's original result schema directly. Feature-preview runs written before
  * the marker did journal a task observation, so retain their envelope too.
  */
-function hasImplicitTaskContext(records: JournalRecord[]): boolean {
+function replayTaskAccess(records: JournalRecord[], def: WorkflowDefinition): DefaultTaskAccess {
   const created = records.find((record) => record.ev.type === "run.created")?.ev;
-  if (created?.type === "run.created" && (created.workflow.taskContextVersion ?? 0) > 0) return true;
+  if (created?.type === "run.created") {
+    const version = created.workflow.taskContextVersion ?? 0;
+    if (version === 1) return "write";
+    if (version >= TASK_CONTEXT_VERSION) return configuredTaskAccess(def);
+  }
   if (
     records.some(
       (record) =>
@@ -70,11 +81,13 @@ function hasImplicitTaskContext(records: JournalRecord[]): boolean {
         (record.ev.payload as { op?: unknown }).op === "task.observe",
     )
   ) {
-    return true;
+    return "write";
   }
   // No historical agent identity can be invalidated before the first agent is
   // scheduled, so an old run suspended earlier may safely adopt the new default.
-  return !records.some((record) => record.ev.type === "step.scheduled" && record.ev.kind === "agent");
+  return records.some((record) => record.ev.type === "step.scheduled" && record.ev.kind === "agent")
+    ? false
+    : configuredTaskAccess(def);
 }
 
 /**
@@ -451,7 +464,7 @@ export class Engine implements EngineHost {
       workflowId,
       ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
       taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
-      defaultAgentTaskContext: this.taskTracker !== undefined,
+      defaultAgentTaskContext: this.taskTracker ? configuredTaskAccess(def) : false,
       cwd: opts.cwd,
       depth: 0,
       shared,
@@ -652,7 +665,7 @@ export class Engine implements EngineHost {
       workflowId: resumedWorkflowId,
       ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
       taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
-      defaultAgentTaskContext: hasImplicitTaskContext(records),
+      defaultAgentTaskContext: replayTaskAccess(records, def),
       cwd: created.cwd,
       depth: created.depth,
       shared,
@@ -1499,7 +1512,11 @@ export class Engine implements EngineHost {
       workflowId: childWorkflowId,
       ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
       taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
-      defaultAgentTaskContext: resuming ? hasImplicitTaskContext(records) : this.taskTracker !== undefined,
+      defaultAgentTaskContext: resuming
+        ? replayTaskAccess(records, def)
+        : this.taskTracker
+          ? configuredTaskAccess(def)
+          : false,
       cwd: parent.cwd,
       depth: parent.depth + 1,
       shared,
@@ -2136,7 +2153,7 @@ export class Engine implements EngineHost {
       workflowId: replayWorkflowId,
       ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
       taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
-      defaultAgentTaskContext: hasImplicitTaskContext(records),
+      defaultAgentTaskContext: replayTaskAccess(records, def),
       cwd: created.cwd,
       depth: created.depth,
       shared: {

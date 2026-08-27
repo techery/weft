@@ -2,7 +2,7 @@ import type { StepError } from "./errors.ts";
 
 /**
  * Per-branch outcome of fan-out. `ctx.parallel` and `pipeline.run()` return these in
- * input order; `ctx.ok()` is the one narrowing helper (it records what it drops).
+ * input order; `ctx.successes()` is the one narrowing helper (it records what it drops).
  */
 export type Settled<T> = { ok: true; value: T } | { ok: false; error: StepError };
 

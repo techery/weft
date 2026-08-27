@@ -4,7 +4,7 @@
  * `Budget.reserveCall` used to refuse a call it could not immediately price, which meant
  * every cold-start fan-out under any ceiling lost N−1 lanes: nothing has charged yet, so
  * exactly one call fits and the rest were dropped with `budget_exceeded` at 0% of the
- * ceiling. `ctx.ok()` then swallowed them, and `adversarialVerify` — which counts a failed
+ * ceiling. `ctx.successes()` then swallowed them, and `adversarialVerify` — which counts a failed
  * refuter as a refute vote — inverted its verdict on every budgeted run.
  *
  * These tests pin both halves of the contract: no lane is lost while budget remains, and
@@ -31,7 +31,7 @@ const fanOut = (width: number) =>
         Array.from({ length: width }, (_, i) => ctx.agent(`work ${i}`, { schema: Value, key: `w${i}` })),
       );
       return {
-        ok: ctx.ok(settled).length,
+        ok: ctx.successes(settled).length,
         dropped: settled.filter((s) => !s.ok).map((s) => (s.ok ? "" : s.error.code)),
       };
     },

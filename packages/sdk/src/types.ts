@@ -150,26 +150,41 @@ export interface WorkflowTaskUpsertInput<Extensions = unknown> {
   note?: string;
 }
 
+/**
+ * Preferred recurring-task form. `set` is shared between the create input and
+ * the later update patch. Optional fields omitted from it take create defaults
+ * initially and remain unchanged on update. `dedupeKey` identifies the logical
+ * task; `key` identifies this journaled workflow step.
+ */
+export interface WorkflowTaskUpsertSpec<Extensions = unknown> extends WorkflowTaskStepOptions {
+  dedupeKey: string;
+  set: WorkflowTaskCreateInput<Extensions>;
+  /** Appended atomically with the create/update. */
+  note?: string;
+}
+
 export interface WorkflowTaskStepOptions {
   /** Stable step identity used by replay. */
   key: string;
 }
 
-export interface WorkflowTasksApi {
+export interface WorkflowTasksApi<ExtensionInput = unknown, Extensions = ExtensionInput> {
   /** A journaled, replay-stable observation. New runs read fresh task state; resumes reuse what they saw. */
-  observe<Extensions = unknown>(
+  observe(
     selector: WorkflowTaskSelector,
     opts: WorkflowTaskStepOptions,
   ): Promise<WorkflowTaskSnapshot<Extensions>>;
-  /** Atomically create or update the one task identified by a workflow-scoped dedupe key. */
-  upsert<Extensions = unknown>(
+  /** Atomically converge one workflow-scoped task on `set` and append optional occurrence evidence. */
+  upsert(input: WorkflowTaskUpsertSpec<ExtensionInput>): Promise<void>;
+  /** @deprecated Prefer `upsert({ dedupeKey, key, set, note })`; keep this for divergent create/update policy. */
+  upsert(
     dedupeKey: string,
-    input: WorkflowTaskUpsertInput<Extensions>,
+    input: WorkflowTaskUpsertInput<ExtensionInput>,
     opts: WorkflowTaskStepOptions,
   ): Promise<void>;
-  update<Extensions = unknown>(
+  update(
     id: string,
-    input: WorkflowTaskUpdateInput<Extensions>,
+    input: WorkflowTaskUpdateInput<ExtensionInput>,
     opts: WorkflowTaskStepOptions,
   ): Promise<void>;
   note(id: string, text: string, opts: WorkflowTaskStepOptions & { ifRevision?: number }): Promise<void>;
@@ -218,8 +233,24 @@ export interface AgentOptions<S extends AnySchema> {
   onMaxTurns?: "finalize" | "fail";
   /** `"throw"` (default) throws StepError; `"null"` resolves to `T | null`. */
   onError?: "throw" | "null";
-  /** Disable task context, observe it read-only, or allow validated task mutations (default). */
+  /** Override workflow task access for this step. Without `meta.tasks`, the default is no context. */
   tasks?: false | AgentTaskAccess;
+}
+
+/** Per-invocation overrides for a reusable agent; its output schema is fixed by the definition. */
+export type AgentRunOptions<S extends AnySchema> = Omit<AgentOptions<S>, "schema">;
+
+/** Reusable role defaults cannot own a call-site key or silently make its result nullable. */
+export type AgentDefinitionDefaults<S extends AnySchema> = Omit<AgentRunOptions<S>, "key" | "onError">;
+
+/** A stateless, reusable agent role: prompt, output contract, and routing defaults. */
+export interface AgentDefinition<Input, S extends AnySchema, ParsedInput = Input> {
+  readonly kind: "weft.agent";
+  readonly name: string;
+  readonly description?: string;
+  readonly prompt: PromptTemplate<Input, ParsedInput>;
+  readonly schema: S;
+  readonly defaults: Readonly<AgentDefinitionDefaults<S>>;
 }
 
 export interface Usage {
@@ -254,12 +285,32 @@ export interface DetailedAgentResult<T> {
 }
 
 export interface AgentFn {
+  <Input, S extends AnySchema, ParsedInput>(
+    definition: AgentDefinition<Input, S, ParsedInput>,
+    input: Input,
+    opts: AgentRunOptions<S> & { onError: "null" },
+  ): Promise<InferOut<S> | null>;
+  <Input, S extends AnySchema, ParsedInput>(
+    definition: AgentDefinition<Input, S, ParsedInput>,
+    input: Input,
+    opts?: AgentRunOptions<S>,
+  ): Promise<InferOut<S>>;
   <S extends AnySchema>(
     prompt: string,
     opts: AgentOptions<S> & { onError: "null" },
   ): Promise<InferOut<S> | null>;
   <S extends AnySchema>(prompt: string, opts: AgentOptions<S>): Promise<InferOut<S>>;
   /** Same options; returns the value plus usage, files, patch, attempts, sessionId. */
+  detailed<Input, S extends AnySchema, ParsedInput>(
+    definition: AgentDefinition<Input, S, ParsedInput>,
+    input: Input,
+    opts: AgentRunOptions<S> & { onError: "null" },
+  ): Promise<DetailedAgentResult<InferOut<S>> | null>;
+  detailed<Input, S extends AnySchema, ParsedInput>(
+    definition: AgentDefinition<Input, S, ParsedInput>,
+    input: Input,
+    opts?: AgentRunOptions<S>,
+  ): Promise<DetailedAgentResult<InferOut<S>>>;
   detailed<S extends AnySchema>(
     prompt: string,
     opts: AgentOptions<S> & { onError: "null" },
@@ -274,11 +325,60 @@ export interface AgentFn {
 // Fan-out
 // ---------------------------------------------------------------------------
 
+/** Prefer thunks or the item/mapper overload; promises start before concurrency can be applied. */
 export type ParallelTask<T> = Promise<T> | (() => Promise<T> | T);
 
 export interface ParallelOptions {
-  /** Caps lanes for thunk tasks; the global limiter inside every step applies regardless. */
+  /** Caps lanes. Already-started promise arrays cannot be capped. */
   concurrency?: number;
+  /** `settle` preserves per-lane failures; `throw` fails after all lanes settle. */
+  errors?: "settle" | "throw";
+}
+
+// ---------------------------------------------------------------------------
+// Reusable authoring definitions and execution scopes
+// ---------------------------------------------------------------------------
+
+export interface PromptSection {
+  readonly kind: "section";
+  readonly title: string;
+  readonly body: string;
+}
+
+export type PromptPart = string | PromptSection | false | null | undefined | readonly PromptPart[];
+
+/** A named, testable prompt renderer. It contains no runtime state or side effects. */
+export interface PromptTemplate<Input, ParsedInput = Input> {
+  readonly kind: "weft.prompt";
+  readonly name: string;
+  readonly input?: AnySchema;
+  readonly render: (input: ParsedInput) => string;
+}
+
+/** A reusable orchestration recipe. Its effects remain visible as ordinary ctx calls. */
+export interface StepDefinition<Input, Output> {
+  readonly kind: "weft.step";
+  readonly name: string;
+  readonly description?: string;
+  readonly run: (ctx: Ctx<any, any>, input: Input) => Promise<Output>;
+}
+
+/** A schema-backed transparent recipe. Nested effects remain ordinary journal entries. */
+export interface RecipeDefinition<Input, Output, ParsedInput = Input, RawOutput = Output> {
+  readonly kind: "weft.recipe";
+  readonly name: string;
+  readonly description?: string;
+  readonly input: AnySchema;
+  readonly output: AnySchema;
+  readonly run: (ctx: Ctx<any, any>, input: ParsedInput) => Promise<RawOutput> | RawOutput;
+}
+
+/** Defaults inherited by calls made through a scoped context. Explicit call options win. */
+export interface CtxScopeOptions {
+  /** Routing/execution policy only; null fallback and task authority stay explicit elsewhere. */
+  agent?: Omit<AgentOptions<AnySchema>, "schema" | "key" | "label" | "onError" | "tasks">;
+  tasks?: false | AgentTaskAccess;
+  parallel?: ParallelOptions;
 }
 
 export interface Pipeline<Item, Prev> {
@@ -286,7 +386,16 @@ export interface Pipeline<Item, Prev> {
   /** A falsy verdict drops the lane (dropped lanes do not appear in run()'s result). */
   filter(fn: (prev: Prev, item: Item, index: number) => boolean | Promise<boolean>): Pipeline<Item, Prev>;
   map<Next>(fn: (prev: Prev, item: Item, index: number) => Next | Promise<Next>): Pipeline<Item, Next>;
-  run(opts?: { concurrency?: number }): Promise<Settled<Prev>[]>;
+  run(opts?: ParallelOptions): Promise<Settled<Prev>[]>;
+}
+
+export interface ParallelFn {
+  <T>(tasks: ReadonlyArray<ParallelTask<T>>, opts?: ParallelOptions): Promise<Settled<T>[]>;
+  <Item, Result>(
+    items: ReadonlyArray<Item>,
+    run: (item: Item, index: number) => Promise<Result> | Result,
+    opts?: ParallelOptions,
+  ): Promise<Settled<Result>[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -555,25 +664,200 @@ export interface GitApi {
 // Checks, integration, ledger
 // ---------------------------------------------------------------------------
 
-export type CheckStatus = "pass" | "fail" | "trust-prior" | "skipped";
+export type CheckStatus = "pass" | "fail";
+export type CheckDisposition = "executed" | "trusted" | "waived";
+export type CheckPolicy = "required" | "advisory";
 
-export interface CheckResult {
+export type CheckEvidence =
+  | { kind: "text"; text: string }
+  | { kind: "file"; path: string; line?: number; message?: string }
+  | { kind: "metric"; name: string; actual: number; expected?: number; unit?: string }
+  | { kind: "command"; exitCode: number; output?: string }
+  | { kind: "artifact"; ref: string; label?: string };
+
+/** Outcome produced by an executed check. Trust and waiver disposition belong to invocation policy. */
+export interface CheckExecutionResult {
   status: CheckStatus;
+  summary?: string;
   evidence?: string;
+  details?: readonly CheckEvidence[];
 }
 
-export interface CheckOptions {
-  exec?: [string, ...string[]];
+export interface CheckResult extends CheckExecutionResult {
+  disposition?: CheckDisposition;
+}
+
+export interface CheckRunContext {
+  signal: AbortSignal;
+}
+
+interface CheckCommonOptions {
+  /** Stable replay identity for this invocation. */
+  key?: string;
+  /** A failing required check gates run completion. */
+  required?: boolean;
+  policy?: CheckPolicy;
+  timeout?: Duration;
+}
+
+export type CheckOptions = CheckCommonOptions &
+  (
+    | { exec: [string, ...string[]]; fn?: never; trustPrior?: never; skip?: never }
+    | {
+        exec?: never;
+        fn: (signal: AbortSignal) => Promise<boolean | CheckResult> | boolean | CheckResult;
+        trustPrior?: never;
+        skip?: never;
+      }
+    | { exec?: never; fn?: never; trustPrior: { run: string; reason: string }; skip?: never }
+    | { exec?: never; fn?: never; trustPrior?: never; skip: { reason: string } }
+  );
+
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+
+/** Source and policy stored by a reusable check; invocation identity remains at the call site. */
+export type CheckDefinitionOptions = DistributiveOmit<CheckOptions, "key">;
+
+export interface CheckInvocationOptions {
+  key?: string;
+  /** Invocation policy may strengthen an advisory definition, never weaken a required one. */
+  policy?: "required";
+  timeout?: Duration;
+  trust?: { run: string; reason: string };
+  waive?: { reason: string; issue?: string; expiresAt?: string };
+}
+
+interface CheckDefinitionBase<Input, Name extends string, ParsedInput> {
+  readonly kind: "weft.check";
+  readonly name: Name;
+  readonly description?: string;
+  readonly policy: CheckPolicy;
+  readonly revision?: string;
+  readonly input?: AnySchema;
+  readonly __input?: Input;
+  readonly __parsedInput?: ParsedInput;
+}
+
+/** A reusable check whose validated input is passed directly to one command or callback. */
+export type CheckDefinition<Input = void, Name extends string = string, ParsedInput = Input> =
+  | (CheckDefinitionBase<Input, Name, ParsedInput> & {
+      readonly mode: "run";
+      readonly run: (
+        input: ParsedInput,
+        context: CheckRunContext,
+      ) => Promise<boolean | CheckExecutionResult> | boolean | CheckExecutionResult;
+    })
+  | (CheckDefinitionBase<Input, Name, ParsedInput> & {
+      readonly mode: "command";
+      readonly command: (input: ParsedInput) => [string, ...string[]];
+    });
+
+/** A reusable group of static checks. Each check remains a separate journal entry. */
+export interface CheckSuiteDefinition<
+  Checks extends readonly CheckDefinition<void>[] = readonly CheckDefinition<void>[],
+> {
+  readonly kind: "weft.check-suite";
+  readonly name: string;
+  readonly description?: string;
+  readonly checks: Checks;
+  readonly concurrency?: number;
+}
+
+export interface CheckSuiteMember<
+  Definition extends CheckDefinition<any, any, any> = CheckDefinition<any, any, any>,
+> {
+  readonly definition: Definition;
+  readonly input: Definition extends CheckDefinition<infer Input, any, any> ? Input : never;
+}
+
+export interface CheckSuiteUse {
+  <Name extends string>(
+    definition: CheckDefinition<void, Name>,
+  ): CheckSuiteMember<CheckDefinition<void, Name>>;
+  <Input, Name extends string, ParsedInput>(
+    definition: CheckDefinition<Input, Name, ParsedInput>,
+    input: Input,
+  ): CheckSuiteMember<CheckDefinition<Input, Name, ParsedInput>>;
+}
+
+export type CheckSuiteMembers = Record<string, CheckSuiteMember>;
+
+/** A reusable contextual suite whose named members are resolved from one validated input. */
+export interface ParameterizedCheckSuiteDefinition<
+  Input,
+  Members extends CheckSuiteMembers,
+  ParsedInput = Input,
+> {
+  readonly kind: "weft.check-suite";
+  readonly name: string;
+  readonly description?: string;
+  readonly input: AnySchema;
+  readonly resolve: (input: ParsedInput) => Members;
+  readonly concurrency?: number;
+  readonly __input?: Input;
+}
+
+export interface CheckSuiteResult<
+  Checks extends readonly CheckDefinition<void>[] = readonly CheckDefinition<void>[],
+> {
+  passed: boolean;
+  results: { [Definition in Checks[number] as Definition["name"]]: CheckResult };
+}
+
+export interface ParameterizedCheckSuiteResult<Members extends CheckSuiteMembers> {
+  passed: boolean;
+  results: { [Name in keyof Members]: CheckResult };
+}
+
+export interface CheckSuiteInvocationOptions {
+  /** Prefixes each member's replay key as `<keyPrefix>:<check name>`. */
+  keyPrefix?: string;
+  /** Strengthens every advisory member to required. */
+  policy?: "required";
+  /** Overrides timeout for every member. */
+  timeout?: Duration;
+  /** Overrides the suite's concurrency. */
+  concurrency?: number;
+}
+
+export interface CheckFn {
+  (definition: CheckDefinition<void>, opts?: CheckInvocationOptions): Promise<CheckResult>;
+  <Input, ParsedInput>(
+    definition: CheckDefinition<Input, string, ParsedInput>,
+    input: Input,
+    opts?: CheckInvocationOptions,
+  ): Promise<CheckResult>;
+  <const Checks extends readonly CheckDefinition<void>[]>(
+    suite: CheckSuiteDefinition<Checks>,
+    opts?: CheckSuiteInvocationOptions,
+  ): Promise<CheckSuiteResult<Checks>>;
+  <Input, ParsedInput, Members extends CheckSuiteMembers>(
+    suite: ParameterizedCheckSuiteDefinition<Input, Members, ParsedInput>,
+    input: Input,
+    opts?: CheckSuiteInvocationOptions,
+  ): Promise<ParameterizedCheckSuiteResult<Members>>;
+  /** @deprecated Use `defineCheck()` and invoke its definition. */
+  (name: string, opts: CheckOptions): Promise<CheckResult>;
+  /** @deprecated Use `defineCheck({ command })`. */
+  exec(name: string, command: [string, ...string[]], opts?: CheckCommonOptions): Promise<CheckResult>;
   /**
+   * @deprecated Use `defineCheck({ run })`.
    * The signal fires if the check times out — wire it into what the fn awaits, or
    * work past the timeout keeps running in the background (JS cannot force-kill it).
    */
-  fn?: (signal: AbortSignal) => Promise<boolean | CheckResult> | boolean | CheckResult;
-  /** Record a deliberately skipped re-run, trusting a prior run's result. */
-  trustPrior?: { run: string; reason: string };
-  /** A failing required check gates run completion. */
-  required?: boolean;
-  timeout?: Duration;
+  fn(
+    name: string,
+    run: (signal: AbortSignal) => Promise<boolean | CheckResult> | boolean | CheckResult,
+    opts?: CheckCommonOptions,
+  ): Promise<CheckResult>;
+  /** @deprecated Use invocation `{ trust }` on a revisioned reusable check. */
+  trust(
+    name: string,
+    prior: { run: string; reason: string },
+    opts?: Omit<CheckCommonOptions, "timeout">,
+  ): Promise<CheckResult>;
+  /** @deprecated Use invocation `{ waive }` on a reusable check. */
+  skip(name: string, reason: string, opts?: Omit<CheckCommonOptions, "timeout">): Promise<CheckResult>;
 }
 
 export interface IntegrateOptions {
@@ -621,13 +905,15 @@ export interface SubWorkflowOptions {
 // Ctx
 // ---------------------------------------------------------------------------
 
-export interface Ctx {
+export interface Ctx<TaskExtensionInput = unknown, TaskExtensions = TaskExtensionInput> {
   // steps
   agent: AgentFn;
-  parallel<T>(tasks: ReadonlyArray<ParallelTask<T>>, opts?: ParallelOptions): Promise<Settled<T>[]>;
+  parallel: ParallelFn;
   pipeline<I>(items: ReadonlyArray<I>): Pipeline<I, I>;
-  /** Narrow Settled[] to values; drops are recorded and listed in the report. */
-  ok<T>(settled: ReadonlyArray<Settled<T>>): T[];
+  /** Tolerantly collect values; drops are recorded and listed in the report. */
+  successes<T>(settled: ReadonlyArray<Settled<T>>): T[];
+  /** Return all values or throw the first lane failure after every lane has settled. */
+  all<T>(settled: ReadonlyArray<Settled<T>>): T[];
   workflow<In, Out>(def: WorkflowDefinitionLike<In, Out>, input: In, opts?: SubWorkflowOptions): Promise<Out>;
   workflow(name: string, input: unknown, opts?: SubWorkflowOptions): Promise<unknown>;
 
@@ -647,14 +933,25 @@ export interface Ctx {
   git: GitApi;
 
   // checks & ledger
-  check(name: string, opts: CheckOptions): Promise<CheckResult>;
+  check: CheckFn;
   integrate(
     results: ReadonlyArray<DetailedAgentResult<unknown> | PatchRef>,
     opts?: IntegrateOptions,
   ): Promise<IntegrationLedger>;
   discard(results: ReadonlyArray<DetailedAgentResult<unknown> | PatchRef>): Promise<void>;
   note(note: NoteInput): Promise<void>;
-  tasks: WorkflowTasksApi;
+  tasks: WorkflowTasksApi<TaskExtensionInput, TaskExtensions>;
+
+  // reusable composition
+  /** Derive an immutable context whose defaults are inherited by all nested calls. */
+  scope(opts: CtxScopeOptions): Ctx<TaskExtensionInput, TaskExtensions>;
+  /** Run a schema-backed transparent recipe. */
+  recipe<Input, Output, ParsedInput, RawOutput>(
+    definition: RecipeDefinition<Input, Output, ParsedInput, RawOutput>,
+    input: Input,
+  ): Promise<Output>;
+  /** @deprecated Use a schema-backed `defineRecipe()` with `ctx.recipe()`. */
+  step<Input, Output>(definition: StepDefinition<Input, Output>, input: Input): Promise<Output>;
 
   // durable waits
   signal<S extends AnySchema>(name: string, schema: S, opts?: { timeout?: Duration }): Promise<InferOut<S>>;
@@ -666,7 +963,11 @@ export interface Ctx {
   uuid(): Promise<string>;
 
   // structure & observability
-  phase(name: string): void;
+  /**
+   * Announce a phase and return an immutable context bound to it. Ignoring the
+   * return value preserves the legacy statement-style API.
+   */
+  phase(name: string): Ctx<TaskExtensionInput, TaskExtensions>;
   log(message: string): void;
   budget: BudgetView;
   run: RunInfo;
@@ -678,7 +979,9 @@ export interface Ctx {
  */
 export interface WorkflowDefinitionLike<In, Out> {
   readonly kind: "weft.workflow";
-  readonly run: (ctx: Ctx, input: In) => Promise<Out>;
+  /** Raw value accepted by the workflow input schema. */
+  readonly __input?: In;
+  readonly run: (ctx: Ctx<any, any>, input: any) => Promise<Out>;
   readonly meta: { id?: string; name?: string; description: string };
 }
 

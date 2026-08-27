@@ -11,6 +11,7 @@ import {
   type CompiledUiAsset,
   type CompiledUiCatalog,
   type CompiledUiViewToken,
+  type CtxScopeOptions,
   type GateResult,
   isCancellation,
   type Risk,
@@ -164,6 +165,8 @@ export interface StepIO {
   unmarkWaiting(): void;
 }
 
+type ExecutionScope = CtxScopeOptions & { phase?: string };
+
 export interface StepOutcome<T> {
   value: T;
   /** JSON journaled as the step output; defaults to `value`. */
@@ -247,8 +250,8 @@ export interface RunRuntimeOptions {
   workflowId: string;
   taskSchemaBinding?: string;
   taskSchemaVersion?: number;
-  /** Whether agent steps with no explicit `tasks` option receive task context. */
-  defaultAgentTaskContext?: boolean;
+  /** Default task authority for agent steps that do not specify `tasks`. */
+  defaultAgentTaskContext?: false | "read" | "write";
   cwd: string;
   baseRef?: string;
   depth: number;
@@ -267,7 +270,7 @@ export class RunRuntime {
   readonly workflowId: string;
   readonly taskSchemaBinding: string | undefined;
   readonly taskSchemaVersion: number;
-  readonly defaultAgentTaskContext: boolean;
+  readonly defaultAgentTaskContext: false | "read" | "write";
   readonly cwd: string;
   readonly baseRef: string | undefined;
   readonly depth: number;
@@ -318,6 +321,7 @@ export class RunRuntime {
   private appendChain: Promise<unknown> = Promise.resolve();
   private idleListeners: Array<() => void> = [];
   private readonly stepContext = new AsyncLocalStorage<{ seq: number }>();
+  private readonly executionScope = new AsyncLocalStorage<ExecutionScope>();
 
   constructor(opts: RunRuntimeOptions) {
     this.host = opts.host;
@@ -398,6 +402,19 @@ export class RunRuntime {
     if (this.currentPhase === name) return;
     this.currentPhase = name;
     if (!this.suppressCosmetic && !this.fencedWith) void this.append([{ type: "phase", name }]);
+  }
+
+  /** Announce a scoped phase without changing the legacy ambient phase pointer. */
+  announcePhase(name: string): void {
+    if (!this.suppressCosmetic && !this.fencedWith) void this.append([{ type: "phase", name }]);
+  }
+
+  activeScope(): ExecutionScope | undefined {
+    return this.executionScope.getStore();
+  }
+
+  withScope<T>(scope: ExecutionScope, run: () => T): T {
+    return this.executionScope.run(scope, run);
   }
 
   log(message: string): void {
@@ -606,17 +623,25 @@ export class RunRuntime {
   }
 
   async runStep<T>(spec: StepSpec<T>): Promise<T> {
+    // Capture scope synchronously at the call boundary. AsyncLocalStorage keeps
+    // concurrent phase handles isolated; phase remains presentation metadata and
+    // is deliberately excluded from the replay hash.
+    const scheduledPhase = this.activeScope()?.phase ?? this.currentPhase;
     if (this.signal.aborted) {
       throw new CancelledError("run cancelled", { kind: spec.kind, key: spec.key, runId: this.runId });
     }
-    const hash = hashStep(spec.kind, spec.payload, spec.schemaJson, spec.key);
-    const seq = ++this.seqCounter;
     if (spec.key !== undefined) {
       if (this.seenKeys.has(spec.key)) {
-        this.log(`duplicate step key "${spec.key}" — give each call a unique key for exact replay identity`);
+        throw new StepError(
+          "invalid_input",
+          `duplicate step key "${spec.key}"; every call in a run must have a unique replay key`,
+          { step: { kind: spec.kind, key: spec.key, runId: this.runId } },
+        );
       }
       this.seenKeys.add(spec.key);
     }
+    const hash = hashStep(spec.kind, spec.payload, spec.schemaJson, spec.key);
+    const seq = ++this.seqCounter;
     const ref: StepRef = {
       seq,
       kind: spec.kind,
@@ -802,7 +827,7 @@ export class RunRuntime {
           kind: spec.kind,
           ...(spec.key !== undefined ? { key: spec.key } : {}),
           ...(spec.label !== undefined ? { label: spec.label } : {}),
-          ...(this.currentPhase !== undefined ? { phase: this.currentPhase } : {}),
+          ...(scheduledPhase !== undefined ? { phase: scheduledPhase } : {}),
           ...(this.parentSeq() !== undefined ? { parentSeq: this.parentSeq() } : {}),
           ...(spec.route !== undefined ? { route: spec.route } : {}),
           ...(spec.scope !== undefined ? { scope: spec.scope } : {}),
@@ -1008,6 +1033,7 @@ export class RunRuntime {
   // -- humans ---------------------------------------------------------------
 
   async runHuman(spec: HumanSpec): Promise<HumanOutcome> {
+    const requestedPhase = this.activeScope()?.phase ?? this.currentPhase;
     if (this.signal.aborted) throw new CancelledError("run cancelled", { kind: "human", runId: this.runId });
     if (spec.onTimeout === "default") {
       // The default is journaled RAW with the request and, when the deadline
@@ -1140,6 +1166,7 @@ export class RunRuntime {
       kind: spec.kind,
       question: spec.question,
       schema: spec.schemaJson ?? {},
+      ...(requestedPhase !== undefined ? { phase: requestedPhase } : {}),
       ...(spec.detail !== undefined ? { detail: spec.detail } : {}),
       ...(spec.artifactRef !== undefined ? { artifactRef: spec.artifactRef } : {}),
       ...(spec.risk !== undefined ? { risk: spec.risk } : {}),

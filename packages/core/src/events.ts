@@ -3,7 +3,14 @@
  * else (state.json, report.md, the live tree) is a projection. Replay re-executes
  * workflow code and serves completed steps from here.
  */
-import type { Risk, SerializedStepError, Usage } from "@techery/weft-sdk";
+import type {
+  CheckDisposition,
+  CheckEvidence,
+  CheckStatus,
+  Risk,
+  SerializedStepError,
+  Usage,
+} from "@techery/weft-sdk";
 
 export type RunStatus =
   | "planning"
@@ -65,6 +72,8 @@ export interface HumanRequestEvent {
   key?: string;
   kind: HumanKind;
   question: string;
+  /** Cosmetic execution grouping; excluded from request identity. */
+  phase?: string;
   detail?: string;
   artifactRef?: BlobRefJson;
   schema: unknown;
@@ -204,8 +213,11 @@ export type JournalEvent =
   | {
       type: "check";
       name: string;
-      status: "pass" | "fail" | "trust-prior" | "skipped";
+      status: CheckStatus;
+      disposition?: CheckDisposition;
+      summary?: string;
       evidence?: string;
+      details?: readonly CheckEvidence[];
       required?: boolean;
     }
   | { type: "note"; kind: "decision" | "claim" | "risk"; text: string; evidence?: string }

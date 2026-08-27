@@ -7,6 +7,7 @@ import {
   OrderedDelivery,
   ReplayIndex,
   reduceState,
+  renderReport,
   Semaphore,
   structuralCheck,
   toWireSchema,
@@ -277,7 +278,14 @@ describe("reduceState check metadata", () => {
         ev: {
           type: "step.completed",
           seq: 1,
-          output: { status: "pass" },
+          output: {
+            status: "pass",
+            summary: "Types are sound",
+            details: [
+              { kind: "metric", name: "errors", actual: 0, expected: 0 },
+              { kind: "file", path: "src/index.ts", line: 12, message: "validated" },
+            ],
+          },
           sessionId: "session-1",
           transcriptRef: { $blob: "a".repeat(64), size: 120 },
         },
@@ -285,8 +293,18 @@ describe("reduceState check metadata", () => {
     ];
     const state = reduceState(recs);
     expect(state.checks).toEqual([
-      { name: "lint", status: "fail", required: true },
-      { name: "types", status: "pass", required: false },
+      { name: "lint", status: "fail", disposition: "executed", required: true },
+      {
+        name: "types",
+        status: "pass",
+        disposition: "executed",
+        summary: "Types are sound",
+        details: [
+          { kind: "metric", name: "errors", actual: 0, expected: 0 },
+          { kind: "file", path: "src/index.ts", line: 12, message: "validated" },
+        ],
+        required: false,
+      },
     ]);
     expect(state.steps.at(-1)?.schema).toEqual({
       type: "object",
@@ -294,6 +312,10 @@ describe("reduceState check metadata", () => {
     });
     expect(state.steps.at(-1)?.sessionId).toBe("session-1");
     expect(state.steps.at(-1)?.transcriptRef).toEqual({ $blob: "a".repeat(64), size: 120 });
+    const report = renderReport(state);
+    expect(report).toContain("| types | pass | executed |  | Types are sound |");
+    expect(report).toContain("**types:** errors: 0 (expected 0)");
+    expect(report).toContain("**types:** src/index.ts:12 — validated");
   });
 });
 
@@ -490,8 +512,8 @@ describe("ctx.pipeline builders", () => {
         const a = await base.map((n) => (n as number) + 1).run();
         const b = await base.map((n) => (n as number) + 2).run();
         return {
-          a: ctx.ok(a) as number[],
-          b: ctx.ok(b) as number[],
+          a: ctx.successes(a) as number[],
+          b: ctx.successes(b) as number[],
         };
       },
     );

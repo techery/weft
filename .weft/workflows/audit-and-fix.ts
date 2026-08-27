@@ -22,7 +22,7 @@ export default defineWorkflow(
   },
   async (ctx, { paths }) => {
     ctx.phase("Find");
-    const found = ctx.ok(
+    const found = ctx.successes(
       await ctx.parallel(
         paths.map((p) =>
           ctx.agent(`Find correctness bugs in ${p}. Cite file:line and quote the evidence.`, {
@@ -36,7 +36,7 @@ export default defineWorkflow(
     const findings = found.flatMap((r) => r.findings); // typed; no nulls
 
     ctx.phase("Verify");
-    const real = ctx.ok(
+    const real = ctx.successes(
       await ctx
         .pipeline(findings)
         .step((f) =>
@@ -50,7 +50,7 @@ export default defineWorkflow(
             ),
           ),
         )
-        .filter((votes) => ctx.ok(votes).filter((v) => v.real).length >= 2)
+        .filter((votes) => ctx.successes(votes).filter((v) => v.real).length >= 2)
         .map((_votes, f) => f)
         .run(),
     );
@@ -70,7 +70,7 @@ export default defineWorkflow(
       return { fixed: [], skipped: real };
     }
 
-    const fixes = ctx.ok(
+    const fixes = ctx.successes(
       await ctx.parallel(
         real.map((f) =>
           ctx.agent.detailed(`Fix and add a focused test: ${f.claim} (${f.file}:${f.line})`, {

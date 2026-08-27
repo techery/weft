@@ -58,10 +58,10 @@ export interface RunResult<Out> {
 }
 
 /** Start a workflow, wait for its validated output, and hand back the journal too. */
-export async function runWorkflow<In, Out>(
+export async function runWorkflow<In, Out, RawIn = In>(
   h: Harness,
-  def: WorkflowDefinition<In, Out>,
-  input: In,
+  def: WorkflowDefinition<In, Out, unknown, RawIn>,
+  input: RawIn,
 ): Promise<RunResult<Out>> {
   const handle = await h.engine.start(def, { input, cwd: await tempCwd() });
   const output = (await handle.result) as Out;
@@ -75,7 +75,7 @@ export function logs(records: JournalRecord[]): string[] {
   return records.flatMap((r) => (r.ev.type === "log" ? [r.ev.message] : []));
 }
 
-/** Every branch `ctx.ok()` dropped, as `code: message` reasons. */
+/** Every branch `ctx.successes()` dropped, as `code: message` reasons. */
 export function drops(records: JournalRecord[]): string[] {
   return records.flatMap((r) => (r.ev.type === "drop" ? [r.ev.reason] : []));
 }

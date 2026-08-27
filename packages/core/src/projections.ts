@@ -2,7 +2,14 @@
  * Projections (C9): state.json, tree.json, and report.md are all folds over the
  * journal — re-derivable at any time, never a source of truth.
  */
-import type { Risk, SerializedStepError, Usage } from "@techery/weft-sdk";
+import type {
+  CheckDisposition,
+  CheckEvidence,
+  CheckStatus,
+  Risk,
+  SerializedStepError,
+  Usage,
+} from "@techery/weft-sdk";
 import type { BlobRefJson, JournalRecord, RunStatus, StepKind, UiPresentation } from "./events.ts";
 
 export interface StepState {
@@ -36,6 +43,7 @@ export interface HumanState {
   key?: string;
   kind: string;
   question: string;
+  phase?: string;
   detail?: string;
   risk?: Risk;
   schema: unknown;
@@ -51,8 +59,11 @@ export interface HumanState {
 
 export interface CheckState {
   name: string;
-  status: "pass" | "fail" | "trust-prior" | "skipped";
+  status: CheckStatus;
+  disposition: CheckDisposition;
+  summary?: string;
   evidence?: string;
+  details?: readonly CheckEvidence[];
   required: boolean;
 }
 
@@ -220,15 +231,24 @@ export function reduceState(records: JournalRecord[]): RunState {
         if (ev.patchRef !== undefined) step.patchRef = ev.patchRef;
         if (ev.presentation !== undefined) step.presentation = ev.presentation;
         if (step.kind === "check") {
-          const out = ev.output as { status?: CheckState["status"]; evidence?: string } | null;
+          const out = ev.output as {
+            status?: CheckState["status"];
+            disposition?: CheckDisposition;
+            summary?: string;
+            evidence?: string;
+            details?: readonly CheckEvidence[];
+          } | null;
           const meta = checkMetaBySeq.get(ev.seq);
           const payloadName = meta?.name ?? step.label?.replace(/^check:/, "") ?? String(ev.seq);
           if (out?.status) {
             state.checks.push({
               name: payloadName,
               status: out.status,
+              disposition: out.disposition ?? "executed",
               required: meta?.required === true,
+              ...(out.summary !== undefined ? { summary: out.summary } : {}),
               ...(out.evidence !== undefined ? { evidence: out.evidence } : {}),
+              ...(out.details !== undefined ? { details: out.details } : {}),
             });
           }
         }
@@ -261,6 +281,7 @@ export function reduceState(records: JournalRecord[]): RunState {
           status: "pending",
           requestedAt: rec.at,
           ...(ev.key !== undefined ? { key: ev.key } : {}),
+          ...(ev.phase !== undefined ? { phase: ev.phase } : {}),
           ...(ev.detail !== undefined ? { detail: ev.detail } : {}),
           ...(ev.risk !== undefined ? { risk: ev.risk } : {}),
           ...(ev.deadline !== undefined ? { deadline: ev.deadline } : {}),
@@ -405,6 +426,25 @@ export function renderTree(state: RunState): TreePhase[] {
 // Report
 // ---------------------------------------------------------------------------
 
+function reportCell(value: string | undefined): string {
+  return (value ?? "").replaceAll("|", "\\|").replace(/\s+/g, " ").trim();
+}
+
+function reportEvidence(detail: CheckEvidence): string {
+  switch (detail.kind) {
+    case "text":
+      return detail.text;
+    case "file":
+      return `${detail.path}${detail.line !== undefined ? `:${detail.line}` : ""}${detail.message ? ` — ${detail.message}` : ""}`;
+    case "metric":
+      return `${detail.name}: ${detail.actual}${detail.unit ?? ""}${detail.expected !== undefined ? ` (expected ${detail.expected}${detail.unit ?? ""})` : ""}`;
+    case "command":
+      return `command exited ${detail.exitCode}${detail.output ? ` — ${detail.output}` : ""}`;
+    case "artifact":
+      return `${detail.label ?? "artifact"}: ${detail.ref}`;
+  }
+}
+
 export function renderReport(state: RunState): string {
   const lines: string[] = [];
   lines.push(`# ${state.workflow} — run ${state.runId}`);
@@ -446,9 +486,24 @@ export function renderReport(state: RunState): string {
 
   if (state.checks.length > 0) {
     lines.push("## Checks");
-    lines.push("| Check | Status | Required |");
-    lines.push("|---|---|---|");
-    for (const c of state.checks) lines.push(`| ${c.name} | ${c.status} | ${c.required ? "yes" : ""} |`);
+    lines.push("| Check | Status | Disposition | Required | Summary |");
+    lines.push("|---|---|---|---|---|");
+    for (const c of state.checks) {
+      lines.push(
+        `| ${reportCell(c.name)} | ${c.status} | ${c.disposition} | ${c.required ? "yes" : ""} | ${reportCell(c.summary)} |`,
+      );
+    }
+    const withEvidence = state.checks.filter((check) => check.evidence || check.details?.length);
+    if (withEvidence.length > 0) {
+      lines.push("");
+      lines.push("### Check evidence");
+      for (const check of withEvidence) {
+        if (check.evidence) lines.push(`- **${check.name}:** ${check.evidence}`);
+        for (const detail of check.details ?? []) {
+          lines.push(`- **${check.name}:** ${reportEvidence(detail)}`);
+        }
+      }
+    }
     lines.push("");
   }
 

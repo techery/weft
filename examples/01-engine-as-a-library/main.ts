@@ -47,7 +47,7 @@ const audit = defineWorkflow(
   },
   async (ctx, { paths }) => {
     ctx.phase("Find");
-    const found = ctx.ok(
+    const found = ctx.successes(
       await ctx.parallel(
         paths.map((p) =>
           ctx.agent(`Find correctness bugs in ${p}. Cite file:line and quote the evidence.`, {
@@ -61,7 +61,7 @@ const audit = defineWorkflow(
     ctx.log(`${findings.length} candidate findings across ${paths.length} paths`);
 
     ctx.phase("Verify");
-    const graded = ctx.ok(
+    const graded = ctx.successes(
       await ctx
         .pipeline(findings)
         .step((f) =>

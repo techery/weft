@@ -54,6 +54,27 @@ export default defineWorkflow(
 );
 `;
 
+const STANDARD_SCHEMA = `import { defineWorkflow } from "@techery/weft-sdk";
+
+const AnyValue = {
+  "~standard": {
+    version: 1,
+    vendor: "test-standard-schema",
+    validate: (value) => ({ value }),
+  },
+} as const;
+
+export default defineWorkflow(
+  {
+    id: "standard-schema",
+    description: "uses a non-Zod Standard Schema",
+    input: AnyValue,
+    output: AnyValue,
+  },
+  async (_ctx, input) => input,
+);
+`;
+
 /** No question, so it runs to completion — what the stats and start suites need. */
 const QUICK = `import { defineWorkflow, z } from "@techery/weft-sdk";
 
@@ -190,6 +211,7 @@ describe("GET /api/workflows", () => {
       taskExtensions: { properties: Record<string, { type?: string }> };
       taskExtensionSchemaVersion: number;
       tasksConfigured: boolean;
+      schemaWarnings: string[];
     };
     expect(body.name).toBe("gated");
     expect(body.hash).toMatch(/^[0-9a-f]{8,}$/);
@@ -203,6 +225,29 @@ describe("GET /api/workflows", () => {
     expect(body.taskExtensions.properties.ownerTeam?.type).toBe("string");
     expect(body.taskExtensionSchemaVersion).toBe(2);
     expect(body.tasksConfigured).toBe(true);
+    expect(body.schemaWarnings).toEqual([]);
+  });
+
+  it("exposes a permissive schema and warning for non-Zod Standard Schemas", async () => {
+    const cwd = await repo();
+    await writeFile(path.join(cwd, ".weft", "workflows", "standard.ts"), STANDARD_SCHEMA, "utf8");
+    const h = await open(cwd, registerWorkflowRoutes);
+
+    const res = await h.app.request("/api/workflows/standard");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      input: { type: string; properties: Record<string, unknown> };
+      output: { type: string; properties: Record<string, unknown> };
+      schemaWarnings: string[];
+    };
+    expect(body.input).toMatchObject({ type: "object", properties: { value: {} } });
+    expect(body.output).toMatchObject({ type: "object", properties: { value: {} } });
+    expect(body.schemaWarnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("input: non-zod schema"),
+        expect.stringContaining("output: non-zod schema"),
+      ]),
+    );
   });
 
   it("lists every durable task for the selected workflow", async () => {

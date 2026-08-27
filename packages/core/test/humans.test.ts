@@ -144,7 +144,7 @@ describe("integrate conflict resolutions via ask", () => {
         }),
       },
       async (ctx) => {
-        const fixes = ctx.ok(
+        const fixes = ctx.successes(
           await ctx.parallel([
             ctx.agent.detailed("one", { schema: FixResult, key: "fix:1", write: { paths: ["shared.txt"] } }),
             ctx.agent.detailed("two", { schema: FixResult, key: "fix:2", write: { paths: ["shared.txt"] } }),

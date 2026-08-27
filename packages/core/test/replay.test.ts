@@ -82,6 +82,36 @@ describe("replay & edit-tolerant resume", () => {
     expect(recs.filter((r) => r.ev.type === "replay.salvaged").length).toBeGreaterThan(0);
   });
 
+  test("renaming a scoped phase does not invalidate durable step identity", async () => {
+    const mkDef = (phase: string) =>
+      defineWorkflow(
+        { name: "phase-rename", description: "phase rename", input: z.object({}), output: Out },
+        async (ctx) => {
+          const scoped = ctx.phase(phase);
+          const result = await scoped.agent("stable work", {
+            schema: z.object({ tag: z.string() }),
+            key: "stable",
+          });
+          await scoped.human.approve({ key: "done", action: "done?" });
+          return { values: [result.tag] };
+        },
+      );
+
+    const t1 = testEngine();
+    t1.builder.on({ key: "stable" }, { tag: "cached" });
+    const cwd = await tempDir();
+    const h1 = await t1.engine.start(mkDef("Review"), { input: {}, cwd });
+    const waiting = await h1.outcome();
+    if (waiting.status !== "waiting_for_human") throw new Error("expected suspension");
+    await t1.engine.answer(h1.runId, waiting.pending[0]!.id, { approved: true });
+    await h1.result;
+
+    const t2 = reopen(t1);
+    const h2 = await t2.engine.resume(h1.runId, { def: mkDef("Deep review") });
+    expect(await h2.result).toEqual({ values: ["cached"] });
+    expect(t2.builder.calls).toHaveLength(0);
+  });
+
   test("rewording one prompt re-runs that step only; the rest serve from the journal", async () => {
     const mkDef = (promptB: string) =>
       defineWorkflow({ name: "two", description: "two", input: z.object({}), output: Out }, async (ctx) => {
@@ -173,7 +203,7 @@ describe("replay & edit-tolerant resume", () => {
           ),
         );
         await ctx.human.approve({ action: "done?" });
-        return { values: [...order, ...ctx.ok(settled).map((s) => s.tag)] };
+        return { values: [...order, ...ctx.successes(settled).map((s) => s.tag)] };
       },
     );
     const t1 = testEngine();

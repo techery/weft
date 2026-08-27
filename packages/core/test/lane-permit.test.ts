@@ -25,7 +25,7 @@ describe("fan-out concurrency", () => {
             ctx.agent(`work ${i}`, { schema: z.object({ v: z.number() }), key: `w${i}` }),
           ),
         );
-        return { ok: ctx.ok(settled).length, peak };
+        return { ok: ctx.successes(settled).length, peak };
       },
     );
 

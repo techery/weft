@@ -19,9 +19,9 @@ import {
   type RunState,
   reduceState,
 } from "@techery/weft-core";
-import { TaskStore } from "@techery/weft-host";
+import { type CreateTaskInput, TaskStore } from "@techery/weft-host";
 import { type MockAgentBuilder, mock } from "@techery/weft-provider-mock";
-import { type WorkflowDefinition, z } from "@techery/weft-sdk";
+import { type WorkflowDefinition, type WorkflowTaskSnapshot, z } from "@techery/weft-sdk";
 import {
   type BashFixtures,
   buildTestHooks,
@@ -34,8 +34,16 @@ import { buildJournalView, type JournalView } from "./journal.ts";
 /** Answers looked up by request id (`h1`), then by exact question, then by function. */
 export type AnswerFixtures = Record<string, unknown> | ((req: PendingRequest) => unknown | Promise<unknown>);
 
-export interface RunWorkflowOptions {
-  input: unknown;
+/** Signal payloads looked up by signal name, or resolved lazily by name. */
+export type SignalFixtures = Record<string, unknown> | ((name: string) => unknown | Promise<unknown>);
+
+/** Tasks present before the workflow starts, validated against its declared task contract. */
+export type TaskSeed<Extensions = unknown> = Omit<CreateTaskInput, "actor" | "extensions"> & {
+  extensions?: Extensions;
+};
+
+export interface RunWorkflowOptions<Input = unknown, TaskExtensionInput = unknown> {
+  input: Input;
   /** Fallback registered for both provider ids; defaults to an empty, fail-loud mock. */
   provider?: MockAgentBuilder;
   /** Provider-specific fixtures override `provider`, allowing routing assertions. */
@@ -50,13 +58,16 @@ export interface RunWorkflowOptions {
   budget?: { tokens?: number; usd?: number };
   config?: EngineConfigInput;
   answers?: AnswerFixtures;
+  signals?: SignalFixtures;
+  taskSeeds?: TaskSeed<TaskExtensionInput>[];
 }
 
-export interface RunWorkflowResult<Out> {
+export interface RunWorkflowResult<Out, TaskExtensions = unknown> {
   output: Out;
   journal: JournalView;
   state: RunState;
   runId: string;
+  tasks: WorkflowTaskSnapshot<TaskExtensions>;
 }
 
 const scratchDirs: string[] = [];
@@ -84,10 +95,16 @@ async function scratchCwd(): Promise<string> {
   return dir;
 }
 
-export async function runWorkflow<In, Out>(
-  def: WorkflowDefinition<In, Out>,
-  opts: RunWorkflowOptions,
-): Promise<RunWorkflowResult<Out>> {
+export async function runWorkflow<
+  In,
+  Out,
+  TaskExtensions = unknown,
+  RawIn = In,
+  TaskExtensionInput = TaskExtensions,
+>(
+  def: WorkflowDefinition<In, Out, TaskExtensions, RawIn, TaskExtensionInput>,
+  opts: RunWorkflowOptions<RawIn, TaskExtensionInput>,
+): Promise<RunWorkflowResult<Out, TaskExtensions>> {
   const journalStore = new MemoryJournalStore();
   const blobs = new MemoryBlobStore();
   const builder = opts.provider ?? mock();
@@ -101,6 +118,28 @@ export async function runWorkflow<In, Out>(
   const testHooks = buildTestHooks(opts);
   const cwd = opts.cwd ?? (await scratchCwd());
   const taskStore = new TaskStore(join(cwd, ".weft", "tasks"));
+  const workflowId = def.meta.id ?? def.meta.name ?? "workflow";
+  const workflowName = def.meta.name ?? def.meta.id ?? "workflow";
+  let extensionJsonSchema: unknown | null = null;
+  if (def.meta.tasks?.extensions) {
+    try {
+      extensionJsonSchema = z.toJSONSchema(def.meta.tasks.extensions as z.ZodType, {
+        io: "input",
+        unrepresentable: "any",
+      });
+    } catch {
+      extensionJsonSchema = null;
+    }
+  }
+  await taskStore.registerWorkflow(
+    { id: workflowId, name: workflowName },
+    def.meta.tasks?.extensions,
+    extensionJsonSchema,
+    def.meta.tasks,
+  );
+  for (const seed of opts.taskSeeds ?? []) {
+    await taskStore.create(workflowId, { ...seed, actor: "test" }, def.meta.tasks?.extensions);
+  }
   const engine = new Engine({
     journal: journalStore,
     blobs,
@@ -135,7 +174,7 @@ export async function runWorkflow<In, Out>(
     ...(opts.budget !== undefined ? { budget: opts.budget } : {}),
   });
 
-  const output = await settle(engine, handle, opts.answers);
+  const output = await settle(engine, handle, opts.answers, opts.signals);
 
   const records: JournalRecord[] = [];
   for await (const rec of journalStore.read(handle.runId)) records.push(rec);
@@ -144,6 +183,7 @@ export async function runWorkflow<In, Out>(
     journal: buildJournalView(records),
     state: reduceState(records),
     runId: handle.runId,
+    tasks: (await taskStore.snapshot(workflowId)) as WorkflowTaskSnapshot<TaskExtensions>,
   };
 }
 
@@ -156,6 +196,7 @@ async function settle(
   engine: Engine,
   handle: RunHandle,
   answers: AnswerFixtures | undefined,
+  signals: SignalFixtures | undefined,
 ): Promise<unknown> {
   for (;;) {
     const outcome = await handle.outcome();
@@ -170,12 +211,21 @@ async function settle(
         const state = await engine.state(handle.runId);
         const names = state.steps
           .filter((s) => s.kind === "signal" && s.status === "running")
-          .map((s) => s.label ?? "(unnamed)")
-          .join(", ");
-        throw new Error(
-          `runWorkflow: run ${handle.runId} is waiting for ${names || "a signal"} — runWorkflow cannot deliver ` +
-            `signals; drive the Engine directly for workflows that block on ctx.signal()`,
-        );
+          .map((s) => (s.label ?? "").replace(/^signal:/, ""))
+          .filter((name) => name !== "");
+        if (names.length === 0) {
+          throw new Error(`runWorkflow: run ${handle.runId} is waiting for an unnamed signal`);
+        }
+        for (const name of names) {
+          const payload = await resolveSignal(name, signals);
+          if (!payload.found) {
+            throw new Error(
+              `runWorkflow: run ${handle.runId} is waiting for signal:${name} - provide it via opts.signals`,
+            );
+          }
+          await engine.signal(handle.runId, name, payload.value);
+        }
+        break;
       }
       case "waiting_for_human": {
         if (outcome.pending.length === 0) {
@@ -196,6 +246,18 @@ async function settle(
       }
     }
   }
+}
+
+async function resolveSignal(
+  name: string,
+  signals: SignalFixtures | undefined,
+): Promise<{ found: boolean; value?: unknown }> {
+  if (signals === undefined) return { found: false };
+  if (typeof signals === "function") {
+    const value = await signals(name);
+    return value === undefined ? { found: false } : { found: true, value };
+  }
+  return Object.hasOwn(signals, name) ? { found: true, value: signals[name] } : { found: false };
 }
 
 async function resolveAnswer(req: PendingRequest, answers: AnswerFixtures | undefined): Promise<unknown> {

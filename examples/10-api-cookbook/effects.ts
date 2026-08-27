@@ -19,9 +19,10 @@ export default defineWorkflow(
       schema: z.object({ ok: z.boolean() }),
     });
     const response = await ctx.fetch(input.url, { key: "fetch", headers: { authorization: token } });
-    await ctx.check("command", { exec: ["node", "--version"], required: true });
-    await ctx.check("function", { fn: () => true });
-    await ctx.check("trusted", { trustPrior: { run: "documented-run", reason: "example only" } });
+    await ctx.check.exec("command", ["node", "--version"], { required: true });
+    await ctx.check.fn("function", () => true);
+    await ctx.check.trust("trusted", { run: "documented-run", reason: "example only" });
+    await ctx.check.skip("platform-only", "not available in this portable example");
     return { bytes: stat.size ?? read.size, files: paths.length, status: response.status };
   },
 );

@@ -1,6 +1,6 @@
 import type { JournalRecord } from "@techery/weft-core";
 import { mockTaskEnvelope } from "@techery/weft-provider-mock";
-import { defineWorkflow, StepError, z } from "@techery/weft-sdk";
+import { defineCheck, defineWorkflow, StepError, z } from "@techery/weft-sdk";
 import { afterAll, describe, expect, test } from "vitest";
 import { cleanupRepos, reopen, tempDir, tempRepo, testEngine } from "./helpers.ts";
 
@@ -34,10 +34,12 @@ describe("engine end to end", () => {
     );
     const def = defineWorkflow(
       {
+        id: "planner",
         name: "planner",
         description: "plan",
         input: z.object({ goal: z.string() }),
         output: z.object({ stepCount: z.number() }),
+        tasks: {},
       },
       async (ctx, { goal }) => {
         ctx.phase("Plan");
@@ -54,7 +56,7 @@ describe("engine end to end", () => {
 
     const recs = await records(t.journal, handle.runId);
     expect(recs.find((record) => record.ev.type === "run.created")?.ev).toMatchObject({
-      workflow: { taskContextVersion: 1 },
+      workflow: { taskContextVersion: 2 },
     });
     const types = recs.map((r) => r.ev.type);
     expect(types).toContain("run.created");
@@ -109,7 +111,13 @@ describe("engine end to end", () => {
     });
     t.builder.on({ key: "fix" }, { ok: true });
     const def = defineWorkflow(
-      { description: "protected writes", input: z.object({}), output: z.object({ ok: z.boolean() }) },
+      {
+        id: "protected-writes",
+        description: "protected writes",
+        input: z.object({}),
+        output: z.object({ ok: z.boolean() }),
+        tasks: {},
+      },
       async (ctx) =>
         ctx.agent("Fix and verify", {
           key: "fix",
@@ -156,6 +164,7 @@ describe("engine end to end", () => {
     const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
     expect(await handle.result).toEqual({ value: "ok:domain-value" });
     expect(applied).toEqual([]);
+    expect(t.builder.calls[0]!.prompt).not.toContain("Workflow task tracker");
   });
 
   test("journals task observations and applies workflow-owned upserts after settlement", async () => {
@@ -192,14 +201,12 @@ describe("engine end to end", () => {
       },
       async (ctx) => {
         const before = await ctx.tasks.observe({}, { key: "tasks:before" });
-        await ctx.tasks.upsert(
-          "src/a.ts|fn|failure",
-          {
-            create: { title: "Fix failure", description: "Concrete evidence", relatedFiles: ["src/a.ts"] },
-            note: "seen now",
-          },
-          { key: "tasks:record" },
-        );
+        await ctx.tasks.upsert({
+          dedupeKey: "src/a.ts|fn|failure",
+          key: "tasks:record",
+          set: { title: "Fix failure", description: "Concrete evidence", relatedFiles: ["src/a.ts"] },
+          note: "seen now",
+        });
         const after = await ctx.tasks.observe({}, { key: "tasks:after" });
         return { before: before.tasks.length, after: after.tasks.length };
       },
@@ -207,7 +214,17 @@ describe("engine end to end", () => {
 
     const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
     expect(await handle.result).toEqual({ before: 0, after: 1 });
-    expect(batches).toEqual([[expect.objectContaining({ op: "upsert", dedupeKey: "src/a.ts|fn|failure" })]]);
+    expect(batches).toEqual([
+      [
+        expect.objectContaining({
+          op: "upsert",
+          dedupeKey: "src/a.ts|fn|failure",
+          create: { title: "Fix failure", description: "Concrete evidence", relatedFiles: ["src/a.ts"] },
+          update: { title: "Fix failure", description: "Concrete evidence", relatedFiles: ["src/a.ts"] },
+          note: "seen now",
+        }),
+      ],
+    ]);
     const recs = await records(t.journal, handle.runId);
     const observations = recs.filter(
       (record) =>
@@ -582,7 +599,7 @@ describe("engine end to end", () => {
         expect(settled[0]!.ok).toBe(true);
         expect(settled[1]!.ok).toBe(false);
         if (!settled[1]!.ok) expect(settled[1]!.error).toBeInstanceOf(StepError);
-        const good = ctx.ok(settled);
+        const good = ctx.successes(settled);
         return { count: good.flatMap((g) => g.findings).length };
       },
     );
@@ -591,6 +608,90 @@ describe("engine end to end", () => {
     const recs = await records(t.journal, handle.runId);
     expect(recs.some((r) => r.ev.type === "step.failed")).toBe(true);
     expect(recs.some((r) => r.ev.type === "drop")).toBe(true);
+  });
+
+  test("parallel mapper form enforces concurrency and all() requires every lane", async () => {
+    const t = testEngine();
+    let active = 0;
+    let peak = 0;
+    const def = defineWorkflow(
+      {
+        description: "bounded parallel",
+        input: z.object({}),
+        output: z.object({ values: z.array(z.number()) }),
+      },
+      async (ctx) => {
+        const settled = await ctx.parallel(
+          [1, 2, 3],
+          async (value) => {
+            active++;
+            peak = Math.max(peak, active);
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            active--;
+            return value * 2;
+          },
+          { concurrency: 1 },
+        );
+        return { values: ctx.all(settled) };
+      },
+    );
+
+    const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    expect(await handle.result).toEqual({ values: [2, 4, 6] });
+    expect(peak).toBe(1);
+  });
+
+  test("parallel rejects a concurrency cap on already-started promises", async () => {
+    const t = testEngine();
+    const def = defineWorkflow(
+      { description: "invalid cap", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.parallel([Promise.resolve(1), Promise.resolve(2)], { concurrency: 1 });
+        return {};
+      },
+    );
+
+    const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(handle.result).rejects.toMatchObject({
+      code: "invalid_input",
+      message: expect.stringContaining("already started"),
+    });
+  });
+
+  test("parallel errors:throw surfaces a failed lane after settlement", async () => {
+    const t = testEngine();
+    const def = defineWorkflow(
+      { description: "strict parallel", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.parallel([() => 1, () => Promise.reject(new Error("lane failed"))], {
+          errors: "throw",
+        });
+        return {};
+      },
+    );
+
+    const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(handle.result).rejects.toMatchObject({ message: expect.stringContaining("lane failed") });
+  });
+
+  test("duplicate replay keys fail before dispatching a second step", async () => {
+    const t = testEngine();
+    t.builder.on({ key: "same" }, { ok: true });
+    const def = defineWorkflow(
+      { description: "duplicate keys", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.agent("first", { key: "same", schema: z.object({ ok: z.boolean() }) });
+        await ctx.agent("second", { key: "same", schema: z.object({ ok: z.boolean() }) });
+        return {};
+      },
+    );
+
+    const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(handle.result).rejects.toMatchObject({
+      code: "invalid_input",
+      message: expect.stringContaining('duplicate step key "same"'),
+    });
+    expect(t.builder.calls).toHaveLength(1);
   });
 
   test("pipeline: step → filter → map with lanes and no barrier", async () => {
@@ -610,7 +711,7 @@ describe("engine end to end", () => {
           .filter((verdict) => verdict.real)
           .map((_verdict, n) => n * 10)
           .run({ concurrency: 2 });
-        return { kept: ctx.ok(out) as number[] };
+        return { kept: ctx.successes(out) as number[] };
       },
     );
     const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
@@ -1149,6 +1250,26 @@ describe("engine end to end", () => {
     await expect(handle.result).rejects.toMatchObject({ code: "depth_exceeded" });
   });
 
+  test("inline child workflows require stable replay identity", async () => {
+    const child = defineWorkflow(
+      { description: "anonymous child", input: z.object({}), output: z.object({}) },
+      async () => ({}),
+    );
+    const parent = defineWorkflow(
+      { description: "parent", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.workflow(child, {}, { key: "child" });
+        return {};
+      },
+    );
+    const t = testEngine();
+    const handle = await t.engine.start(parent, { input: {}, cwd: await tempDir() });
+    await expect(handle.result).rejects.toMatchObject({
+      code: "invalid_input",
+      message: expect.stringContaining("require meta.id or meta.name"),
+    });
+  });
+
   test("check with exec: pass/fail, and a failed required check fails the run", async () => {
     const t = testEngine();
     const def = defineWorkflow(
@@ -1178,9 +1299,87 @@ describe("engine end to end", () => {
       },
     );
     const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
-    expect(await handle.result).toEqual({ status: "trust-prior" });
+    expect(await handle.result).toEqual({ status: "pass" });
     const state = await t.engine.state(handle.runId);
-    expect(state.checks[0]).toMatchObject({ name: "tests", status: "trust-prior" });
+    expect(state.checks[0]).toMatchObject({ name: "tests", status: "pass", disposition: "trusted" });
+  });
+
+  test("reusable checks trust only compatible executed passes from completed runs", async () => {
+    const t = testEngine();
+    const invariant = defineCheck({
+      name: "positive",
+      revision: "v1",
+      input: z.object({ value: z.number(), metadata: z.record(z.string(), z.number()) }),
+      run: ({ value }) => value > 0,
+    });
+    const source = defineWorkflow(
+      { description: "source check", input: z.object({}), output: z.object({ passed: z.boolean() }) },
+      async (ctx) => ({
+        passed:
+          (await ctx.check(invariant, { value: 1, metadata: { b: 2, a: 1 } }, { key: "positive" })).status ===
+          "pass",
+      }),
+    );
+    const sourceHandle = await t.engine.start(source, { input: {}, cwd: await tempDir() });
+    await expect(sourceHandle.result).resolves.toEqual({ passed: true });
+
+    const trusted = defineWorkflow(
+      {
+        description: "trusted check",
+        input: z.object({ priorRun: z.string(), value: z.number() }),
+        output: z.object({ disposition: z.string() }),
+      },
+      async (ctx, input) => {
+        const result = await ctx.check(
+          invariant,
+          { value: input.value, metadata: { a: 1, b: 2 } },
+          {
+            key: "trusted-positive",
+            trust: { run: input.priorRun, reason: "same validated input" },
+          },
+        );
+        return { disposition: result.disposition ?? "executed" };
+      },
+    );
+    const trustedHandle = await t.engine.start(trusted, {
+      input: { priorRun: sourceHandle.runId, value: 1 },
+      cwd: await tempDir(),
+    });
+    await expect(trustedHandle.result).resolves.toEqual({ disposition: "trusted" });
+
+    const incompatible = await t.engine.start(trusted, {
+      input: { priorRun: sourceHandle.runId, value: 2 },
+      cwd: await tempDir(),
+    });
+    await expect(incompatible.result).rejects.toThrow(/no compatible executed pass/);
+  });
+
+  test("check helpers make intent explicit and ambiguous JavaScript input fails", async () => {
+    const t = testEngine();
+    const def = defineWorkflow(
+      { description: "check intent", input: z.object({}), output: z.object({ skipped: z.string() }) },
+      async (ctx) => {
+        const passed = await ctx.check.fn("callback", () => true);
+        expect(passed.status).toBe("pass");
+        const skipped = await ctx.check.skip("platform", "not available on this host");
+        expect(skipped).toMatchObject({ status: "pass", disposition: "waived" });
+        await expect(
+          (ctx.check as unknown as (name: string, opts: object) => Promise<unknown>)("ambiguous", {
+            exec: ["true"],
+            fn: () => true,
+          }),
+        ).rejects.toMatchObject({ code: "invalid_input" });
+        await expect(
+          (ctx.check as unknown as (name: string, opts: object) => Promise<unknown>)("missing", {
+            required: true,
+          }),
+        ).rejects.toMatchObject({ code: "invalid_input" });
+        return { skipped: skipped.evidence ?? "" };
+      },
+    );
+
+    const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    expect(await handle.result).toEqual({ skipped: "not available on this host" });
   });
 
   test("cancel aborts in-flight work; the run stays journaled as cancelled", async () => {

@@ -16,13 +16,23 @@ import {
   removeWorktree,
 } from "@techery/weft-isolation";
 import {
+  type AgentDefinition,
   type AgentFn,
   type AgentOptions,
   type AnySchema,
   CancelledError,
+  type CheckDefinition,
+  type CheckFn,
+  type CheckInvocationOptions,
   type CheckOptions,
+  type CheckPolicy,
   type CheckResult,
+  type CheckSuiteDefinition,
+  type CheckSuiteInvocationOptions,
+  type CheckSuiteMember,
+  type CheckSuiteResult,
   type Ctx,
+  type CtxScopeOptions,
   type DetailedAgentResult,
   type Duration,
   type ExecOptions,
@@ -36,15 +46,20 @@ import {
   type IntegrationLedger,
   isCancellation,
   type NoteInput,
+  type ParallelFn,
   type ParallelOptions,
   type ParallelTask,
+  type ParameterizedCheckSuiteDefinition,
+  type ParameterizedCheckSuiteResult,
   type PatchRef,
   type Pipeline,
   parseDuration,
+  type RecipeDefinition,
   type Risk,
   type SchemaIssue,
   type SecretHandle,
   type Settled,
+  type StepDefinition,
   StepError,
   type SubWorkflowOptions,
   type Usage,
@@ -54,11 +69,13 @@ import {
   type WorkflowTaskSnapshot,
   type WorkflowTaskUpdateInput,
   type WorkflowTaskUpsertInput,
+  type WorkflowTaskUpsertSpec,
 } from "@techery/weft-sdk";
 import { execa } from "execa";
 import picomatch from "picomatch";
 import { glob as tinyGlob } from "tinyglobby";
 import * as z from "zod";
+import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { priceFor } from "./config.ts";
 import type { BlobRefJson } from "./events.ts";
 import { toWireSchema, unwrapWireValue } from "./jsonschema.ts";
@@ -452,6 +469,9 @@ export async function integrationBaseCommit(cwd: string, alsoInclude: string[] =
 const suppressedRevivals = new WeakSet<object>();
 
 export function buildCtx(rt: RunRuntime): Ctx {
+  const reportWireLints = (label: string, lints: readonly string[]): void => {
+    for (const lint of lints) rt.log(`${label}: schema compatibility warning: ${lint}`);
+  };
   const config = rt.host.config;
   const gitHandle: Git = createGit(rt.cwd);
 
@@ -493,9 +513,15 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
   async function agentImpl<S extends AnySchema>(
     prompt: string,
-    opts: AgentOptions<S>,
+    providedOpts: AgentOptions<S>,
     mode: { detailed: boolean; writeInPlace?: boolean },
   ): Promise<unknown> {
+    const active = rt.activeScope();
+    const opts = {
+      ...(active?.agent ?? {}),
+      ...providedOpts,
+      ...(providedOpts.tasks === undefined && active?.tasks !== undefined ? { tasks: active.tasks } : {}),
+    } as AgentOptions<S>;
     if (!opts?.schema) {
       throw new StepError("invalid_input", "ctx.agent: 'schema' is required on every step", {
         step: { kind: "agent" },
@@ -516,7 +542,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
     const repairMax = opts.repair ?? config.limits.repair;
     const useWorktree = !mode.writeInPlace && (opts.isolation === "worktree" || opts.write !== undefined);
     const ordinal = rt.nextAgentOrdinal();
-    const label = opts.label ?? opts.key ?? `${rt.currentPhase ?? "run"}/agent#${ordinal}`;
+    const label =
+      opts.label ?? opts.key ?? `${rt.activeScope()?.phase ?? rt.currentPhase ?? "run"}/agent#${ordinal}`;
+    reportWireLints(label, wire.lints);
     const scope = opts.write
       ? {
           paths: opts.write.paths,
@@ -536,7 +564,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     const taskAccess =
       opts.tasks === false || !rt.host.taskTracker || mode.writeInPlace
         ? undefined
-        : (opts.tasks ?? (rt.defaultAgentTaskContext ? {} : undefined));
+        : (opts.tasks ?? (rt.defaultAgentTaskContext ? { mode: rt.defaultAgentTaskContext } : undefined));
     const taskMode = taskAccess?.mode ?? "write";
     const taskSelector: WorkflowTaskSelector | undefined = taskAccess
       ? {
@@ -1357,10 +1385,59 @@ export function buildCtx(rt: RunRuntime): Ctx {
     }
   }
 
-  const agent = (<S extends AnySchema>(prompt: string, opts: AgentOptions<S>) =>
-    agentImpl(prompt, opts, { detailed: false })) as AgentFn;
-  agent.detailed = <S extends AnySchema>(prompt: string, opts: AgentOptions<S>) =>
-    agentImpl(prompt, opts, { detailed: true }) as Promise<DetailedAgentResult<InferOut<S>>>;
+  async function reusableAgentCall<Input, S extends AnySchema, ParsedInput>(
+    definition: AgentDefinition<Input, S, ParsedInput>,
+    input: Input,
+    overrides: Omit<AgentOptions<S>, "schema"> | undefined,
+    detailed: boolean,
+  ): Promise<unknown> {
+    if (definition?.kind !== "weft.agent") {
+      throw new StepError("invalid_input", "ctx.agent: reusable agents must be created with defineAgent", {
+        step: { kind: "agent" },
+      });
+    }
+    const scopedDefaults = rt.activeScope();
+    const opts = {
+      ...definition.defaults,
+      ...(scopedDefaults?.agent ?? {}),
+      ...(scopedDefaults?.tasks !== undefined ? { tasks: scopedDefaults.tasks } : {}),
+      ...(overrides ?? {}),
+      schema: definition.schema,
+      label: overrides?.label ?? definition.defaults.label ?? definition.name,
+    } as AgentOptions<S>;
+    let promptInput: unknown = input;
+    if (definition.prompt.input !== undefined) {
+      const validation = await validateSchema(definition.prompt.input, input);
+      if (!validation.ok) {
+        throw new StepError(
+          "invalid_input",
+          `agent:${definition.name}: input failed schema validation: ${validation.issues
+            .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
+            .join("; ")}`,
+          { step: { kind: "agent", key: overrides?.key } },
+        );
+      }
+      promptInput = validation.value;
+    }
+    return agentImpl(definition.prompt.render(promptInput as ParsedInput), opts, { detailed });
+  }
+
+  const agent = ((
+    promptOrDefinition: string | AgentDefinition<unknown, AnySchema>,
+    inputOrOptions: unknown,
+    maybeOptions?: Omit<AgentOptions<AnySchema>, "schema">,
+  ) =>
+    typeof promptOrDefinition === "string"
+      ? agentImpl(promptOrDefinition, inputOrOptions as AgentOptions<AnySchema>, { detailed: false })
+      : reusableAgentCall(promptOrDefinition, inputOrOptions, maybeOptions, false)) as AgentFn;
+  agent.detailed = ((
+    promptOrDefinition: string | AgentDefinition<unknown, AnySchema>,
+    inputOrOptions: unknown,
+    maybeOptions?: Omit<AgentOptions<AnySchema>, "schema">,
+  ) =>
+    typeof promptOrDefinition === "string"
+      ? agentImpl(promptOrDefinition, inputOrOptions as AgentOptions<AnySchema>, { detailed: true })
+      : reusableAgentCall(promptOrDefinition, inputOrOptions, maybeOptions, true)) as AgentFn["detailed"];
 
   // ---- fan-out ------------------------------------------------------------
 
@@ -1373,30 +1450,52 @@ export function buildCtx(rt: RunRuntime): Ctx {
     }
   }
 
-  async function parallel<T>(
-    tasks: ReadonlyArray<ParallelTask<T>>,
-    opts?: ParallelOptions,
-  ): Promise<Settled<T>[]> {
+  async function parallelImpl<T, Result = T>(
+    tasksOrItems: ReadonlyArray<ParallelTask<T>> | ReadonlyArray<T>,
+    runOrOpts?: ((item: T, index: number) => Promise<Result> | Result) | ParallelOptions,
+    maybeOpts?: ParallelOptions,
+  ): Promise<Settled<T | Result>[]> {
+    const mapped = typeof runOrOpts === "function";
+    const explicitOpts = (mapped ? maybeOpts : runOrOpts) as ParallelOptions | undefined;
+    const opts = { ...(rt.activeScope()?.parallel ?? {}), ...(explicitOpts ?? {}) };
+    const tasks: ReadonlyArray<ParallelTask<T | Result>> = mapped
+      ? (tasksOrItems as ReadonlyArray<T>).map((item, index) => () => runOrOpts(item, index))
+      : (tasksOrItems as ReadonlyArray<ParallelTask<T>>);
     if (tasks.length > config.limits.fanoutMax) {
-      // Promise-form tasks are ALREADY running — their steps spend and append.
-      // Failing while they're in flight would let them journal after run.failed
-      // lands (and leak unhandled rejections); settle them before surfacing.
-      await Promise.allSettled(tasks.filter((t) => typeof t !== "function"));
+      await Promise.allSettled(tasks.filter((task) => typeof task !== "function"));
       throw new StepError(
         "invalid_input",
         `parallel: ${tasks.length} items exceeds the cap of ${config.limits.fanoutMax}`,
       );
     }
+    if (
+      !mapped &&
+      opts?.concurrency !== undefined &&
+      opts.concurrency < tasks.length &&
+      tasks.some((task) => typeof task !== "function")
+    ) {
+      await Promise.allSettled(tasks.filter((task) => typeof task !== "function"));
+      throw new StepError(
+        "invalid_input",
+        "parallel: concurrency cannot limit promises that have already started; pass items and a mapper, or an array of thunks",
+      );
+    }
     let settled: Settled<T>[];
-    if (opts?.concurrency && tasks.every((t) => typeof t === "function")) {
-      settled = await mapWithConcurrency(tasks, opts.concurrency, (t) => toSettled(t));
+    if (opts?.concurrency && tasks.every((task) => typeof task === "function")) {
+      settled = (await mapWithConcurrency(tasks, opts.concurrency, (t) => toSettled(t))) as Settled<T>[];
     } else {
-      settled = await Promise.all(tasks.map((t) => toSettled(t)));
+      settled = (await Promise.all(tasks.map((t) => toSettled(t)))) as Settled<T>[];
     }
     const cancelled = settled.find((s) => !s.ok && isCancellation(s.error));
     if (cancelled && !cancelled.ok) throw cancelled.error;
+    if (opts?.errors === "throw") {
+      const failed = settled.find((result) => !result.ok);
+      if (failed && !failed.ok) throw failed.error;
+    }
     return settled;
   }
+
+  const parallel = parallelImpl as ParallelFn;
 
   function pipeline<I>(items: ReadonlyArray<I>): Pipeline<I, I> {
     if (items.length > config.limits.fanoutMax) {
@@ -1423,7 +1522,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
       map(fn) {
         return makeBuilder([...stages, { type: "map", fn: fn as Stage["fn"] }]) as never;
       },
-      async run(opts?: { concurrency?: number }) {
+      async run(opts?: ParallelOptions) {
         const lanes = await mapWithConcurrency(
           items,
           opts?.concurrency ?? (items.length || 1),
@@ -1445,21 +1544,32 @@ export function buildCtx(rt: RunRuntime): Ctx {
         );
         const cancelled = lanes.find((l) => "ok" in l && !l.ok && isCancellation(l.error));
         if (cancelled && "error" in cancelled) throw cancelled.error;
-        return lanes.filter(
+        const settled = lanes.filter(
           (l): l is Exclude<typeof l, { filtered: true }> => !("filtered" in l),
         ) as Settled<unknown>[];
+        if (opts?.errors === "throw") {
+          const failed = settled.find((result) => !result.ok);
+          if (failed && !failed.ok) throw failed.error;
+        }
+        return settled;
       },
     });
     return makeBuilder([]) as Pipeline<I, I>;
   }
 
-  function ok<T>(settled: ReadonlyArray<Settled<T>>): T[] {
+  function successes<T>(settled: ReadonlyArray<Settled<T>>): T[] {
     const values: T[] = [];
     for (const s of settled) {
       if (s.ok) values.push(s.value);
       else rt.recordDrop(s.error);
     }
     return values;
+  }
+
+  function all<T>(settled: ReadonlyArray<Settled<T>>): T[] {
+    const failed = settled.find((result) => !result.ok);
+    if (failed && !failed.ok) throw failed.error;
+    return settled.map((result) => (result as { ok: true; value: T }).value);
   }
 
   // ---- sub-workflows ------------------------------------------------------
@@ -1469,9 +1579,20 @@ export function buildCtx(rt: RunRuntime): Ctx {
     input: unknown,
     opts: SubWorkflowOptions = {},
   ): Promise<unknown> {
-    const name = typeof defOrName === "string" ? defOrName : (defOrName.meta.name ?? "inline");
+    if (
+      typeof defOrName !== "string" &&
+      defOrName.meta.id === undefined &&
+      defOrName.meta.name === undefined
+    ) {
+      throw new StepError(
+        "invalid_input",
+        "ctx.workflow: inline child definitions require meta.id or meta.name for stable replay identity",
+        { step: { kind: "workflow", key: opts.key, runId: rt.runId } },
+      );
+    }
+    const name = typeof defOrName === "string" ? defOrName : (defOrName.meta.name ?? defOrName.meta.id!);
     const workflowIdentity =
-      typeof defOrName === "string" ? name : (defOrName.meta.id ?? defOrName.meta.name ?? "inline");
+      typeof defOrName === "string" ? name : (defOrName.meta.id ?? defOrName.meta.name!);
     if (rt.depth + 1 > config.limits.maxDepth) {
       throw new StepError(
         "depth_exceeded",
@@ -2177,7 +2298,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
   };
 
   function sha256Of(s: string): string {
-    return createHash("sha256").update(s).digest("hex");
+    return sha256Hex(s);
   }
 
   // ---- humans -------------------------------------------------------------
@@ -2185,6 +2306,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
   const human: Ctx["human"] = {
     ask: async (opts) => {
       const wire = toWireSchema(opts.schema);
+      reportWireLints(opts.key ?? `human:${opts.question}`, wire.lints);
       const outcome = await rt.runHuman({
         kind: "ask",
         ...(opts.key !== undefined ? { key: opts.key } : {}),
@@ -2219,6 +2341,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     review: async (opts) => {
       const blob = await rt.host.blobs.put(opts.artifact, { kind: "artifact" });
       const wire = toWireSchema(opts.schema);
+      reportWireLints(opts.key ?? "human:review", wire.lints);
       const outcome = await rt.runHuman({
         kind: "review",
         ...(opts.key !== undefined ? { key: opts.key } : {}),
@@ -2269,22 +2392,47 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
   // ---- checks, integration, ledger ---------------------------------------
 
-  async function check(name: string, opts: CheckOptions): Promise<CheckResult> {
-    const normalize = (v: boolean | CheckResult): CheckResult =>
-      typeof v === "boolean" ? { status: v ? "pass" : "fail" } : v;
-    const required = opts.required ?? false;
+  async function checkImpl(
+    name: string,
+    opts: CheckOptions,
+    definitionMeta?: { revision?: string; inputHash?: string },
+  ): Promise<CheckResult> {
+    const normalize = (value: boolean | CheckResult): CheckResult => {
+      if (typeof value === "boolean") {
+        return { status: value ? "pass" : "fail", disposition: "executed" };
+      }
+      if (value?.status !== "pass" && value?.status !== "fail") {
+        throw new StepError("invalid_output", `check:${name} returned an invalid status`);
+      }
+      return { ...value, disposition: "executed" };
+    };
+    const required = opts.policy === "required" || opts.required === true;
+    const definitionPayload = {
+      ...(definitionMeta?.revision !== undefined ? { revision: definitionMeta.revision } : {}),
+      ...(definitionMeta?.inputHash !== undefined ? { inputHash: definitionMeta.inputHash } : {}),
+    };
+    const sources = [opts.exec, opts.fn, opts.trustPrior, opts.skip].filter((source) => source !== undefined);
+    if (sources.length !== 1) {
+      throw new StepError(
+        "invalid_input",
+        `check:${name} must specify exactly one of exec, fn, trustPrior, or skip`,
+        { step: { kind: "check", key: name, runId: rt.runId } },
+      );
+    }
     const settle = (value: CheckResult & { required?: boolean }) => {
       if (required && value.status === "fail") rt.requiredCheckFailures.push(name);
     };
     if (opts.trustPrior) {
       return rt.runStep<CheckResult>({
         kind: "check",
+        ...(opts.key !== undefined ? { key: opts.key } : {}),
         label: `check:${name}`,
-        payload: { name, trustPrior: opts.trustPrior, required },
+        payload: { name, trustPrior: opts.trustPrior, required, ...definitionPayload },
         onSettle: settle,
         execute: async () => ({
           value: {
-            status: "trust-prior",
+            status: "pass",
+            disposition: "trusted",
             evidence: `run ${opts.trustPrior!.run}: ${opts.trustPrior!.reason}`,
           },
         }),
@@ -2295,8 +2443,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
       const timeoutMs = toMs(opts.timeout, config.limits.execTimeoutMs);
       return rt.runStep<CheckResult>({
         kind: "check",
+        ...(opts.key !== undefined ? { key: opts.key } : {}),
         label: `check:${name}`,
-        payload: { name, exec: opts.exec, required },
+        payload: { name, exec: opts.exec, required, ...definitionPayload },
         onSettle: settle,
         execute: async (io) => {
           const stubbed = await rt.host.testHooks?.exec?.(file, args);
@@ -2316,6 +2465,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
           return {
             value: {
               status: pass ? "pass" : "fail",
+              disposition: "executed",
               evidence: tail(`${String(result.stdout ?? "")}\n${String(result.stderr ?? "")}`.trim(), 2_000),
             },
           };
@@ -2330,14 +2480,15 @@ export function buildCtx(rt: RunRuntime): Ctx {
       const TIMED_OUT = Symbol("check-timeout");
       return rt.runStep<CheckResult>({
         kind: "check",
+        ...(opts.key !== undefined ? { key: opts.key } : {}),
         label: `check:${name}`,
-        payload: { name, fn: true, required },
+        payload: { name, fn: true, required, ...definitionPayload },
         onSettle: settle,
         // A function check's real inputs live in its CLOSURE — invisible to the
         // content hash. Serving a journaled pass could vouch for an artifact a
         // diverged upstream step has since replaced, so validation re-runs on
         // every resume instead of being served.
-        verifyServe: async () => false,
+        ...(definitionMeta === undefined ? { verifyServe: async () => false } : {}),
         execute: async () => {
           const abort = new AbortController();
           let timer: NodeJS.Timeout | undefined;
@@ -2363,7 +2514,13 @@ export function buildCtx(rt: RunRuntime): Ctx {
               // Best effort: JS cannot force-kill the callback, but an abort-aware fn
               // stops here instead of appending work after the workflow moved on.
               abort.abort();
-              return { value: { status: "fail", evidence: `check timed out after ${timeoutMs}ms` } };
+              return {
+                value: {
+                  status: "fail",
+                  disposition: "executed",
+                  evidence: `check timed out after ${timeoutMs}ms`,
+                },
+              };
             }
             return { value: normalize(outcome) };
           } finally {
@@ -2374,12 +2531,260 @@ export function buildCtx(rt: RunRuntime): Ctx {
     }
     return rt.runStep<CheckResult>({
       kind: "check",
+      ...(opts.key !== undefined ? { key: opts.key } : {}),
       label: `check:${name}`,
-      payload: { name, skipped: true, required },
+      payload: { name, skipped: true, reason: opts.skip?.reason, required, ...definitionPayload },
       onSettle: settle,
-      execute: async () => ({ value: { status: "skipped" } }),
+      execute: async () => ({
+        value: {
+          status: "pass",
+          disposition: "waived",
+          ...(opts.skip?.reason ? { evidence: opts.skip.reason } : {}),
+        },
+      }),
     });
   }
+
+  async function runCheckDefinition<Input, ParsedInput>(
+    definition: CheckDefinition<Input, string, ParsedInput>,
+    input: Input,
+    overrides: CheckInvocationOptions = {},
+  ): Promise<CheckResult> {
+    if (definition?.kind !== "weft.check") {
+      throw new StepError("invalid_input", "check: expected a definition created with defineCheck");
+    }
+    let parsedInput = input as unknown as ParsedInput;
+    if (definition.input !== undefined) {
+      if (!definition.input) {
+        throw new StepError("invalid_input", `check:${definition.name}: input schema is missing`, {
+          step: { kind: "check", key: overrides.key ?? definition.name, runId: rt.runId },
+        });
+      }
+      const validation = await validateSchema(definition.input, input);
+      if (!validation.ok) {
+        const issues = validation.issues
+          .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
+          .join("; ");
+        throw new StepError(
+          "invalid_input",
+          `check:${definition.name}: input failed schema validation: ${issues}`,
+          { step: { kind: "check", key: overrides.key ?? definition.name, runId: rt.runId } },
+        );
+      }
+      parsedInput = validation.value as ParsedInput;
+    }
+    if (overrides.trust !== undefined && overrides.waive !== undefined) {
+      throw new StepError(
+        "invalid_input",
+        `check:${definition.name}: trust and waive are mutually exclusive`,
+      );
+    }
+    const policy: CheckPolicy =
+      definition.policy === "required" || overrides.policy === "required" ? "required" : "advisory";
+    const inputHash = sha256Hex(canonicalJson(parsedInput ?? null));
+    if (overrides.trust !== undefined) {
+      if (!definition.revision) {
+        throw new StepError(
+          "invalid_input",
+          `check:${definition.name}: revision is required before trusting a prior result`,
+        );
+      }
+      const matchingSequences = new Set<number>();
+      let matched = false;
+      let completedRun = false;
+      for await (const record of rt.host.journal.read(overrides.trust.run)) {
+        const event = record.ev;
+        if (event.type === "step.scheduled" && event.kind === "check") {
+          const payload = event.payload as
+            | { name?: string; revision?: string; inputHash?: string }
+            | undefined;
+          if (
+            payload?.name === definition.name &&
+            payload.revision === definition.revision &&
+            payload.inputHash === inputHash
+          ) {
+            matchingSequences.add(event.seq);
+          }
+        } else if (event.type === "step.completed" && matchingSequences.has(event.seq)) {
+          const output = event.output as CheckResult | undefined;
+          matched ||= output?.status === "pass" && (output.disposition ?? "executed") === "executed";
+        } else if (event.type === "run.completed") {
+          completedRun = true;
+        }
+      }
+      if (!completedRun || !matched) {
+        throw new StepError(
+          "invalid_input",
+          `check:${definition.name}: prior run ${overrides.trust.run} has no compatible executed pass for revision ${definition.revision}`,
+        );
+      }
+    }
+    const invocation = {
+      ...(overrides.key !== undefined ? { key: overrides.key } : {}),
+      ...(overrides.timeout !== undefined ? { timeout: overrides.timeout } : {}),
+      policy,
+    };
+    let command: [string, ...string[]] | undefined;
+    if (!overrides.trust && !overrides.waive && definition.mode === "command") {
+      const candidate = definition.command(parsedInput);
+      if (
+        !Array.isArray(candidate) ||
+        candidate.length === 0 ||
+        candidate.some((part) => typeof part !== "string")
+      ) {
+        throw new StepError(
+          "invalid_output",
+          `check:${definition.name}: command must return a non-empty string argv tuple`,
+        );
+      }
+      command = candidate;
+    }
+    const source: CheckOptions = overrides.trust
+      ? { ...invocation, trustPrior: overrides.trust }
+      : overrides.waive
+        ? {
+            ...invocation,
+            skip: {
+              reason: [
+                overrides.waive.reason,
+                overrides.waive.issue ? `issue ${overrides.waive.issue}` : undefined,
+                overrides.waive.expiresAt ? `expires ${overrides.waive.expiresAt}` : undefined,
+              ]
+                .filter((value): value is string => value !== undefined)
+                .join("; "),
+            },
+          }
+        : definition.mode === "command"
+          ? { ...invocation, exec: command! }
+          : {
+              ...invocation,
+              fn: (signal) => definition.run(parsedInput, { signal }),
+            };
+    return checkImpl(definition.name, source, {
+      ...(definition.revision !== undefined ? { revision: definition.revision } : {}),
+      inputHash,
+    });
+  }
+
+  async function runCheckSuite(
+    suite: CheckSuiteDefinition,
+    opts: CheckSuiteInvocationOptions = {},
+  ): Promise<CheckSuiteResult> {
+    if (suite?.kind !== "weft.check-suite") {
+      throw new StepError("invalid_input", "check: expected a suite created with defineCheckSuite");
+    }
+    const settled = (await parallelImpl(
+      suite.checks,
+      async (definition) => {
+        const result = await runCheckDefinition(definition, undefined, {
+          ...(opts.keyPrefix !== undefined ? { key: `${opts.keyPrefix}:${definition.name}` } : {}),
+          ...(opts.policy !== undefined ? { policy: opts.policy } : {}),
+          ...(opts.timeout !== undefined ? { timeout: opts.timeout } : {}),
+        });
+        return [definition.name, result] as const;
+      },
+      {
+        ...(suite.concurrency !== undefined ? { concurrency: suite.concurrency } : {}),
+        ...(opts.concurrency !== undefined ? { concurrency: opts.concurrency } : {}),
+        errors: "throw",
+      },
+    )) as Settled<readonly [string, CheckResult]>[];
+    const pairs = settled.map((entry) => {
+      if (!entry.ok) throw entry.error;
+      return entry.value;
+    });
+    const results = Object.fromEntries(pairs);
+    return {
+      passed: pairs.every(([, result]) => result.status !== "fail"),
+      results,
+    };
+  }
+
+  async function runParameterizedCheckSuite<Input, ParsedInput>(
+    suite: ParameterizedCheckSuiteDefinition<Input, Record<string, CheckSuiteMember>, ParsedInput>,
+    input: Input,
+    opts: CheckSuiteInvocationOptions = {},
+  ): Promise<ParameterizedCheckSuiteResult<Record<string, CheckSuiteMember>>> {
+    const validation = await validateSchema(suite.input, input);
+    if (!validation.ok) {
+      const issues = validation.issues
+        .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
+        .join("; ");
+      throw new StepError(
+        "invalid_input",
+        `check-suite:${suite.name}: input failed schema validation: ${issues}`,
+      );
+    }
+    const members = suite.resolve(validation.value as ParsedInput);
+    const entries = Object.entries(members ?? {});
+    if (entries.length === 0) {
+      throw new StepError("invalid_input", `check-suite:${suite.name}: checks must not be empty`);
+    }
+    const settled = (await parallelImpl(
+      entries,
+      async ([memberName, member]) => {
+        if (member?.definition?.kind !== "weft.check") {
+          throw new StepError(
+            "invalid_input",
+            `check-suite:${suite.name}.${memberName}: expected a check created with defineCheck`,
+          );
+        }
+        const result = await runCheckDefinition(member.definition, member.input, {
+          ...(opts.keyPrefix !== undefined ? { key: `${opts.keyPrefix}:${memberName}` } : {}),
+          ...(opts.policy !== undefined ? { policy: opts.policy } : {}),
+          ...(opts.timeout !== undefined ? { timeout: opts.timeout } : {}),
+        });
+        return [memberName, result] as const;
+      },
+      {
+        ...(suite.concurrency !== undefined ? { concurrency: suite.concurrency } : {}),
+        ...(opts.concurrency !== undefined ? { concurrency: opts.concurrency } : {}),
+        errors: "throw",
+      },
+    )) as Settled<readonly [string, CheckResult]>[];
+    const pairs = settled.map((entry) => {
+      if (!entry.ok) throw entry.error;
+      return entry.value;
+    });
+    return {
+      passed: pairs.every(([, result]) => result.status !== "fail"),
+      results: Object.fromEntries(pairs),
+    };
+  }
+
+  const check = ((
+    nameOrDefinition:
+      | string
+      | CheckDefinition<unknown>
+      | CheckSuiteDefinition
+      | ParameterizedCheckSuiteDefinition<unknown, Record<string, CheckSuiteMember>, unknown>,
+    optionsOrInput?: CheckOptions | CheckInvocationOptions | CheckSuiteInvocationOptions | unknown,
+    maybeOptions?: CheckInvocationOptions,
+  ) => {
+    if (typeof nameOrDefinition === "string") {
+      return checkImpl(nameOrDefinition, optionsOrInput as CheckOptions);
+    }
+    if (nameOrDefinition?.kind === "weft.check-suite") {
+      if ("input" in nameOrDefinition) {
+        return runParameterizedCheckSuite(
+          nameOrDefinition,
+          optionsOrInput,
+          maybeOptions as CheckSuiteInvocationOptions | undefined,
+        );
+      }
+      return runCheckSuite(nameOrDefinition, optionsOrInput as CheckSuiteInvocationOptions | undefined);
+    }
+    if (nameOrDefinition?.kind === "weft.check") {
+      return nameOrDefinition.input !== undefined
+        ? runCheckDefinition(nameOrDefinition, optionsOrInput, maybeOptions)
+        : runCheckDefinition(nameOrDefinition, undefined, optionsOrInput as CheckInvocationOptions);
+    }
+    throw new StepError("invalid_input", "check: expected a name, reusable check, or reusable check suite");
+  }) as CheckFn;
+  check.exec = (name, command, opts = {}) => checkImpl(name, { ...opts, exec: command });
+  check.fn = (name, run, opts = {}) => checkImpl(name, { ...opts, fn: run });
+  check.trust = (name, prior, opts = {}) => checkImpl(name, { ...opts, trustPrior: prior });
+  check.skip = (name, reason, opts = {}) => checkImpl(name, { ...opts, skip: { reason } });
 
   const ResolutionSchema = z.object({
     resolution: z.enum(["skip", "keep-conflicts", "abort"]),
@@ -2772,6 +3177,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
   const signalFn = (<S extends AnySchema>(name: string, schema: S, opts?: { timeout?: Duration }) => {
     const wire = toWireSchema(schema);
+    reportWireLints(`signal:${name}`, wire.lints);
     return rt.runStep<InferOut<S>>({
       kind: "signal",
       label: `signal:${name}`,
@@ -2908,29 +3314,53 @@ export function buildCtx(rt: RunRuntime): Ctx {
     });
   };
 
-  const tasks: Ctx["tasks"] = {
-    observe: async <Extensions>(selector: WorkflowTaskSelector, opts: { key: string }) => {
-      const observed = await observeTasks(workflowTaskContext(opts.key, "read", selector), opts.key);
-      return observed.snapshot as WorkflowTaskSnapshot<Extensions>;
-    },
-    upsert: async <Extensions>(
-      dedupeKey: string,
-      input: WorkflowTaskUpsertInput<Extensions>,
-      opts: { key: string },
-    ) => {
-      await applyWorkflowTaskOperation(opts.key, {
-        op: "upsert",
-        dedupeKey,
-        create: input.create,
-        ...(input.update ? { update: input.update } : {}),
-        ...(input.note !== undefined ? { note: input.note } : {}),
+  async function upsertTask(input: WorkflowTaskUpsertSpec<any>): Promise<void>;
+  async function upsertTask(
+    dedupeKey: string,
+    input: WorkflowTaskUpsertInput<any>,
+    opts: { key: string },
+  ): Promise<void>;
+  async function upsertTask(
+    specOrDedupeKey: WorkflowTaskUpsertSpec<any> | string,
+    legacyInput?: WorkflowTaskUpsertInput<any>,
+    legacyOpts?: { key: string },
+  ): Promise<void> {
+    const concise = typeof specOrDedupeKey !== "string";
+    const dedupeKey = concise ? specOrDedupeKey.dedupeKey : specOrDedupeKey;
+    const key = concise ? specOrDedupeKey.key : legacyOpts?.key;
+    if (!key) {
+      throw new StepError("invalid_input", "ctx.tasks.upsert: key is required", {
+        step: { kind: "sideeffect" },
       });
+    }
+    if (!concise && !legacyInput) {
+      throw new StepError("invalid_input", "ctx.tasks.upsert: input is required", {
+        step: { kind: "sideeffect", key },
+      });
+    }
+    const input: WorkflowTaskUpsertInput<any> = concise
+      ? {
+          create: specOrDedupeKey.set,
+          update: { ...specOrDedupeKey.set },
+          ...(specOrDedupeKey.note !== undefined ? { note: specOrDedupeKey.note } : {}),
+        }
+      : legacyInput!;
+    await applyWorkflowTaskOperation(key, {
+      op: "upsert",
+      dedupeKey,
+      create: input.create,
+      ...(input.update ? { update: input.update } : {}),
+      ...(input.note !== undefined ? { note: input.note } : {}),
+    });
+  }
+
+  const tasks: Ctx<any, any>["tasks"] = {
+    observe: async (selector: WorkflowTaskSelector, opts: { key: string }) => {
+      const observed = await observeTasks(workflowTaskContext(opts.key, "read", selector), opts.key);
+      return observed.snapshot as WorkflowTaskSnapshot<any>;
     },
-    update: async <Extensions>(
-      id: string,
-      input: WorkflowTaskUpdateInput<Extensions>,
-      opts: { key: string },
-    ) => {
+    upsert: upsertTask,
+    update: async (id: string, input: WorkflowTaskUpdateInput<any>, opts: { key: string }) => {
       await applyWorkflowTaskOperation(opts.key, { op: "update", id, ...input });
     },
     note: async (id, text, opts) => {
@@ -2952,13 +3382,119 @@ export function buildCtx(rt: RunRuntime): Ctx {
     },
   };
 
+  // ---- immutable authoring scopes ---------------------------------------
+
+  type ExecutionScopeOptions = CtxScopeOptions & { phase?: string };
+
+  const mergeScope = (
+    parent: ExecutionScopeOptions | undefined,
+    next: ExecutionScopeOptions,
+  ): ExecutionScopeOptions => ({
+    ...(parent ?? {}),
+    ...next,
+    ...(parent?.agent || next.agent ? { agent: { ...(parent?.agent ?? {}), ...(next.agent ?? {}) } } : {}),
+    ...(parent?.parallel || next.parallel
+      ? { parallel: { ...(parent?.parallel ?? {}), ...(next.parallel ?? {}) } }
+      : {}),
+  });
+
+  const phaseName = (name: string): string => {
+    if (typeof name !== "string" || name.trim() === "") {
+      throw new StepError("invalid_input", "ctx.phase: name must be a non-empty string");
+    }
+    const clean = name.trim();
+    const parent = rt.activeScope()?.phase;
+    return parent ? `${parent} / ${clean}` : clean;
+  };
+
+  let ctx: Ctx;
+
+  /** Bind every nested ctx capability (human.ask, git.branch.create, agent.detailed…) to one ALS scope. */
+  const scopedContext = (scope: ExecutionScopeOptions): Ctx => {
+    const cache = new WeakMap<object, object>();
+    const bind = (value: unknown): unknown => {
+      if ((typeof value !== "object" || value === null) && typeof value !== "function") return value;
+      const object = value as object;
+      const cached = cache.get(object);
+      if (cached) return cached;
+      const proxy = new Proxy(object, {
+        apply(target, thisArg, args) {
+          return rt.withScope(scope, () =>
+            Reflect.apply(target as (...args: unknown[]) => unknown, thisArg, args),
+          );
+        },
+        get(target, property, receiver) {
+          return bind(Reflect.get(target, property, receiver));
+        },
+      });
+      cache.set(object, proxy);
+      return proxy;
+    };
+    return bind(ctx) as Ctx;
+  };
+
+  const deriveScope = (opts: CtxScopeOptions): Ctx => {
+    const merged = mergeScope(rt.activeScope(), opts);
+    return scopedContext(merged);
+  };
+
+  const phase = (name: string): Ctx => {
+    const fullName = phaseName(name);
+    const parent = rt.activeScope();
+    if (parent) rt.announcePhase(fullName);
+    else rt.phase(fullName);
+    return scopedContext(mergeScope(parent, { phase: fullName }));
+  };
+
+  const step = async <Input, Output>(
+    definition: StepDefinition<Input, Output>,
+    input: Input,
+  ): Promise<Output> => {
+    if (definition?.kind !== "weft.step") {
+      throw new StepError("invalid_input", "ctx.step: definition must be created with defineStep");
+    }
+    const target = scopedContext(rt.activeScope() ?? {});
+    return definition.run(target, input);
+  };
+
+  const recipe = async <Input, Output, ParsedInput, RawOutput>(
+    definition: RecipeDefinition<Input, Output, ParsedInput, RawOutput>,
+    input: Input,
+  ): Promise<Output> => {
+    if (definition?.kind !== "weft.recipe") {
+      throw new StepError("invalid_input", "ctx.recipe: definition must be created with defineRecipe");
+    }
+    const parsedInput = await validateSchema(definition.input, input);
+    if (!parsedInput.ok) {
+      throw new StepError(
+        "invalid_input",
+        `recipe:${definition.name}: input failed schema validation: ${parsedInput.issues
+          .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
+          .join("; ")}`,
+      );
+    }
+    const target = scopedContext(rt.activeScope() ?? {});
+    const rawOutput = await definition.run(target, parsedInput.value as ParsedInput);
+    const parsedOutput = await validateSchema(definition.output, rawOutput);
+    if (!parsedOutput.ok) {
+      throw new StepError(
+        "invalid_output",
+        `recipe:${definition.name}: output failed schema validation: ${parsedOutput.issues
+          .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
+          .join("; ")}`,
+      );
+    }
+    return parsedOutput.value as Output;
+  };
+
   // ---- assemble -----------------------------------------------------------
 
-  const ctx: Ctx = {
+  ctx = {
     agent,
     parallel,
     pipeline,
-    ok,
+    successes,
+    all,
     workflow: workflow as Ctx["workflow"],
     gate: (req) => rt.gateStep(req),
     human,
@@ -2975,12 +3511,15 @@ export function buildCtx(rt: RunRuntime): Ctx {
     discard,
     note,
     tasks,
+    scope: deriveScope,
+    recipe,
+    step,
     signal: signalFn,
     sleep: sleepFn,
     now: nowFn,
     random: randomFn,
     uuid: uuidFn,
-    phase: (name) => rt.phase(name),
+    phase,
     log: (message) => rt.log(message),
     get budget() {
       return rt.budget.view();

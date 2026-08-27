@@ -39,5 +39,11 @@ export type {
 export { buildTestHooks } from "./fixtures.ts";
 export type { JournalSnapshotEntry, JournalView, StepStatus, StepView } from "./journal.ts";
 export { buildJournalView } from "./journal.ts";
-export type { AnswerFixtures, RunWorkflowOptions, RunWorkflowResult } from "./run.ts";
+export type {
+  AnswerFixtures,
+  RunWorkflowOptions,
+  RunWorkflowResult,
+  SignalFixtures,
+  TaskSeed,
+} from "./run.ts";
 export { runWorkflow } from "./run.ts";

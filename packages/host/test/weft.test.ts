@@ -141,7 +141,11 @@ export default defineWorkflow(
     description: "path workflow with task extensions",
     input: z.object({}),
     output: z.object({ ok: z.boolean() }),
-    tasks: { extensions: z.object({ ownerTeam: z.string() }), semanticRevision: "owner-team-v1" },
+    tasks: {
+      extensions: z.object({ ownerTeam: z.string() }),
+      semanticRevision: "owner-team-v1",
+      agentAccess: "write",
+    },
   },
   async (ctx) => ctx.agent("Track this", { key: "path-task", schema: z.object({ ok: z.boolean() }) }),
 );
@@ -328,6 +332,7 @@ export default defineWorkflow(
           description: "asks one agent for a verdict",
           input: z.object({}),
           output: z.object({ verdict: z.string() }),
+          tasks: { agentAccess: "write" },
         },
         async (ctx) => ctx.agent("Is this fine?", { key: "verdict", schema: z.object({ verdict: z.string() }) }),
       );

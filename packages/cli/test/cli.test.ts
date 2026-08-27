@@ -133,6 +133,7 @@ const TRACKED = `import { defineWorkflow, z } from "@techery/weft-sdk";
 
 export default defineWorkflow(
   {
+    id: "tracked",
     name: "tracked",
     description: "has workflow-specific task fields",
     input: z.object({}),
@@ -412,6 +413,17 @@ describe("weft check", () => {
     expect(checked.text).toContain("schemas.ts (module, not a workflow)");
     expect(checked.exitCode).toBeUndefined();
   });
+
+  it("fails when the TypeScript pass reports a real error", async () => {
+    const root = await tempRoot();
+    await write(root, ".weft/workflows/broken-types.ts", "export const value: string = 1;\n");
+
+    const checked = await cli("--cwd", root, "--mock", "check");
+
+    expect(checked.text).toContain("broken-types.ts (module, not a workflow)");
+    expect(checked.text).toContain("TS2322");
+    expect(checked.exitCode).toBe(1);
+  });
 });
 
 describe("weft new", () => {
@@ -428,7 +440,74 @@ describe("weft new", () => {
     expect(checked.text).toContain("review.ts");
     expect(checked.exitCode).toBeUndefined();
 
+    const source = await readFile(path.join(root, ".weft", "workflows", "review.ts"), "utf8");
+    expect(source).toContain('id: "review"');
+    expect(source).toContain('errors: "throw"');
+    expect(source).toContain("ctx.all(");
+
     await expect(cli("--cwd", root, "--mock", "new", "review")).rejects.toThrow(/already exists/);
+  });
+
+  it("offers minimal and task-aware templates that both pass the gate", async () => {
+    const simpleRoot = await tempRoot();
+    await cli("--cwd", simpleRoot, "--mock", "new", "answer", "--template", "simple");
+    expect(existsSync(path.join(simpleRoot, ".weft", "workflows", "schemas.ts"))).toBe(false);
+    expect(
+      (await cli("--cwd", simpleRoot, "--mock", "check", "answer", "--no-tsc")).exitCode,
+    ).toBeUndefined();
+
+    const taskRoot = await tempRoot();
+    await cli("--cwd", taskRoot, "--mock", "new", "queue", "--template", "task");
+    const taskSource = await readFile(path.join(taskRoot, ".weft", "workflows", "queue.ts"), "utf8");
+    expect(taskSource).toContain("defineTaskContract");
+    expect((await cli("--cwd", taskRoot, "--mock", "check", "queue", "--no-tsc")).exitCode).toBeUndefined();
+  });
+});
+
+describe("weft workflow", () => {
+  it("lists definitions and inspects their schemas as JSON", async () => {
+    const root = await tempRoot();
+    await write(root, ".weft/workflows/audit.ts", AUDIT);
+
+    const listed = await cli("--cwd", root, "--mock", "workflow", "list");
+    expect(listed.text).toContain("audit");
+    expect(listed.text).toContain("echoes back the input");
+
+    const inspected = await cli("--cwd", root, "--mock", "workflow", "inspect", "audit", "--json");
+    const contract = JSON.parse(inspected.text) as Record<string, unknown>;
+    expect(contract).toMatchObject({
+      id: "audit",
+      name: "audit",
+      tasks: null,
+      defaults: {},
+    });
+    expect(contract.input).toMatchObject({ type: "object" });
+    expect(contract.output).toMatchObject({ type: "object" });
+  });
+
+  it("inspects a workflow by its durable id when it differs from the callable name", async () => {
+    const root = await tempRoot();
+    await write(
+      root,
+      ".weft/workflows/audit.ts",
+      AUDIT.replace(
+        'description: "echoes back the input it was given",',
+        'id: "durable-audit", description: "echoes back the input it was given",',
+      ),
+    );
+
+    const inspected = await cli("--cwd", root, "--mock", "workflow", "inspect", "durable-audit", "--json");
+    expect(JSON.parse(inspected.text)).toMatchObject({ id: "durable-audit", name: "audit" });
+  });
+
+  it("shows rejected workflow files and fails the listing", async () => {
+    const root = await tempRoot();
+    await write(root, ".weft/workflows/bad.ts", BANNED);
+
+    const listed = await cli("--cwd", root, "--mock", "workflow", "list");
+    expect(listed.text).toContain("bad.ts");
+    expect(listed.text).toContain("Date.now() is not allowed");
+    expect(listed.exitCode).toBe(1);
   });
 });
 
@@ -451,6 +530,59 @@ describe("weft skill", () => {
     for (const name of commands) expect(printed.text).toContain(`weft ${name}`);
   });
 
+  it("is state-independent, writes only the document to stdout, and creates nothing", async () => {
+    const root = await tempRoot();
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    await buildProgram({ out: (line) => stdout.push(line), err: (line) => stderr.push(line) })
+      .exitOverride()
+      .parseAsync(["--cwd", root, "skill"], { from: "user" });
+
+    expect(stderr).toEqual([]);
+    expect(stdout[0]).toBe("---");
+    expect(stdout.at(-1)).toMatch(/decide\.$/);
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  it("emits portable frontmatter, distribution guidance, and current authoring boundaries", async () => {
+    const printed = await cli("--cwd", await tempRoot(), "skill");
+    const frontmatterEnd = printed.lines.indexOf("---", 1);
+
+    expect(frontmatterEnd).toBeGreaterThan(1);
+    expect(printed.lines.slice(0, frontmatterEnd + 1).join("\n")).toMatch(
+      /^---\nname: weft\ndescription: >-/,
+    );
+    for (const destination of [".claude/skills/weft/SKILL.md", ".agents/skills/weft/SKILL.md"]) {
+      expect(printed.text).toContain(destination);
+    }
+    expect(printed.text).toContain("Codex repository skill");
+    expect(printed.text).not.toContain(".codex/skills/weft/SKILL.md");
+    for (const contract of [
+      "ctx.tasks.observe",
+      "ctx.tasks.upsert",
+      "ctx.tasks.setCriterion",
+      "ctx.ui.render",
+      "defineUiView",
+      "defineResultView",
+      "defineTaskContract",
+      "ctx.successes",
+      "ctx.all",
+      'errors: "throw"',
+      "`signals`",
+      "`taskSeeds`",
+      "actionable TypeScript diagnostics fail",
+      "workflow.ts",
+      "not published to npm",
+    ]) {
+      expect(printed.text).toContain(contract);
+    }
+    expect(printed.text).not.toMatch(/\b(?:TODO|placeholder|changelog)\b/i);
+    expect(printed.text).toMatch(/independently\s+authored review workflow/);
+    expect(printed.text).not.toContain("The default review shape");
+    expect(printed.text).toContain("By default, `low` auto-approves");
+    expect(printed.text).toContain("configured action-pattern or risk-tier approval policies can require");
+  });
+
   it("names the ctx replacement for every global the gate rejects", async () => {
     const root = await tempRoot();
     const printed = await cli("--cwd", root, "skill");
@@ -458,6 +590,50 @@ describe("weft skill", () => {
     for (const replacement of ["ctx.now()", "ctx.random()", "ctx.sleep(", "ctx.env.get(", "ctx.secret("]) {
       expect(printed.text).toContain(replacement);
     }
+  });
+
+  it("documents the implemented replay-key guard and direct child workflow identity", async () => {
+    const printed = await cli("--cwd", await tempRoot(), "skill");
+
+    expect(printed.text).toContain("one shared explicit-key namespace for `ctx.agent`, `ctx.workflow`");
+    expect(printed.text).toContain("`ctx.exec`/`ctx.bash`, and `ctx.fetch`");
+    expect(printed.text).toMatch(
+      /Reusing a key across those calls or kinds in\s+one run fails with `invalid_input` before the second step dispatches/,
+    );
+    expect(printed.text).toMatch(
+      /`ctx\.human\.ask`\/`approve`\/`review` keys are replay identities too, but human requests\s+are not included in that duplicate-key guard/,
+    );
+    expect(printed.text).toContain("do not rely on cross-kind rejection to catch a collision");
+    expect(printed.text).not.toContain(
+      "Every explicit step `key` must be unique across all calls and step kinds in one run",
+    );
+    expect(printed.text).toMatch(
+      /A directly supplied child\s+definition must declare a stable `meta\.id` or `meta\.name`/,
+    );
+    expect(printed.text).toMatch(/prefer `meta\.id` for replay\s+identity/);
+  });
+
+  it("documents workflow discovery, task-write authority, fixture fallthrough, and exact stdlib schemas", async () => {
+    const printed = await cli("--cwd", await tempRoot(), "skill");
+
+    expect(printed.text).toContain("weft workflow list");
+    expect(printed.text).toContain("weft workflow inspect <name-or-id> [--json]");
+    expect(printed.text).toContain("weft new <name> --template simple");
+    expect(printed.text).toContain("weft new <name> --template review");
+    expect(printed.text).toContain("weft new <name> --template task");
+    expect(printed.text).toContain("`--json` also exposes UI metadata");
+    expect(printed.text).toContain('{ status: "failed", error }');
+    expect(printed.text).toContain('{ status: "cancelled" }');
+    expect(printed.text).toContain("by callable name or stable id");
+    expect(printed.text).toContain('tasks: { mode: "write" }');
+    expect(printed.text).toContain('tasks: { mode: "read", statuses: ["blocked"] }');
+    expect(printed.text).toContain('meta.tasks.agentAccess: "write"');
+    expect(printed.text).toContain("Side-effect fixture tables are interceptors, not a host sandbox");
+    expect(printed.text).toContain("falls through to the real host implementation");
+    expect(printed.text).toContain("CompletenessGapsSchema");
+    expect(printed.text).toContain("`loopUntilDry` has no");
+    expect(printed.text).toContain("result-schema export");
+    expect(printed.text).not.toContain("Each also exports a schema builder");
   });
 });
 
