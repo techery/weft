@@ -106,6 +106,6 @@ console.log(
 
 const report = await engine.report(handle.runId);
 const risk = report.split("## Remaining risk")[1]?.split("##")[0]?.trim();
-console.log("\nreport → remaining risk:\n" + (risk ?? "(none)"));
+console.log(`\nreport → remaining risk:\n${risk ?? "(none)"}`);
 
 await rm(repo, { recursive: true, force: true });

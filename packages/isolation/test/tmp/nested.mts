@@ -29,6 +29,6 @@ const out = await applyPatchToTree({ repoRoot: repo, patch: cap.patch });
 console.log("APPLY:", JSON.stringify(out));
 console.log(
   "CONTENT AFTER:",
-  await readFile(join(repo, "subproj/index.ts"), "utf8").catch((e) => "*** LOST: " + e.code),
+  await readFile(join(repo, "subproj/index.ts"), "utf8").catch((e) => `*** LOST: ${e.code}`),
 );
 await rm(repo, { recursive: true, force: true });

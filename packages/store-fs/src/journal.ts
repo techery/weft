@@ -156,7 +156,7 @@ export class FsJournalStore implements JournalStore {
         const rec: JournalRecord = { i: base + offset, at, ev };
         return rec;
       });
-      const payload = Buffer.from(records.map((r) => JSON.stringify(r)).join("\n") + "\n");
+      const payload = Buffer.from(`${records.map((r) => JSON.stringify(r)).join("\n")}\n`);
       const fd = openSync(this.journalPath(runId), "a");
       try {
         // writeSync may return SHORT without throwing; treating a partial write
