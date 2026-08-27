@@ -1,5 +1,5 @@
 /** Lifecycle of a whole run, as the journal records it. */
-import type { JsonSchema, UiPresentation } from "~/api/types";
+import type { JsonSchema, ReviewAttachment, ReviewSubject, UiPresentation } from "~/api/types";
 
 export type RunState = "running" | "waiting" | "done" | "stopped" | "failed";
 
@@ -186,6 +186,8 @@ export type Gate = {
   denyLabel: string;
   questions: GateQuestion[];
   artifactRef?: { ref: string; size: number; preview?: string };
+  reviewSubject?: ReviewSubject;
+  reviewAttachments?: ReviewAttachment[];
   ui?: UiPresentation;
 };
 

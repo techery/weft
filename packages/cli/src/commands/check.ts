@@ -99,9 +99,10 @@ async function gate(
     const { def } = await loadWorkflow({ entry: file, ...allowBare });
     const schemas = [
       ["input", def.meta.input],
-      ["output", def.meta.output],
       ...(def.meta.tasks?.extensions ? ([["tasks.extensions", def.meta.tasks.extensions]] as const) : []),
     ] as const;
+    // Only provider-bound/input schemas need the portable wire subset. Workflow outputs
+    // are validated locally against their authoritative Standard Schema.
     return {
       diagnostics: [],
       warnings: schemas.flatMap(([label, schema]) =>

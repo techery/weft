@@ -41,6 +41,8 @@ import {
   type GitApi,
   type GitRange,
   type GitWriteOpts,
+  type HumanReviewDetailedResult,
+  type HumanReviewOptions,
   type InferOut,
   type IntegrateOptions,
   type IntegrationLedger,
@@ -81,6 +83,7 @@ import type { BlobRefJson } from "./events.ts";
 import { toWireSchema, unwrapWireValue } from "./jsonschema.ts";
 import { mapWithConcurrency } from "./limiter.ts";
 import type { AgentRequest, AgentResult, AgentTaskContext, AgentTaskOperation } from "./provider.ts";
+import { resolveReviewFile } from "./review.ts";
 import {
   isSettlementFailure,
   MAX_TIMER_MS,
@@ -529,6 +532,48 @@ export function buildCtx(rt: RunRuntime): Ctx {
     }
     const wire = toWireSchema(opts.schema);
     const providerId = opts.provider ?? rt.workflowDefaults.provider ?? config.defaults.provider;
+    const provider = rt.host.providers.get(providerId);
+    if (
+      opts.providerOptions !== undefined &&
+      (typeof opts.providerOptions !== "object" ||
+        opts.providerOptions === null ||
+        Array.isArray(opts.providerOptions))
+    ) {
+      throw new StepError("invalid_input", `${providerId}: providerOptions must be an object`, {
+        step: { kind: "agent", key: opts.key },
+      });
+    }
+    const selectedProviderOptions = (opts.providerOptions as Record<string, unknown> | undefined)?.[
+      providerId
+    ];
+    provider.validateOptions?.(selectedProviderOptions);
+    const capabilities = provider.capabilities();
+    const requirements = opts.providerRequirements;
+    if (requirements?.structured !== undefined && capabilities.structured !== requirements.structured) {
+      throw new StepError(
+        "invalid_input",
+        `${providerId}: requires structured=${requirements.structured}, provider reports ${capabilities.structured}`,
+        { step: { kind: "agent", key: opts.key } },
+      );
+    }
+    if (requirements?.permissionHook === true && !capabilities.permissionHook) {
+      throw new StepError(
+        "invalid_input",
+        `${providerId}: required capability permissionHook is unavailable`,
+        {
+          step: { kind: "agent", key: opts.key },
+        },
+      );
+    }
+    if (requirements?.sessionResume === true && !capabilities.sessionResume) {
+      throw new StepError(
+        "invalid_input",
+        `${providerId}: required capability sessionResume is unavailable`,
+        {
+          step: { kind: "agent", key: opts.key },
+        },
+      );
+    }
     // step opts → workflow defaults → engine config; a model default applies only
     // when the step actually routes to the provider that default was written for.
     const wfProvider = rt.workflowDefaults.provider ?? config.defaults.provider;
@@ -552,6 +597,28 @@ export function buildCtx(rt: RunRuntime): Ctx {
           mode: opts.write.mode ?? ("warn" as const),
         }
       : undefined;
+    if (scope) {
+      if (!Array.isArray(scope.paths) || (scope.also !== undefined && !Array.isArray(scope.also))) {
+        throw new StepError("invalid_input", `${label}: write scope paths and also must be arrays`, {
+          step: { kind: "agent", key: opts.key, label },
+        });
+      }
+      for (const pattern of [...scope.paths, ...(scope.also ?? [])]) {
+        if (
+          typeof pattern !== "string" ||
+          pattern.trim() === "" ||
+          pattern.includes("\\") ||
+          isAbsolute(pattern) ||
+          pattern.split("/").includes("..")
+        ) {
+          throw new StepError(
+            "invalid_input",
+            `${label}: write scope patterns must be non-empty POSIX repository-relative globs; got ${JSON.stringify(pattern)}`,
+            { step: { kind: "agent", key: opts.key, label } },
+          );
+        }
+      }
+    }
     if (mode.writeInPlace && opts.tasks !== undefined && opts.tasks !== false) {
       throw new StepError(
         "invalid_input",
@@ -630,6 +697,8 @@ export function buildCtx(rt: RunRuntime): Ctx {
       timeoutMs,
       isolation: useWorktree ? "worktree" : "none",
       write: scope ?? null,
+      providerOptions: selectedProviderOptions ?? null,
+      providerRequirements: requirements ?? null,
       taskContext: taskObservation
         ? {
             mode: taskMode,
@@ -850,7 +919,6 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 finalPrompt += `\n\nThis is a read-only step: do not modify any files.`;
               }
 
-              const provider = rt.host.providers.get(providerId);
               // A USD-only ceiling with no way to price this call would charge $0 per
               // call forever — refuse the dispatch instead of silently unbounding it.
               if (
@@ -879,6 +947,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
                 maxTurns,
                 timeoutMs,
                 onMaxTurns: opts.onMaxTurns ?? "finalize",
+                ...(selectedProviderOptions !== undefined
+                  ? { providerOptions: selectedProviderOptions }
+                  : {}),
                 tools: { allowEdits: scope !== undefined || mode.writeInPlace === true },
                 ...(taskContext && rt.host.taskTracker?.protectedPaths?.length
                   ? { protectedPaths: [...rt.host.taskTracker.protectedPaths] }
@@ -2303,6 +2374,123 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
   // ---- humans -------------------------------------------------------------
 
+  async function reviewImpl<S extends AnySchema, Props = never>(
+    opts: HumanReviewOptions<S, Props>,
+  ): Promise<HumanReviewDetailedResult<InferOut<S>>> {
+    const wire = toWireSchema(opts.schema);
+    reportWireLints(opts.key ?? "human:review", wire.lints);
+
+    const attachments = await Promise.all(
+      (opts.attachments ?? []).map(async (attachment) => {
+        const blob = await rt.host.blobs.put(attachment.content, {
+          kind: "artifact",
+          ...(attachment.mediaType !== undefined ? { contentType: attachment.mediaType } : {}),
+        });
+        return {
+          kind: "artifact" as const,
+          ref: {
+            $blob: blob.hash,
+            size: blob.size,
+            preview: attachment.content.slice(0, 200),
+          },
+          ...(attachment.mediaType !== undefined ? { mediaType: attachment.mediaType } : {}),
+          ...(attachment.label !== undefined ? { label: attachment.label } : {}),
+        };
+      }),
+    );
+
+    const subjectInput =
+      opts.subject ??
+      ({
+        kind: "artifact",
+        content: opts.artifact!,
+        mediaType: undefined,
+        label: undefined,
+      } as const);
+    if (subjectInput.kind === "artifact") {
+      const blob = await rt.host.blobs.put(subjectInput.content, {
+        kind: "artifact",
+        ...(subjectInput.mediaType !== undefined ? { contentType: subjectInput.mediaType } : {}),
+      });
+      const ref: BlobRefJson = {
+        $blob: blob.hash,
+        size: blob.size,
+        preview: subjectInput.content.slice(0, 200),
+      };
+      const subject = {
+        kind: "artifact" as const,
+        ref,
+        ...(subjectInput.mediaType !== undefined ? { mediaType: subjectInput.mediaType } : {}),
+        ...(subjectInput.label !== undefined ? { label: subjectInput.label } : {}),
+      };
+      const outcome = await rt.runHuman({
+        kind: "review",
+        ...(opts.key !== undefined ? { key: opts.key } : {}),
+        question: opts.question ?? "Review the attached artifact",
+        schemaJson: wire.json,
+        realSchema: opts.schema,
+        wrapped: wire.wrapped,
+        artifactRef: ref,
+        reviewSubject: subject,
+        ...(attachments.length > 0 ? { reviewAttachments: attachments } : {}),
+        ...(opts.timeout !== undefined ? { timeoutMs: parseDuration(opts.timeout) } : {}),
+        ...(timeoutSpec(opts.onTimeout) ?? {}),
+        ...(opts.ui !== undefined ? { ui: opts.ui } : {}),
+      });
+      return {
+        answer: outcome.answer as InferOut<S>,
+        subject: {
+          kind: "artifact",
+          ref: blob.hash,
+          sha256: blob.hash,
+          size: blob.size,
+          ...(subjectInput.mediaType !== undefined ? { mediaType: subjectInput.mediaType } : {}),
+          ...(subjectInput.label !== undefined ? { label: subjectInput.label } : {}),
+        },
+      };
+    }
+
+    const path = subjectInput.path;
+    const content = await nodeFs.readFile(await resolveReviewFile(rt.cwd, path), "utf8");
+    const blob = await rt.host.blobs.put(content, { kind: "human-review-file", contentType: "text/plain" });
+    const beforeSha256 = sha256Hex(content);
+    const mode = subjectInput.mode ?? "view";
+    const ref: BlobRefJson = { $blob: blob.hash, size: blob.size, preview: content.slice(0, 200) };
+    const outcome = await rt.runHuman({
+      kind: "review",
+      ...(opts.key !== undefined ? { key: opts.key } : {}),
+      question: opts.question ?? `Review ${path}`,
+      schemaJson: wire.json,
+      realSchema: opts.schema,
+      wrapped: wire.wrapped,
+      reviewSubject: { kind: "file", path, mode, ref, sha256: beforeSha256 },
+      ...(attachments.length > 0 ? { reviewAttachments: attachments } : {}),
+      ...(opts.timeout !== undefined ? { timeoutMs: parseDuration(opts.timeout) } : {}),
+      ...(timeoutSpec(opts.onTimeout) ?? {}),
+      ...(opts.ui !== undefined ? { ui: opts.ui } : {}),
+    });
+    const edit = outcome.reviewEdit;
+    return {
+      answer: outcome.answer as InferOut<S>,
+      subject: {
+        kind: "file",
+        path,
+        mode,
+        beforeSha256,
+        afterSha256: edit?.afterSha256 ?? beforeSha256,
+        ref: edit?.ref.$blob ?? blob.hash,
+        size: edit?.ref.size ?? blob.size,
+        applied: edit !== undefined && edit.afterSha256 !== beforeSha256,
+      },
+    };
+  }
+
+  const review = Object.assign(
+    async <S extends AnySchema, Props = never>(opts: HumanReviewOptions<S, Props>) =>
+      (await reviewImpl(opts)).answer,
+    { detailed: reviewImpl },
+  ) as Ctx["human"]["review"];
+
   const human: Ctx["human"] = {
     ask: async (opts) => {
       const wire = toWireSchema(opts.schema);
@@ -2338,24 +2526,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
       const raw = outcome.answer as { approved?: boolean; note?: string };
       return { approved: raw.approved === true, ...(raw.note !== undefined ? { note: raw.note } : {}) };
     },
-    review: async (opts) => {
-      const blob = await rt.host.blobs.put(opts.artifact, { kind: "artifact" });
-      const wire = toWireSchema(opts.schema);
-      reportWireLints(opts.key ?? "human:review", wire.lints);
-      const outcome = await rt.runHuman({
-        kind: "review",
-        ...(opts.key !== undefined ? { key: opts.key } : {}),
-        question: opts.question ?? "Review the attached artifact",
-        schemaJson: wire.json,
-        realSchema: opts.schema,
-        wrapped: wire.wrapped,
-        artifactRef: { $blob: blob.hash, size: blob.size, preview: opts.artifact.slice(0, 200) },
-        ...(opts.timeout !== undefined ? { timeoutMs: parseDuration(opts.timeout) } : {}),
-        ...(timeoutSpec(opts.onTimeout) ?? {}),
-        ...(opts.ui !== undefined ? { ui: opts.ui } : {}),
-      });
-      return outcome.answer as never;
-    },
+    review,
   };
 
   const ui: Ctx["ui"] = {
@@ -3446,6 +3617,58 @@ export function buildCtx(rt: RunRuntime): Ctx {
     return scopedContext(mergeScope(parent, { phase: fullName }));
   };
 
+  const sequence: Ctx["sequence"] = async (items, opts, run) => {
+    const prefix = opts.keyPrefix ?? "item";
+    if (typeof prefix !== "string" || prefix.trim() === "" || prefix.includes(":")) {
+      throw new StepError("invalid_input", "ctx.sequence: keyPrefix must be a non-empty string without ':'");
+    }
+    const identities = items.map((item, index) => {
+      const itemKey = opts.keyOf(item, index);
+      if (typeof itemKey !== "string" || itemKey.trim() === "" || itemKey.includes(":")) {
+        throw new StepError(
+          "invalid_input",
+          `ctx.sequence: keyOf returned an invalid key at index ${index}; keys must be non-empty and cannot contain ':'`,
+        );
+      }
+      return itemKey;
+    });
+    const seen = new Set<string>();
+    for (const itemKey of identities) {
+      if (seen.has(itemKey)) {
+        throw new StepError("invalid_input", `ctx.sequence: duplicate item key ${JSON.stringify(itemKey)}`);
+      }
+      seen.add(itemKey);
+    }
+
+    const results: unknown[] = [];
+    for (let index = 0; index < items.length; index++) {
+      const item = items[index]!;
+      const itemKey = identities[index]!;
+      const label = opts.phase?.(item, index) ?? itemKey;
+      const itemCtx = phase(label);
+      results.push(
+        await run(
+          item,
+          {
+            ctx: itemCtx,
+            itemKey,
+            key(local: string) {
+              if (typeof local !== "string" || local.trim() === "" || local.includes(":")) {
+                throw new StepError(
+                  "invalid_input",
+                  "ctx.sequence item key(): local key must be non-empty and cannot contain ':'",
+                );
+              }
+              return `${prefix}:${itemKey}:${local}`;
+            },
+          },
+          index,
+        ),
+      );
+    }
+    return results as never;
+  };
+
   const step = async <Input, Output>(
     definition: StepDefinition<Input, Output>,
     input: Input,
@@ -3492,6 +3715,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
   ctx = {
     agent,
     parallel,
+    sequence,
     pipeline,
     successes,
     all,

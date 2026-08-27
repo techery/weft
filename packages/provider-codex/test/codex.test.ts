@@ -267,6 +267,37 @@ describe("createCodexProvider", () => {
     expect(codex.startOptions[0]?.sandboxMode).toBe("read-only");
   });
 
+  it("maps Codex-specific step options without allowing a sandbox widening", async () => {
+    const codex = new FakeCodex([{ id: "t1", reply: turn("{}") }]);
+    const provider = createCodexProvider({ codex });
+
+    await provider.run(
+      request({
+        providerOptions: {
+          sandboxMode: "read-only",
+          networkAccess: false,
+          webSearch: "cached",
+        },
+      }),
+      control(),
+    );
+
+    expect(codex.startOptions[0]).toMatchObject({
+      sandboxMode: "read-only",
+      networkAccessEnabled: false,
+      webSearchMode: "cached",
+    });
+    await expect(
+      provider.run(
+        request({ tools: { allowEdits: false }, providerOptions: { sandboxMode: "workspace-write" } }),
+        control(),
+      ),
+    ).rejects.toThrow(/cannot widen a read-only Weft step/);
+    expect(() => provider.validateOptions?.({ approvalPolicy: "on-request" })).toThrow(
+      /unknown provider option/,
+    );
+  });
+
   it.each([
     { allowEdits: false, parent: ":read-only" },
     { allowEdits: true, parent: ":workspace" },

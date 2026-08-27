@@ -21,6 +21,10 @@ export interface StepView {
   prompt?: string;
   route?: { provider: string; model?: string; effort?: string };
   usage?: Usage;
+  /** Full scheduled payload, useful for asserting provider options and composed inputs. */
+  payload?: unknown;
+  /** Declared write boundary recorded with the scheduled step. */
+  scope?: { paths: string[]; also?: string[]; mode: "warn" | "strict" };
 }
 
 /** One `toJSON()` entry: identity and outcome only — nothing that varies run to run. */
@@ -38,6 +42,10 @@ export interface JournalView {
   steps(filter?: { kind?: StepKind; phase?: string }): StepView[];
   /** The step (or human request) carrying this key; throws listing the known keys. */
   step(key: string): StepView;
+  /** Whether a step with this durable key was scheduled. */
+  ran(key: string): boolean;
+  /** Readable inverse for branch assertions. */
+  neverRan(key: string): boolean;
   /** Snapshot-stable projection: no timestamps, no run ids, no outputs. */
   toJSON(): JournalSnapshotEntry[];
 }
@@ -69,6 +77,8 @@ export function buildJournalView(records: JournalRecord[]): JournalView {
           ...(ev.label !== undefined ? { label: ev.label } : {}),
           ...(phase !== undefined ? { phase } : {}),
           ...(ev.route !== undefined ? { route: ev.route } : {}),
+          ...(ev.payload !== undefined ? { payload: ev.payload } : {}),
+          ...(ev.scope !== undefined ? { scope: ev.scope } : {}),
           ...(typeof payload?.prompt === "string" ? { prompt: payload.prompt } : {}),
         });
         break;
@@ -142,6 +152,12 @@ export function buildJournalView(records: JournalRecord[]): JournalView {
       throw new Error(
         `journal.step: no step with key "${key}" — known keys: ${known.length > 0 ? known.join(", ") : "(none declared a key)"}`,
       );
+    },
+    ran(key) {
+      return all.some((step) => step.key === key);
+    },
+    neverRan(key) {
+      return !all.some((step) => step.key === key);
     },
     toJSON() {
       return all.map((s) => ({

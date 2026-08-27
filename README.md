@@ -246,6 +246,36 @@ export default defineWorkflow(
 approval gate, parallel fixes in isolated worktrees with declared write scopes, an explicit sequential
 merge, and a required `pnpm test` check that gates the run's completion.
 
+Provider mechanics are namespaced by adapter; Weft selects and validates only the entry for the routed
+provider, while engine-owned write scope remains authoritative:
+
+```ts
+await ctx.agent("Review without changing files.", {
+  key: "review:auth",
+  provider: "codex",
+  providerOptions: {
+    claude: { permissionMode: "dontAsk" },
+    codex: { sandboxMode: "read-only", networkAccess: false, webSearch: "cached" },
+  },
+  providerRequirements: { structured: "native", sessionResume: true },
+  schema: z.object({ findings: z.array(Finding) }),
+});
+```
+
+For review gates, the primary subject can be an immutable artifact or a repository-relative file. Edit mode
+opens a text editor in the Workflow Manager and applies the accepted draft only if the file still matches the
+revision that was opened:
+
+```ts
+const reviewed = await ctx.human.review.detailed({
+  key: "review:delivery-plan",
+  subject: { kind: "file", path: "plans/delivery.md", mode: "edit" },
+  attachments: [{ kind: "artifact", content: brief, label: "brief" }],
+  question: "Edit and approve the delivery plan",
+  schema: z.object({ approved: z.boolean(), note: z.string().optional() }),
+});
+```
+
 ## How it works
 
 Everything that leaves the sandbox is a step. The engine executes it, appends the outcome to an append-only

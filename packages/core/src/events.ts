@@ -47,6 +47,35 @@ export interface BlobRefJson {
   preview?: string;
 }
 
+export type HumanReviewSubjectRef =
+  | {
+      kind: "artifact";
+      ref: BlobRefJson;
+      mediaType?: string;
+      label?: string;
+    }
+  | {
+      kind: "file";
+      path: string;
+      mode: "view" | "edit";
+      ref: BlobRefJson;
+      sha256: string;
+    };
+
+export interface HumanReviewAttachmentRef {
+  kind: "artifact";
+  ref: BlobRefJson;
+  mediaType?: string;
+  label?: string;
+}
+
+export interface HumanReviewFileEdit {
+  path: string;
+  beforeSha256: string;
+  afterSha256: string;
+  ref: BlobRefJson;
+}
+
 export type UiPropsJson = { inline: unknown; hash: string } | { ref: BlobRefJson; hash: string };
 
 export interface UiPresentation {
@@ -76,6 +105,9 @@ export interface HumanRequestEvent {
   phase?: string;
   detail?: string;
   artifactRef?: BlobRefJson;
+  /** Primary artifact or file under review. `artifactRef` remains for legacy consumers. */
+  reviewSubject?: HumanReviewSubjectRef;
+  reviewAttachments?: HumanReviewAttachmentRef[];
   schema: unknown;
   risk?: Risk;
   /** Epoch ms deadline when a timeout policy applies. */
@@ -100,6 +132,8 @@ export interface HumanAnsweredEvent {
   answer: unknown;
   answeredBy: "human" | "policy" | "timeout";
   channel?: string;
+  /** Edited file content accepted with this answer and applied idempotently by the runtime. */
+  reviewEdit?: HumanReviewFileEdit;
 }
 
 /**

@@ -15,6 +15,36 @@ import type { InputUiView, UiApi } from "./ui.ts";
 export type ProviderId = "claude" | "codex" | (string & {});
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
+/** Claude Agent SDK mechanics that do not alter Weft's engine-owned safety boundary. */
+export interface ClaudeAgentProviderOptions {
+  /** `default` can ask through Weft's permission hook; `dontAsk` denies tools that need an ask. */
+  permissionMode?: "default" | "dontAsk";
+}
+
+/** Codex SDK mechanics. Engine-owned read/write scope always wins over these settings. */
+export interface CodexAgentProviderOptions {
+  /** May narrow a write step to read-only; cannot make a read-only Weft step writable. */
+  sandboxMode?: "read-only" | "workspace-write";
+  networkAccess?: boolean;
+  webSearch?: "disabled" | "cached" | "live";
+}
+
+/**
+ * Provider option registry. Provider packages may augment this interface for their id;
+ * Weft ships the built-in Claude and Codex entries so ordinary workflows stay typed.
+ */
+export interface AgentProviderOptions {
+  claude?: ClaudeAgentProviderOptions;
+  codex?: CodexAgentProviderOptions;
+}
+
+/** Capabilities a workflow requires before Weft spends a provider turn. */
+export interface ProviderRequirements {
+  structured?: "native" | "tool";
+  permissionHook?: true;
+  sessionResume?: true;
+}
+
 /** Risk tiers drive the approval policy: low auto-approves (recorded), higher tiers ask. */
 export type Risk = "low" | "medium" | "high" | "irreversible";
 
@@ -218,6 +248,10 @@ export interface AgentOptions<S extends AnySchema> {
   /** Cosmetic label for the tree; defaults to the key. */
   label?: string;
   provider?: ProviderId;
+  /** Options for concrete provider adapters. Only the selected provider's entry is dispatched. */
+  providerOptions?: AgentProviderOptions;
+  /** Fail before a paid turn when the selected provider cannot meet these requirements. */
+  providerRequirements?: ProviderRequirements;
   model?: string;
   effort?: Effort;
   /** `"worktree"` gives the agent its own git worktree at the integration tree. */
@@ -398,6 +432,34 @@ export interface ParallelFn {
   ): Promise<Settled<Result>[]>;
 }
 
+export interface SequenceItemContext<TaskExtensionInput = unknown, TaskExtensions = TaskExtensionInput> {
+  /** Phase-scoped context for this item. */
+  ctx: Ctx<TaskExtensionInput, TaskExtensions>;
+  /** Stable item key selected by `keyOf`. */
+  itemKey: string;
+  /** Compose a globally unique step key beneath this sequence item. */
+  key(local: string): string;
+}
+
+export interface SequenceOptions<Item> {
+  /** Stable identity for the item; duplicate identities fail before any item runs. */
+  keyOf(item: Item, index: number): string;
+  /** Cosmetic phase label. Defaults to the stable item key. */
+  phase?(item: Item, index: number): string;
+  /** Prefix for generated step keys; defaults to `item`. */
+  keyPrefix?: string;
+}
+
+export type SequenceFn<TaskExtensionInput = unknown, TaskExtensions = TaskExtensionInput> = <Item, Result>(
+  items: ReadonlyArray<Item>,
+  opts: SequenceOptions<Item>,
+  run: (
+    item: Item,
+    scope: SequenceItemContext<TaskExtensionInput, TaskExtensions>,
+    index: number,
+  ) => Promise<Result> | Result,
+) => Promise<Result[]>;
+
 // ---------------------------------------------------------------------------
 // Humans & gates
 // ---------------------------------------------------------------------------
@@ -457,7 +519,26 @@ export interface HumanApproveOptions {
   onTimeout?: HumanTimeoutPolicy<{ approved: boolean; note?: string }>;
 }
 
-export interface HumanReviewOptions<S extends AnySchema, Props = never> {
+export interface HumanReviewArtifactSubject {
+  kind: "artifact";
+  content: string;
+  mediaType?: string;
+  label?: string;
+}
+
+export interface HumanReviewFileSubject {
+  kind: "file";
+  /** Repository-relative path. */
+  path: string;
+  /** `edit` presents an editor and applies the submitted draft with a content-hash guard. */
+  mode?: "view" | "edit";
+}
+
+export type HumanReviewSubject = HumanReviewArtifactSubject | HumanReviewFileSubject;
+
+export type HumanReviewAttachment = HumanReviewArtifactSubject;
+
+interface HumanReviewCommonOptions<S extends AnySchema, Props> {
   /**
    * Stable identity for replay, exactly as on {@link AgentOptions.key}. A human step is
    * otherwise identified by its CONTENT alone — question, detail, schema, risk, timeouts —
@@ -467,21 +548,46 @@ export interface HumanReviewOptions<S extends AnySchema, Props = never> {
    * reusable across the edit.
    */
   key?: string;
-  /** The artifact under review (markdown, a diff, a report…). Stored as a blob. */
-  artifact: string;
   question?: string;
   schema: S;
+  /** Supplemental immutable artifacts shown beside the primary subject. */
+  attachments?: HumanReviewAttachment[];
   timeout?: Duration;
   onTimeout?: HumanTimeoutPolicy<InferIn<S>>;
   /** Optional workflow-provided presentation; the host remains the submission authority. */
   ui?: { view: InputUiView<Props, InferIn<S>>; props: Props };
 }
 
+/** Existing artifact shorthand remains source-compatible. */
+export type HumanReviewOptions<S extends AnySchema, Props = never> = HumanReviewCommonOptions<S, Props> &
+  ({ artifact: string; subject?: never } | { subject: HumanReviewSubject; artifact?: never });
+
+export interface HumanReviewDetailedResult<T> {
+  answer: T;
+  subject:
+    | { kind: "artifact"; ref: string; sha256: string; size: number; mediaType?: string; label?: string }
+    | {
+        kind: "file";
+        path: string;
+        mode: "view" | "edit";
+        beforeSha256: string;
+        afterSha256: string;
+        ref: string;
+        size: number;
+        applied: boolean;
+      };
+}
+
 export interface HumanApi {
   /** Always asks a person; the answer is validated against the schema like any output. */
   ask<S extends AnySchema, Props = never>(opts: HumanAskOptions<S, Props>): Promise<InferOut<S>>;
   approve(opts: HumanApproveOptions): Promise<{ approved: boolean; note?: string }>;
-  review<S extends AnySchema, Props = never>(opts: HumanReviewOptions<S, Props>): Promise<InferOut<S>>;
+  review: {
+    <S extends AnySchema, Props = never>(opts: HumanReviewOptions<S, Props>): Promise<InferOut<S>>;
+    detailed<S extends AnySchema, Props = never>(
+      opts: HumanReviewOptions<S, Props>,
+    ): Promise<HumanReviewDetailedResult<InferOut<S>>>;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -909,6 +1015,8 @@ export interface Ctx<TaskExtensionInput = unknown, TaskExtensions = TaskExtensio
   // steps
   agent: AgentFn;
   parallel: ParallelFn;
+  /** Sequential item traversal with stable item keys and nested phase contexts. */
+  sequence: SequenceFn<TaskExtensionInput, TaskExtensions>;
   pipeline<I>(items: ReadonlyArray<I>): Pipeline<I, I>;
   /** Tolerantly collect values; drops are recorded and listed in the report. */
   successes<T>(settled: ReadonlyArray<Settled<T>>): T[];

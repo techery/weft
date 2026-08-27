@@ -22,12 +22,18 @@
 
 export type {
   MockAgentBuilder,
+  MockOptions,
   MockRequest,
   MockResponder,
   MockRuleOptions,
   MockTaskEnvelope,
 } from "@techery/weft-provider-mock";
-export { mock, mockTaskEnvelope } from "@techery/weft-provider-mock";
+export { mock, mockSequence, mockTaskEnvelope } from "@techery/weft-provider-mock";
+
+import { mockSequence } from "@techery/weft-provider-mock";
+
+/** Explicit stateful fixtures; arrays passed directly to mock.on remain ordinary output values. */
+export const fixture = Object.freeze({ sequence: mockSequence });
 export type {
   BashFixtures,
   ExecFixtures,

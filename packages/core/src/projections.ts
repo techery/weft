@@ -10,7 +10,16 @@ import type {
   SerializedStepError,
   Usage,
 } from "@techery/weft-sdk";
-import type { BlobRefJson, JournalRecord, RunStatus, StepKind, UiPresentation } from "./events.ts";
+import type {
+  BlobRefJson,
+  HumanReviewAttachmentRef,
+  HumanReviewFileEdit,
+  HumanReviewSubjectRef,
+  JournalRecord,
+  RunStatus,
+  StepKind,
+  UiPresentation,
+} from "./events.ts";
 
 export interface StepState {
   seq: number;
@@ -53,6 +62,9 @@ export interface HumanState {
   deadline?: number;
   confirmToken?: string;
   artifactRef?: BlobRefJson;
+  reviewSubject?: HumanReviewSubjectRef;
+  reviewAttachments?: HumanReviewAttachmentRef[];
+  reviewEdit?: HumanReviewFileEdit;
   ui?: UiPresentation;
   requestedAt: number;
 }
@@ -287,6 +299,8 @@ export function reduceState(records: JournalRecord[]): RunState {
           ...(ev.deadline !== undefined ? { deadline: ev.deadline } : {}),
           ...(ev.confirmToken !== undefined ? { confirmToken: ev.confirmToken } : {}),
           ...(ev.artifactRef !== undefined ? { artifactRef: ev.artifactRef } : {}),
+          ...(ev.reviewSubject !== undefined ? { reviewSubject: ev.reviewSubject } : {}),
+          ...(ev.reviewAttachments !== undefined ? { reviewAttachments: ev.reviewAttachments } : {}),
           ...(ev.ui !== undefined ? { ui: ev.ui } : {}),
         };
         humansById.set(ev.id, human);
@@ -301,6 +315,7 @@ export function reduceState(records: JournalRecord[]): RunState {
         human.status = "answered";
         human.answer = ev.answer;
         human.answeredBy = ev.answeredBy;
+        if (ev.reviewEdit !== undefined) human.reviewEdit = ev.reviewEdit;
         break;
       }
       case "human.rejected": {
@@ -310,6 +325,7 @@ export function reduceState(records: JournalRecord[]): RunState {
         human.status = "pending";
         delete human.answer;
         delete human.answeredBy;
+        delete human.reviewEdit;
         break;
       }
       case "human.superseded": {

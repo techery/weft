@@ -75,6 +75,60 @@
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+.reviewFile {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 4px;
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+.reviewFileHead {
+  min-height: 34px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--color-divider);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-neutral-700);
+}
+.fileEditor,
+.filePreview {
+  width: 100%;
+  min-height: 240px;
+  max-height: 520px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 0;
+  background: var(--color-neutral-50);
+  color: var(--color-neutral-900);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 2;
+  white-space: pre;
+}
+.fileEditor {
+  resize: vertical;
+  outline: none;
+}
+.fileEditor:focus {
+  box-shadow: inset 0 0 0 2px var(--color-accent-300);
+}
+.attachments {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
 .answersHead {
   padding-top: 2px;
 }
@@ -119,6 +173,10 @@
   color: var(--color-danger);
   font-size: 12px;
   line-height: 1.45;
+}
+.reviewFile > .detail,
+.reviewFile > .error {
+  padding: 2px 10px 10px;
 }
 .foot {
   flex: none;

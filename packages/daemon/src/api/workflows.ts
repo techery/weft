@@ -314,7 +314,9 @@ function jsonSchemaOf(
     };
   } catch {
     const wire = toWireSchema(def.meta[which]);
-    return { schema: wire.json, warnings: wire.lints };
+    // The fallback still gives the manager something inspectable. Output lints are not
+    // actionable provider constraints: outputs are validated locally by the engine.
+    return { schema: wire.json, warnings: which === "output" ? [] : wire.lints };
   }
 }
 

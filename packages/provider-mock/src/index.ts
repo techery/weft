@@ -5,7 +5,7 @@
  * a fixture that wouldn't pass in production fails the test.
  */
 import { promises as fs } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type {
   AgentProvider,
   AgentRequest,
@@ -15,6 +15,7 @@ import type {
   RunControl,
 } from "@techery/weft-core";
 import type { SchemaIssue, Usage } from "@techery/weft-sdk";
+import picomatch from "picomatch";
 
 const MOCK_ENVELOPE = Symbol("weft.mock.taskEnvelope");
 
@@ -49,6 +50,8 @@ export interface MockRequest {
   schema: unknown;
   model?: string;
   effort?: string;
+  tools: AgentRequest["tools"];
+  providerOptions?: unknown;
   writeScope?: { paths: string[]; also?: string[]; mode: "warn" | "strict" };
   protectedPaths?: readonly string[];
   /** 1 on the first call; >1 on repair calls, with the validation issues. */
@@ -80,6 +83,13 @@ export interface MockRuleOptions {
   times?: number;
 }
 
+export interface MockOptions {
+  /** Provider behavior advertised to capability preflight. Defaults to the permissive mock profile. */
+  profile?: "mock" | "claude" | "codex";
+  /** Enforce edit and protected-path policy before applying fixture writes. */
+  strict?: boolean;
+}
+
 interface MockRule {
   match: { key?: string; prompt?: string | RegExp; label?: string };
   respond: MockResponder;
@@ -90,6 +100,8 @@ interface MockRule {
 export class MockAgentBuilder {
   readonly rules: MockRule[] = [];
   readonly calls: MockRequest[] = [];
+
+  constructor(readonly options: MockOptions = {}) {}
 
   on(match: MockRule["match"], respond: MockResponder, opts: MockRuleOptions = {}): this {
     this.rules.push({ match, respond, opts, used: 0 });
@@ -103,8 +115,23 @@ export class MockAgentBuilder {
 }
 
 /** Fluent entry point: `mock().on({ key: "review:*" }, () => ({ … }))`. */
-export function mock(): MockAgentBuilder {
-  return new MockAgentBuilder();
+export function mock(options: MockOptions = {}): MockAgentBuilder {
+  return new MockAgentBuilder(options);
+}
+
+/** A stateful responder for repeated matches. Arrays remain ordinary fixture outputs. */
+export function mockSequence(values: readonly MockResponder[]): MockResponder {
+  if (values.length === 0) throw new TypeError("mockSequence: provide at least one response");
+  let index = 0;
+  return async (request) => {
+    if (index >= values.length) {
+      throw new Error(
+        `mockSequence: exhausted after ${values.length} response(s) for ${request.key ?? request.label}`,
+      );
+    }
+    const value = values[index++];
+    return typeof value === "function" ? await value(request) : value;
+  };
 }
 
 export class MockProvider implements AgentProvider {
@@ -117,6 +144,9 @@ export class MockProvider implements AgentProvider {
   ) {}
 
   capabilities(): ProviderCapabilities {
+    if (this.builder.options.profile === "codex") {
+      return { structured: "native", permissionHook: false, sessionResume: true, reportsUsd: false };
+    }
     return { structured: "tool", permissionHook: true, sessionResume: true, reportsUsd: true };
   }
 
@@ -165,9 +195,11 @@ export class MockProvider implements AgentProvider {
       cwd: req.cwd,
       schema: req.schema,
       attempt,
+      tools: req.tools,
       ...(req.key !== undefined ? { key: req.key } : {}),
       ...(req.model !== undefined ? { model: req.model } : {}),
       ...(req.effort !== undefined ? { effort: req.effort } : {}),
+      ...(req.providerOptions !== undefined ? { providerOptions: req.providerOptions } : {}),
       ...(req.writeScope !== undefined ? { writeScope: req.writeScope } : {}),
       ...(req.protectedPaths !== undefined ? { protectedPaths: req.protectedPaths } : {}),
       ...(issues !== undefined ? { issues } : {}),
@@ -186,8 +218,36 @@ export class MockProvider implements AgentProvider {
         );
       });
     }
-    for (const [path, content] of Object.entries(rule.opts.writes ?? {})) {
-      const target = join(req.cwd, path);
+    const writes = Object.entries(rule.opts.writes ?? {});
+    if (this.builder.options.strict && writes.length > 0 && req.tools.allowEdits !== true) {
+      throw new Error(`mock provider "${this.id}": fixture attempted writes in a read-only step`);
+    }
+    if (this.builder.options.strict) {
+      const touched = new Set([...writes.map(([path]) => path), ...(rule.opts.filesTouched ?? [])]);
+      const allowed = req.writeScope
+        ? picomatch([...req.writeScope.paths, ...(req.writeScope.also ?? [])], { dot: true })
+        : undefined;
+      for (const path of touched) {
+        const target = resolve(req.cwd, path);
+        const relPath = relative(req.cwd, target).replaceAll("\\", "/");
+        const escaped = isAbsolute(path) || relPath === ".." || relPath.startsWith("../");
+        if (escaped) {
+          throw new Error(`mock provider "${this.id}": fixture write escapes the workspace: ${path}`);
+        }
+        if (allowed !== undefined && !allowed(relPath)) {
+          throw new Error(`mock provider "${this.id}": fixture write is outside the declared scope: ${path}`);
+        }
+        const protectedPath = req.protectedPaths?.find((candidate) => {
+          const rel = relative(candidate, target);
+          return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+        });
+        if (protectedPath !== undefined) {
+          throw new Error(`mock provider "${this.id}": fixture write targets protected path ${path}`);
+        }
+      }
+    }
+    for (const [path, content] of writes) {
+      const target = resolve(req.cwd, path);
       await fs.mkdir(dirname(target), { recursive: true });
       await fs.writeFile(target, content);
     }

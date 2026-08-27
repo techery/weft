@@ -147,8 +147,12 @@ function useRunInvalidation(): (runId: string) => Promise<void> {
 export function useAnswerGate() {
   const invalidate = useRunInvalidation();
   return useMutation({
-    mutationFn: (vars: { runId: string; requestId: string; answer: unknown }) =>
-      api.answer(vars.runId, vars.requestId, vars.answer),
+    mutationFn: (vars: {
+      runId: string;
+      requestId: string;
+      answer: unknown;
+      reviewEdit?: { content: string; beforeSha256: string };
+    }) => api.answer(vars.runId, vars.requestId, vars.answer, vars.reviewEdit),
     onSuccess: (_data, vars) => invalidate(vars.runId),
   });
 }

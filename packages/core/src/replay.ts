@@ -13,7 +13,13 @@
  * code has changed — determinism of the remainder is best-effort by design).
  */
 import type { Usage } from "@techery/weft-sdk";
-import type { BlobRefJson, HumanRequestEvent, JournalRecord, StepKind } from "./events.ts";
+import type {
+  BlobRefJson,
+  HumanRequestEvent,
+  HumanReviewFileEdit,
+  JournalRecord,
+  StepKind,
+} from "./events.ts";
 
 export interface CompletedEntry {
   seq: number;
@@ -41,7 +47,12 @@ export interface HumanEntry {
   seq: number;
   key?: string;
   request: HumanRequestEvent;
-  answer?: { answer: unknown; answeredBy: "human" | "policy" | "timeout"; order: number };
+  answer?: {
+    answer: unknown;
+    answeredBy: "human" | "policy" | "timeout";
+    order: number;
+    reviewEdit?: HumanReviewFileEdit;
+  };
   consumed: boolean;
   superseded: boolean;
 }
@@ -256,7 +267,12 @@ export class ReplayIndex {
           // A rejection clears the slot, so a post-rejection replacement still fills.
           const entry = index.humansById.get(ev.id);
           if (entry && entry.answer === undefined) {
-            entry.answer = { answer: ev.answer, answeredBy: ev.answeredBy, order: rec.i };
+            entry.answer = {
+              answer: ev.answer,
+              answeredBy: ev.answeredBy,
+              order: rec.i,
+              ...(ev.reviewEdit !== undefined ? { reviewEdit: ev.reviewEdit } : {}),
+            };
           }
           break;
         }

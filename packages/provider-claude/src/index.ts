@@ -55,6 +55,28 @@ export interface ClaudeProviderOptions {
   id?: string;
 }
 
+interface ClaudeStepOptions {
+  permissionMode?: "default" | "dontAsk";
+}
+
+function claudeStepOptions(value: unknown): ClaudeStepOptions {
+  if (value === undefined) return {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("claude: provider options must be an object");
+  }
+  const options = value as Record<string, unknown>;
+  const unknown = Object.keys(options).filter((key) => key !== "permissionMode");
+  if (unknown.length > 0) throw new Error(`claude: unknown provider option(s): ${unknown.join(", ")}`);
+  if (
+    options.permissionMode !== undefined &&
+    options.permissionMode !== "default" &&
+    options.permissionMode !== "dontAsk"
+  ) {
+    throw new Error('claude: permissionMode must be "default" or "dontAsk"');
+  }
+  return options as ClaudeStepOptions;
+}
+
 /** Sent when a stream ended without the terminating tool and `onMaxTurns` is "finalize". */
 const FINALIZE_PROMPT = `Call ${STRUCTURED_OUTPUT_TOOL} now with your best final answer matching the schema.`;
 
@@ -168,6 +190,10 @@ class ClaudeProvider implements AgentProvider {
     return { structured: "tool", permissionHook: true, sessionResume: true, reportsUsd: true };
   }
 
+  validateOptions(options: unknown): void {
+    claudeStepOptions(options);
+  }
+
   async run(req: AgentRequest, ctl: RunControl): Promise<AgentResult> {
     const turn = newTurn();
     await this.stream(req, ctl, turn, withOutputSection(req));
@@ -247,6 +273,7 @@ class ClaudeProvider implements AgentProvider {
     }
 
     const protectedSandbox = protectedPathSandbox(req);
+    const stepOptions = claudeStepOptions(req.providerOptions);
     const options: Options = {
       cwd: req.cwd,
       abortController: controller,
@@ -260,7 +287,7 @@ class ClaudeProvider implements AgentProvider {
       // canUseTool is only consulted in "default" mode: acceptEdits/bypassPermissions
       // pre-approve, "dontAsk" denies what is not pre-approved without asking, and
       // "plan" runs no tools at all.
-      permissionMode: "default",
+      permissionMode: stepOptions.permissionMode ?? "default",
       ...(protectedSandbox ? { sandbox: protectedSandbox } : {}),
       ...(req.model !== undefined ? { model: req.model } : {}),
       ...(req.maxTurns !== undefined ? { maxTurns: req.maxTurns } : {}),

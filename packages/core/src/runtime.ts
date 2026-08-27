@@ -29,6 +29,9 @@ import type {
   BlobRefJson,
   HumanKind,
   HumanRequestEvent,
+  HumanReviewAttachmentRef,
+  HumanReviewFileEdit,
+  HumanReviewSubjectRef,
   JournalEvent,
   JournalRecord,
   RunStatus,
@@ -39,6 +42,7 @@ import { jsonUnsafeAt, unwrapWireValue, wrapWireValue } from "./jsonschema.ts";
 import type { Semaphore } from "./limiter.ts";
 import type { AgentTaskTrackerHost, ProviderRegistry } from "./provider.ts";
 import { type CompletedEntry, OrderedDelivery, type ReplayIndex, type ReuseMode } from "./replay.ts";
+import { applyReviewFileEdit } from "./review.ts";
 import type { BlobStore, JournalStore } from "./stores.ts";
 import { isBlobBeyondRepair } from "./stores.ts";
 
@@ -73,6 +77,8 @@ export interface PendingRequest {
   deadline?: number;
   confirmToken?: string;
   artifactRef?: BlobRefJson;
+  reviewSubject?: HumanReviewSubjectRef;
+  reviewAttachments?: HumanReviewAttachmentRef[];
   ui?: UiPresentation;
 }
 
@@ -215,6 +221,8 @@ interface HumanSpec {
   timeoutDefault?: unknown;
   confirmToken?: string;
   artifactRef?: BlobRefJson;
+  reviewSubject?: HumanReviewSubjectRef;
+  reviewAttachments?: HumanReviewAttachmentRef[];
   /** Policy auto-approval: append request+answer in one batch, never wait. */
   auto?: boolean;
   ui?: { view: unknown; props: unknown };
@@ -223,6 +231,7 @@ interface HumanSpec {
 export interface HumanOutcome {
   answer: unknown;
   answeredBy: "human" | "policy" | "timeout";
+  reviewEdit?: HumanReviewFileEdit;
 }
 
 interface PendingWait {
@@ -1071,6 +1080,8 @@ export class RunRuntime {
       schema: spec.schemaJson ?? null,
       risk: spec.risk ?? null,
       artifact: spec.artifactRef?.$blob ?? null,
+      reviewSubject: spec.reviewSubject ?? null,
+      reviewAttachments: spec.reviewAttachments ?? [],
       // Timeout settings change what an UNANSWERED request does, so they are
       // part of its identity: editing "2h" to "2d" (or the policy/default) must
       // surface a fresh request on resume, not silently keep the old absolute
@@ -1123,7 +1134,13 @@ export class RunRuntime {
           return await this.settleAnswer(
             entry.request,
             spec.realSchema,
-            { answer: structuredClone(entry.answer.answer), answeredBy: entry.answer.answeredBy },
+            {
+              answer: structuredClone(entry.answer.answer),
+              answeredBy: entry.answer.answeredBy,
+              ...(entry.answer.reviewEdit !== undefined
+                ? { reviewEdit: structuredClone(entry.answer.reviewEdit) }
+                : {}),
+            },
             spec.wrapped ?? false,
           );
         } catch (err) {
@@ -1169,6 +1186,8 @@ export class RunRuntime {
       ...(requestedPhase !== undefined ? { phase: requestedPhase } : {}),
       ...(spec.detail !== undefined ? { detail: spec.detail } : {}),
       ...(spec.artifactRef !== undefined ? { artifactRef: spec.artifactRef } : {}),
+      ...(spec.reviewSubject !== undefined ? { reviewSubject: spec.reviewSubject } : {}),
+      ...(spec.reviewAttachments !== undefined ? { reviewAttachments: spec.reviewAttachments } : {}),
       ...(spec.risk !== undefined ? { risk: spec.risk } : {}),
       ...(spec.timeoutMs !== undefined ? { deadline: now + spec.timeoutMs } : {}),
       ...(spec.onTimeout !== undefined ? { onTimeout: spec.onTimeout } : {}),
@@ -1259,6 +1278,9 @@ export class RunRuntime {
       ...(request.risk !== undefined ? { risk: request.risk } : {}),
       ...(request.deadline !== undefined ? { deadline: request.deadline } : {}),
       ...(request.confirmToken !== undefined ? { confirmToken: request.confirmToken } : {}),
+      ...(request.artifactRef !== undefined ? { artifactRef: request.artifactRef } : {}),
+      ...(request.reviewSubject !== undefined ? { reviewSubject: request.reviewSubject } : {}),
+      ...(request.reviewAttachments !== undefined ? { reviewAttachments: request.reviewAttachments } : {}),
       ...(request.ui !== undefined ? { ui: request.ui } : {}),
     });
     return new Promise<HumanOutcome>((resolve, reject) => {
@@ -1326,6 +1348,7 @@ export class RunRuntime {
       }
       return { answer: { approved: false, note: "timed out" }, answeredBy: "timeout" };
     }
+    let answer = outcome.answer;
     if (realSchema) {
       const check = await validateSchema(realSchema, unwrapWireValue(outcome.answer, wrapped));
       if (!check.ok) {
@@ -1335,9 +1358,14 @@ export class RunRuntime {
           { step: { kind: "human", key: request.id, runId: this.runId } },
         );
       }
-      return { answer: check.value, answeredBy: outcome.answeredBy };
+      answer = check.value;
     }
-    return outcome;
+    await applyReviewFileEdit(this.cwd, request.reviewSubject, outcome.reviewEdit, this.host.blobs);
+    return {
+      answer,
+      answeredBy: outcome.answeredBy,
+      ...(outcome.reviewEdit !== undefined ? { reviewEdit: outcome.reviewEdit } : {}),
+    };
   }
 
   /**
@@ -1383,7 +1411,12 @@ export class RunRuntime {
   }
 
   /** Deliver an answer to an in-process waiting step; the caller already appended the event. */
-  resolveAnswer(id: string, answer: unknown, answeredBy: HumanOutcome["answeredBy"]): boolean {
+  resolveAnswer(
+    id: string,
+    answer: unknown,
+    answeredBy: HumanOutcome["answeredBy"],
+    reviewEdit?: HumanReviewFileEdit,
+  ): boolean {
     const wait = this.pendingWaits.get(id);
     if (!wait) return false;
     this.pendingWaits.delete(id);
@@ -1391,7 +1424,7 @@ export class RunRuntime {
     this.host.resolvePending(this, id);
     if (this.pendingWaits.size === 0 && this.status === "waiting_for_human") this.setStatus("executing");
     this.answeredIds.add(id);
-    wait.resolve({ answer, answeredBy });
+    wait.resolve({ answer, answeredBy, ...(reviewEdit !== undefined ? { reviewEdit } : {}) });
     return true;
   }
 
@@ -1401,10 +1434,15 @@ export class RunRuntime {
    * an answer appended in between is invisible to the replay index and this delivery is
    * its only path in. Echoes of answers already delivered here are dropped.
    */
-  deliverAnswer(id: string, answer: unknown, answeredBy: HumanOutcome["answeredBy"]): boolean {
-    if (this.resolveAnswer(id, answer, answeredBy)) return true;
+  deliverAnswer(
+    id: string,
+    answer: unknown,
+    answeredBy: HumanOutcome["answeredBy"],
+    reviewEdit?: HumanReviewFileEdit,
+  ): boolean {
+    if (this.resolveAnswer(id, answer, answeredBy, reviewEdit)) return true;
     if (this.answeredIds.has(id)) return false;
-    this.bufferedAnswers.set(id, { answer, answeredBy });
+    this.bufferedAnswers.set(id, { answer, answeredBy, ...(reviewEdit !== undefined ? { reviewEdit } : {}) });
     return false;
   }
 

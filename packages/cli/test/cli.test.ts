@@ -551,6 +551,18 @@ describe("weft skill", () => {
     for (const name of commands) expect(printed.text).toContain(`weft ${name}`);
   });
 
+  it("documents every public Ctx surface derived from the SDK", async () => {
+    const printed = await cli("--cwd", await tempRoot(), "skill");
+    const { stdout } = await run(process.execPath, ["scripts/check-example-coverage.mjs", "--list"], {
+      cwd: process.cwd(),
+    });
+    const surfaces = stdout.trim().split("\n").filter(Boolean);
+    const missing = surfaces.filter((surface) => !printed.text.includes(surface));
+
+    expect(surfaces).toHaveLength(77);
+    expect(missing).toEqual([]);
+  });
+
   it("is state-independent, writes only the document to stdout, and creates nothing", async () => {
     const root = await tempRoot();
     const stdout: string[] = [];
@@ -588,6 +600,12 @@ describe("weft skill", () => {
       "defineTaskContract",
       "ctx.successes",
       "ctx.all",
+      "ctx.sequence",
+      "providerOptions",
+      "providerRequirements",
+      "review.detailed",
+      "fixture.sequence",
+      "journal.neverRan",
       'errors: "throw"',
       "`signals`",
       "`taskSeeds`",
@@ -687,12 +705,12 @@ describe("weft test", () => {
     const root = await tempRoot();
 
     expect(selectRunner(root, "auto")).toBe("node");
-    expect(nodeRunnerFor("test/workflows", { watch: false, coverage: false })).toEqual([
-      process.execPath,
+    expect(nodeRunnerFor(root, "test/workflows", { watch: false, coverage: false })).toEqual([
+      "node",
       ["--experimental-strip-types", "--test", "test/workflows"],
     ]);
-    expect(nodeRunnerFor("test/workflows/review.test.ts", { watch: true, coverage: true })).toEqual([
-      process.execPath,
+    expect(nodeRunnerFor(root, "test/workflows/review.test.ts", { watch: true, coverage: true })).toEqual([
+      "node",
       [
         "--watch",
         "--experimental-strip-types",
@@ -700,6 +718,12 @@ describe("weft test", () => {
         "--experimental-test-coverage",
         "test/workflows/review.test.ts",
       ],
+    ]);
+
+    await write(root, "node_modules/tsx/package.json", '{"name":"tsx"}\n');
+    expect(nodeRunnerFor(root, "test/workflows", { watch: false, coverage: false })).toEqual([
+      "node",
+      ["--import", "tsx", "--test", "test/workflows"],
     ]);
   });
 

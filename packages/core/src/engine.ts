@@ -19,12 +19,13 @@ import { Budget } from "./budget.ts";
 import { sha256Hex } from "./canonical.ts";
 import { type EngineConfig, type EngineConfigInput, resolveConfig } from "./config.ts";
 import { buildCtx } from "./ctx.ts";
-import type { JournalEvent, JournalRecord } from "./events.ts";
+import type { HumanRequestEvent, HumanReviewFileEdit, JournalEvent, JournalRecord } from "./events.ts";
 import { jsonUnsafeAt, structuralCheck } from "./jsonschema.ts";
 import { Semaphore } from "./limiter.ts";
 import { type RunState, reduceState, renderReport, renderTree } from "./projections.ts";
 import type { AgentProvider, ProviderRegistry } from "./provider.ts";
 import { ReplayIndex, type ReuseMode } from "./replay.ts";
+import { applyReviewFileEdit } from "./review.ts";
 import {
   type ChildRunSpec,
   type EngineHost,
@@ -1191,7 +1192,12 @@ export class Engine implements EngineHost {
           }
           const ev = rec.ev;
           if (ev.type === "human.answered") {
-            active.runtime.deliverAnswer(ev.id, structuredClone(ev.answer), ev.answeredBy);
+            active.runtime.deliverAnswer(
+              ev.id,
+              structuredClone(ev.answer),
+              ev.answeredBy,
+              ev.reviewEdit === undefined ? undefined : structuredClone(ev.reviewEdit),
+            );
           } else if (ev.type === "signal.received") {
             active.runtime.deliverSignal(ev.name, structuredClone(ev.payload));
           } else if (ev.type === "run.cancelled") {
@@ -1658,7 +1664,7 @@ export class Engine implements EngineHost {
     runId: string,
     requestId: string,
     answer: unknown,
-    opts: { channel?: string } = {},
+    opts: { channel?: string; reviewEdit?: { content: string; beforeSha256: string } } = {},
   ): Promise<void> {
     // Same contract as signal payloads: the answer rides the JSONL journal, so a
     // Map/Date would replay differently than the live waiter saw it, and a
@@ -1696,7 +1702,7 @@ export class Engine implements EngineHost {
     runId: string,
     requestId: string,
     answer: unknown,
-    opts: { channel?: string } = {},
+    opts: { channel?: string; reviewEdit?: { content: string; beforeSha256: string } } = {},
   ): Promise<void> {
     const active = this.active.get(runId);
     if (active) {
@@ -1739,16 +1745,19 @@ export class Engine implements EngineHost {
           );
         }
       }
+      const reviewEdit = await this.prepareReviewEdit(wait.request, opts.reviewEdit);
       const ev: JournalEvent = {
         type: "human.answered",
         id: requestId,
         answer,
         answeredBy: "human",
         ...(opts.channel ? { channel: opts.channel } : {}),
+        ...(reviewEdit !== undefined ? { reviewEdit } : {}),
       };
       if (!this.journal.appendIf) {
         await active.runtime.append([ev]);
-        active.runtime.resolveAnswer(requestId, answer, "human");
+        await applyReviewFileEdit(active.runtime.cwd, wait.request.reviewSubject, reviewEdit, this.blobs);
+        active.runtime.resolveAnswer(requestId, answer, "human", reviewEdit);
         return;
       }
       // The OWNER's append participates in the same CAS as everyone else's: an
@@ -1778,7 +1787,8 @@ export class Engine implements EngineHost {
         }
         if (standing) throw new Error(`run ${runId}: request ${requestId} is already answered`);
         if (await this.journal.appendIf(runId, count, [ev])) {
-          active.runtime.resolveAnswer(requestId, answer, "human");
+          await applyReviewFileEdit(active.runtime.cwd, wait.request.reviewSubject, reviewEdit, this.blobs);
+          active.runtime.resolveAnswer(requestId, answer, "human", reviewEdit);
           return;
         }
       }
@@ -1835,6 +1845,7 @@ export class Engine implements EngineHost {
           { step: { kind: "human", key: requestId, runId } },
         );
       }
+      const reviewEdit = await this.prepareReviewEdit(request, opts.reviewEdit);
       const events: JournalEvent[] = [
         {
           type: "human.answered",
@@ -1842,15 +1853,57 @@ export class Engine implements EngineHost {
           answer,
           answeredBy: "human",
           ...(opts.channel ? { channel: opts.channel } : {}),
+          ...(reviewEdit !== undefined ? { reviewEdit } : {}),
         },
       ];
       if (!this.journal.appendIf) {
         // No conditional append: accept the race (single-process hosts don't race themselves).
         await this.journal.append(runId, events);
+        const created = records.find((record) => record.ev.type === "run.created")?.ev;
+        if (created?.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
+        await applyReviewFileEdit(created.cwd, request.reviewSubject, reviewEdit, this.blobs);
         return;
       }
-      if (await this.journal.appendIf(runId, records.length, events)) return;
+      if (await this.journal.appendIf(runId, records.length, events)) {
+        const created = records.find((record) => record.ev.type === "run.created")?.ev;
+        if (created?.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
+        await applyReviewFileEdit(created.cwd, request.reviewSubject, reviewEdit, this.blobs);
+        return;
+      }
     }
+  }
+
+  private async prepareReviewEdit(
+    request: HumanRequestEvent,
+    input: { content: string; beforeSha256: string } | undefined,
+  ): Promise<HumanReviewFileEdit | undefined> {
+    if (input === undefined) return undefined;
+    if (request.reviewSubject?.kind !== "file" || request.reviewSubject.mode !== "edit") {
+      throw new StepError("invalid_answer", "this review request does not accept file edits", {
+        step: { kind: "human", key: request.id },
+      });
+    }
+    if (typeof input.content !== "string" || typeof input.beforeSha256 !== "string") {
+      throw new StepError("invalid_answer", "reviewEdit requires string content and beforeSha256", {
+        step: { kind: "human", key: request.id },
+      });
+    }
+    if (input.beforeSha256 !== request.reviewSubject.sha256) {
+      throw new StepError("conflict", `${request.reviewSubject.path} changed since this review opened`, {
+        step: { kind: "human", key: request.id },
+      });
+    }
+    const afterSha256 = sha256Hex(input.content);
+    const blob = await this.blobs.put(input.content, {
+      kind: "human-review-edit",
+      contentType: "text/plain",
+    });
+    return {
+      path: request.reviewSubject.path,
+      beforeSha256: input.beforeSha256,
+      afterSha256,
+      ref: { $blob: blob.hash, size: blob.size, preview: input.content.slice(0, 200) },
+    };
   }
 
   async signal(runId: string, name: string, payload: unknown): Promise<void> {
@@ -2068,6 +2121,8 @@ export class Engine implements EngineHost {
         ...(h.deadline !== undefined ? { deadline: h.deadline } : {}),
         ...(h.confirmToken !== undefined ? { confirmToken: h.confirmToken } : {}),
         ...(h.artifactRef !== undefined ? { artifactRef: h.artifactRef } : {}),
+        ...(h.reviewSubject !== undefined ? { reviewSubject: h.reviewSubject } : {}),
+        ...(h.reviewAttachments !== undefined ? { reviewAttachments: h.reviewAttachments } : {}),
         ...(h.ui !== undefined ? { ui: h.ui } : {}),
       }));
     for (const { childRunId } of state.children) {

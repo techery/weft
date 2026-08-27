@@ -65,6 +65,8 @@ export function pendingOf(state: RunState): PendingRequest[] {
       ...(human.deadline !== undefined ? { deadline: human.deadline } : {}),
       ...(human.confirmToken !== undefined ? { confirmToken: human.confirmToken } : {}),
       ...(human.artifactRef !== undefined ? { artifactRef: human.artifactRef } : {}),
+      ...(human.reviewSubject !== undefined ? { reviewSubject: human.reviewSubject } : {}),
+      ...(human.reviewAttachments !== undefined ? { reviewAttachments: human.reviewAttachments } : {}),
       ...(human.ui !== undefined ? { ui: human.ui } : {}),
     }));
 }

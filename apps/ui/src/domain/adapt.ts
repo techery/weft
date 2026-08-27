@@ -578,6 +578,8 @@ export function adaptGate(request: PendingRequest): Gate {
           },
         }
       : {}),
+    ...(request.reviewSubject !== undefined ? { reviewSubject: request.reviewSubject } : {}),
+    ...(request.reviewAttachments !== undefined ? { reviewAttachments: request.reviewAttachments } : {}),
     ...(request.ui !== undefined ? { ui: request.ui } : {}),
   };
 }
@@ -601,6 +603,8 @@ function adaptGateFromState(detail: RunDetail, human: HumanState | undefined): G
     ...(human.detail !== undefined ? { detail: human.detail } : {}),
     ...(human.risk !== undefined ? { risk: human.risk } : {}),
     ...(human.artifactRef !== undefined ? { artifactRef: human.artifactRef } : {}),
+    ...(human.reviewSubject !== undefined ? { reviewSubject: human.reviewSubject } : {}),
+    ...(human.reviewAttachments !== undefined ? { reviewAttachments: human.reviewAttachments } : {}),
     ...(human.ui !== undefined ? { ui: human.ui } : {}),
   });
 }

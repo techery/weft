@@ -1,7 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MemoryBlobStore, MemoryJournalStore } from "@techery/weft-core";
+import { type AgentRequest, MemoryBlobStore, MemoryJournalStore } from "@techery/weft-core";
 import {
   defineAgent,
   defineCheck,
@@ -17,7 +17,7 @@ import {
 import { FsBlobStore, FsJournalStore } from "@techery/weft-store-fs";
 import { afterAll, describe, expect, test } from "vitest";
 import { blobStoreConformance, journalStoreConformance } from "../src/conformance.ts";
-import { mock, runWorkflow } from "../src/index.ts";
+import { fixture, mock, runWorkflow } from "../src/index.ts";
 
 const tempDirs: string[] = [];
 
@@ -872,6 +872,208 @@ describe("side-effect fixtures", () => {
     expect(output.model).toBe("seen");
     expect(journal.step("hi").route).toMatchObject({ provider: "claude", model: "claude-haiku-4-5" });
     expect(provider.calls[0]!.cwd).toBe(cwd);
+  });
+
+  test("materializes filesystem fixtures and loads a checked config fixture", async () => {
+    const inspect = defineWorkflow(
+      {
+        name: "fixture-files",
+        description: "read a seeded file and route through fixture config",
+        input: z.object({}),
+        output: z.object({ content: z.string() }),
+      },
+      async (ctx) => {
+        const file = await ctx.fs.read("src/message.txt");
+        await ctx.agent("configured", { key: "configured", schema: z.object({ ok: z.boolean() }) });
+        return { content: file.content };
+      },
+    );
+    const provider = mock().on({ key: "configured" }, { ok: true });
+    const result = await runWorkflow(inspect, {
+      input: {},
+      provider,
+      fs: {
+        "src/message.txt": "hello from fixture\n",
+        ".weft/test-config.json": JSON.stringify({ defaults: { model: "claude-haiku-4-5" } }),
+      },
+      config: { path: ".weft/test-config.json" },
+    });
+
+    expect(result.output).toEqual({ content: "hello from fixture\n" });
+    expect(await readFile(join(result.cwd, "src/message.txt"), "utf8")).toBe("hello from fixture\n");
+    expect(result.journal.step("configured").route?.model).toBe("claude-haiku-4-5");
+  });
+
+  test("sequence composes stable item keys, phases, and explicit response sequences", async () => {
+    const workflow = defineWorkflow(
+      {
+        name: "sequence-dx",
+        description: "run stable item stages sequentially",
+        input: z.object({}),
+        output: z.object({ values: z.array(z.string()) }),
+      },
+      async (ctx) => ({
+        values: await ctx.sequence(
+          ["auth", "billing"],
+          { keyOf: (item) => item, phase: (item) => `Review ${item}`, keyPrefix: "module" },
+          async (_item, item) => {
+            const response = await item.ctx.agent("review", {
+              key: item.key("review"),
+              schema: z.object({ value: z.string() }),
+            });
+            return response.value;
+          },
+        ),
+      }),
+    );
+    const provider = mock().on(
+      { key: "module:*:review" },
+      fixture.sequence([{ value: "auth-ok" }, { value: "billing-ok" }]),
+    );
+    const result = await runWorkflow(workflow, { input: {}, provider });
+
+    expect(result.output.values).toEqual(["auth-ok", "billing-ok"]);
+    expect(result.journal.step("module:auth:review").phase).toBe("Review auth");
+    expect(result.journal.step("module:billing:review").phase).toBe("Review billing");
+    expect(result.journal.ran("module:auth:review")).toBe(true);
+    expect(result.journal.neverRan("module:other:review")).toBe(true);
+    expect(result.journal.step("module:auth:review").payload).toMatchObject({ prompt: "review" });
+  });
+
+  test("sequence rejects duplicate item identity before dispatching any effect", async () => {
+    const provider = mock().on({ key: "*" }, { ok: true });
+    const workflow = defineWorkflow(
+      {
+        name: "duplicate-sequence",
+        description: "fail before running an ambiguous sequence",
+        input: z.object({}),
+        output: z.object({}),
+      },
+      async (ctx) => {
+        await ctx.sequence(["same", "same"], { keyOf: (item) => item }, async (_item, scope) => {
+          await scope.ctx.agent("never", { key: scope.key("agent"), schema: z.object({ ok: z.boolean() }) });
+        });
+        return {};
+      },
+    );
+
+    await expect(runWorkflow(workflow, { input: {}, provider })).rejects.toThrow(/duplicate item key/);
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  test("strict mocks fail when a read-only fixture tries to write", async () => {
+    const provider = mock({ strict: true }).on(
+      { key: "read-only" },
+      { ok: true },
+      { writes: { "src/changed.ts": "changed\n" } },
+    );
+    const workflow = defineWorkflow(
+      {
+        name: "strict-read-only",
+        description: "a read-only agent cannot mutate fixtures",
+        input: z.object({}),
+        output: z.object({}),
+      },
+      async (ctx) => {
+        await ctx.agent("inspect", { key: "read-only", schema: z.object({ ok: z.boolean() }) });
+        return {};
+      },
+    );
+
+    await expect(runWorkflow(workflow, { input: {}, provider })).rejects.toThrow(
+      /fixture attempted writes in a read-only step/,
+    );
+  });
+
+  test("strict mocks reject out-of-scope and protected writes before touching the fixture tree", async () => {
+    const cwd = await tempDir("weft-strict-scope-");
+    const request: AgentRequest = {
+      prompt: "change one file",
+      key: "write",
+      label: "write",
+      cwd,
+      schema: { type: "object" },
+      tools: { allowEdits: true },
+      writeScope: { paths: ["src/**"], mode: "strict" },
+      protectedPaths: [join(cwd, "src", "protected")],
+      hitl: {
+        onPermission: async () => ({ behavior: "allow" }),
+        onAsk: async () => ({}),
+      },
+    };
+    const control = { signal: new AbortController().signal };
+
+    const outside = mock({ strict: true })
+      .on({ key: "write" }, { ok: true }, { writes: { "docs/outside.md": "no\n" } })
+      .provider("claude");
+    await expect(outside.run(request, control)).rejects.toThrow(/outside the declared scope/);
+
+    const protectedWrite = mock({ strict: true })
+      .on({ key: "write" }, { ok: true }, { writes: { "src/protected/state.json": "no\n" } })
+      .provider("claude");
+    await expect(protectedWrite.run(request, control)).rejects.toThrow(/targets protected path/);
+    await expect(readFile(join(cwd, "docs/outside.md"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(join(cwd, "src/protected/state.json"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  test("routes only the selected provider options and preflights required capabilities", async () => {
+    const codex = mock({ profile: "codex" }).on({ key: "route" }, { ok: true });
+    const routed = defineWorkflow(
+      {
+        name: "provider-options",
+        description: "dispatch selected provider mechanics",
+        input: z.object({}),
+        output: z.object({}),
+      },
+      async (ctx) => {
+        await ctx.agent("route", {
+          key: "route",
+          provider: "codex",
+          providerOptions: {
+            claude: { permissionMode: "dontAsk" },
+            codex: { sandboxMode: "read-only", networkAccess: false, webSearch: "cached" },
+          },
+          providerRequirements: { structured: "native", sessionResume: true },
+          schema: z.object({ ok: z.boolean() }),
+        });
+        return {};
+      },
+    );
+    const result = await runWorkflow(routed, { input: {}, providers: { codex } });
+    expect(codex.calls[0]?.providerOptions).toEqual({
+      sandboxMode: "read-only",
+      networkAccess: false,
+      webSearch: "cached",
+    });
+    expect(result.journal.step("route").payload).toMatchObject({
+      providerOptions: { sandboxMode: "read-only" },
+      providerRequirements: { structured: "native", sessionResume: true },
+    });
+
+    const impossible = defineWorkflow(
+      {
+        name: "provider-preflight",
+        description: "fail before a provider without a permission hook runs",
+        input: z.object({}),
+        output: z.object({}),
+      },
+      async (ctx) => {
+        await ctx.agent("cannot run", {
+          key: "needs-hook",
+          provider: "codex",
+          providerRequirements: { permissionHook: true },
+          schema: z.object({ ok: z.boolean() }),
+        });
+        return {};
+      },
+    );
+    const preflight = mock({ profile: "codex" }).on({ key: "needs-hook" }, { ok: true });
+    await expect(runWorkflow(impossible, { input: {}, providers: { codex: preflight } })).rejects.toThrow(
+      /required capability permissionHook is unavailable/,
+    );
+    expect(preflight.calls).toHaveLength(0);
   });
 });
 

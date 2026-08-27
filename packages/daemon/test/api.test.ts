@@ -239,7 +239,7 @@ describe("GET /api/workflows", () => {
     expect(body.schemaWarnings).toEqual([]);
   });
 
-  it("exposes a permissive schema and warning for non-Zod Standard Schemas", async () => {
+  it("exposes a permissive schema and only provider-bound warnings for non-Zod Standard Schemas", async () => {
     const cwd = await repo();
     await writeWorkflow(cwd, "standard", STANDARD_SCHEMA);
     const h = await open(cwd, registerWorkflowRoutes);
@@ -254,10 +254,10 @@ describe("GET /api/workflows", () => {
     expect(body.input).toMatchObject({ type: "object", properties: { value: {} } });
     expect(body.output).toMatchObject({ type: "object", properties: { value: {} } });
     expect(body.schemaWarnings).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("input: non-zod schema"),
-        expect.stringContaining("output: non-zod schema"),
-      ]),
+      expect.arrayContaining([expect.stringContaining("input: non-zod schema")]),
+    );
+    expect(body.schemaWarnings).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("output: non-zod schema")]),
     );
   });
 

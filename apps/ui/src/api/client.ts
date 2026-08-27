@@ -125,10 +125,15 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  answer: (runId: string, requestId: string, answer: unknown) =>
+  answer: (
+    runId: string,
+    requestId: string,
+    answer: unknown,
+    reviewEdit?: { content: string; beforeSha256: string },
+  ) =>
     request<{ ok: true; woke: boolean }>(`/api/runs/${encodeURIComponent(runId)}/answer`, {
       method: "POST",
-      body: JSON.stringify({ requestId, answer }),
+      body: JSON.stringify({ requestId, answer, ...(reviewEdit !== undefined ? { reviewEdit } : {}) }),
     }),
 
   cancel: (runId: string) =>

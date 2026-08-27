@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, symlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import type { JournalRecord } from "@techery/weft-core";
@@ -40,6 +40,94 @@ describe("human review, confirm tokens, escalation", () => {
     expect(await t.blobs.getText(req.artifactRef!.$blob)).toBe(report);
     await t.engine.answer(handle.runId, outcome.pending[0]!.id, { verdict: "ship", notes: "looks right" });
     expect(await handle.result).toEqual({ verdict: "ship" });
+  });
+
+  test("human.review edits a repository artifact with an optimistic hash guard", async () => {
+    const t = testEngine();
+    const cwd = await tempDir();
+    await writeFile(join(cwd, "delivery-plan.md"), "# Plan\n\nDraft\n");
+    const def = defineWorkflow(
+      {
+        description: "editable review",
+        input: z.object({}),
+        output: z.object({ approved: z.boolean(), applied: z.boolean(), after: z.string() }),
+      },
+      async (ctx) => {
+        const reviewed = await ctx.human.review.detailed({
+          key: "review:plan",
+          subject: { kind: "file", path: "delivery-plan.md", mode: "edit" },
+          question: "Edit and approve the delivery plan",
+          schema: z.object({ approved: z.boolean() }),
+          attachments: [{ kind: "artifact", content: "# Context\nKeep the scope small.", label: "brief" }],
+        });
+        return {
+          approved: reviewed.answer.approved,
+          applied: reviewed.subject.kind === "file" && reviewed.subject.applied,
+          after: reviewed.subject.kind === "file" ? reviewed.subject.afterSha256 : "",
+        };
+      },
+    );
+    const handle = await t.engine.start(def, { input: {}, cwd });
+    const outcome = await handle.outcome();
+    if (outcome.status !== "waiting_for_human") throw new Error("expected editable review request");
+    const pending = outcome.pending[0]!;
+    expect(pending.reviewSubject).toMatchObject({
+      kind: "file",
+      path: "delivery-plan.md",
+      mode: "edit",
+    });
+    expect(pending.reviewAttachments?.[0]).toMatchObject({ kind: "artifact", label: "brief" });
+    if (pending.reviewSubject?.kind !== "file") throw new Error("expected file subject");
+    await t.engine.answer(
+      handle.runId,
+      pending.id,
+      { approved: true },
+      {
+        reviewEdit: {
+          content: "# Plan\n\nApproved\n",
+          beforeSha256: pending.reviewSubject.sha256,
+        },
+      },
+    );
+
+    const result = await handle.result;
+    expect(result).toMatchObject({ approved: true, applied: true });
+    expect((result as { after: string }).after).not.toBe(pending.reviewSubject.sha256);
+    expect(await readFile(join(cwd, "delivery-plan.md"), "utf8")).toBe("# Plan\n\nApproved\n");
+    const recs = await records(t.journal, handle.runId);
+    expect(recs.find((record) => record.ev.type === "human.answered")?.ev).toMatchObject({
+      type: "human.answered",
+      reviewEdit: {
+        path: "delivery-plan.md",
+        beforeSha256: pending.reviewSubject.sha256,
+      },
+    });
+  });
+
+  test("human.review rejects a repository symlink that points outside cwd", async () => {
+    const t = testEngine();
+    const cwd = await tempDir();
+    const outside = await tempDir();
+    await writeFile(join(outside, "private-plan.md"), "outside\n");
+    await symlink(join(outside, "private-plan.md"), join(cwd, "delivery-plan.md"));
+    const def = defineWorkflow(
+      {
+        description: "bounded file review",
+        input: z.object({}),
+        output: z.object({}),
+      },
+      async (ctx) => {
+        await ctx.human.review({
+          subject: { kind: "file", path: "delivery-plan.md", mode: "edit" },
+          schema: z.object({ approved: z.boolean() }),
+        });
+        return {};
+      },
+    );
+
+    const handle = await t.engine.start(def, { input: {}, cwd });
+    await expect(handle.result).rejects.toThrow(/escapes the workflow cwd through a symlink/);
+    expect(await readFile(join(outside, "private-plan.md"), "utf8")).toBe("outside\n");
   });
 
   test("irreversible gate requires the typed confirm token; a mismatch denies", async () => {

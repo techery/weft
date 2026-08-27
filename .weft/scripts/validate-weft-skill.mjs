@@ -16,6 +16,19 @@ try {
 
 if (result.stderr.trim()) fail(`weft skill wrote to stderr: ${result.stderr.trim()}`);
 const skill = result.stdout;
+let surfaceResult;
+try {
+  surfaceResult = await run(process.execPath, ["scripts/check-example-coverage.mjs", "--list"], {
+    cwd: process.cwd(),
+    maxBuffer: 2 * 1024 * 1024,
+  });
+} catch (error) {
+  fail(`Ctx surface inventory failed: ${error.stderr || error.message}`);
+}
+const ctxSurfaces = surfaceResult.stdout.trim().split("\n").filter(Boolean);
+for (const surface of ctxSurfaces) {
+  if (!skill.includes(surface)) fail(`generated skill omits public Ctx surface: ${surface}`);
+}
 const frontmatter = frontmatterOf(skill);
 if (!/^name:\s*weft\s*$/m.test(frontmatter)) fail("frontmatter must declare name: weft");
 if (!/^description:\s*(?:\S|[>|])/m.test(frontmatter)) fail("frontmatter must declare a description");
@@ -36,6 +49,19 @@ for (const required of [
   "ad-hoc path run",
 ]) {
   if (!skill.includes(required)) fail(`generated skill omits workflow package guidance: ${required}`);
+}
+for (const required of [
+  "providerOptions",
+  "providerRequirements",
+  "ctx.sequence",
+  'kind: "file"',
+  "review.detailed",
+  "mock({ strict: true",
+  "fixture.sequence",
+  "journal.neverRan",
+  "nothing lands until `ctx.integrate()`",
+]) {
+  if (!skill.includes(required)) fail(`generated skill omits current API guidance: ${required}`);
 }
 
 console.log(`weft skill valid: ${Buffer.byteLength(skill, "utf8")} bytes`);

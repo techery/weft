@@ -237,6 +237,18 @@ describe("createClaudeProvider", () => {
     expect(result.filesTouched).toEqual([]);
   });
 
+  test("maps Claude-specific permission mode and rejects unknown mechanics", async () => {
+    const { fn, calls } = fakeQuery([{ emit: { payload: { verdict: "ok" } }, messages: [resultMessage()] }]);
+    const provider = createClaudeProvider({ queryFn: fn });
+
+    await provider.run(request({ providerOptions: { permissionMode: "dontAsk" } }), control());
+
+    expect(calls[0]?.options.permissionMode).toBe("dontAsk");
+    expect(() => provider.validateOptions?.({ sandboxMode: "workspace-write" })).toThrow(
+      /unknown provider option/,
+    );
+  });
+
   test("run() reports tool names in the transcript and allowed edits in filesTouched", async () => {
     const { fn } = fakeQuery([
       {

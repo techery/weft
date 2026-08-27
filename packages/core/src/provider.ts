@@ -132,6 +132,8 @@ export interface AgentRequest {
   /** Milliseconds. */
   timeoutMs?: number;
   onMaxTurns?: "finalize" | "fail";
+  /** Validated options for this concrete provider only. */
+  providerOptions?: unknown;
   /** Always populated by the engine; read-only steps get { allowEdits: false }. */
   tools: ToolPolicy;
   /** Engine-owned host paths provider isolation must deny for both reads and writes. */
@@ -171,6 +173,8 @@ export interface ProviderCapabilities {
 export interface AgentProvider {
   readonly id: string;
   capabilities(): ProviderCapabilities;
+  /** Validate provider-specific author options before any worktree or paid turn is created. */
+  validateOptions?(options: unknown): void;
   run(req: AgentRequest, ctl: RunControl): Promise<AgentResult>;
   /** Re-prompt the same session with validation errors; absent sessions may re-run. */
   repair(

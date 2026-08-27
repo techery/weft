@@ -45,7 +45,7 @@ export function testCommand(io: CliIo): Command {
 
       const [program, programArgs] =
         runner === "node"
-          ? nodeRunnerFor(selectedPattern, opts)
+          ? nodeRunnerFor(cwd, selectedPattern, opts)
           : runner === "bun"
             ? bunRunnerFor(selectedPattern, opts)
             : runnerFor(cwd, vitestArgs(selectedPattern, opts));
@@ -71,15 +71,22 @@ function vitestArgs(pattern: string, opts: TestOptions): string[] {
 }
 
 export function nodeRunnerFor(
+  cwd: string,
   pattern: string,
   opts: Pick<TestOptions, "watch" | "coverage">,
 ): [string, string[]] {
-  // Node 22.12+ can strip TypeScript annotations without a project dependency.
-  const args = ["--experimental-strip-types", "--test"];
+  // A local tsx hook supports the full TypeScript syntax used by linked, unpublished Weft
+  // packages. Otherwise keep the dependency-free Node 22.12+ strip-only fallback for ordinary
+  // workflow tests. (Node 26 removed --experimental-transform-types.)
+  const args = hasLocalPackage(cwd, "tsx")
+    ? ["--import", "tsx", "--test"]
+    : ["--experimental-strip-types", "--test"];
   if (opts.watch) args.unshift("--watch");
   if (opts.coverage) args.push("--experimental-test-coverage");
   args.push(pattern);
-  return [process.execPath, args];
+  // Resolve Node from the consuming project's PATH so version managers and the project's
+  // selected runtime win over the runtime that happened to launch a globally installed CLI.
+  return ["node", args];
 }
 
 export function bunRunnerFor(

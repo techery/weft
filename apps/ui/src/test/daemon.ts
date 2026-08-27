@@ -234,17 +234,22 @@ export function defaultState(): DaemonState {
       {
         id: "release",
         name: "release",
-        file: ".weft/workflows/release.ts",
+        file: ".weft/workflows/release/main.ts",
         description: "Draft and publish release notes",
       },
-      { id: "triage", name: "triage", file: ".weft/workflows/triage.ts", description: "Classify new issues" },
+      {
+        id: "triage",
+        name: "triage",
+        file: ".weft/workflows/triage/main.ts",
+        description: "Classify new issues",
+      },
     ],
     workflowIssues: [],
     workflow: {
       release: {
         id: "release",
         name: "release",
-        file: ".weft/workflows/release.ts",
+        file: ".weft/workflows/release/main.ts",
         description: "Draft and publish release notes",
         hash: "b".repeat(64),
         input: {
@@ -261,7 +266,7 @@ export function defaultState(): DaemonState {
       triage: {
         id: "triage",
         name: "triage",
-        file: ".weft/workflows/triage.ts",
+        file: ".weft/workflows/triage/main.ts",
         description: "Classify new issues",
         hash: "c".repeat(64),
         input: { type: "object", properties: { window: { type: "string", enum: ["24h", "7d"] } } },

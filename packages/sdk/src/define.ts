@@ -32,8 +32,8 @@ export type WorkflowTaskSchemaConfig =
     });
 
 /**
- * Workflow metadata. `name` derives from the filename in module mode; override with
- * `name:` for inline scripts or explicit registration.
+ * Workflow metadata. Registry hosts derive `name` from the package directory; direct path
+ * loads derive it from the filename. Use `name:` for inline scripts or explicit registration.
  */
 export interface WorkflowMeta<
   InS extends AnySchema,

@@ -4,9 +4,9 @@
  * the typed output next to the journal it produced.
  */
 import { rmSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   Engine,
   type EngineConfigInput,
@@ -19,7 +19,7 @@ import {
   type RunState,
   reduceState,
 } from "@techery/weft-core";
-import { type CreateTaskInput, TaskStore } from "@techery/weft-host";
+import { type CreateTaskInput, parseConfig, TaskStore } from "@techery/weft-host";
 import { type MockAgentBuilder, mock } from "@techery/weft-provider-mock";
 import { type WorkflowDefinition, type WorkflowTaskSnapshot, z } from "@techery/weft-sdk";
 import {
@@ -56,7 +56,10 @@ export interface RunWorkflowOptions<Input = unknown, TaskExtensionInput = unknow
   /** Defaults to a fresh temp dir per call (not a git repo — git fixtures make that fine). */
   cwd?: string;
   budget?: { tokens?: number; usd?: number };
-  config?: EngineConfigInput;
+  /** Inline engine config, or a repository-relative JSON config fixture. */
+  config?: EngineConfigInput | { path: string };
+  /** Repository-relative files materialized before the run starts. */
+  fs?: Record<string, string | Uint8Array>;
   answers?: AnswerFixtures;
   signals?: SignalFixtures;
   taskSeeds?: TaskSeed<TaskExtensionInput>[];
@@ -67,6 +70,8 @@ export interface RunWorkflowResult<Out, TaskExtensions = unknown> {
   journal: JournalView;
   state: RunState;
   runId: string;
+  /** Effective working directory, including files produced by strict write fixtures. */
+  cwd: string;
   tasks: WorkflowTaskSnapshot<TaskExtensions>;
 }
 
@@ -117,6 +122,12 @@ export async function runWorkflow<
 
   const testHooks = buildTestHooks(opts);
   const cwd = opts.cwd ?? (await scratchCwd());
+  for (const [path, content] of Object.entries(opts.fs ?? {})) {
+    const target = fixturePath(cwd, path, "fs fixture");
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, content);
+  }
+  const config = await testConfig(cwd, opts.config);
   const taskStore = new TaskStore(join(cwd, ".weft", "tasks"));
   const workflowId = def.meta.id ?? def.meta.name ?? "workflow";
   const workflowName = def.meta.name ?? def.meta.id ?? "workflow";
@@ -144,7 +155,7 @@ export async function runWorkflow<
     journal: journalStore,
     blobs,
     providers,
-    config: opts.config ?? {},
+    config,
     ...(testHooks !== undefined ? { testHooks } : {}),
     taskTracker: {
       prepare: async (workflow, extensionSchema, taskOptions) => {
@@ -183,8 +194,42 @@ export async function runWorkflow<
     journal: buildJournalView(records),
     state: reduceState(records),
     runId: handle.runId,
+    cwd,
     tasks: (await taskStore.snapshot(workflowId)) as WorkflowTaskSnapshot<TaskExtensions>,
   };
+}
+
+function fixturePath(cwd: string, path: string, label: string): string {
+  const target = resolve(cwd, path);
+  const rel = relative(cwd, target);
+  if (
+    typeof path !== "string" ||
+    path.trim() === "" ||
+    isAbsolute(path) ||
+    path.includes("\\") ||
+    rel === "" ||
+    rel === ".." ||
+    rel.startsWith("../") ||
+    isAbsolute(rel)
+  ) {
+    throw new Error(`runWorkflow: ${label} path must stay inside cwd: ${JSON.stringify(path)}`);
+  }
+  return target;
+}
+
+async function testConfig(
+  cwd: string,
+  input: EngineConfigInput | { path: string } | undefined,
+): Promise<EngineConfigInput> {
+  if (input === undefined || !("path" in input)) return input ?? {};
+  const file = fixturePath(cwd, input.path, "config");
+  let json: unknown;
+  try {
+    json = JSON.parse(await readFile(file, "utf8")) as unknown;
+  } catch (error) {
+    throw new Error(`runWorkflow: cannot parse config ${input.path}: ${String(error)}`, { cause: error });
+  }
+  return parseConfig(json, file);
 }
 
 /**

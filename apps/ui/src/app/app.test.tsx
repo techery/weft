@@ -143,6 +143,55 @@ describe("a run", () => {
     );
   });
 
+  it("loads, edits, and submits a repository artifact with its opening revision", async () => {
+    const ref = "b".repeat(64);
+    const reviewSubject = {
+      kind: "file" as const,
+      path: "plans/delivery.md",
+      mode: "edit" as const,
+      ref: { $blob: ref, size: 15, preview: "# Plan" },
+      sha256: "c".repeat(64),
+    };
+    daemon.state.blobs[ref] = "# Plan\n\nDraft\n";
+    Object.assign(daemon.state.detail["r-waiting"]!.humans[0]!, {
+      kind: "review",
+      question: "Edit and approve the delivery plan",
+      reviewSubject,
+      reviewAttachments: [{ kind: "artifact", ref: { $blob: "a".repeat(64), size: 28 }, label: "brief" }],
+      artifactRef: undefined,
+    });
+    Object.assign(daemon.state.pending.pending[0]!, {
+      kind: "review",
+      question: "Edit and approve the delivery plan",
+      reviewSubject,
+      reviewAttachments: [{ kind: "artifact", ref: { $blob: "a".repeat(64), size: 28 }, label: "brief" }],
+      artifactRef: undefined,
+    });
+
+    const { user } = renderApp("/runs/r-waiting?from=queue&tab=steps&step=gate:h1");
+    const editor = await screen.findByRole("textbox", { name: "Edit plans/delivery.md" });
+    expect(editor).toHaveValue("# Plan\n\nDraft\n");
+    fireEvent.change(editor, { target: { value: "# Plan\n\nApproved\n" } });
+    expect(screen.getByRole("link", { name: /Open brief/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: "off" }));
+    await user.click(screen.getByRole("button", { name: "Answer & resume" }));
+
+    const answered = await waitFor(() => {
+      const call = daemon.calls.find(
+        (candidate) => candidate.method === "POST" && candidate.path.endsWith("/answer"),
+      );
+      expect(call).toBeDefined();
+      return call!;
+    });
+    expect(answered.body).toMatchObject({
+      answer: { approved: true },
+      reviewEdit: {
+        content: "# Plan\n\nApproved\n",
+        beforeSha256: "c".repeat(64),
+      },
+    });
+  });
+
   it("keeps host controls and the standard form around a workflow-provided input view", async () => {
     const presentation = {
       id: "h1",
@@ -336,7 +385,7 @@ describe("workflows", () => {
     const { user } = renderApp("/workflows?wf=release");
     expect((await screen.findAllByText("Draft and publish release notes")).length).toBeGreaterThan(0);
     // The API returns a repo-relative path; the inspector must not prefix it again.
-    expect(screen.getAllByText(".weft/workflows/release.ts").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(".weft/workflows/release/main.ts").length).toBeGreaterThan(0);
     expect(screen.queryByText(/\.weft\/workflows\/\.weft/)).not.toBeInTheDocument();
     expect(await screen.findByText("Verify release notes")).toBeInTheDocument();
     expect(screen.getByText("Every note links to source evidence")).toBeInTheDocument();
@@ -354,13 +403,13 @@ describe("workflows", () => {
   it("shows broken workflow files with their parse diagnostics", async () => {
     daemon.state.workflowIssues = [
       {
-        file: ".weft/workflows/custom-react-ui.ts",
+        file: ".weft/workflows/custom-react-ui/main.ts",
         error: "workflow gate: 1 violation",
         diagnostics: [
           {
             rule: "no-date-now",
             message: "Date.now() is unavailable",
-            file: ".weft/workflows/custom-react-ui.ts",
+            file: ".weft/workflows/custom-react-ui/main.ts",
             line: 18,
             column: 14,
             fixIt: "use ctx.now()",
@@ -370,7 +419,7 @@ describe("workflows", () => {
     ];
     renderApp("/workflows");
     expect(await screen.findByRole("heading", { name: "Broken workflows" })).toBeInTheDocument();
-    expect(screen.getByText(".weft/workflows/custom-react-ui.ts")).toBeInTheDocument();
+    expect(screen.getByText(".weft/workflows/custom-react-ui/main.ts")).toBeInTheDocument();
     expect(screen.getByText(/no-date-now/)).toBeInTheDocument();
     expect(screen.getByText(/use ctx\.now\(\)/)).toBeInTheDocument();
   });

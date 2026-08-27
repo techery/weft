@@ -246,11 +246,31 @@ export function createApp(weft: Weft, opts: CreateAppOptions = {}): Hono {
         throw new Error("answer: requestId is required");
       }
       if (!("answer" in body)) throw new Error("answer: answer is required (use null for an empty answer)");
+      const rawReviewEdit = body["reviewEdit"];
+      let reviewEdit: { content: string; beforeSha256: string } | undefined;
+      if (rawReviewEdit !== undefined) {
+        if (
+          typeof rawReviewEdit !== "object" ||
+          rawReviewEdit === null ||
+          Array.isArray(rawReviewEdit) ||
+          typeof (rawReviewEdit as Record<string, unknown>)["content"] !== "string" ||
+          typeof (rawReviewEdit as Record<string, unknown>)["beforeSha256"] !== "string"
+        ) {
+          throw new Error("answer: reviewEdit requires string content and beforeSha256");
+        }
+        reviewEdit = {
+          content: (rawReviewEdit as Record<string, string>)["content"]!,
+          beforeSha256: (rawReviewEdit as Record<string, string>)["beforeSha256"]!,
+        };
+      }
       // Decide BEFORE answering: an in-process run may finish (and leave the active
       // map) the moment the answer resolves its wait — that is delivery, not a
       // suspended run needing a wake.
       const heldHere = engine.isActive(runId);
-      await engine.answer(runId, requestId, body["answer"], { channel: CHANNEL });
+      await engine.answer(runId, requestId, body["answer"], {
+        channel: CHANNEL,
+        ...(reviewEdit !== undefined ? { reviewEdit } : {}),
+      });
       // Refreshed before the wake, so the runs list never shows the pre-answer status.
       await refreshProjections(weft, runId);
       return c.json({ ok: true, woke: heldHere ? false : wakeIfSuspended(weft, runId) });

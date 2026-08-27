@@ -70,6 +70,42 @@ export interface CodexProviderOptions {
   id?: string;
 }
 
+interface CodexStepOptions {
+  sandboxMode?: "read-only" | "workspace-write";
+  networkAccess?: boolean;
+  webSearch?: "disabled" | "cached" | "live";
+}
+
+function codexStepOptions(value: unknown): CodexStepOptions {
+  if (value === undefined) return {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("codex: provider options must be an object");
+  }
+  const options = value as Record<string, unknown>;
+  const allowed = new Set(["sandboxMode", "networkAccess", "webSearch"]);
+  const unknown = Object.keys(options).filter((key) => !allowed.has(key));
+  if (unknown.length > 0) throw new Error(`codex: unknown provider option(s): ${unknown.join(", ")}`);
+  if (
+    options.sandboxMode !== undefined &&
+    options.sandboxMode !== "read-only" &&
+    options.sandboxMode !== "workspace-write"
+  ) {
+    throw new Error('codex: sandboxMode must be "read-only" or "workspace-write"');
+  }
+  if (options.networkAccess !== undefined && typeof options.networkAccess !== "boolean") {
+    throw new Error("codex: networkAccess must be a boolean");
+  }
+  if (
+    options.webSearch !== undefined &&
+    options.webSearch !== "disabled" &&
+    options.webSearch !== "cached" &&
+    options.webSearch !== "live"
+  ) {
+    throw new Error('codex: webSearch must be "disabled", "cached", or "live"');
+  }
+  return options as CodexStepOptions;
+}
+
 /** Thrown when the run was cancelled around a turn; the engine maps it to a StepError. */
 const ABORTED = "aborted";
 
@@ -97,7 +133,14 @@ function repairPrompt(req: AgentRequest, errors: readonly SchemaIssue[]): string
  * strictest mode the SDK offers rather than being trusted to behave.
  */
 function sandboxFor(req: AgentRequest): SandboxMode {
-  return (req.tools?.allowEdits ?? true) === true ? "workspace-write" : "read-only";
+  const requested = codexStepOptions(req.providerOptions).sandboxMode;
+  if ((req.tools?.allowEdits ?? true) !== true) {
+    if (requested === "workspace-write") {
+      throw new Error("codex: sandboxMode workspace-write cannot widen a read-only Weft step");
+    }
+    return "read-only";
+  }
+  return requested ?? "workspace-write";
 }
 
 const PROTECTED_PROFILE = "weft_task_boundary";
@@ -119,7 +162,7 @@ function protectedClientConfig(req: AgentRequest): ProtectedClientConfig | undef
     throw new Error(`codex: protected path must be absolute: ${JSON.stringify(relativePath)}`);
   }
   const protectedPaths = [...new Set(req.protectedPaths)].sort();
-  const parent = (req.tools?.allowEdits ?? true) === true ? ":workspace" : ":read-only";
+  const parent = sandboxFor(req) === "workspace-write" ? ":workspace" : ":read-only";
   const filesystem = protectedPaths.map((path) => `${JSON.stringify(path)}="deny"`).join(",");
   return {
     key: JSON.stringify([parent, protectedPaths]),
@@ -134,6 +177,7 @@ function protectedClientConfig(req: AgentRequest): ProtectedClientConfig | undef
 }
 
 function threadOptions(req: AgentRequest): ThreadOptions {
+  const options = codexStepOptions(req.providerOptions);
   return {
     workingDirectory: req.cwd,
     // A protected request uses a custom permission profile instead. Codex rejects
@@ -145,6 +189,8 @@ function threadOptions(req: AgentRequest): ThreadOptions {
     // Approvals would block on a TTY no run has, and capabilities() already tells the
     // engine there is no permission hook here — the sandbox decides alone.
     approvalPolicy: "never",
+    ...(options.networkAccess !== undefined ? { networkAccessEnabled: options.networkAccess } : {}),
+    ...(options.webSearch !== undefined ? { webSearchMode: options.webSearch } : {}),
     ...(req.model !== undefined ? { model: req.model } : {}),
     // Weft's five effort tiers are a subset of ModelReasoningEffort's names.
     ...(req.effort !== undefined ? { modelReasoningEffort: req.effort } : {}),
@@ -402,6 +448,10 @@ class CodexProvider implements AgentProvider {
     // reportsUsd false: the Codex SDK reports tokens only, so USD cost exists only
     // when the host configures a price for the model.
     return { structured: "native", permissionHook: false, sessionResume: true, reportsUsd: false };
+  }
+
+  validateOptions(options: unknown): void {
+    codexStepOptions(options);
   }
 
   async run(req: AgentRequest, ctl: RunControl): Promise<AgentResult> {

@@ -53,6 +53,19 @@ export interface UiPresentation {
 export type Risk = "low" | "medium" | "high" | "irreversible";
 export type ApprovalMode = "auto" | "ask";
 
+export type BlobRef = { $blob: string; size: number; preview?: string };
+
+export type ReviewSubject =
+  | { kind: "artifact"; ref: BlobRef; mediaType?: string; label?: string }
+  | { kind: "file"; path: string; mode: "view" | "edit"; ref: BlobRef; sha256: string };
+
+export type ReviewAttachment = {
+  kind: "artifact";
+  ref: BlobRef;
+  mediaType?: string;
+  label?: string;
+};
+
 /** `GET /api/meta` */
 export interface Meta {
   version: string;
@@ -114,6 +127,8 @@ export interface HumanState {
   answeredBy?: string;
   requestedAt: number;
   artifactRef?: { $blob: string; size: number; preview?: string };
+  reviewSubject?: ReviewSubject;
+  reviewAttachments?: ReviewAttachment[];
   ui?: UiPresentation;
 }
 
@@ -162,6 +177,8 @@ export interface PendingRequest {
   rootRunId: string;
   rootWorkflow: string;
   artifactRef?: { $blob: string; size: number; preview?: string };
+  reviewSubject?: ReviewSubject;
+  reviewAttachments?: ReviewAttachment[];
   ui?: UiPresentation;
 }
 

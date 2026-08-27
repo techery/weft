@@ -49,10 +49,11 @@ description: >-
 
 # Weft
 
-A workflow is an ordinary TypeScript program. \`await\` is a sequential edge, \`ctx.parallel\`
-fans out and joins, \`ctx.pipeline\` runs independent lanes, and \`if\` on a typed field is a
-conditional edge. Use ordinary TypeScript loops, but give them an explicit bound or a
-journaled stopping condition. There is no graph DSL to keep in sync.
+A workflow is an ordinary TypeScript program. \`await\` is a sequential edge, \`ctx.sequence\`
+walks stable keyed items in order, \`ctx.parallel\` fans out and joins, \`ctx.pipeline\` runs
+independent lanes, and \`if\` on a typed field is a conditional edge. Use ordinary TypeScript
+loops, but give them an explicit bound or a journaled stopping condition. There is no graph
+DSL to keep in sync.
 
 Everything that leaves the sandbox is a **step**: the engine executes it, appends the
 outcome to an append-only journal, and hands your code a schema-validated value. Resume
@@ -276,11 +277,16 @@ Durations are \`"250ms"\`, \`"90s"\`, \`"10m"\`, \`"2h"\`, \`"7d"\`, or a number
 
 | Call | Returns |
 | --- | --- |
-| \`ctx.agent(prompt, { schema, key, label, provider, model, effort, isolation, write, maxTurns, timeout, retry, repair, onMaxTurns, onError })\` | the validated value |
+| \`ctx.agent(prompt, { schema, key, label, provider, providerOptions, providerRequirements, model, effort, isolation, write, maxTurns, timeout, retry, repair, onMaxTurns, onError })\` | the validated value |
 | \`ctx.agent.detailed(prompt, opts)\` | \`{ value, usage, files, patch, attempts, sessionId }\` |
+| \`ctx.sequence(items, { keyOf, phase?, keyPrefix? }, run)\` | sequential results with one stable keyed scope per item |
 | \`ctx.parallel(tasks, { concurrency, errors })\` | \`Settled<T>[]\`, in input order |
 | \`ctx.parallel(items, mapper, { concurrency, errors })\` | bounded mapper fan-out as \`Settled<T>[]\` |
-| \`ctx.pipeline(items).step(fn).filter(fn).map(fn).run({ concurrency, errors })\` | \`Settled<T>[]\` |
+| \`ctx.pipeline(items)\` | a lazy lane pipeline; no work starts until \`run\` |
+| \`ctx.pipeline.step(fn)\` | transform each surviving lane asynchronously |
+| \`ctx.pipeline.filter(fn)\` | drop lanes whose verdict is false |
+| \`ctx.pipeline.map(fn)\` | map each surviving lane while retaining its original item |
+| \`ctx.pipeline.run({ concurrency, errors })\` | execute the pipeline as \`Settled<T>[]\` |
 | \`ctx.successes(settled)\` | \`T[]\` — tolerant; records dropped failures |
 | \`ctx.all(settled)\` | \`T[]\` or throws the first failure after all lanes settle |
 | \`ctx.workflow(def \\| name, input, { budget, key, label })\` | the child's output |
@@ -290,12 +296,59 @@ Durations are \`"250ms"\`, \`"90s"\`, \`"10m"\`, \`"2h"\`, \`"7d"\`, or a number
 \`ProviderId\` also permits host-registered strings. \`onError: "null"\` resolves to \`T | null\`
 instead of throwing \`StepError\`.
 
+Provider mechanics are adapter-specific, so namespace them by provider. Weft selects and
+validates only the routed provider's entry, and rejects unmet capability requirements before
+creating a worktree or spending a provider turn:
+
+\`\`\`ts
+await ctx.agent("Review without editing files", {
+  key: "review:auth",
+  provider: "codex",
+  providerOptions: {
+    claude: { permissionMode: "dontAsk" },
+    codex: { sandboxMode: "read-only", networkAccess: false, webSearch: "cached" },
+  },
+  providerRequirements: { structured: "native", sessionResume: true },
+  schema: z.object({ findings: z.array(Finding) }),
+});
+\`\`\`
+
+Built-in Claude options currently expose \`permissionMode: "default" | "dontAsk"\`.
+Built-in Codex options expose \`sandboxMode\`, \`networkAccess\`, and \`webSearch\`.
+Provider options may narrow execution, but never widen Weft's engine-owned edit boundary:
+a read-only step stays read-only even if Codex requests \`workspace-write\`.
+
+Use \`ctx.sequence\` when items intentionally share one workspace or another ordered resource.
+It computes and checks every item key before the first callback runs; duplicate or invalid keys
+fail without partial effects. Build nested step keys from the supplied scope rather than an
+array index:
+
+\`\`\`ts
+const reviewed = await ctx.sequence(
+  items,
+  { keyOf: (item) => item.id, phase: (item) => \`Review \${item.id}\`, keyPrefix: "item" },
+  (item, scope) =>
+    scope.ctx.agent(\`Review \${item.path}\`, {
+      key: scope.key("review"),
+      schema: ReviewResult,
+    }),
+);
+\`\`\`
+
 \`errors: "settle"\` is the default; \`"throw"\` surfaces a failed lane after every lane has
 settled. A concurrency cap works with mapper form or thunks, not promises that have already
 started. Prefer \`ctx.pipeline\` over two \`ctx.parallel\` calls: a pipeline has no barrier
 between stages, so lane A can be in stage 3 while lane B is still in stage 1. Reach for the
 barrier only when a stage genuinely needs every prior result at once (dedup across all of
 them, an early exit on a total count, a prompt that compares findings to each other).
+
+**Reusable composition**
+
+| Call | Returns |
+| --- | --- |
+| \`ctx.scope({ agent?, tasks?, parallel? })\` | an immutable derived context whose nested calls inherit those defaults |
+| \`ctx.recipe(definition, input)\` | validated output from a schema-backed transparent recipe; nested effects stay visible |
+| \`ctx.step(definition, input)\` | output from the legacy transparent step definition; deprecated in favor of \`ctx.recipe\` |
 
 **Humans** — durable suspensions. The answer can arrive hours later, from another process.
 
@@ -304,35 +357,83 @@ them, an early exit on a total count, a prompt that compares findings to each ot
 | \`ctx.gate({ action, risk, detail })\` | \`{ approved, note?, answeredBy: "human" \\| "policy" \\| "timeout" }\` |
 | \`ctx.human.ask({ question, schema, detail, timeout, onTimeout })\` | the validated answer |
 | \`ctx.human.approve({ action, detail, timeout, onTimeout })\` | \`{ approved, note? }\` |
-| \`ctx.human.review({ artifact, question, schema, timeout, onTimeout })\` | the validated answer |
+| \`ctx.human.review({ artifact | subject, attachments?, question, schema, timeout, onTimeout })\` | the validated answer |
+| \`ctx.human.review.detailed(opts)\` | answer plus immutable artifact metadata or file before/after hashes |
 
 \`risk\` is \`low \\| medium \\| high \\| irreversible\`. By default, \`low\` auto-approves
 and is still recorded; configured action-pattern or risk-tier approval policies can require
 a human instead. \`onTimeout\` is \`"deny"\`, \`"escalate"\`, or \`{ default: <value> }\`.
 
+A review subject is either an immutable artifact
+(\`{ kind: "artifact", content, mediaType?, label? }\`) or an existing repository-relative
+file (\`{ kind: "file", path, mode: "view" | "edit" }\`). Attachments are immutable artifacts.
+In file edit mode, the Workflow Manager loads the journaled snapshot into a text editor and
+submits the draft with its opening hash. The engine applies it atomically only when the file
+still matches that revision; path traversal and symlink escapes outside the run cwd fail closed.
+Use \`review.detailed\` when later workflow logic needs the accepted blob reference or hashes.
+
 **Side effects**
 
 | Call | Returns |
 | --- | --- |
-| \`ctx.fs.read(path)\` · \`ctx.fs.glob(patterns)\` · \`ctx.fs.stat(path)\` | content + sha256 · paths · stat |
-| \`ctx.exec(file, args, opts)\` · \`ctx.bash(command, opts)\` | \`{ exitCode, stdout, stderr }\` |
-| the same with \`{ schema }\` | JSON stdout, parsed and validated |
+| \`ctx.fs.read(path)\` | \`{ content, sha256, size }\` |
+| \`ctx.fs.glob(patterns, { cwd? })\` | sorted repository-relative \`{ paths }\` |
+| \`ctx.fs.stat(path)\` | \`{ exists, size?, mtimeMs?, isFile?, isDirectory? }\` |
+| \`ctx.exec(file, args, opts)\` | \`{ exitCode, stdout, stderr }\`; with \`schema\`, validated JSON stdout |
+| \`ctx.bash(command, opts)\` | the same result and optional schema behavior through a shell command |
 | \`ctx.fetch(url, init)\` | \`{ status, headers, body }\`; with \`{ schema }\`, a validated 2xx body |
-| \`ctx.env.get(name)\` · \`ctx.secret(name)\` | the value · an opaque handle, journaled as \`<redacted>\` |
-| \`ctx.git.*\` | typed git; reads are free, writes carry fixed risk tiers |
+| \`ctx.env.get(name)\` | a journaled environment value or \`undefined\` |
+| \`ctx.secret(name)\` | an opaque handle resolved only inside an effect and journaled as \`<redacted>\` |
 
 \`exec\`/\`bash\` take \`{ cwd, timeout, env, risk, key }\` — \`risk\` routes the call through the
-approval gate. Git reads: \`status\`, \`head\`, \`branches\`, \`mergeBase\`, \`changedSince\`, \`diff\`,
-\`log\`, \`show\`, \`blame\`, \`fileAt\`, \`snapshot\`. Git writes (\`commit\`, \`push\`, \`reset\`,
-\`tag\`, \`branch.*\`, \`stash.*\`, \`clean\`, …) have a fixed tier you can raise with \`{ risk }\`,
-never lower.
+approval gate.
+
+**Git reads** — journaled without an approval gate.
+
+| Call | Returns |
+| --- | --- |
+| \`ctx.git.status()\` | branch plus clean, staged, unstaged, and untracked paths |
+| \`ctx.git.head()\` | \`{ sha }\` |
+| \`ctx.git.branches()\` | \`{ current, all }\` |
+| \`ctx.git.mergeBase(a, b)\` | \`{ sha }\` |
+| \`ctx.git.changedSince(ref)\` | \`{ files: [{ path, status }] }\` |
+| \`ctx.git.diff(range?)\` | \`{ patch, stats, ref? }\` |
+| \`ctx.git.log({ from?, to?, paths?, max? })\` | \`{ commits }\` |
+| \`ctx.git.show(ref)\` | \`{ content }\` |
+| \`ctx.git.blame(path, { lines? })\` | structured blame lines |
+| \`ctx.git.fileAt(ref, path)\` | \`{ content }\` from that revision |
+| \`ctx.git.snapshot()\` | \`{ ref }\` for the current tree state |
+
+**Git writes** — journaled and idempotency-checked on resume. Their fixed risk tier may be
+raised with \`{ risk }\`, never lowered.
+
+| Call | Returns |
+| --- | --- |
+| \`ctx.git.add({ paths, risk? })\` | void |
+| \`ctx.git.commit({ message, paths?, risk? })\` | \`{ sha }\` |
+| \`ctx.git.checkout(ref, { discard?, risk? })\` | void |
+| \`ctx.git.fetch({ remote?, risk? })\` | void |
+| \`ctx.git.pull({ rebase?, remote?, branch?, risk? })\` | void |
+| \`ctx.git.push({ remote?, branch?, setUpstream?, force?, risk? })\` | void |
+| \`ctx.git.reset({ to, mode?, risk? })\` | void |
+| \`ctx.git.apply({ patch, threeWay?, risk? })\` | void |
+| \`ctx.git.tag(name, { ref?, risk? })\` | \`{ sha }\` of the tagged commit |
+| \`ctx.git.branch.create(name, { from?, checkout?, risk? })\` | void |
+| \`ctx.git.branch.delete(name, { force?, risk? })\` | void |
+| \`ctx.git.stash.push({ message?, risk? })\` | void |
+| \`ctx.git.stash.pop({ risk? })\` | void |
+| \`ctx.git.stash.drop({ risk? })\` | void |
+| \`ctx.git.clean({ force?, risk? })\` | void |
 
 **Checks, integration, ledger**
 
 | Call | Returns |
 | --- | --- |
 | \`ctx.check(name, { exec \\| fn \\| trustPrior \\| skip, required, timeout })\` | \`{ status, evidence? }\` |
-| \`ctx.check.exec/fn/trust/skip(…)\` | named helpers for the same four exclusive check modes |
+| \`ctx.check.exec(name, command, opts?)\` | legacy command-backed check result |
+| \`ctx.check.fn(name, run, opts?)\` | legacy callback-backed check result |
+| \`ctx.check.trust(name, prior, opts?)\` | legacy result trusted from a prior run |
+| \`ctx.check.skip(name, reason, opts?)\` | legacy explicit skipped/waived result |
 | \`ctx.check(defineCheck(…), input?, { key, policy, timeout, trust, waive })\` | run a reusable static or schema-backed check |
 | \`ctx.check(defineCheckSuite(…), { keyPrefix, concurrency })\` | run reusable static checks; returns \`{ passed, results }\` while journaling each member |
 | \`ctx.integrate(results, { order, onConflict })\` | \`{ merged, conflicts, quarantined, skipped }\` |
@@ -389,18 +490,30 @@ changes; recovery fails closed if the exact executable extension contract is una
 
 **Waits, journaled globals, structure**
 
-\`ctx.signal(name, schema, { timeout })\` parks until something outside delivers it.
-\`ctx.sleep(duration)\` is durable — the process may exit and resume later.
-\`ctx.now()\`, \`ctx.random()\`, \`ctx.uuid()\` are the journaled replacements for the banned
-globals. \`ctx.phase(name)\` groups the tree, \`ctx.log(message)\` narrates it, \`ctx.budget\`
-is \`{ spent, remaining }\` (\`null\` means unlimited on that axis), and \`ctx.run\` is
-\`{ id, cwd, baseRef?, depth }\`.
+| Call or property | Meaning |
+| --- | --- |
+| \`ctx.signal(name, schema, { timeout? })\` | park until an external validated payload arrives |
+| \`ctx.sleep(duration)\` | durable wait; the process may exit and resume later |
+| \`ctx.now()\` | journaled epoch milliseconds |
+| \`ctx.random()\` | journaled random number |
+| \`ctx.uuid()\` | journaled UUID |
+| \`ctx.phase(name)\` | announce a phase and return an immutable context bound to it |
+| \`ctx.log(message)\` | add workflow narration to the run |
+| \`ctx.budget\` | \`{ spent, remaining }\`; \`null\` means unlimited on that remaining axis |
+| \`ctx.run\` | \`{ id, cwd, baseRef?, depth }\` |
 
 ## Write steps
 
 A write step does not mutate the tree. Declaring \`write:\` makes the step a write step: it
 gets its own git worktree, its diff is captured as a patch blob, out-of-scope files are
 flagged, and **nothing lands until \`ctx.integrate()\`**.
+
+Do not model a shared-checkout implementation/review loop by omitting \`write\`: omission makes
+the provider read-only. Weft currently has no public durable in-place workspace lease, and the
+\`sessionId\` returned by \`agent.detailed\` is diagnostic metadata rather than a cross-step
+continuation handle. For implementation followed by independent review, use a patch-first
+boundary: run the writer with declared \`write\`, inspect/integrate its patch, then review the
+integrated tree. A later repair is another explicitly scoped write step.
 
 \`\`\`ts
 const fixes = ctx.all(
@@ -554,32 +667,47 @@ request, and go through the engine's normal schema validation — a fixture that
 pass in production fails the test.
 
 \`\`\`ts
-import { mock, runWorkflow } from "@techery/weft-testing";
+import { fixture, mock, runWorkflow } from "@techery/weft-testing";
 import review from "../.weft/workflows/review/main.ts";
 
 const { output, journal } = await runWorkflow(review, {
   input: { base: "main" },
-  provider: mock()
+  fs: { "src/a.ts": "export const n = 1;\\n" },
+  provider: mock({ strict: true, profile: "claude" })
     .on({ key: "find:*" }, (req) => ({
       findings: req.prompt.includes("a.ts")
         ? [{ file: "a.ts", line: 3, claim: "off-by-one", severity: "medium" }]
         : [],
     }))
-    .on({ key: "refute:*" }, { survives: true, why: "verified from the source" }),
+    .on(
+      { key: "refute:*" },
+      fixture.sequence([{ survives: true, why: "verified from the source" }]),
+    ),
   git: { changedSince: { files: [{ path: "a.ts", status: "M" }] } },
 });
 
 expect(output.confirmed).toHaveLength(1);
 expect(journal.steps({ kind: "agent" })).toHaveLength(2);
 expect(journal.step("find:a.ts").prompt).toContain("Cite file:line");
+expect(journal.ran("find:a.ts")).toBe(true);
+expect(journal.neverRan("fix:a.ts")).toBe(true);
 \`\`\`
 
 Fixture keys are plain globs, not path patterns: \`*\` matches any characters, \`/\` included,
 so \`find:*\` matches \`find:src/auth/login.ts\`. \`runWorkflow\` also takes \`exec\`, \`bash\`,
-\`fetch\`, \`env\`, \`answers\`, \`signals\`, \`taskSeeds\`, \`budget\`, \`config\` and \`cwd\`
-fixtures; its result includes the final typed \`tasks\` snapshot. Thus workflows with human
-steps, signals, task state, and shell checks can run end to end in a unit test when the
-needed fixtures are supplied.
+\`fetch\`, \`env\`, \`answers\`, \`signals\`, \`taskSeeds\`, \`budget\`, \`config\`, \`fs\`, and
+\`cwd\` fixtures; \`config: { path }\` loads a repository-relative JSON fixture. Its result
+includes the effective \`cwd\` and final typed \`tasks\` snapshot. \`fixture.sequence\` is the
+explicit stateful responder for repeated matches; an array passed directly to \`mock.on\`
+remains an ordinary schema value.
+
+Use \`mock({ strict: true })\` for mutation workflows. It rejects fixture writes from
+read-only steps, workspace escapes, protected paths, and files outside the declared write
+scope before writing any fixture file. A \`profile: "claude" | "codex"\` advertises that
+provider's real capabilities so \`providerRequirements\` are exercised in tests. Journal
+views expose \`payload\`, \`scope\`, \`ran(key)\`, and \`neverRan(key)\` for focused assertions.
+Thus workflows with human steps, signals, task state, and shell checks can run end to end in
+a unit test when the needed fixtures are supplied.
 
 The mock agent is fail-closed, and a missing human answer or signal also fails loudly.
 Side-effect fixture tables are interceptors, not a host sandbox: an unmatched \`git\`,
@@ -600,6 +728,8 @@ separately when the requested claim depends on them.
 - **Promises instead of thunks in \`ctx.parallel\`.** A promise has already started, so
   \`concurrency\` cannot cap it. Pass items plus a mapper, or \`() => ctx.agent(…)\` thunks.
 - **Un-integrated patches.** The run fails at the end. \`ctx.integrate\` or \`ctx.discard\`.
+- **Treating a read-only agent as an implementation step.** Without \`write\`, provider edits
+  are denied; with \`write\`, changes stay in an isolated worktree until explicit integration.
 - **Reading \`ledger.merged\` as file paths.** They are step keys.
 - **A bare import you "need".** Put the helper in a relative file, or add the package to
   \`workflows.allowBare\` in \`.weft/config.json\` — do not work around the gate.

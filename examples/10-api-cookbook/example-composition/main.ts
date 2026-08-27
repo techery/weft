@@ -10,7 +10,11 @@ export default defineWorkflow(
     name: "example-composition",
     description: "Minimal structured agents, parallel lanes, pipelines, and child workflows.",
     input: z.object({ values: z.array(z.number()).default([1, 2, 3]) }),
-    output: z.object({ values: z.array(z.number()), failures: z.number(), child: z.number() }),
+    output: z.object({
+      values: z.array(z.number()),
+      failures: z.number(),
+      children: z.array(z.number()),
+    }),
   },
   async (ctx, { values }) => {
     ctx.phase("Compose");
@@ -18,6 +22,11 @@ export default defineWorkflow(
     await ctx.agent("Return the number one.", { key: "one", schema: z.object({ n: z.literal(1) }) });
     await ctx.agent.detailed("Return the number two.", {
       key: "two",
+      provider: "codex",
+      providerOptions: {
+        codex: { sandboxMode: "read-only", networkAccess: false, webSearch: "cached" },
+      },
+      providerRequirements: { structured: "native", sessionResume: true },
       schema: z.object({ n: z.literal(2) }),
       retry: { attempts: 2, backoff: "10ms" },
     });
@@ -28,10 +37,15 @@ export default defineWorkflow(
       .filter((value) => value > 2)
       .map((value) => value * 10)
       .run();
+    const children = await ctx.sequence(
+      values,
+      { keyOf: (value) => String(value), phase: (value) => `Value ${value}`, keyPrefix: "value" },
+      (value, item) => item.ctx.workflow(child, { n: value }, { key: item.key("double") }),
+    );
     return {
       values: ctx.successes(piped),
       failures: failures(piped).length,
-      child: await ctx.workflow(child, { n: values[0] ?? 0 }, { key: "child" }),
+      children,
     };
   },
 );

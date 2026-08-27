@@ -1,5 +1,5 @@
 import { useAtomValue, useSetAtom } from "jotai";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "~/api/client";
 import { useAnswerGate } from "~/api/queries";
 import type { JsonSchema } from "~/api/types";
@@ -40,7 +40,42 @@ export function GatePane({ gate, step, schema, onAnswered }: Props) {
   const clearDraft = useSetAtom(clearGateDraftAtom);
   const answer = useAnswerGate();
   const [staged, setStaged] = useState<{ gateId: string; value: unknown }>();
+  const [reviewFile, setReviewFile] = useState<{
+    gateId: string;
+    status: "loading" | "ready" | "error";
+    content: string;
+    error?: string;
+  }>();
   const candidate = staged?.gateId === gate.id ? staged.value : undefined;
+  const fileSubject = gate.reviewSubject?.kind === "file" ? gate.reviewSubject : undefined;
+  const fileBlobHash = fileSubject?.ref.$blob;
+
+  useEffect(() => {
+    if (fileBlobHash === undefined) {
+      setReviewFile(undefined);
+      return;
+    }
+    let cancelled = false;
+    setReviewFile({ gateId: gate.id, status: "loading", content: "" });
+    void api.blobText(fileBlobHash).then(
+      (content) => {
+        if (!cancelled) setReviewFile({ gateId: gate.id, status: "ready", content });
+      },
+      (error: unknown) => {
+        if (!cancelled) {
+          setReviewFile({
+            gateId: gate.id,
+            status: "error",
+            content: "",
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [fileBlobHash, gate.id]);
 
   const values = useMemo(() => drafts[gate.id] ?? {}, [drafts, gate.id]);
   const runId = gate.runId ?? "";
@@ -49,7 +84,10 @@ export function GatePane({ gate, step, schema, onAnswered }: Props) {
     ...(gate.deniable ? { [VERDICT_FIELD]: true } : {}),
   });
   const candidateMissing = candidate === undefined ? [] : requiredFieldsMissing(schema, candidate);
-  const canSubmit = candidate === undefined ? standardMissing.length === 0 : candidateMissing.length === 0;
+  const fileReady =
+    fileSubject?.mode !== "edit" || (reviewFile?.gateId === gate.id && reviewFile.status === "ready");
+  const canSubmit =
+    fileReady && (candidate === undefined ? standardMissing.length === 0 : candidateMissing.length === 0);
 
   const submit = (override?: Record<string, unknown>, exact?: unknown) => {
     answer.mutate(
@@ -57,6 +95,14 @@ export function GatePane({ gate, step, schema, onAnswered }: Props) {
         runId,
         requestId: gate.id,
         answer: exact === undefined ? gateAnswer(schema, { ...values, ...override }) : exact,
+        ...(fileSubject?.mode === "edit" && reviewFile?.gateId === gate.id && reviewFile.status === "ready"
+          ? {
+              reviewEdit: {
+                content: reviewFile.content,
+                beforeSha256: fileSubject.sha256,
+              },
+            }
+          : {}),
       },
       {
         onSuccess: () => {
@@ -89,7 +135,17 @@ export function GatePane({ gate, step, schema, onAnswered }: Props) {
           </div>
           <h3 className={styles.gateTitle}>{gate.title}</h3>
           {gate.detail ? <span className={styles.detail}>{gate.detail}</span> : null}
-          {gate.artifactRef ? (
+          {gate.reviewSubject?.kind === "artifact" ? (
+            <a
+              className={styles.artifactLink}
+              href={api.blobUrl(gate.reviewSubject.ref.$blob, "text")}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open {gate.reviewSubject.label ?? "review artifact"} ·{" "}
+              {gate.reviewSubject.ref.size.toLocaleString()} bytes
+            </a>
+          ) : gate.artifactRef && gate.reviewSubject === undefined ? (
             <a
               className={styles.artifactLink}
               href={api.blobUrl(gate.artifactRef.ref, "text")}
@@ -98,6 +154,56 @@ export function GatePane({ gate, step, schema, onAnswered }: Props) {
             >
               Open attached report · {gate.artifactRef.size.toLocaleString()} bytes
             </a>
+          ) : null}
+          {fileSubject ? (
+            <section className={styles.reviewFile} aria-label={`Review file ${fileSubject.path}`}>
+              <div className={styles.reviewFileHead}>
+                <span>{fileSubject.path}</span>
+                <MonoBadge bg="var(--color-neutral-100)" fg="var(--color-neutral-700)">
+                  {fileSubject.mode}
+                </MonoBadge>
+              </div>
+              {reviewFile?.gateId !== gate.id || reviewFile.status === "loading" ? (
+                <span className={styles.detail}>Loading file…</span>
+              ) : reviewFile.status === "error" ? (
+                <span className={styles.error} role="alert">
+                  {reviewFile.error}
+                </span>
+              ) : fileSubject.mode === "edit" ? (
+                <textarea
+                  className={styles.fileEditor}
+                  aria-label={`Edit ${fileSubject.path}`}
+                  spellCheck={false}
+                  value={reviewFile.content}
+                  onChange={(event) => {
+                    answer.reset();
+                    setReviewFile({
+                      gateId: gate.id,
+                      status: "ready",
+                      content: event.target.value,
+                    });
+                  }}
+                />
+              ) : (
+                <pre className={styles.filePreview}>{reviewFile.content}</pre>
+              )}
+            </section>
+          ) : null}
+          {gate.reviewAttachments?.length ? (
+            <div className={styles.attachments}>
+              {gate.reviewAttachments.map((attachment, index) => (
+                <a
+                  key={`${attachment.kind}:${attachment.ref.$blob}:${attachment.label ?? ""}`}
+                  className={styles.artifactLink}
+                  href={api.blobUrl(attachment.ref.$blob, "text")}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open {attachment.label ?? `attachment ${index + 1}`} ·{" "}
+                  {attachment.ref.size.toLocaleString()} bytes
+                </a>
+              ))}
+            </div>
           ) : null}
         </div>
 
