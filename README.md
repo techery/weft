@@ -40,6 +40,27 @@ Status: design preview. See [Status and honest deviations](#status-and-honest-de
   (checks, ledger, remaining risk) are projections over the same events, and the CLI, MCP server, and daemon
   are thin shells over one `Engine` class.
 
+## What ships today
+
+- **Authoring and discovery.** Start from simple, review, or task-aware TypeScript templates with `weft new`,
+  reject non-deterministic workflow code before it runs with `weft check`, and inspect every loadable workflow's
+  input, output, task, routing, and UI contract with `weft workflow`.
+- **Reliable fan-out and checks.** `ctx.parallel(items, mapper, { concurrency, errors })` and
+  `ctx.pipeline(...).run({ concurrency, errors })` bound concurrent work while preserving lane order. Choose
+  `ctx.successes()` for a recorded tolerant result or `ctx.all()` to fail after every lane settles; journal
+  shell, callback, trusted-prior, and deliberately skipped checks through `ctx.check`.
+- **Workflow-scoped durable work.** Task records carry lifecycle, dependencies, acceptance criteria, notes,
+  provenance, and typed workflow extensions. `defineTaskContract` makes the stored schema, executable revision,
+  migration, and default agent authority explicit.
+- **Workflow-native React views.** Import a colocated `.ui.tsx` component for a custom human-input view or a
+  read-only presentation. Weft compiles the browser asset separately, journals the immutable view and JSON props,
+  and keeps final answer submission in host-owned controls.
+- **Several ways to operate.** Use the CLI, local Workflow Manager, MCP server, or a generated repository skill
+  for Codex and Claude Code. The manager provides queue, runs, workflow contracts, settings, live updates, and
+  durable task views over the daemon API.
+- **Testable without a model.** `@techery/weft-testing` runs real workflow code through the engine with fixtures,
+  schema validation, journal assertions, and mock task-operation envelopes.
+
 ## Install
 
 > Not on npm yet — the packages below are what the release workflow publishes, and the names
@@ -78,6 +99,17 @@ npm i @techery/weft-core @techery/weft-host    # the Engine itself
 Node 22.12 or newer. Every package is ESM-only and ships compiled JavaScript with type
 declarations, so no loader or bundler is required.
 
+To give a coding agent the complete authoring contract in a repository-local skill, generate it from the same
+CLI version that will run the workflows:
+
+```bash
+mkdir -p .agents/skills/weft
+weft skill > .agents/skills/weft/SKILL.md  # Codex
+
+mkdir -p .claude/skills/weft
+weft skill > .claude/skills/weft/SKILL.md  # Claude Code
+```
+
 ## Quickstart
 
 In a checkout of this repository:
@@ -90,13 +122,19 @@ pnpm typecheck && pnpm test
 node packages/cli/bin/weft.js check review                    # tsc + gate
 node packages/cli/bin/weft.js run review --base main --watch  # input fields become flags
 node packages/cli/bin/weft.js ui                              # localhost: runs, live tree, report, answer
+node packages/cli/bin/weft.js workflow list                   # loadable definitions and rejected files
+node packages/cli/bin/weft.js workflow inspect review --json  # exact executable contract
 
 # Keep state in this repo while also registering workflows from other folders
 node packages/cli/bin/weft.js --extra-workflow-dir examples/08-task-backed-code-review \
   --extra-workflow-dir examples/09-custom-react-ui ui
 
-# scaffold another one, or put `weft` on your PATH for this checkout
-node packages/cli/bin/weft.js new triage
+# scaffold a simple, review, or task-aware workflow; nothing is overwritten
+node packages/cli/bin/weft.js new triage --template simple
+node packages/cli/bin/weft.js new recurring-review --template review
+node packages/cli/bin/weft.js new issue-queue --template task
+
+# or put `weft` on your PATH for this checkout
 pnpm -C packages/cli link --global
 ```
 
@@ -159,20 +197,21 @@ export default defineWorkflow(
     const paths = files.filter((f) => f.status !== "D").map((f) => f.path);
 
     ctx.phase("Find");
-    const found = ctx.ok(                                        // ok() narrows and records what it dropped
-      await ctx.parallel(                                        // Settled<T>[] in input order
-        paths.map((f) =>
+    const found = ctx.all(                                       // every lane must succeed
+      await ctx.parallel(                                        // bounded, in input order
+        paths,
+        (f) =>
           ctx.agent(`Review ${f} for correctness bugs. Cite file:line and quote the evidence.`, {
             schema: z.object({ findings: z.array(Finding) }),     // required on every step
             key: `review:${f}`,                                  // stable identity for replay, tests, the tree
           }),
-        ),
+        { concurrency: 4, errors: "throw" },
       ),
     );
     const findings = found.flatMap((r) => r.findings);           // typed — no nulls to filter
 
     ctx.phase("Verify");
-    const confirmed = ctx.ok(
+    const confirmed = ctx.all(
       await ctx
         .pipeline(findings)                                      // independent lanes, no barrier between stages
         .step((f) =>
@@ -184,7 +223,7 @@ export default defineWorkflow(
         )
         .filter((verdict) => verdict.real)                       // a falsy verdict drops the lane
         .map((_verdict, f) => f)                                 // back to the finding
-        .run(),
+        .run({ concurrency: 4, errors: "throw" }),
     );
 
     return { confirmed };
@@ -263,9 +302,27 @@ and provide `tasks.migrate(value, fromVersion)`. Each run remains bound to its e
 and migrated values are persisted on the next mutation. The workflow manager renders all tasks from
 `GET /api/workflows/:name/tasks`.
 
+`defineTaskContract({ schema, revision, version?, agentAccess?, migrate? })` is the concise form for declaring
+that contract. Task-enabled workflows require a stable `meta.id`; agent steps receive read-only task context by
+default. Set `agentAccess: "write"` only when the workflow's default should permit structured task mutations,
+or opt a single agent step into write access.
+
 See [`examples/08-task-backed-code-review`](./examples/08-task-backed-code-review) for the recommended review
 shape: typed same-run claims, a consolidation pass, independent refutation, human selection, then durable task
 upserts with first/last-seen provenance and occurrence notes.
+
+## Custom React views in workflows
+
+Keep a `.ui.tsx` file next to the workflow and import it directly. An input view, created with
+`defineUiView` from `@techery/weft-sdk/ui`, is passed to `ctx.human.ask({ ui: { view, props } })`; it can only
+stage a candidate answer. The Workflow Manager validates that candidate and a person uses its **Submit and
+resume** control to record the durable answer. A display view, created with `defineResultView`, is published as
+its own replay-aware step with `ctx.ui.render({ key, slot?, view, props })`.
+
+View props and proposed answers are JSON-only and bounded; code and props are persisted separately from the
+workflow's Node bundle. The manager renders a presentation alongside the ordinary schema/result data, so a
+custom component is never the source of truth. See the [custom UI guide](./docs/custom-react-ui-in-workflows.md)
+and the runnable [`examples/09-custom-react-ui`](./examples/09-custom-react-ui).
 
 ## Packages
 
@@ -280,14 +337,15 @@ upserts with first/last-seen provenance and occurrence notes.
 | `@techery/weft-isolation` | Worktrees, patch capture, scope checks. (Merge and conflict handling live with `ctx.integrate` in `@techery/weft-core`.) |
 | `@techery/weft-stdlib` | Typed patterns: `adversarialVerify`, `judgePanel`, `loopUntilDry`, `integrationLedger`, `finalReport`, … |
 | `@techery/weft-testing` | `runWorkflow` harness, mock fixtures, journal assertions, store conformance suites. |
+| `@techery/weft-design-system` | React primitives, tokens, and theme used by the Workflow Manager and optional custom workflow views. |
 | `@techery/weft-host` | Engine assembly shared by the hosts: config loading, stores, providers, workflow registry. |
-| `@techery/weft`, `@techery/weft-mcp`, `@techery/weft-daemon` | Hosts. CLI: run, resume, task, ls, status, answer, cancel, report, replay, check, explain, diff, new, skill, ui, doctor. MCP: `weft.run/wait/answer/resume/list/report/types`. Daemon: serves the web UI and wakes suspended runs. |
+| `@techery/weft`, `@techery/weft-mcp`, `@techery/weft-daemon` | Hosts. CLI: run, resume, task, workflow, ls, status, answer, cancel, report, replay, check, explain, diff, new, skill, ui, doctor. MCP: `weft.run/wait/answer/resume/list/report/types`. Daemon: serves the web UI and wakes suspended runs. |
 
 ## Apps
 
 | App | Owns |
 | --- | --- |
-| `@techery/weft-ui` (`apps/ui`) | The workflow manager: queue, runs, run detail, workflows, settings, and a ⌘K launcher — reading and writing the live journal through the API below. React + Vite + TanStack Router + Query + Jotai, laid out atomically. See [apps/ui/README.md](./apps/ui/README.md). |
+| `@techery/weft-ui` (`apps/ui`) | The workflow manager: queue, runs, run detail, workflows, settings, a ⌘K launcher, durable tasks, schema-result inspection, and custom workflow presentations — reading and writing the live journal through the API below. React + Vite + TanStack Router + Query + Jotai, laid out atomically. See [apps/ui/README.md](./apps/ui/README.md). |
 
 `weft ui` serves it. The manager builds into `packages/daemon/web/`, and the daemon that
 `weft ui` starts serves that directory at `/` — so `pnpm build && weft ui` opens the
@@ -328,34 +386,11 @@ A checkout that has not built the manager still gets a working UI: the daemon fa
 to its own built-in page, and `weft ui` says which one you are looking at. That page reads
 the live journal and keeps a fixed address at `/legacy` either way.
 
-## Development
+## Contributing
 
-```bash
-pnpm install
-pnpm typecheck        # tsc over every package plus examples/ and .weft/, then apps/ui
-pnpm test             # vitest run, then the apps/ui suite
-pnpm test:watch
-pnpm dev:ui           # the workflow manager on :4782
-pnpm lint             # biome check .
-pnpm lint:fix         # biome check --write .
-pnpm format           # biome format --write .
-pnpm build            # tsc per package, src/ -> dist/, in dependency order; apps/ui via vite
-pnpm clean            # drop every dist/
-pnpm verify:packing   # pack every package and check the tarballs are installable
-pnpm verify:install   # install those tarballs for real and run the CLI out of them
-```
-
-Node 22.12 or newer, pnpm 10, ESM everywhere, TypeScript strict. Relative imports inside a package carry an
-explicit `.ts` extension (`allowImportingTsExtensions`), including in `.weft/workflows/`. `pnpm build`
-rewrites those to `.js` on the way out (`rewriteRelativeImportExtensions`), so what ships is plain ESM that
-resolves under node with no loader.
-
-Day to day you never need `pnpm build` — tests, examples, and `bin/weft.js` all run off `src/`. It matters
-when you are checking what a release will look like; see [RELEASING.md](./RELEASING.md).
-
-`.weft/workflows/` and `examples/` import workspace packages by name (`@techery/weft-sdk`, `@techery/weft-core`, …). The
-workspace root lists those packages as `workspace:*` devDependencies, so both directories resolve them
-through the root `node_modules` — `pnpm install` once and `npx tsx examples/…` works from a fresh clone.
+Development setup, focused and release-grade validation, workflow/custom-UI conventions, and documentation
+expectations now live in [CONTRIBUTING.md](./CONTRIBUTING.md). The contributor guide is the source of truth for
+changing Weft; [RELEASING.md](./RELEASING.md) covers publishing a validated release.
 
 ## Testing workflows
 
@@ -407,8 +442,9 @@ This repository implements the design in the two design documents. Where it does
    not.
 3. **The built web UI is a Vite + React app served by the daemon.** `apps/ui` builds the workflow manager
    into `packages/daemon/web/`, and `weft ui` serves that bundle with client-side routes, API-backed views,
-   and live journal updates over SSE. A fresh checkout that has not run `pnpm build` uses the daemon's
-   single-file built-in fallback instead; that legacy surface remains available at `/legacy`.
+   live journal updates over SSE, and journaled custom workflow presentations. A fresh checkout that has not run
+   `pnpm build` uses the daemon's single-file built-in fallback instead; that legacy surface remains available at
+   `/legacy`.
 4. **TypeScript is pinned to 5.9.** The gate needs the in-process compiler API to parse workflow scripts and
    apply its AST rules; the native 7.x compiler does not expose it yet. Unpinning waits on that API.
 5. **Replay identity is content plus `key`, and the world is not in it.** A step's identity hashes its
