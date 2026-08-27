@@ -178,6 +178,9 @@ and a real vendor adapter swapped in. Six more runnable tours live alongside it 
 write-step patches and scopes, edit-tolerant resume, sub-workflow budgets, the stdlib patterns, and the
 testing harness. Start at [`examples/README.md`](./examples/README.md).
 
+For the complete workflow authoring surface, including the logic and usage patterns behind every `ctx`
+method, see the [workflow `ctx` reference](./docs/workflow-context-reference.md).
+
 ## A workflow, annotated
 
 `.weft/workflows/review/main.ts` — review the files changed since a base ref, have Claude find bugs, have Codex
