@@ -926,6 +926,95 @@ describe("the tool gate", () => {
     }
   });
 
+  test("a `..` segment after a symlink cannot smuggle an edit out of the worktree", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "weft-gate-"));
+    const outside = await mkdtemp(join(tmpdir(), "weft-outside-"));
+    await mkdir(join(cwd, "sub"));
+    await symlink(outside, join(cwd, "sub", "esc"), "dir");
+    try {
+      const options = await gateContext(
+        request({ cwd, tools: { allowEdits: true }, writeScope: { paths: ["**"], mode: "strict" } }),
+      );
+      // Deliberately NOT join(): join() collapses the `..` lexically, which is exactly
+      // what resolvesOutsideWorktree used to do — erasing the symlink from the probe.
+      // POSIX resolves left to right, so this lands in the OUTSIDE directory's parent.
+      const edit = await ask(options, "Edit", {
+        file_path: `${cwd}/sub/esc/../stolen`,
+        old_string: "a",
+        new_string: "b",
+      });
+      expect(edit.behavior).toBe("deny");
+      // The traversal-free spelling of an in-tree file stays allowed.
+      expect(
+        (await ask(options, "Edit", { file_path: `${cwd}/sub/notes.txt`, old_string: "a", new_string: "b" }))
+          .behavior,
+      ).toBe("allow");
+    } finally {
+      await rm(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await rm(outside, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    }
+  });
+
+  test("the engine-owned task store is screened on the normalized path, not the raw argument", async () => {
+    const options = await gateContext(
+      request({
+        tools: { allowEdits: true },
+        writeScope: { paths: ["**"], mode: "warn" },
+        protectedPaths: [`${CWD}/.weft/tasks`],
+        taskContext: {
+          workflowId: "review",
+          workflowName: "review",
+          runId: "run-1",
+          step: "review",
+          provider: "claude",
+          mode: "write",
+        },
+      }),
+    );
+    // Every spelling of the same file is the same write.
+    for (const spelling of [
+      `${CWD}/.weft/tasks/review/task-deadbeef.json`,
+      `${CWD}/.weft/foo/../tasks/review/task-deadbeef.json`,
+      `${CWD}/.weft//tasks/review/task-deadbeef.json`,
+    ]) {
+      expect(await ask(options, "Edit", { file_path: spelling }), spelling).toMatchObject({
+        behavior: "deny",
+      });
+    }
+  });
+
+  test("a strict scope denies an absolute destination ATTACHED to its redirection", async () => {
+    const brokered: PermissionRequest[] = [];
+    const options = await gateContext(
+      request({
+        tools: { allowEdits: true },
+        writeScope: { paths: ["**"], mode: "strict" },
+        hitl: {
+          onPermission: async (r: PermissionRequest) => {
+            brokered.push(r);
+            return { behavior: "allow" } as PermissionDecision;
+          },
+          onAsk: async () => ({}),
+        },
+      }),
+    );
+    // The spaced form was already denied; the attached forms are the same write.
+    for (const command of [
+      "printf x > /etc/cron.d/pwn",
+      "printf x >/etc/cron.d/pwn",
+      "printf x >>/etc/cron.d/pwn",
+      "printf x 2>/etc/cron.d/pwn",
+    ]) {
+      expect((await ask(options, "Bash", { command })).behavior, command).toBe("deny");
+    }
+    // Denied up front, never handed to the approval broker.
+    expect(brokered).toHaveLength(0);
+    // A URL is not a filesystem destination and must still pass the screen.
+    expect((await ask(options, "Bash", { command: "curl -s http://example.com/p" })).behavior).not.toBe(
+      "deny",
+    );
+  });
+
   test("tools.deny removes a tool outright", async () => {
     const options = await gateContext(request({ tools: { allowEdits: true, deny: ["WebFetch"] } }));
     const denial = await ask(options, "WebFetch", { url: "https://example.com" });
