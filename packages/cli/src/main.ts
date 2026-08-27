@@ -27,6 +27,7 @@ import { runCommand } from "./commands/run.ts";
 import { skillCommand } from "./commands/skill.ts";
 import { statusCommand } from "./commands/status.ts";
 import { taskCommand } from "./commands/task.ts";
+import { testCommand } from "./commands/test.ts";
 import { uiCommand } from "./commands/ui.ts";
 import { workflowCommand } from "./commands/workflow.ts";
 import { type CliIo, warn } from "./io.ts";
@@ -79,6 +80,7 @@ export function buildProgram(io: CliIo = consoleIo): Command {
     skillCommand,
     doctorCommand,
     taskCommand,
+    testCommand,
     uiCommand,
     workflowCommand,
   ]) {

@@ -13,9 +13,16 @@
   background: transparent;
   color: var(--color-neutral-700);
   text-decoration: none;
+  white-space: nowrap;
 }
 .on {
   font-weight: 600;
   background: var(--color-accent-200);
   color: var(--color-accent-800);
+}
+@media (max-width: 760px) {
+  .tab {
+    padding: 6px 9px;
+    font-size: 12px;
+  }
 }

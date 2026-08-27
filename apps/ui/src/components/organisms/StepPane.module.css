@@ -111,3 +111,14 @@
   flex: 1;
   min-width: 180px;
 }
+@media (max-width: 700px) {
+  .body {
+    padding: 13px 14px 16px;
+  }
+  .foot {
+    padding: 9px 14px;
+  }
+  .footId {
+    min-width: 0;
+  }
+}

@@ -24,6 +24,7 @@ export function RailStepRow({ step, selected, onSelect }: Props) {
     <button
       type="button"
       aria-current={selected ? "step" : undefined}
+      aria-label={step.id.startsWith("gate:") ? `Open pending question ${step.id.slice(5)}` : undefined}
       className={[styles.row, ground].filter(Boolean).join(" ")}
       onClick={onSelect}
     >

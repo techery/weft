@@ -1,0 +1,1016 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Weft run detail UX prototype</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f2ede3;
+      --surface: #faf9f5;
+      --surface-strong: #fffefb;
+      --text: #181715;
+      --muted: #6c6a64;
+      --faint: #8e8b82;
+      --divider: #e2dbd1;
+      --neutral-100: #f5f0e8;
+      --neutral-200: #efe9de;
+      --accent: #cc785c;
+      --accent-dark: #a9583e;
+      --accent-soft: #f6e2d8;
+      --agent-border: #d7a18d;
+      --program-border: #b9b3aa;
+      --success: #35786b;
+      --success-soft: #eaf6f3;
+      --warning: #9b6519;
+      --warning-soft: #fbf0d9;
+      --danger: #a2463c;
+      --danger-soft: #fae6e2;
+      --terminal: #181816;
+      --terminal-text: #e7e0d5;
+      --serif: "Source Serif 4", Georgia, serif;
+      --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--bg); color: var(--text); }
+    body { margin: 0; min-width: 320px; background: var(--bg); font: 13px/1.45 var(--sans); }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    h1, h2, h3, p { margin: 0; }
+    h1, h2, h3 { font-family: var(--serif); font-weight: 400; letter-spacing: -.025em; }
+    code, .mono { font-family: var(--mono); }
+    [hidden] { display: none !important; }
+
+    .app { min-height: 100vh; display: flex; flex-direction: column; }
+    .topbar {
+      min-height: 38px;
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      border-bottom: 1px solid var(--divider);
+      background: var(--surface);
+    }
+    .brand { display: flex; align-items: center; gap: 9px; font-weight: 600; }
+    .brand-mark {
+      width: 22px; height: 22px; display: grid; place-items: center;
+      border-radius: 7px; background: var(--accent); color: var(--surface); font-size: 12px;
+    }
+    .workspace {
+      padding: 2px 9px; border: 1px solid var(--divider); border-radius: 999px;
+      color: var(--muted); font: 10px var(--mono);
+    }
+    .global-nav { display: flex; align-self: stretch; gap: 2px; }
+    .global-nav button, .run-tabs button, .subtle-button, .scenario button, .filter-button, .mode-button {
+      appearance: none; border: 0; background: transparent; cursor: pointer;
+    }
+    .global-nav button { padding: 0 11px; color: var(--muted); font-size: 12px; }
+    .global-nav button[aria-current="page"] { color: var(--text); box-shadow: inset 0 -2px var(--accent); }
+    .top-spacer { flex: 1; }
+    .daemon { display: flex; align-items: center; gap: 7px; color: var(--muted); font: 10px var(--mono); }
+    .daemon::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: #5db8a6; }
+
+    .run-header {
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      background: var(--surface);
+      border-bottom: 1px solid var(--divider);
+    }
+    .back { color: var(--accent-dark); }
+    .subtle-button { padding: 5px 7px; border-radius: 6px; }
+    .subtle-button:hover { background: var(--neutral-100); }
+    .run-name { font: 21px/1.1 var(--serif); }
+    .run-id, .status-pill, .run-path, .run-meta { font-family: var(--mono); font-size: 10px; }
+    .run-id { padding: 2px 8px; border: 1px solid var(--divider); border-radius: 999px; color: var(--muted); }
+    .status-pill {
+      padding: 3px 9px; border-radius: 999px; color: var(--success); background: var(--success-soft);
+      letter-spacing: .09em; text-transform: uppercase;
+    }
+    .status-pill[data-state="running"] { color: var(--accent-dark); background: var(--accent-soft); }
+    .status-pill[data-state="waiting"] { color: var(--warning); background: var(--warning-soft); }
+    .run-path { color: var(--accent-dark); text-decoration: underline; text-underline-offset: 2px; }
+    .run-meta { margin-left: auto; color: var(--muted); white-space: nowrap; }
+    .scenario {
+      display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--neutral-200);
+    }
+    .scenario button { min-height: 27px; padding: 4px 9px; border-radius: 6px; color: var(--muted); font-size: 11px; }
+    .scenario button[aria-pressed="true"] { background: var(--surface-strong); color: var(--text); box-shadow: 0 1px 3px rgba(24,23,21,.08); }
+
+    .run-tabs {
+      height: 38px; padding: 0 16px; display: flex; align-items: stretch; gap: 7px;
+      overflow-x: auto; background: var(--surface); border-bottom: 1px solid var(--divider);
+    }
+    .run-tabs button { padding: 0 10px; border-bottom: 2px solid transparent; color: var(--muted); white-space: nowrap; }
+    .run-tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+    .tab-count { margin-left: 5px; padding: 1px 6px; border-radius: 999px; background: var(--neutral-200); font: 9px var(--mono); }
+
+    .panel { padding: 14px 16px 20px; }
+    .panel-inner { max-width: 1420px; margin: 0 auto; }
+    .eyebrow {
+      color: var(--faint); font-size: 10px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase;
+    }
+    .section-heading { display: flex; align-items: baseline; gap: 9px; margin-bottom: 8px; }
+    .section-heading h2 { font-size: 19px; }
+    .section-heading p { color: var(--muted); font-size: 12px; }
+
+    .outcome {
+      padding: 14px 16px;
+      border: 1px solid var(--divider);
+      border-radius: 10px;
+      background: var(--surface);
+    }
+    .outcome-top { display: flex; gap: 16px; align-items: flex-start; }
+    .outcome-copy { flex: 1; min-width: 0; }
+    .outcome h1 { margin-top: 2px; max-width: 900px; font-size: clamp(23px, 2.2vw, 31px); line-height: 1.08; }
+    .outcome-description { margin-top: 5px; max-width: 950px; color: var(--muted); font-size: 12px; }
+    .outcome-state {
+      display: flex; align-items: center; gap: 8px; color: var(--success); font-weight: 600; white-space: nowrap;
+    }
+    .outcome-state::before { content: "✓"; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; background: var(--success-soft); }
+    .outcome-state[data-state="running"] { color: var(--accent-dark); }
+    .outcome-state[data-state="running"]::before { content: "↻"; background: var(--accent-soft); }
+    .outcome-state[data-state="waiting"] { color: var(--warning); }
+    .outcome-state[data-state="waiting"]::before { content: "!"; background: var(--warning-soft); }
+    .metrics {
+      margin-top: 11px; padding-top: 9px; border-top: 1px solid var(--divider);
+      display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .metric { min-width: 0; padding: 0 13px; border-left: 1px solid var(--divider); }
+    .metric:first-child { padding-left: 0; border-left: 0; }
+    .metric-label { display: block; color: var(--faint); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
+    .metric-value { display: block; margin-top: 1px; font: 14px var(--mono); }
+    .metric-note { display: block; margin-top: 1px; color: var(--muted); font-size: 10px; }
+
+    #panel-overview .panel-inner {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 330px;
+      grid-template-areas:
+        "outcome outcome"
+        "progress evidence"
+        "activity evidence"
+        "note note";
+      gap: 14px 18px;
+      align-items: start;
+    }
+    #panel-overview .outcome { grid-area: outcome; }
+    #panel-overview .progress-section { grid-area: progress; }
+    #panel-overview .overview-grid { display: contents; }
+    #panel-overview .overview-grid > section { grid-area: activity; }
+    #panel-overview .overview-grid > aside { grid-area: evidence; }
+    #panel-overview .prototype-note { grid-area: note; }
+    .progress-section { margin-top: 0; padding-top: 2px; }
+    .phase-track { display: grid; grid-template-columns: .9fr 1fr 1.45fr .9fr; gap: 12px; }
+    .phase {
+      position: relative; min-width: 0; padding: 9px 10px;
+      border: 1px solid var(--divider); border-radius: 8px; background: var(--surface);
+      text-align: left; cursor: pointer;
+    }
+    .phase:not(:last-child)::after {
+      content: ""; position: absolute; left: calc(100% + 1px); top: 21px; width: 12px; height: 1px; background: var(--divider);
+    }
+    .phase:not(:last-child)::before {
+      content: ""; position: absolute; left: calc(100% + 8px); top: 18px;
+      width: 6px; height: 6px; border-top: 1px solid var(--faint); border-right: 1px solid var(--faint); transform: rotate(45deg);
+    }
+    .phase:hover { border-color: #c9bfb4; }
+    .phase[data-status="active"] { border-color: var(--accent); box-shadow: inset 3px 0 var(--accent); }
+    .phase[data-status="waiting"] { border-color: #d9b873; box-shadow: inset 3px 0 #c4892f; }
+    .phase-status { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
+    .phase-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--neutral-200); border: 1px solid var(--faint); }
+    .phase[data-status="done"] .phase-dot { border: 0; background: var(--success); box-shadow: inset 0 0 0 2px var(--success-soft); }
+    .phase[data-status="active"] .phase-dot { border: 0; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+    .phase[data-status="waiting"] .phase-dot { border: 0; background: #c4892f; box-shadow: 0 0 0 4px var(--warning-soft); }
+    .phase-name { display: block; margin-top: 5px; font-weight: 600; font-size: 13px; }
+    .phase-meta { display: block; margin-top: 1px; color: var(--muted); font: 9px var(--mono); }
+    .phase-summary { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
+
+    .overview-grid { margin-top: 0; }
+    .activity-list { margin: 0; padding: 0; list-style: none; }
+    .activity-item { position: relative; display: grid; grid-template-columns: 70px 18px minmax(0, 1fr); gap: 7px; min-height: 48px; }
+    .activity-time { padding-top: 8px; color: var(--faint); text-align: right; font: 9px var(--mono); }
+    .activity-mark { position: relative; display: flex; justify-content: center; }
+    .activity-mark::before { content: ""; position: absolute; top: 0; bottom: 0; width: 1px; background: var(--divider); }
+    .activity-mark::after {
+      content: ""; position: relative; margin-top: 11px; width: 8px; height: 8px; border-radius: 50%; background: var(--surface); border: 2px solid var(--faint);
+    }
+    .activity-item[data-kind="agent"] .activity-mark::after { border-color: var(--accent); }
+    .activity-item[data-kind="change"] .activity-mark::after,
+    .activity-item[data-kind="check"] .activity-mark::after { border-color: var(--success); }
+    .activity-item[data-kind="decision"] .activity-mark::after { border-color: var(--warning); }
+    .activity-item:first-child .activity-mark::before { top: 14px; }
+    .activity-item:last-child .activity-mark::before { bottom: calc(100% - 14px); }
+    .activity-button {
+      appearance: none; width: 100%; border: 0; border-bottom: 1px solid var(--divider); background: transparent;
+      padding: 6px 0 8px; text-align: left; cursor: pointer;
+    }
+    .activity-button:hover .activity-title { color: var(--accent-dark); }
+    .activity-title { display: flex; gap: 8px; align-items: center; font-weight: 600; }
+    .activity-kind { color: var(--faint); font: 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .activity-detail { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .activity-filters { display: flex; gap: 3px; margin-left: auto; }
+    .filter-button, .mode-button { padding: 4px 9px; border-radius: 6px; color: var(--muted); font-size: 11px; }
+    .filter-button[aria-pressed="true"], .mode-button[aria-pressed="true"] { background: var(--neutral-200); color: var(--text); }
+    .evidence-stack { display: flex; flex-direction: column; gap: 7px; }
+    .evidence-card { padding: 10px 11px; border: 1px solid var(--divider); border-radius: 8px; background: var(--surface); }
+    .evidence-card strong { display: block; margin-top: 4px; font-size: 13px; }
+    .evidence-card p { margin-top: 3px; color: var(--muted); font-size: 11px; }
+    .change-stat { color: var(--success); font: 11px var(--mono); }
+    .change-stat .deletions { color: var(--danger); }
+    .gate-card { border-color: #d9b873; background: #fffaf0; }
+    .gate-actions { margin-top: 12px; display: flex; gap: 8px; }
+    .primary-action, .secondary-action {
+      appearance: none; border-radius: 7px; padding: 7px 11px; cursor: pointer; font-weight: 600; font-size: 11px;
+    }
+    .primary-action { border: 1px solid var(--text); background: var(--text); color: var(--surface); }
+    .secondary-action { border: 1px solid var(--divider); background: var(--surface); color: var(--text); }
+
+    .execution-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 9px; }
+    .execution-toolbar h1 { font-size: 25px; }
+    .execution-toolbar p { color: var(--muted); }
+    .mode-switch { margin-left: auto; display: flex; gap: 2px; padding: 2px; background: var(--neutral-200); border-radius: 8px; }
+    .execution-grid {
+      display: grid; grid-template-columns: 310px minmax(0, 1fr);
+      border: 1px solid var(--divider); border-radius: 9px; overflow: hidden; background: var(--surface);
+    }
+    .execution-nav { border-right: 1px solid var(--divider); background: var(--surface); }
+    .execution-nav-head { padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--divider); color: var(--faint); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+    .execution-kind-key { display: flex; align-items: center; gap: 8px; letter-spacing: 0; text-transform: none; }
+    .kind-key-item { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font: 8px var(--mono); white-space: nowrap; }
+    .kind-mark, .step-dot {
+      width: 15px; height: 15px; display: grid; place-items: center; flex: none; font: 600 7px/1 var(--mono);
+    }
+    .kind-mark[data-execution="agent"], .step-button[data-execution="agent"] .step-dot {
+      border: 1px solid var(--agent-border); border-radius: 50%; background: var(--accent-soft); color: var(--accent-dark);
+    }
+    .kind-mark[data-execution="agent"]::after, .step-button[data-execution="agent"] .step-dot::after { content: "A"; }
+    .kind-mark[data-execution="program"], .step-button[data-execution="program"] .step-dot {
+      border: 1px solid var(--program-border); border-radius: 3px; background: var(--neutral-200); color: var(--muted);
+    }
+    .kind-mark[data-execution="program"]::after, .step-button[data-execution="program"] .step-dot::after { content: ">_"; font-size: 6px; }
+    .phase-group { border-bottom: 1px solid var(--divider); }
+    .phase-group:last-child { border-bottom: 0; }
+    .group-summary {
+      width: 100%; padding: 8px 11px; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto;
+      align-items: center; gap: 8px; border: 0; background: transparent; text-align: left; cursor: pointer;
+    }
+    .group-summary:hover { background: var(--neutral-100); }
+    .group-icon { color: var(--success); }
+    .group-summary[data-status="active"] .group-icon { color: var(--accent); }
+    .group-summary[data-status="waiting"] .group-icon { color: var(--warning); }
+    .group-name { font-weight: 600; }
+    .group-meta { color: var(--faint); font: 9px var(--mono); }
+    .step-list { padding: 0 6px 6px 24px; }
+    .step-button {
+      appearance: none; width: 100%; min-height: 27px; padding: 4px 7px; display: grid;
+      grid-template-columns: 15px minmax(0, 1fr) auto; align-items: center; gap: 8px;
+      border: 0; border-radius: 7px; background: transparent; text-align: left; cursor: pointer;
+    }
+    .step-button:hover { background: var(--neutral-100); }
+    .step-button[data-status="active"] { box-shadow: inset 2px 0 var(--accent); }
+    .step-button[data-status="waiting"] { box-shadow: inset 2px 0 var(--warning); }
+    .step-button[aria-current="step"] { background: var(--neutral-200); box-shadow: inset 2px 0 var(--text); }
+    .step-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; }
+    .step-meta { color: var(--faint); font: 9px var(--mono); }
+    .step-button.internal { display: none; }
+    .execution-grid.show-all .step-button.internal { display: grid; }
+
+    .step-detail { min-width: 0; padding: 13px 15px 18px; background: var(--bg); }
+    .step-heading { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .step-heading h2 { font-size: 21px; }
+    .step-type { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font: 9px var(--mono); }
+    .step-state { padding: 3px 8px; border-radius: 999px; background: var(--success-soft); color: var(--success); font: 9px var(--mono); text-transform: uppercase; }
+    .step-kicker { margin-top: 4px; color: var(--faint); font: 10px var(--mono); }
+    .step-workbench, .step-main, .step-inspector { min-width: 0; }
+    .inspector-head { display: none; }
+    .result-card { margin-top: 10px; padding: 12px 13px; border: 1px solid var(--divider); border-radius: 8px; background: var(--surface); }
+    .result-card h3 { margin-top: 2px; font-size: 18px; }
+    .result-card p { margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .chip-row { margin-top: 8px; display: flex; gap: 5px; flex-wrap: wrap; }
+    .chip { padding: 3px 8px; border-radius: 999px; background: var(--neutral-200); color: var(--muted); font: 9px var(--mono); }
+    .step-facts { margin-top: 8px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--divider); border-radius: 7px; overflow: hidden; background: var(--surface); }
+    .step-fact { padding: 7px 9px; border-left: 1px solid var(--divider); }
+    .step-fact:first-child { border-left: 0; }
+    .step-fact span { display: block; }
+    .step-fact-label { color: var(--faint); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+    .step-fact-value { margin-top: 2px; font: 11px var(--mono); }
+    .step-section { margin-top: 11px; }
+    .step-section h3 { font: 12px var(--sans); font-weight: 600; }
+    .mini-activity { margin-top: 8px; border-top: 1px solid var(--divider); }
+    .mini-event { display: grid; grid-template-columns: 15px 110px 70px minmax(0, 1fr); gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--divider); }
+    .mini-event-kind { overflow: hidden; color: var(--faint); font: 9px var(--mono); text-transform: uppercase; white-space: nowrap; text-overflow: ellipsis; }
+    .mini-event-state { color: var(--success); font: 9px var(--mono); }
+    .mini-event-state.error { color: var(--danger); }
+    .mini-event-text { color: var(--muted); font-size: 11px; }
+    details { margin-top: 10px; border-top: 1px solid var(--divider); }
+    summary { padding: 8px 0; cursor: pointer; font-weight: 600; font-size: 11px; }
+    .payload { padding: 12px; border-radius: 9px; background: var(--terminal); color: var(--terminal-text); white-space: pre-wrap; overflow-wrap: anywhere; font: 10px/1.65 var(--mono); }
+    .execution-statusbar {
+      min-height: 24px; padding: 0 11px; display: flex; align-items: center; gap: 16px;
+      background: var(--text); color: #e9e4da; font: 9px var(--mono);
+    }
+    .execution-statusbar span { white-space: nowrap; }
+    .execution-statusbar .status-step { display: inline-flex; align-items: center; gap: 6px; }
+    .execution-statusbar .kind-mark { width: 13px; height: 13px; }
+    .status-spacer { flex: 1; }
+
+    .changes-grid { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 560px; border: 1px solid var(--divider); border-radius: 9px; overflow: hidden; background: var(--surface); }
+    .file-tree { border-right: 1px solid var(--divider); display: flex; flex-direction: column; }
+    .file-tree-head, .diff-head { min-height: 43px; padding: 10px 13px; display: flex; align-items: center; gap: 9px; border-bottom: 1px solid var(--divider); }
+    .file-tree-head strong, .diff-head strong { flex: 1; }
+    .file-tree-body { flex: 1; padding: 8px; }
+    .file-button { appearance: none; width: 100%; padding: 7px 9px; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; border: 0; border-radius: 7px; background: transparent; text-align: left; cursor: pointer; }
+    .file-button:hover { background: var(--neutral-100); }
+    .file-button[aria-current="true"] { background: var(--accent-soft); }
+    .file-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10px var(--mono); }
+    .file-stat { font: 9px var(--mono); color: var(--success); }
+    .file-tree-foot { padding: 12px; border-top: 1px solid var(--divider); color: var(--muted); font-size: 11px; }
+    .provenance { margin-top: 8px; }
+    .provenance li { margin: 4px 0; color: var(--muted); font-size: 11px; }
+    .diff-view { min-width: 0; display: flex; flex-direction: column; }
+    .diff-body { flex: 1; min-width: 0; overflow-x: auto; padding: 11px 0; background: var(--terminal); color: var(--terminal-text); }
+    .diff-row { min-width: 760px; display: grid; grid-template-columns: 40px 40px 20px minmax(0,1fr); font: 10px/1.7 var(--mono); }
+    .diff-row span { padding: 0 6px; white-space: pre; }
+    .diff-row .line-no { color: #8e8b82; text-align: right; user-select: none; }
+    .diff-row.add { background: rgba(53,120,107,.23); }
+    .diff-row.remove { background: rgba(162,70,60,.22); }
+    .diff-row.context { color: #c4bdb2; }
+    .diff-foot { padding: 10px 13px; border-top: 1px solid var(--divider); color: var(--muted); font: 10px var(--mono); }
+
+    .outputs-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(280px, .8fr); gap: 24px; }
+    .output-list { display: flex; flex-direction: column; gap: 7px; }
+    .output-item { padding: 11px 12px; border: 1px solid var(--divider); border-radius: 8px; background: var(--surface); }
+    .output-item-top { display: flex; align-items: center; gap: 8px; }
+    .output-type { padding: 2px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-dark); font: 9px var(--mono); text-transform: uppercase; }
+    .output-item h3 { margin-top: 7px; font: 14px var(--sans); font-weight: 600; letter-spacing: 0; }
+    .output-item p { margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .output-meta { margin-left: auto; color: var(--faint); font: 9px var(--mono); }
+    .empty-output { padding: 17px; border: 1px dashed var(--divider); border-radius: 11px; color: var(--muted); }
+    .empty-output strong { display: block; color: var(--text); }
+    .empty-output p { margin-top: 4px; }
+
+    .prototype-note { margin-top: 16px; color: var(--faint); font-size: 11px; text-align: center; }
+
+    @media (min-width: 981px) {
+      body.execution-active { height: 100vh; overflow: hidden; }
+      body.execution-active .app { height: 100vh; min-height: 0; }
+      body.execution-active main { min-height: 0; flex: 1; display: flex; }
+      body.execution-active #panel-execution { min-height: 0; flex: 1; padding: 0; display: flex; }
+      body.execution-active #panel-execution .panel-inner {
+        width: 100%; max-width: none; min-height: 0; margin: 0; display: flex; flex-direction: column;
+      }
+      body.execution-active .execution-toolbar {
+        min-height: 35px; flex: none; margin: 0; padding: 0 10px; border-bottom: 1px solid var(--divider); background: var(--surface);
+      }
+      body.execution-active .execution-toolbar > div:first-child { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+      body.execution-active .execution-toolbar h1 {
+        font: 600 11px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase;
+      }
+      body.execution-active .execution-toolbar p { overflow: hidden; font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
+      body.execution-active .mode-switch { padding: 1px; border-radius: 5px; }
+      body.execution-active .mode-button { padding: 3px 8px; border-radius: 4px; font-size: 10px; }
+      body.execution-active .execution-grid {
+        min-height: 0; flex: 1; grid-template-columns: 320px minmax(0, 1fr); border: 0; border-radius: 0;
+      }
+      body.execution-active .execution-nav { min-height: 0; overflow: auto; }
+      body.execution-active .execution-nav-head {
+        position: sticky; top: 0; z-index: 3; min-height: 31px; padding: 8px 11px; background: var(--surface);
+      }
+      body.execution-active .group-summary { padding-top: 7px; padding-bottom: 7px; }
+      body.execution-active .step-detail { min-height: 0; padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+      body.execution-active .step-heading {
+        min-height: 36px; flex: none; margin: 0; padding: 0 12px;
+        flex-wrap: nowrap; border-bottom: 1px solid var(--divider); background: var(--surface);
+      }
+      body.execution-active .step-heading::before { content: "STEP"; color: var(--faint); font: 8px var(--mono); letter-spacing: .1em; }
+      body.execution-active .step-heading h2 { font: 600 12px/1 var(--sans); letter-spacing: 0; }
+      body.execution-active .step-state { margin-left: auto; padding: 2px 6px; border-radius: 4px; font-size: 8px; }
+      body.execution-active .step-kicker {
+        min-height: 27px; flex: none; margin: 0; padding: 6px 12px; border-bottom: 1px solid var(--divider); background: var(--neutral-100);
+      }
+      body.execution-active .step-workbench {
+        min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 340px; background: var(--surface);
+      }
+      body.execution-active .step-main { min-height: 0; overflow: auto; border-right: 1px solid var(--divider); background: var(--surface); }
+      body.execution-active .step-inspector { min-height: 0; overflow: auto; background: var(--surface-strong); }
+      body.execution-active .inspector-head {
+        position: sticky; top: 0; z-index: 2; min-height: 31px; padding: 8px 11px; display: block;
+        border-bottom: 1px solid var(--divider); background: var(--surface-strong); color: var(--faint);
+        font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+      }
+      body.execution-active .result-card {
+        margin: 0; padding: 11px 15px 12px; border: 0; border-bottom: 1px solid var(--divider); border-radius: 0;
+      }
+      body.execution-active .result-card h3 { font-size: 17px; }
+      body.execution-active .step-facts {
+        margin: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 0; border-bottom: 1px solid var(--divider); border-radius: 0;
+      }
+      body.execution-active .step-fact { padding: 6px 9px; }
+      body.execution-active .step-fact:nth-child(3) { border-left: 0; border-top: 1px solid var(--divider); }
+      body.execution-active .step-fact:nth-child(4) { border-top: 1px solid var(--divider); }
+      body.execution-active .step-section {
+        min-height: calc(100% - 109px); margin: 0; padding: 9px 15px 0; background: var(--surface);
+      }
+      body.execution-active .mini-activity { margin-top: 6px; }
+      body.execution-active details { margin: 0; padding: 0 12px; background: var(--surface-strong); }
+      body.execution-active details + details { border-top: 1px solid var(--divider); }
+      body.execution-active .execution-statusbar { flex: none; }
+    }
+
+    @media (max-width: 980px) {
+      .global-nav { display: none; }
+      #panel-overview .panel-inner {
+        grid-template-columns: 1fr;
+        grid-template-areas: "outcome" "progress" "activity" "evidence" "note";
+      }
+      .phase-track { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .phase::before, .phase::after { display: none; }
+      .overview-grid, .outputs-grid { grid-template-columns: 1fr; }
+      .execution-grid, .changes-grid { grid-template-columns: 1fr; }
+      .execution-nav, .file-tree { border-right: 0; border-bottom: 1px solid var(--divider); }
+      .execution-nav { max-height: none; }
+      .execution-statusbar { display: none; }
+      .file-tree-body { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+      .changes-grid { min-height: 0; }
+      .diff-body { min-height: 520px; }
+    }
+
+    @media (max-width: 680px) {
+      .topbar { padding: 0 12px; }
+      .workspace, .daemon { display: none; }
+      .run-header { padding: 11px 12px; gap: 8px; }
+      .run-name { width: calc(100% - 78px); font-size: 21px; }
+      .run-path { order: 2; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .run-meta { margin-left: 0; }
+      .scenario { width: 100%; }
+      .scenario button { flex: 1; }
+      .run-tabs { padding: 0 8px; }
+      .panel { padding: 14px 12px 24px; }
+      .outcome { padding: 17px 16px; }
+      .outcome-top { flex-direction: column; }
+      .outcome h1 { font-size: 27px; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 13px; }
+      .metric { padding: 0 10px; }
+      .metric:nth-child(3) { padding-left: 0; border-left: 0; }
+      .phase-track { grid-template-columns: 1fr; gap: 7px; }
+      .overview-grid { gap: 18px; }
+      .section-heading { align-items: flex-start; flex-wrap: wrap; }
+      .activity-filters { width: 100%; margin-left: 0; overflow-x: auto; }
+      .activity-item { grid-template-columns: 54px 18px minmax(0, 1fr); }
+      .execution-toolbar { align-items: flex-start; flex-wrap: wrap; }
+      .mode-switch { width: 100%; margin-left: 0; }
+      .mode-button { flex: 1; }
+      .step-detail { padding: 15px 13px 20px; }
+      .step-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .step-fact:nth-child(3) { border-left: 0; border-top: 1px solid var(--divider); }
+      .step-fact:nth-child(4) { border-top: 1px solid var(--divider); }
+      .mini-event { grid-template-columns: 15px minmax(88px, 1fr) minmax(68px, .7fr); }
+      .mini-event-text { grid-column: 2 / -1; padding-left: 0; }
+      .file-tree-body { grid-template-columns: 1fr; }
+      .diff-body { min-height: 430px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">w</span><span>weft</span><span class="workspace">local</span></div>
+      <nav class="global-nav" aria-label="Primary navigation">
+        <button type="button">Queue</button>
+        <button type="button" aria-current="page">Runs</button>
+        <button type="button">Workflows</button>
+        <button type="button">Settings</button>
+      </nav>
+      <span class="top-spacer"></span>
+      <span class="daemon">daemon connected</span>
+    </header>
+
+    <section class="run-header" aria-label="Run header">
+      <button class="subtle-button back" type="button">← Runs</button>
+      <h2 class="run-name">maintain-agent-skill</h2>
+      <span class="run-id">3460761a</span>
+      <span class="status-pill" id="header-status" data-state="done">done · 7 h</span>
+      <span class="run-path">.weft/workflows/maintain-agent-skill.ts</span>
+      <span class="run-meta" id="header-meta">36 steps · 23:31 · 11.6M tok</span>
+      <div class="scenario" aria-label="Prototype run state">
+        <button type="button" data-scenario="done" aria-pressed="true">Done</button>
+        <button type="button" data-scenario="running" aria-pressed="false">Running</button>
+        <button type="button" data-scenario="waiting" aria-pressed="false">Needs input</button>
+      </div>
+    </section>
+
+    <nav class="run-tabs" role="tablist" aria-label="Run views">
+      <button type="button" role="tab" aria-selected="true" aria-controls="panel-overview" data-tab="overview">Overview</button>
+      <button type="button" role="tab" aria-selected="false" aria-controls="panel-execution" data-tab="execution">Execution <span class="tab-count">36</span></button>
+      <button type="button" role="tab" aria-selected="false" aria-controls="panel-changes" data-tab="changes">Changes <span class="tab-count">2</span></button>
+      <button type="button" role="tab" aria-selected="false" aria-controls="panel-outputs" data-tab="outputs">Outputs <span class="tab-count">2</span></button>
+    </nav>
+
+    <main>
+      <section class="panel" id="panel-overview" role="tabpanel" aria-label="Overview">
+        <div class="panel-inner">
+          <article class="outcome">
+            <div class="outcome-top">
+              <div class="outcome-copy">
+                <span class="eyebrow">Run outcome</span>
+                <h1 id="outcome-title">Canonical Agent Skill updated and verified</h1>
+                <p class="outcome-description" id="outcome-description">The workflow corrected the remaining stdlib guidance error, verified all supported agent audiences, and merged the final two-file change into the working tree.</p>
+              </div>
+              <span class="outcome-state" id="outcome-state" data-state="done">Accepted</span>
+            </div>
+            <div class="metrics" aria-label="Run summary">
+              <div class="metric"><span class="metric-label">Execution</span><span class="metric-value" id="metric-steps">36 steps</span><span class="metric-note" id="metric-phases">4 workflow stages</span></div>
+              <div class="metric"><span class="metric-label">Elapsed</span><span class="metric-value" id="metric-elapsed">23:31</span><span class="metric-note">wall-clock duration</span></div>
+              <div class="metric"><span class="metric-label">Usage</span><span class="metric-value" id="metric-tokens">11.6M tok</span><span class="metric-note">across 8 agent calls</span></div>
+              <div class="metric"><span class="metric-label">Effective change</span><span class="metric-value">2 files</span><span class="metric-note"><span class="change-stat">+34 <span class="deletions">−15</span></span> · 4 patches merged</span></div>
+            </div>
+          </article>
+
+          <section class="progress-section" aria-labelledby="progress-heading">
+            <div class="section-heading">
+              <h2 id="progress-heading">Workflow progress</h2>
+              <p id="progress-caption">All declared milestones completed</p>
+            </div>
+            <div class="phase-track" id="phase-track">
+              <button type="button" class="phase" data-phase="inventory" data-status="done">
+                <span class="phase-status"><span class="phase-dot"></span><span class="phase-state-label">Complete</span></span>
+                <span class="phase-name">Inventory</span><span class="phase-meta">5 tasks · 0:01</span><span class="phase-summary">Source and change scope established</span>
+              </button>
+              <button type="button" class="phase" data-phase="author" data-status="done">
+                <span class="phase-status"><span class="phase-dot"></span><span class="phase-state-label">Complete</span></span>
+                <span class="phase-name">Author</span><span class="phase-meta">1 agent · patch</span><span class="phase-summary">Canonical skill revised</span>
+              </button>
+              <button type="button" class="phase" data-phase="verification" data-status="done">
+                <span class="phase-status"><span class="phase-dot"></span><span class="phase-state-label">Complete</span></span>
+                <span class="phase-name">Verification loop</span><span class="phase-meta">4 verifies · 3 repairs</span><span class="phase-summary">Issues narrowed until no findings remained</span>
+              </button>
+              <button type="button" class="phase" data-phase="accept" data-status="done">
+                <span class="phase-status"><span class="phase-dot"></span><span class="phase-state-label">Complete</span></span>
+                <span class="phase-name">Accept</span><span class="phase-meta">3 checks · 0:01</span><span class="phase-summary">Final claim recorded</span>
+              </button>
+            </div>
+          </section>
+
+          <div class="overview-grid">
+            <section aria-labelledby="activity-heading">
+              <div class="section-heading">
+                <h2 id="activity-heading">Activity</h2>
+                <p id="activity-summary" aria-live="polite">6 high-signal events</p>
+                <div class="activity-filters" aria-label="Filter activity">
+                  <button type="button" class="filter-button" data-filter="all" aria-pressed="true">All</button>
+                  <button type="button" class="filter-button" data-filter="agent" aria-pressed="false">Agents</button>
+                  <button type="button" class="filter-button" data-filter="check" aria-pressed="false">Checks</button>
+                  <button type="button" class="filter-button" data-filter="change" aria-pressed="false">Changes</button>
+                </div>
+              </div>
+              <ol class="activity-list" id="activity-list">
+                <li class="activity-item" data-kind="decision">
+                  <span class="activity-time">00:00</span><span class="activity-mark"></span>
+                  <button class="activity-button" type="button" data-open-step="inventory"><span class="activity-title"><span class="activity-kind">Decision</span>Refresh the canonical Agent Skill</span><span class="activity-detail">34 relevant changes since main established the review scope.</span></button>
+                </li>
+                <li class="activity-item" data-kind="agent">
+                  <span class="activity-time">00:01</span><span class="activity-mark"></span>
+                  <button class="activity-button" type="button" data-open-step="author"><span class="activity-title"><span class="activity-kind">Agent</span>Author produced the first patch</span><span class="activity-detail">The initial guidance revision was captured in an isolated worktree.</span></button>
+                </li>
+                <li class="activity-item" data-kind="check">
+                  <span class="activity-time">08:42</span><span class="activity-mark"></span>
+                  <button class="activity-button" type="button" data-open-step="verify0"><span class="activity-title"><span class="activity-kind">Verify</span>One contract error remained</span><span class="activity-detail">The judgePanel description incorrectly claimed that the panel synthesized a result.</span></button>
+                </li>
+                <li class="activity-item" data-kind="change">
+                  <span class="activity-time">14:21</span><span class="activity-mark"></span>
+                  <button class="activity-button" type="button" data-open-step="repair2"><span class="activity-title"><span class="activity-kind">Repair</span>Stdlib semantics corrected</span><span class="activity-detail">Repair 2 updated the canonical command and preserved the focused tests.</span></button>
+                </li>
+                <li class="activity-item" data-kind="check">
+                  <span class="activity-time">23:30</span><span class="activity-mark"></span>
+                  <button class="activity-button" type="button" data-open-step="verify3"><span class="activity-title"><span class="activity-kind">Verify</span>All supported audiences passed</span><span class="activity-detail">The fourth verification completed without a remaining substantiated finding.</span></button>
+                </li>
+                <li class="activity-item" data-kind="change">
+                  <span class="activity-time">23:31</span><span class="activity-mark"></span>
+                  <button class="activity-button" type="button" data-open-step="accept"><span class="activity-title"><span class="activity-kind">Accept</span>Final change merged and claimed</span><span class="activity-detail">Four captured patches were consolidated into the two-file working-tree change.</span></button>
+                </li>
+              </ol>
+            </section>
+
+            <aside aria-labelledby="evidence-heading">
+              <div class="section-heading"><h2 id="evidence-heading">Outcome evidence</h2></div>
+              <div class="evidence-stack" id="evidence-stack">
+                <article class="evidence-card" data-evidence="acceptance"><span class="eyebrow">Acceptance</span><strong>Focused tests and deterministic checks passed</strong><p>Final output and audience verification were accepted after the last repair.</p></article>
+                <article class="evidence-card"><span class="eyebrow">Effective change</span><strong><span class="change-stat">+34 <span class="deletions">−15</span></span> across 2 files</strong><p>Four patch iterations are retained as provenance; Changes shows the cumulative result.</p></article>
+                <article class="evidence-card"><span class="eyebrow">Final claim</span><strong>Updated and verified for all supported agent audiences</strong><p>Recorded by the workflow at acceptance, with the canonical source attached.</p></article>
+                <article class="evidence-card gate-card" data-evidence="gate" hidden><span class="eyebrow">Needs you</span><strong>Approve the final canonical skill update?</strong><p>Acceptance is paused. Review the consolidated diff before the workflow records its final claim.</p><div class="gate-actions"><button class="primary-action" type="button">Review and approve</button><button class="secondary-action" type="button">Open changes</button></div></article>
+              </div>
+            </aside>
+          </div>
+          <p class="prototype-note">Phase progress is milestone-based. No percentage is shown when the workflow has not declared a reliable denominator.</p>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-execution" role="tabpanel" aria-label="Execution" hidden>
+        <div class="panel-inner">
+          <div class="execution-toolbar">
+            <div><h1>Execution</h1><p>Phases first; engine records available on demand.</p></div>
+            <div class="mode-switch" aria-label="Execution density">
+              <button type="button" class="mode-button" data-mode="macro" aria-pressed="true">Key steps</button>
+              <button type="button" class="mode-button" data-mode="all" aria-pressed="false">All 36 records</button>
+            </div>
+          </div>
+          <div class="execution-grid" id="execution-grid">
+            <nav class="execution-nav" aria-label="Workflow phases and steps">
+              <div class="execution-nav-head">
+                <span>Workflow · 4 stages</span>
+                <span class="execution-kind-key" aria-label="Step type legend">
+                  <span class="kind-key-item"><span class="kind-mark" data-execution="agent" aria-hidden="true"></span>Agent</span>
+                  <span class="kind-key-item"><span class="kind-mark" data-execution="program" aria-hidden="true"></span>Programmatic</span>
+                </span>
+              </div>
+              <section class="phase-group" data-phase-group="inventory">
+                <button type="button" class="group-summary" data-status="done" data-select-step="inventory"><span class="group-icon">✓</span><span><span class="group-name">Inventory</span><span class="group-meta"> · 5 tasks</span></span><span class="group-meta">0:01</span></button>
+                <div class="step-list">
+                  <button type="button" class="step-button" data-step="inventory" data-status="done" data-execution="program"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Scope and source inventory</span><span class="step-meta">done</span></button>
+                  <button type="button" class="step-button internal" data-step="git-head" data-status="done" data-execution="program"><span class="step-dot" aria-hidden="true"></span><span class="step-label">git.head</span><span class="step-meta">0:00</span></button>
+                  <button type="button" class="step-button internal" data-step="changed-since" data-status="done" data-execution="program"><span class="step-dot" aria-hidden="true"></span><span class="step-label">git.changedSince</span><span class="step-meta">0:00</span></button>
+                </div>
+              </section>
+              <section class="phase-group" data-phase-group="author">
+                <button type="button" class="group-summary" data-status="done" data-select-step="author"><span class="group-icon">✓</span><span><span class="group-name">Author</span><span class="group-meta"> · 6 steps</span></span><span class="group-meta">patch</span></button>
+                <div class="step-list">
+                  <button type="button" class="step-button" data-step="author" data-status="done" data-execution="agent"><span class="step-dot" aria-hidden="true"></span><span class="step-label">skill:author</span><span class="step-meta">941.9k</span></button>
+                  <button type="button" class="step-button internal" data-step="author-integrate" data-status="done" data-execution="program"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Integrate and validate patch</span><span class="step-meta">5 tasks</span></button>
+                </div>
+              </section>
+              <section class="phase-group" data-phase-group="verification">
+                <button type="button" class="group-summary" data-status="done" data-select-step="repair2"><span class="group-icon">✓</span><span><span class="group-name">Verification loop</span><span class="group-meta"> · 7 agents</span></span><span class="group-meta">3 repairs</span></button>
+                <div class="step-list">
+                  <button type="button" class="step-button" data-step="verify0" data-status="done" data-execution="agent"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Verify 0 · finding</span><span class="step-meta">3.49M</span></button>
+                  <button type="button" class="step-button" data-step="repair1" data-status="done" data-execution="agent"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Repair 1 · patch</span><span class="step-meta">673.3k</span></button>
+                  <button type="button" class="step-button" data-step="verify1" data-status="done" data-execution="agent"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Verify 1 · finding</span><span class="step-meta">1.24M</span></button>
+                  <button type="button" class="step-button" data-step="repair2" data-status="done" data-execution="agent"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Repair 2 · patch</span><span class="step-meta">503.5k</span></button>
+                  <button type="button" class="step-button internal" data-step="repair2-integrate" data-status="done" data-execution="program"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Integrate, snapshot, apply</span><span class="step-meta">3 tasks</span></button>
+                  <button type="button" class="step-button internal" data-step="repair2-checks" data-status="done" data-execution="program"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Output and focused tests</span><span class="step-meta">2 checks</span></button>
+                  <button type="button" class="step-button" data-step="verify2" data-status="done" data-execution="agent"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Verify 2 · finding</span><span class="step-meta">1.16M</span></button>
+                  <button type="button" class="step-button" data-step="repair3" data-status="done" data-execution="agent"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Repair 3 · patch</span><span class="step-meta">765.3k</span></button>
+                  <button type="button" class="step-button" data-step="verify3" data-status="done" data-execution="agent"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Verify 3 · passed</span><span class="step-meta">2.82M</span></button>
+                </div>
+              </section>
+              <section class="phase-group" data-phase-group="accept">
+                <button type="button" class="group-summary" data-status="done" data-select-step="accept"><span class="group-icon">✓</span><span><span class="group-name">Accept</span><span class="group-meta"> · 3 checks</span></span><span class="group-meta">0:01</span></button>
+                <div class="step-list">
+                  <button type="button" class="step-button" data-step="accept" data-status="done" data-execution="program"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Final checks and claim</span><span class="step-meta">done</span></button>
+                  <button type="button" class="step-button internal" data-step="accept-checks" data-status="done" data-execution="program"><span class="step-dot" aria-hidden="true"></span><span class="step-label">Output and tests</span><span class="step-meta">2 checks</span></button>
+                </div>
+              </section>
+            </nav>
+
+            <article class="step-detail" aria-live="polite">
+              <div class="step-heading"><h2 id="step-title">Repair 2</h2><span class="step-type"><span class="kind-mark" id="step-type-mark" data-execution="agent" aria-hidden="true"></span><span id="step-type-label">Agent</span></span><span class="step-state" id="step-state">completed</span></div>
+              <p class="step-kicker" id="step-kicker">Agent step 20 · Verification loop</p>
+              <div class="step-workbench">
+                <div class="step-main">
+                  <section class="result-card">
+                    <span class="eyebrow">Outcome</span>
+                    <h3 id="step-result-title">Corrected the remaining stdlib semantics</h3>
+                    <p id="step-result-summary">Updated judgePanel guidance to state that panel scoring returns the highest-ranked existing attempt; it does not synthesize a new result.</p>
+                    <div class="chip-row" id="step-files"><span class="chip">packages/cli/src/commands/skill.ts</span><span class="chip">patch captured</span></div>
+                  </section>
+                  <section class="step-section">
+                    <h3>Activity · <span id="activity-count">7 events</span></h3>
+                    <div class="mini-activity" id="step-activity"></div>
+                  </section>
+                </div>
+                <aside class="step-inspector" aria-label="Selected step inspector">
+                  <div class="inspector-head">Properties</div>
+                  <div class="step-facts" aria-label="Selected step facts">
+                    <div class="step-fact"><span class="step-fact-label">Execution</span><span class="step-fact-value" id="fact-kind">Agent step</span></div>
+                    <div class="step-fact"><span class="step-fact-label">Duration</span><span class="step-fact-value" id="fact-duration">01:33</span></div>
+                    <div class="step-fact"><span class="step-fact-label">Usage</span><span class="step-fact-value" id="fact-usage">503,514 tok</span></div>
+                    <div class="step-fact"><span class="step-fact-label">Provider</span><span class="step-fact-value" id="fact-provider">codex · medium</span></div>
+                  </div>
+                  <details open>
+                    <summary>Scheduled input · repair prompt and audit evidence</summary>
+                    <pre class="payload" id="step-input">Repair round 2 for Weft's canonical Agent Skill.
+
+Scope: packages/cli/src/commands/skill.ts, packages/cli/src/main.ts, packages/cli/test/cli.test.ts
+Finding: judgePanel selects the highest-ranked existing attempt; it does not synthesize a new result.
+Return disposition=updated when files changed.</pre>
+                  </details>
+                  <details>
+                    <summary id="transcript-summary">Recorded activity · 7 events</summary>
+                    <pre class="payload" id="step-transcript">Assistant · inspected scoped sources
+Exec · source search · exit 1
+Assistant · narrowed the inspection
+Exec · focused source reads · exit 0
+Files · update packages/cli/src/commands/skill.ts
+Exec · git diff --check · exit 0
+Assistant · returned schema-validated outcome</pre>
+                  </details>
+                </aside>
+              </div>
+            </article>
+          </div>
+          <footer class="execution-statusbar" aria-label="Execution status">
+            <span>✓ run accepted</span>
+            <span class="status-step"><span class="kind-mark" id="status-type-mark" data-execution="agent" aria-hidden="true"></span><span id="status-step">Agent · Repair 2</span></span>
+            <span class="status-spacer"></span>
+            <span id="status-provider">codex · medium</span>
+            <span id="status-usage">503,514 tok</span>
+            <span>worktree</span>
+          </footer>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-changes" role="tabpanel" aria-label="Changes" hidden>
+        <div class="panel-inner">
+          <div class="section-heading"><h2>Effective change</h2><p>One cumulative diff; four iteration patches retained as provenance.</p></div>
+          <div class="changes-grid">
+            <aside class="file-tree">
+              <div class="file-tree-head"><strong>2 changed files</strong><span class="change-stat">+34 <span class="deletions">−15</span></span></div>
+              <div class="file-tree-body">
+                <button type="button" class="file-button" data-file="skill" aria-current="true"><span class="file-path">packages/cli/src/commands/skill.ts</span><span class="file-stat">+20 −12</span></button>
+                <button type="button" class="file-button" data-file="test" aria-current="false"><span class="file-path">packages/cli/test/cli.test.ts</span><span class="file-stat">+14 −3</span></button>
+              </div>
+              <div class="file-tree-foot">
+                <strong>Merged into the working tree.</strong>
+                <details class="provenance"><summary>Patch lineage · 4 captured / 4 merged</summary><ul><li>Author · initial patch</li><li>Repair 1 · focused correction</li><li>Repair 2 · stdlib semantics</li><li>Repair 3 · final audience guidance</li></ul></details>
+              </div>
+            </aside>
+            <section class="diff-view" aria-live="polite">
+              <div class="diff-head"><strong class="mono" id="diff-path">packages/cli/src/commands/skill.ts</strong><span class="change-stat" id="diff-stat">+20 <span class="deletions">−12</span></span><span class="mono">unified</span></div>
+              <div class="diff-body" id="diff-body" aria-label="Selected file diff"></div>
+              <div class="diff-foot">4 patches captured · 4 merged · final working-tree projection</div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="panel-outputs" role="tabpanel" aria-label="Outputs" hidden>
+        <div class="panel-inner outputs-grid">
+          <section aria-labelledby="decisions-title">
+            <div class="section-heading"><h2 id="decisions-title">Decisions and claims</h2><p>Human-readable workflow outputs, linked to their evidence.</p></div>
+            <div class="output-list">
+              <article class="output-item"><div class="output-item-top"><span class="output-type">Decision</span><span class="output-meta">Inventory · 00:00</span></div><h3>Refresh Weft's canonical Agent Skill</h3><p>34 relevant changes since main established the source revision and bounded the work.</p></article>
+              <article class="output-item"><div class="output-item-top"><span class="output-type">Claim</span><span class="output-meta">Accept · 23:31</span></div><h3>Updated and verified for all supported agent audiences</h3><p>Final acceptance points to the canonical source and the completed Codex verification.</p></article>
+              <article class="output-item"><div class="output-item-top"><span class="output-type">Change set</span><span class="output-meta">4 patches merged</span></div><h3>Two-file cumulative working-tree change</h3><p><span class="change-stat">+34 <span class="deletions">−15</span></span>. Open Changes to review the effective result instead of each intermediate patch.</p></article>
+            </div>
+          </section>
+          <aside aria-labelledby="artifacts-title">
+            <div class="section-heading"><h2 id="artifacts-title">Durable artifacts</h2></div>
+            <div class="empty-output"><strong>No standalone deliverables</strong><p>This run produced code patches, not reports or documents. Intermediate patches stay attached to their execution steps and are consolidated in Changes.</p></div>
+            <div class="evidence-card" style="margin-top:10px"><span class="eyebrow">Provenance</span><strong>4 content-addressed patches retained</strong><p>Author, Repair 1, Repair 2, and Repair 3 remain inspectable without competing with the final output.</p></div>
+          </aside>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const tabs = [...document.querySelectorAll('[data-tab]')];
+      const panels = [...document.querySelectorAll('[role="tabpanel"]')];
+      const executionGrid = document.getElementById('execution-grid');
+
+      function selectTab(name) {
+        tabs.forEach((tab) => tab.setAttribute('aria-selected', String(tab.dataset.tab === name)));
+        panels.forEach((panel) => { panel.hidden = panel.id !== `panel-${name}`; });
+        document.body.classList.toggle('execution-active', name === 'execution');
+      }
+
+      tabs.forEach((tab) => tab.addEventListener('click', () => selectTab(tab.dataset.tab)));
+
+      const scenarios = {
+        done: {
+          header: 'done · 7 h', headerMeta: '36 steps · 23:31 · 11.6M tok', stateLabel: 'Accepted',
+          title: 'Canonical Agent Skill updated and verified',
+          description: 'The workflow corrected the remaining stdlib guidance error, verified all supported agent audiences, and merged the final two-file change into the working tree.',
+          steps: '36 steps', phases: '4 workflow stages', elapsed: '23:31', tokens: '11.6M tok', caption: 'All declared milestones completed',
+          phaseStates: ['done', 'done', 'done', 'done']
+        },
+        running: {
+          header: 'running · 12:44', headerMeta: '24 steps recorded · 12:44 · 7.8M tok', stateLabel: 'Verifying',
+          title: 'Verifying the revised Agent Skill',
+          description: 'Inventory and authoring are complete. The workflow is in its second repair cycle, with one agent active and later milestones not yet scheduled.',
+          steps: '24 recorded', phases: '2 complete · 1 active', elapsed: '12:44', tokens: '7.8M tok', caption: 'Verification loop active · repair 2 in progress',
+          phaseStates: ['done', 'done', 'active', 'pending']
+        },
+        waiting: {
+          header: 'waiting on you', headerMeta: '35 steps recorded · 23:30 · 11.6M tok', stateLabel: 'Needs input',
+          title: 'Final acceptance needs your review',
+          description: 'The verification loop completed successfully. The workflow is paused before recording its final claim and merging the consolidated change.',
+          steps: '35 recorded', phases: '3 complete · 1 waiting', elapsed: '23:30', tokens: '11.6M tok', caption: 'Accept is waiting on a human decision',
+          phaseStates: ['done', 'done', 'done', 'waiting']
+        }
+      };
+
+      function setScenario(name) {
+        const scenario = scenarios[name];
+        document.querySelectorAll('[data-scenario]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.scenario === name)));
+        const headerStatus = document.getElementById('header-status');
+        headerStatus.textContent = scenario.header;
+        headerStatus.dataset.state = name;
+        document.getElementById('header-meta').textContent = scenario.headerMeta;
+        document.getElementById('outcome-title').textContent = scenario.title;
+        document.getElementById('outcome-description').textContent = scenario.description;
+        const outcomeState = document.getElementById('outcome-state');
+        outcomeState.textContent = scenario.stateLabel;
+        outcomeState.dataset.state = name;
+        document.getElementById('metric-steps').textContent = scenario.steps;
+        document.getElementById('metric-phases').textContent = scenario.phases;
+        document.getElementById('metric-elapsed').textContent = scenario.elapsed;
+        document.getElementById('metric-tokens').textContent = scenario.tokens;
+        document.getElementById('progress-caption').textContent = scenario.caption;
+        [...document.querySelectorAll('.phase')].forEach((phase, index) => {
+          const status = scenario.phaseStates[index];
+          phase.dataset.status = status;
+          phase.querySelector('.phase-state-label').textContent = status === 'done' ? 'Complete' : status === 'active' ? 'Active now' : status === 'waiting' ? 'Needs you' : 'Not started';
+        });
+        document.querySelector('[data-evidence="acceptance"]').hidden = name === 'waiting';
+        document.querySelector('[data-evidence="gate"]').hidden = name !== 'waiting';
+      }
+
+      document.querySelectorAll('[data-scenario]').forEach((button) => button.addEventListener('click', () => setScenario(button.dataset.scenario)));
+
+      const phaseToStep = { inventory: 'inventory', author: 'author', verification: 'repair2', accept: 'accept' };
+      document.querySelectorAll('[data-phase]').forEach((phase) => phase.addEventListener('click', () => {
+        selectTab('execution');
+        selectStep(phaseToStep[phase.dataset.phase]);
+      }));
+
+      document.querySelectorAll('[data-open-step]').forEach((button) => button.addEventListener('click', () => {
+        selectTab('execution');
+        selectStep(button.dataset.openStep);
+      }));
+
+      document.querySelectorAll('[data-select-step]').forEach((button) => button.addEventListener('click', () => selectStep(button.dataset.selectStep)));
+      document.querySelectorAll('[data-step]').forEach((button) => button.addEventListener('click', () => selectStep(button.dataset.step)));
+
+      const stepDetails = {
+        inventory: { title: 'Inventory', kicker: 'Task group · Source discovery', result: 'Established the bounded source and change scope', summary: 'Recorded the source revision, identified 34 relevant changes since main, and selected the canonical skill and focused tests for review.', files: ['source 1e7c7d2', '34 relevant changes'], kind: 'task group', duration: '00:01', usage: '—', provider: 'runtime', input: 'Resolve source revision, changed files, and the canonical Agent Skill entrypoint before authoring.', transcript: 'git.head · exit 0\ngit.changedSince · 34 changes\nglob · canonical sources found' },
+        author: { title: 'Author', kicker: 'Agent step 6 · Author', result: 'Produced the first canonical skill patch', summary: 'Reconciled the Agent Skill with current CLI, SDK, runtime, testing, MCP, and portability behavior.', files: ['packages/cli/src/commands/skill.ts', 'patch captured'], kind: 'agent', duration: '04:11', usage: '941,900 tok', provider: 'codex · medium', input: 'Author the canonical Agent Skill from current Weft sources and focused tests.', transcript: 'Assistant · inspected current Weft contracts\nFiles · authored canonical skill guidance\nCheck · focused tests passed\nPatch · captured in isolated worktree' },
+        verify0: { title: 'Verify 0', kicker: 'Agent step 12 · Verification loop', result: 'Found one remaining stdlib contract error', summary: 'The skill was otherwise source-backed, but judgePanel was described as synthesizing a result instead of returning the highest-ranked existing attempt.', files: ['minor finding', 'packages/stdlib/src/judge.ts'], kind: 'agent', duration: '06:24', usage: '3,487,900 tok', provider: 'codex · medium', input: 'Independently audit the generated Agent Skill for every supported audience.', transcript: 'Audit · compared skill claims with current sources\nFinding · incorrect-stdlib-semantics\nVerdict · not ready' },
+        repair1: { title: 'Repair 1', kicker: 'Agent step 13 · Verification loop', result: 'Applied the first focused repair', summary: 'Narrowed the guidance in response to the independent audit and preserved the validated sections.', files: ['patch captured', 'focused tests passed'], kind: 'agent', duration: '02:03', usage: '673,300 tok', provider: 'codex · medium', input: 'Repair every substantiated finding without broadening scope.', transcript: 'Assistant · mapped finding to canonical source\nFiles · updated focused guidance\nCheck · passed' },
+        verify1: { title: 'Verify 1', kicker: 'Agent step 19 · Verification loop', result: 'Verification narrowed the remaining discrepancy', summary: 'A second audit confirmed the repair direction and isolated the final semantics wording that still needed correction.', files: ['1 remaining finding', 'source-backed evidence'], kind: 'agent', duration: '03:17', usage: '1,241,500 tok', provider: 'codex · medium', input: 'Re-audit the repaired skill against the current implementation.', transcript: 'Audit · current source comparison\nFinding · localized wording mismatch\nVerdict · repair required' },
+        repair2: { title: 'Repair 2', kicker: 'Agent step 20 · Verification loop', result: 'Corrected the remaining stdlib semantics', summary: 'Updated judgePanel guidance to state that panel scoring returns the highest-ranked existing attempt; it does not synthesize a new result.', files: ['packages/cli/src/commands/skill.ts', 'patch captured'], kind: 'agent', duration: '01:33', usage: '503,514 tok', provider: 'codex · medium', input: "Repair round 2 for Weft's canonical Agent Skill.\n\nScope: packages/cli/src/commands/skill.ts, packages/cli/src/main.ts, packages/cli/test/cli.test.ts\nFinding: judgePanel selects the highest-ranked existing attempt; it does not synthesize a new result.\nReturn disposition=updated when files changed.", transcript: 'Assistant · inspected scoped sources\nExec · source search · exit 1\nAssistant · narrowed the inspection\nExec · focused source reads · exit 0\nFiles · update packages/cli/src/commands/skill.ts\nExec · git diff --check · exit 0\nAssistant · returned schema-validated outcome' },
+        verify2: { title: 'Verify 2', kicker: 'Agent step 26 · Verification loop', result: 'Audience guidance required one final repair', summary: 'The implementation semantics were now correct; verification identified one final audience-facing clarification before acceptance.', files: ['1 audience finding', 'no runtime defect'], kind: 'agent', duration: '02:58', usage: '1,162,300 tok', provider: 'codex · medium', input: 'Verify correctness and portability for supported agent audiences.', transcript: 'Audit · audience-by-audience pass\nFinding · final guidance clarification\nVerdict · one repair required' },
+        repair3: { title: 'Repair 3', kicker: 'Agent step 27 · Verification loop', result: 'Completed the final audience-focused repair', summary: 'Aligned the remaining guidance with the canonical command and retained the already-correct runtime and testing material.', files: ['patch captured', 'final repair'], kind: 'agent', duration: '02:14', usage: '765,300 tok', provider: 'codex · medium', input: 'Apply the final substantiated verification finding and preserve correct guidance.', transcript: 'Assistant · reviewed final finding\nFiles · updated canonical command\nChecks · deterministic and focused tests passed' },
+        verify3: { title: 'Verify 3', kicker: 'Agent step 33 · Verification loop', result: 'All supported audiences passed', summary: 'The final independent verification found no remaining substantiated issue and accepted the canonical skill for every supported audience.', files: ['accepted', 'no findings'], kind: 'agent', duration: '03:02', usage: '2,815,900 tok', provider: 'codex · medium', input: 'Perform the final independent audit against current Weft sources.', transcript: 'Audit · Codex audience passed\nAudit · Claude Code audience passed\nAudit · other agents audience passed\nVerdict · ready' },
+        accept: { title: 'Accept', kicker: 'Final task group · Acceptance', result: 'Recorded the final claim and consolidated change', summary: "Weft's canonical Agent Skill was updated and verified for all supported agent audiences. Four patches were merged into the two-file working-tree result.", files: ['2 files changed', '4 patches merged', 'claim recorded'], kind: 'task group', duration: '00:01', usage: '—', provider: 'runtime', input: 'Run final output and focused test checks, then record the acceptance claim.', transcript: 'Check · skill output passed\nCheck · focused tests passed\nNote · final claim recorded' }
+      };
+
+      const aliases = { 'git-head': 'inventory', 'changed-since': 'inventory', 'author-integrate': 'author', 'repair2-integrate': 'repair2', 'repair2-checks': 'repair2', 'accept-checks': 'accept' };
+
+      function renderStepActivity(transcript) {
+        const lines = transcript.split('\n').filter(Boolean);
+        const activity = document.getElementById('step-activity');
+        activity.replaceChildren(...lines.map((line, index) => {
+          const [kind, ...parts] = line.split(' · ');
+          const exitPart = parts.find((part) => /^exit \d+$/.test(part));
+          const event = document.createElement('div');
+          const typeMark = document.createElement('span');
+          const kindNode = document.createElement('span');
+          const stateNode = document.createElement('span');
+          const textNode = document.createElement('span');
+          const executionType = ['Assistant', 'Audit', 'Finding', 'Verdict'].includes(kind) ? 'agent' : 'program';
+          let state = exitPart || (kind === 'Files' ? 'updated' : kind === 'Finding' ? 'finding' : kind === 'Verdict' ? 'verdict' : kind === 'Check' || kind === 'Checks' ? 'check' : kind === 'Audit' ? 'audit' : index === lines.length - 1 ? 'complete' : 'recorded');
+          const text = parts.filter((part) => part !== exitPart).join(' · ');
+          event.className = 'mini-event';
+          event.dataset.execution = executionType;
+          typeMark.className = 'kind-mark';
+          typeMark.dataset.execution = executionType;
+          typeMark.setAttribute('aria-hidden', 'true');
+          kindNode.className = 'mini-event-kind';
+          stateNode.className = `mini-event-state${state === 'exit 1' || state === 'finding' ? ' error' : ''}`;
+          textNode.className = 'mini-event-text';
+          kindNode.textContent = kind;
+          stateNode.textContent = state;
+          textNode.textContent = text;
+          event.append(typeMark, kindNode, stateNode, textNode);
+          return event;
+        }));
+        document.getElementById('activity-count').textContent = `${lines.length} event${lines.length === 1 ? '' : 's'}`;
+      }
+
+      function selectStep(requested) {
+        const key = aliases[requested] || requested;
+        const detail = stepDetails[key] || stepDetails.repair2;
+        const requestedButton = [...document.querySelectorAll('[data-step]')].find((button) => button.dataset.step === requested);
+        const executionType = requestedButton?.dataset.execution || (detail.kind === 'agent' ? 'agent' : 'program');
+        const executionLabel = executionType === 'agent' ? 'Agent' : 'Programmatic';
+        document.querySelectorAll('[data-step]').forEach((button) => button.setAttribute('aria-current', button.dataset.step === requested ? 'step' : 'false'));
+        document.getElementById('step-title').textContent = detail.title;
+        document.getElementById('step-type-mark').dataset.execution = executionType;
+        document.getElementById('step-type-label').textContent = executionLabel;
+        document.getElementById('step-kicker').textContent = detail.kicker;
+        document.getElementById('step-result-title').textContent = detail.result;
+        document.getElementById('step-result-summary').textContent = detail.summary;
+        document.getElementById('step-files').innerHTML = detail.files.map((file) => `<span class="chip">${file}</span>`).join('');
+        document.getElementById('fact-kind').textContent = `${executionLabel} step`;
+        document.getElementById('fact-duration').textContent = detail.duration;
+        document.getElementById('fact-usage').textContent = detail.usage;
+        document.getElementById('fact-provider').textContent = detail.provider;
+        document.getElementById('status-type-mark').dataset.execution = executionType;
+        document.getElementById('status-step').textContent = `${executionLabel} · ${detail.title}`;
+        document.getElementById('status-provider').textContent = detail.provider;
+        document.getElementById('status-usage').textContent = detail.usage;
+        document.getElementById('step-input').textContent = detail.input;
+        document.getElementById('step-transcript').textContent = detail.transcript;
+        document.getElementById('transcript-summary').textContent = `Recorded activity · ${detail.transcript.split('\n').length} events`;
+        renderStepActivity(detail.transcript);
+      }
+
+      document.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', () => {
+        const all = button.dataset.mode === 'all';
+        executionGrid.classList.toggle('show-all', all);
+        document.querySelectorAll('[data-mode]').forEach((candidate) => candidate.setAttribute('aria-pressed', String(candidate === button)));
+      }));
+
+      document.querySelectorAll('.step-button').forEach((button) => {
+        const executionLabel = button.dataset.execution === 'agent' ? 'Agent' : 'Programmatic';
+        const label = button.querySelector('.step-label').textContent;
+        const meta = button.querySelector('.step-meta').textContent;
+        button.setAttribute('aria-label', `${executionLabel} step: ${label}. ${meta}`);
+      });
+
+      document.querySelectorAll('[data-filter]').forEach((button) => button.addEventListener('click', () => {
+        const filter = button.dataset.filter;
+        let visible = 0;
+        document.querySelectorAll('.activity-item').forEach((item) => {
+          item.hidden = filter !== 'all' && item.dataset.kind !== filter;
+          if (!item.hidden) visible += 1;
+        });
+        document.querySelectorAll('[data-filter]').forEach((candidate) => candidate.setAttribute('aria-pressed', String(candidate === button)));
+        document.getElementById('activity-summary').textContent = `${visible} high-signal event${visible === 1 ? '' : 's'}`;
+      }));
+
+      const diffs = {
+        skill: {
+          path: 'packages/cli/src/commands/skill.ts', stat: '+20 −12',
+          lines: [
+            ['context','50','50',' ','# Weft'],
+            ['remove','53','','-','fans out and joins, ctx.pipeline runs independent lanes, if on a typed field is a'],
+            ['remove','54','','-','conditional edge, while is a bounded loop. There is no graph DSL to keep in sync.'],
+            ['add','','53','+','fans out and joins, ctx.pipeline runs independent lanes, and if on a typed field is a'],
+            ['add','','54','+','conditional edge. Use ordinary TypeScript loops, but give them an explicit bound or a'],
+            ['add','','55','+','journaled stopping condition. There is no graph DSL to keep in sync.'],
+            ['context','408','408',' ','| Function | What it does |'],
+            ['remove','411','','-','| judgePanel(...) | independent attempts from different angles, scored, best synthesized |'],
+            ['add','','411','+','| judgePanel(...) | independent attempts, panel-scored; highest-ranked existing attempt returned |']
+          ]
+        },
+        test: {
+          path: 'packages/cli/test/cli.test.ts', stat: '+14 −3',
+          lines: [
+            ['context','520','520',' ','it("prints a standalone Agent Skill", async () => {'],
+            ['add','','521','+','  const skill = await runCli(["skill"]);'],
+            ['add','','522','+','  expect(skill.stdout).toContain("highest-ranked existing attempt");'],
+            ['add','','523','+','  expect(skill.stdout).not.toContain("best synthesized");'],
+            ['context','524','524',' ','  expect(skill.exitCode).toBe(0);'],
+            ['context','525','525',' ','});']
+          ]
+        }
+      };
+
+      function renderDiff(key) {
+        const diff = diffs[key];
+        document.getElementById('diff-path').textContent = diff.path;
+        document.getElementById('diff-stat').innerHTML = `${diff.stat.split(' ')[0]} <span class="deletions">${diff.stat.split(' ')[1]}</span>`;
+        const body = document.getElementById('diff-body');
+        body.innerHTML = '';
+        diff.lines.forEach(([kind, oldNo, newNo, sign, text]) => {
+          const row = document.createElement('div');
+          row.className = `diff-row ${kind}`;
+          [oldNo, newNo, sign, text].forEach((value, index) => {
+            const span = document.createElement('span');
+            if (index < 2) span.className = 'line-no';
+            span.textContent = value;
+            row.appendChild(span);
+          });
+          body.appendChild(row);
+        });
+        document.querySelectorAll('[data-file]').forEach((button) => button.setAttribute('aria-current', String(button.dataset.file === key)));
+      }
+
+      document.querySelectorAll('[data-file]').forEach((button) => button.addEventListener('click', () => renderDiff(button.dataset.file)));
+      document.querySelector('.gate-card .secondary-action').addEventListener('click', () => selectTab('changes'));
+
+      tabs.forEach((tab, index) => tab.addEventListener('keydown', (event) => {
+        if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+        event.preventDefault();
+        const direction = event.key === 'ArrowRight' ? 1 : -1;
+        const next = tabs[(index + direction + tabs.length) % tabs.length];
+        next.focus();
+        selectTab(next.dataset.tab);
+      }));
+
+      selectStep('repair2');
+      renderDiff('skill');
+    })();
+  </script>
+</body>
+</html>

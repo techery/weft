@@ -1,0 +1,28 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - link "w weft" [ref=e6] [cursor=pointer]:
+      - /url: /queue
+      - generic [ref=e7]: w
+      - generic [ref=e8]: weft
+    - navigation [ref=e9]:
+      - link "Queue" [ref=e10] [cursor=pointer]:
+        - /url: /queue
+      - link "Runs" [ref=e11] [cursor=pointer]:
+        - /url: /runs
+      - link "Workflows" [ref=e12] [cursor=pointer]:
+        - /url: /workflows
+      - link "Settings" [ref=e13] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=e14]: daemon · 127.0.0.1:4788
+  - generic [ref=e18]:
+    - generic [ref=e19]:
+      - heading "Queue" [level=1] [ref=e20]
+      - generic [ref=e21]: quick start
+    - generic [ref=e24]:
+      - generic [ref=e25]:
+        - generic [ref=e26]: Waiting on you · 0
+        - generic [ref=e28]: blocks the run until answered
+      - generic [ref=e29]: loading…
+    - generic [ref=e30]:
+      - generic [ref=e31]: Running · 0
+      - generic [ref=e34]: loading…

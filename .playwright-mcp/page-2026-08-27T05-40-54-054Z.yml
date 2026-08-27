@@ -1,0 +1,23 @@
+- generic [ref=f15e3]:
+  - banner [ref=f15e4]:
+    - generic [ref=f15e5]:
+      - link "w weft" [ref=f15e6] [cursor=pointer]:
+        - /url: /queue
+        - generic [ref=f15e7]: w
+        - generic [ref=f15e8]: weft
+      - generic [ref=f15e9]: weft
+    - navigation [ref=f15e10]:
+      - link "Queue" [ref=f15e11] [cursor=pointer]:
+        - /url: /queue
+      - link "Runs" [ref=f15e12] [cursor=pointer]:
+        - /url: /runs
+      - link "Workflows" [ref=f15e13] [cursor=pointer]:
+        - /url: /workflows
+      - link "Settings" [ref=f15e14] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=f15e15]: daemon · 127.0.0.1:4788
+  - generic [ref=f15e19]:
+    - generic [ref=f15e20]:
+      - heading "Workflows" [level=1] [ref=f15e21]
+      - generic [ref=f15e22]: .weft/workflows/
+    - paragraph [ref=f15e24]: Reading the registry…

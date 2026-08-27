@@ -40,3 +40,23 @@
   color: var(--color-surface);
   border-color: var(--color-accent);
 }
+@media (max-width: 560px) {
+  .row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 5px 10px;
+  }
+  .tier {
+    width: auto;
+  }
+  .ops {
+    grid-row: 2;
+    min-width: 0;
+    font-size: 10px;
+  }
+  .modes {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: center;
+  }
+}

@@ -23,6 +23,7 @@ import {
   validateSchema,
   z,
 } from "@techery/weft-sdk";
+import { defineResultView } from "@techery/weft-sdk/ui";
 import { describe, expect, test } from "vitest";
 
 describe("duration", () => {
@@ -487,6 +488,23 @@ describe("reusable workflow definitions", () => {
       /definePrompt/,
     );
     expect(() => defineStep({ name: "step", run: undefined as never })).toThrow(/run/);
+  });
+});
+
+describe("custom UI JSON boundary", () => {
+  test("accepts named JSON props and rejects non-JSON props at type-check time", () => {
+    interface CardProps {
+      title: string;
+      details?: { count: number };
+    }
+    const card = defineResultView<CardProps>({ id: "card", component: () => null });
+    expect(card.revision).toBe("auto");
+
+    // @ts-expect-error Date cannot cross the custom UI JSON boundary
+    defineResultView<{ createdAt: Date }>({
+      id: "invalid-date",
+      component: () => null,
+    });
   });
 });
 

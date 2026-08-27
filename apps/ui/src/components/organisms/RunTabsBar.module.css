@@ -3,9 +3,16 @@
   display: flex;
   align-items: stretch;
   gap: 2px;
+  height: 44px;
+  box-sizing: border-box;
   padding: 0 18px;
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-divider);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.bar::-webkit-scrollbar {
+  display: none;
 }
 .tab {
   appearance: none;
@@ -15,15 +22,24 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 9px 13px;
+  padding: 0 13px;
   background: none;
   font-size: 13px;
   border-bottom: 2px solid transparent;
   font-weight: 500;
   color: var(--color-neutral-600);
+  white-space: nowrap;
 }
 .on {
   border-bottom-color: var(--color-accent);
   font-weight: 600;
   color: var(--color-text);
+}
+@media (max-width: 700px) {
+  .bar {
+    padding: 0 8px;
+  }
+  .tab {
+    padding: 0 10px;
+  }
 }

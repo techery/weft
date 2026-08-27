@@ -1,4 +1,6 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
+import { api } from "~/api/client";
+import type { UiPresentation } from "~/api/types";
 import { Button } from "~/components/atoms/Button";
 import { FactCell } from "~/components/atoms/FactCell";
 import { Kicker } from "~/components/atoms/Kicker";
@@ -34,6 +36,9 @@ export function StepPane({ run, step, stepId, onSelectStep, onGoToGate }: Props)
   const logTabId = useId();
   const stepPanelId = useId();
   const logPanelId = useId();
+  // `ctx.ui.render` completes with `null`, while the durable JSON that produced
+  // its view lives in the presentation props.
+  const presentationIsOutput = step.presentation !== undefined && step.outValue === null;
 
   return (
     <div className={styles.pane}>
@@ -137,14 +142,22 @@ export function StepPane({ run, step, stepId, onSelectStep, onGoToGate }: Props)
                 />
               </div>
             ) : null}
-            <DataPane
-              title={step.outTitle}
-              note={step.outNote}
-              value={step.outValue}
-              schema={step.outSchema}
-              lines={step.out}
-              streaming={step.streaming}
-            />
+            {presentationIsOutput && step.presentation ? (
+              <PresentationOutputPane
+                key={step.presentation.props.hash}
+                title={step.outTitle}
+                presentation={step.presentation}
+              />
+            ) : (
+              <DataPane
+                title={step.outTitle}
+                note={step.outNote}
+                value={step.outValue}
+                schema={step.outSchema}
+                lines={step.out}
+                streaming={step.streaming}
+              />
+            )}
 
             {step.tools.length > 0 ? (
               <div className={styles.tools}>
@@ -179,5 +192,44 @@ export function StepPane({ run, step, stepId, onSelectStep, onGoToGate }: Props)
         </Button>
       </div>
     </div>
+  );
+}
+
+function PresentationOutputPane({ title, presentation }: { title: string; presentation: UiPresentation }) {
+  const initialValue = "inline" in presentation.props ? presentation.props.inline : undefined;
+  const propsRef = "ref" in presentation.props ? presentation.props.ref.$blob : "";
+  const [value, setValue] = useState<unknown>(initialValue);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(initialValue === undefined);
+
+  useEffect(() => {
+    if (propsRef === "") return;
+    let current = true;
+    void api
+      .blobJson(propsRef)
+      .then((props) => {
+        if (!current) return;
+        setValue(props);
+        setLoading(false);
+      })
+      .catch((cause: unknown) => {
+        if (!current) return;
+        setError(cause instanceof Error ? cause.message : String(cause));
+        setLoading(false);
+      });
+    return () => {
+      current = false;
+    };
+  }, [propsRef]);
+
+  return (
+    <DataPane
+      title={title}
+      note="rendered by workflow view"
+      value={value}
+      schema={null}
+      lines={error ? [error] : loading ? ["Loading presentation JSON…"] : []}
+      streaming={loading}
+    />
   );
 }

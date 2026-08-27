@@ -12,9 +12,14 @@
   cursor: pointer;
   background: var(--color-surface);
   color: inherit;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
 }
 .row:hover {
   border-color: var(--color-accent-400);
+  box-shadow: var(--shadow-sm);
 }
 .on {
   border-color: var(--color-accent-500);
@@ -120,6 +125,11 @@
 .successMetric {
   width: 176px;
 }
+@media (max-width: 900px) {
+  .identity {
+    width: 250px;
+  }
+}
 @media (max-width: 700px) {
   .top {
     flex-direction: column;
@@ -142,5 +152,9 @@
   }
   .successMetric {
     width: 50%;
+  }
+  .action,
+  .action button {
+    width: 100%;
   }
 }

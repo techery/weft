@@ -14,7 +14,6 @@ type FrameStatus = "loading" | "ready" | "error" | "disabled";
 
 const MAX_FRAME_MESSAGE_BYTES = 64 * 1024;
 const MIN_HEIGHT = 80;
-const MAX_HEIGHT = 720;
 const READY_TIMEOUT_MS = 5_000;
 
 function jsonByteSize(value: unknown): number | undefined {
@@ -33,7 +32,6 @@ export function WorkflowViewFrame({ runId, presentation, onCandidate }: Props) {
   const initialization = useRef(0);
   const generation = useRef(0);
   const readyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastResize = useRef(0);
   const [status, setStatus] = useState<FrameStatus>("loading");
   const [height, setHeight] = useState(180);
   const [message, setMessage] = useState("");
@@ -109,11 +107,16 @@ export function WorkflowViewFrame({ runId, presentation, onCandidate }: Props) {
           if (readyTimer.current) clearTimeout(readyTimer.current);
           readyTimer.current = null;
           setStatus("ready");
-        } else if (data.type === "resize" && typeof data.height === "number") {
-          const now = performance.now();
-          if (now - lastResize.current < 50) return;
-          lastResize.current = now;
-          setHeight(Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, Math.ceil(data.height))));
+        } else if (
+          data.type === "resize" &&
+          typeof data.height === "number" &&
+          Number.isFinite(data.height)
+        ) {
+          // The gate pane owns scrolling, so the embedded view should occupy the height its
+          // content requested instead of introducing a second clipped scrolling surface.
+          // ResizeObserver already coalesces layout work; dropping a close-following update
+          // here could preserve the pre-React height and clip the completed view.
+          setHeight(Math.max(MIN_HEIGHT, Math.ceil(data.height)));
         } else if (data.type === "candidate" && presentation.mode === "input") {
           if (jsonByteSize(data.answer) === undefined) return;
           onCandidate?.(data.answer);

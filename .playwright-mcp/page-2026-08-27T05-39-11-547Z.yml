@@ -1,0 +1,135 @@
+- generic [ref=f4e3]:
+  - banner [ref=f4e4]:
+    - generic [ref=f4e5]:
+      - link "w weft" [ref=f4e6] [cursor=pointer]:
+        - /url: /queue
+        - generic [ref=f4e7]: w
+        - generic [ref=f4e8]: weft
+      - generic [ref=f4e9]: weft
+    - navigation [ref=f4e10]:
+      - link "Queue" [ref=f4e11] [cursor=pointer]:
+        - /url: /queue
+      - link "Runs" [ref=f4e12] [cursor=pointer]:
+        - /url: /runs
+      - link "Workflows" [ref=f4e13] [cursor=pointer]:
+        - /url: /workflows
+      - link "Settings" [ref=f4e14] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=f4e15]: daemon · 127.0.0.1:4788
+  - generic [ref=f4e19]:
+    - generic [ref=f4e20]:
+      - heading "Runs" [level=1] [ref=f4e21]
+      - generic [ref=f4e22]: 11 runs in the journal window
+      - generic [ref=f4e24]:
+        - button "All" [pressed] [ref=f4e25] [cursor=pointer]
+        - button "Needs you" [ref=f4e26] [cursor=pointer]
+        - button "Running" [ref=f4e27] [cursor=pointer]
+        - button "Finished" [ref=f4e28] [cursor=pointer]
+    - generic [ref=f4e29]:
+      - generic [ref=f4e30]:
+        - generic [ref=f4e31]: Run
+        - generic [ref=f4e32]: Where it stands
+        - generic [ref=f4e33]: State
+        - generic [ref=f4e34]: Started
+        - generic [ref=f4e35]: Elapsed
+        - generic [ref=f4e36]: Cost
+      - button "2274fe1e ensure-code-coverage finished 5 steps done 12:12 AM 00:58 $0.00" [ref=f4e37] [cursor=pointer]:
+        - generic [ref=f4e38]:
+          - generic [ref=f4e40]: 2274fe1e
+          - generic [ref=f4e41]: ensure-code-coverage
+        - generic [ref=f4e42]: finished 5 steps
+        - generic [ref=f4e43]: done
+        - generic [ref=f4e44]: 12:12 AM
+        - generic [ref=f4e45]: 00:58
+        - generic [ref=f4e46]: $0.00
+      - button "3c161825 ensure-code-coverage failed after 4 steps failed 12:00 AM 08:00 $0.00" [ref=f4e47] [cursor=pointer]:
+        - generic [ref=f4e48]:
+          - generic [ref=f4e50]: 3c161825
+          - generic [ref=f4e51]: ensure-code-coverage
+        - generic [ref=f4e52]: failed after 4 steps
+        - generic [ref=f4e53]: failed
+        - generic [ref=f4e54]: 12:00 AM
+        - generic [ref=f4e55]: 08:00
+        - generic [ref=f4e56]: $0.00
+      - button "3460761a maintain-agent-skill finished 36 steps done 11:34 PM 23:31 11.6M tok" [ref=f4e57] [cursor=pointer]:
+        - generic [ref=f4e58]:
+          - generic [ref=f4e60]: 3460761a
+          - generic [ref=f4e61]: maintain-agent-skill
+        - generic [ref=f4e62]: finished 36 steps
+        - generic [ref=f4e63]: done
+        - generic [ref=f4e64]: 11:34 PM
+        - generic [ref=f4e65]: 23:31
+        - generic [ref=f4e66]: 11.6M tok
+      - button "62fc9d6a maintain-agent-skill failed after 26 steps failed 11:12 PM 19:20 10.3M tok" [ref=f4e67] [cursor=pointer]:
+        - generic [ref=f4e68]:
+          - generic [ref=f4e70]: 62fc9d6a
+          - generic [ref=f4e71]: maintain-agent-skill
+        - generic [ref=f4e72]: failed after 26 steps
+        - generic [ref=f4e73]: failed
+        - generic [ref=f4e74]: 11:12 PM
+        - generic [ref=f4e75]: 19:20
+        - generic [ref=f4e76]: 10.3M tok
+      - button "8bd1a604 maintain-agent-skill failed after 22 steps failed 10:57 PM 14:14 5.0M tok" [ref=f4e77] [cursor=pointer]:
+        - generic [ref=f4e78]:
+          - generic [ref=f4e80]: 8bd1a604
+          - generic [ref=f4e81]: maintain-agent-skill
+        - generic [ref=f4e82]: failed after 22 steps
+        - generic [ref=f4e83]: failed
+        - generic [ref=f4e84]: 10:57 PM
+        - generic [ref=f4e85]: 14:14
+        - generic [ref=f4e86]: 5.0M tok
+      - button "dd5c35f6 maintain-agent-skill failed after 6 steps failed 10:57 PM 00:00 $0.00" [ref=f4e87] [cursor=pointer]:
+        - generic [ref=f4e88]:
+          - generic [ref=f4e90]: dd5c35f6
+          - generic [ref=f4e91]: maintain-agent-skill
+        - generic [ref=f4e92]: failed after 6 steps
+        - generic [ref=f4e93]: failed
+        - generic [ref=f4e94]: 10:57 PM
+        - generic [ref=f4e95]: 00:00
+        - generic [ref=f4e96]: $0.00
+      - button "5d4848ed maintain-agent-skill stopped after 13 steps stopped 10:44 PM 09:52 5.7M tok" [ref=f4e97] [cursor=pointer]:
+        - generic [ref=f4e98]:
+          - generic [ref=f4e100]: 5d4848ed
+          - generic [ref=f4e101]: maintain-agent-skill
+        - generic [ref=f4e102]: stopped after 13 steps
+        - generic [ref=f4e103]: stopped
+        - generic [ref=f4e104]: 10:44 PM
+        - generic [ref=f4e105]: 09:52
+        - generic [ref=f4e106]: 5.7M tok
+      - button "8310f187 maintain-agent-skill failed after 6 steps failed 10:02 PM 23:10 $0.00" [ref=f4e107] [cursor=pointer]:
+        - generic [ref=f4e108]:
+          - generic [ref=f4e110]: 8310f187
+          - generic [ref=f4e111]: maintain-agent-skill
+        - generic [ref=f4e112]: failed after 6 steps
+        - generic [ref=f4e113]: failed
+        - generic [ref=f4e114]: 10:02 PM
+        - generic [ref=f4e115]: 23:10
+        - generic [ref=f4e116]: $0.00
+      - button "f934c76d task-backed-code-review finished 3 steps done 07:51 PM 00:00 $0.00" [ref=f4e117] [cursor=pointer]:
+        - generic [ref=f4e118]:
+          - generic [ref=f4e120]: f934c76d
+          - generic [ref=f4e121]: task-backed-code-review
+        - generic [ref=f4e122]: finished 3 steps
+        - generic [ref=f4e123]: done
+        - generic [ref=f4e124]: 07:51 PM
+        - generic [ref=f4e125]: 00:00
+        - generic [ref=f4e126]: $0.00
+      - button "87db9737 task-backed-code-review finished 3 steps done 07:40 PM 00:00 $0.00" [ref=f4e127] [cursor=pointer]:
+        - generic [ref=f4e128]:
+          - generic [ref=f4e130]: 87db9737
+          - generic [ref=f4e131]: task-backed-code-review
+        - generic [ref=f4e132]: finished 3 steps
+        - generic [ref=f4e133]: done
+        - generic [ref=f4e134]: 07:40 PM
+        - generic [ref=f4e135]: 00:00
+        - generic [ref=f4e136]: $0.00
+      - button "bd43b4f7 task-backed-code-review finished 3 steps done 06:58 PM 00:00 $0.00" [ref=f4e137] [cursor=pointer]:
+        - generic [ref=f4e138]:
+          - generic [ref=f4e140]: bd43b4f7
+          - generic [ref=f4e141]: task-backed-code-review
+        - generic [ref=f4e142]: finished 3 steps
+        - generic [ref=f4e143]: done
+        - generic [ref=f4e144]: 06:58 PM
+        - generic [ref=f4e145]: 00:00
+        - generic [ref=f4e146]: $0.00
+    - paragraph [ref=f4e147]: Every run keeps its journal, artifacts and staged changes for 30 days — open one to read what happened, even after it finished.

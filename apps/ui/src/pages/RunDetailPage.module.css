@@ -14,3 +14,11 @@
   font-size: 13px;
   color: var(--color-neutral-700);
 }
+@media (max-width: 700px) {
+  .body {
+    flex-direction: column;
+  }
+  .missing {
+    padding: 18px 14px;
+  }
+}

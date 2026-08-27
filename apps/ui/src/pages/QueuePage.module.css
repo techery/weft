@@ -42,3 +42,18 @@
   font-size: 12px;
   color: var(--color-neutral-600);
 }
+@media (max-width: 700px) {
+  .quickStart {
+    flex-wrap: nowrap;
+    width: max-content;
+  }
+  .warning {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .warningRuns {
+    flex-basis: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}

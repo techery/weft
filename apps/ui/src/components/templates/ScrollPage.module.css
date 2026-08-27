@@ -10,3 +10,8 @@
   display: flex;
   flex-direction: column;
 }
+@media (max-width: 700px) {
+  .inner {
+    padding: 18px 14px 28px;
+  }
+}

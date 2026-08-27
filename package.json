@@ -23,12 +23,14 @@
     "verify:examples": "node scripts/check-example-coverage.mjs",
     "version:set": "node scripts/set-version.mjs",
     "verify:install": "node scripts/verify-install.mjs",
+    "install:global": "cd packages/cli && pnpm link --global",
     "dev:ui": "pnpm --filter @techery/weft-ui dev"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.10",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
+    "@vitest/coverage-v8": "4.1.11",
     "react": "^19.2.8",
     "typescript": "~5.9.3",
     "vitest": "^4.1.11",

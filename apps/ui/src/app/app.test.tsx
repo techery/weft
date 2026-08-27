@@ -83,6 +83,35 @@ describe("a run", () => {
     expect(daemon.calls.some((call) => call.path === "/api/runs/r-waiting?detail=1")).toBe(true);
   });
 
+  it("shows the JSON behind a display presentation instead of its null engine result", async () => {
+    Object.assign(daemon.state.detail["r-waiting"]!.steps[0]!, {
+      kind: "ui",
+      output: null,
+      presentation: {
+        id: "u1",
+        asset: {
+          id: "release-plan",
+          revision: "1",
+          bundleRef: { $blob: "e".repeat(64), size: 128 },
+          protocol: 1,
+        },
+        props: { inline: { tag: "v0.9.0" }, hash: "f".repeat(64) },
+        mode: "display",
+      },
+    });
+
+    renderApp("/runs/r-waiting?from=runs&tab=steps&step=step:1");
+
+    expect(
+      await screen.findByRole("region", { name: "Workflow-provided view: release-plan" }),
+    ).toBeInTheDocument();
+    const output = screen.getByRole("region", { name: "step output" });
+    expect(within(output).getByText("rendered by workflow view")).toBeInTheDocument();
+    expect(within(output).getByText("Tag")).toBeInTheDocument();
+    expect(within(output).getByText("v0.9.0")).toBeInTheDocument();
+    expect(within(output).queryByText("null")).not.toBeInTheDocument();
+  });
+
   it("loads a recorded coding-session transcript inside its agent step", async () => {
     const { user } = renderApp("/runs/r-waiting?from=runs&tab=steps&step=step:1");
     const views = await screen.findByRole("tablist", { name: "Step views" });
@@ -101,6 +130,7 @@ describe("a run", () => {
   it("builds the gate's form from the schema the workflow declared", async () => {
     renderApp("/runs/r-waiting?from=queue&tab=steps&step=gate:h1");
     expect(await screen.findByRole("heading", { name: "Approve the v0.9.0 release" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Standard answer form" })).toBeInTheDocument();
     // `approve` declares { approved, note }. The verdict is the two buttons, so the
     // schema's own boolean is not offered a third time as a toggle.
     expect(screen.getByLabelText("note")).toBeInTheDocument();
@@ -169,6 +199,73 @@ describe("a run", () => {
       return call!;
     });
     expect(answered.body).toMatchObject({ answer: { approved: false, note: "not yet" } });
+  });
+
+  it("blocks an incomplete standard answer and submits a complete custom candidate exactly", async () => {
+    const schema = {
+      type: "object" as const,
+      properties: {
+        intent: { type: "string" as const },
+        approvedServices: { type: "array" as const, items: { type: "string" as const } },
+        strategy: { type: "string" as const },
+        trafficPercent: { type: "integer" as const },
+      },
+      required: ["intent", "approvedServices", "strategy", "trafficPercent"],
+    };
+    const presentation = {
+      id: "h1",
+      asset: {
+        id: "deployment-review",
+        revision: "3",
+        bundleRef: { $blob: "e".repeat(64), size: 128 },
+        protocol: 1 as const,
+      },
+      props: { inline: { environment: "staging" }, hash: "f".repeat(64) },
+      mode: "input" as const,
+    };
+    const human = daemon.state.detail["r-waiting"]!.humans[0]!;
+    Object.assign(human, { kind: "ask", schema, ui: presentation });
+    Object.assign(daemon.state.pending.pending[0]!, { kind: "ask", schema, ui: presentation });
+
+    const { user } = renderApp("/runs/r-waiting?from=queue&tab=steps&step=gate:h1");
+    expect(await screen.findByRole("button", { name: "Answer & resume" })).toBeDisabled();
+
+    const frame = await screen.findByTitle<HTMLIFrameElement>("Workflow view deployment-review");
+    const contentWindow = frame.contentWindow;
+    if (!contentWindow) throw new Error("test iframe has no contentWindow");
+    let componentPort: MessagePort | undefined;
+    let init: Record<string, unknown> | undefined;
+    contentWindow.postMessage = ((message: unknown, _origin: string, transfer?: Transferable[]) => {
+      init = message as Record<string, unknown>;
+      componentPort = transfer?.[0] as MessagePort | undefined;
+    }) as typeof contentWindow.postMessage;
+    fireEvent.load(frame);
+    await waitFor(() => expect(componentPort).toBeDefined());
+
+    const candidate = {
+      intent: "partial",
+      approvedServices: ["api", "web"],
+      strategy: "canary",
+      trafficPercent: 10,
+    };
+    componentPort!.postMessage({
+      type: "candidate",
+      presentationId: init!.presentationId,
+      generation: init!.generation,
+      answer: candidate,
+    });
+
+    const submit = await screen.findByRole("button", { name: "Submit and resume" });
+    expect(submit).toBeEnabled();
+    await user.click(submit);
+    const answered = await waitFor(() => {
+      const call = daemon.calls.find(
+        (request) => request.method === "POST" && request.path === "/api/runs/r-waiting/answer",
+      );
+      expect(call).toBeDefined();
+      return call!;
+    });
+    expect(answered.body).toMatchObject({ answer: candidate });
   });
 
   it("keeps the attached report when the gate falls back to run detail", async () => {

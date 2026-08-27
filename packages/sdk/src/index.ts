@@ -154,6 +154,7 @@ export type {
   CompiledUiViewToken,
   DisplayUiView,
   InputUiView,
+  JsonObject,
   JsonPrimitive,
   JsonValue,
   UiApi,

@@ -17,3 +17,14 @@
   color: var(--color-neutral-600);
   font-weight: 600;
 }
+@media (max-width: 700px) {
+  .table {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    overflow: visible;
+  }
+  .head {
+    display: none;
+  }
+}

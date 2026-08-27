@@ -406,6 +406,49 @@ describe("bundleWorkflow", () => {
     const revised = await bundleWorkflow({ entry, cwd: dir });
     expect(revised.hash).toBe(first.hash);
     expect(revised.uiCatalog.assets[0]?.revision).toBe("2");
+
+    await writeFile(view, (await readFile(view, "utf8")).replace('  revision: "2",\n', ""));
+    const automatic = await bundleWorkflow({ entry, cwd: dir });
+    expect(automatic.uiCatalog.assets[0]?.revision).toMatch(/^auto-[0-9a-f]{12}$/);
+    await writeFile(view, (await readFile(view, "utf8")).replace('size="medium"', 'size="large"'));
+    const automaticChanged = await bundleWorkflow({ entry, cwd: dir });
+    expect(automaticChanged.uiCatalog.assets[0]?.revision).not.toBe(automatic.uiCatalog.assets[0]?.revision);
+  });
+
+  it("derives automatic UI revisions from imported browser dependencies", async () => {
+    const dir = await tempDir();
+    const helper = await write(dir, "panel-helper.ts", `export const label = "first";`);
+    await write(
+      dir,
+      "panel.ui.tsx",
+      [
+        `import { defineResultView } from "@techery/weft-sdk/ui";`,
+        `import { label } from "./panel-helper.ts";`,
+        `export default defineResultView<Record<string, never>>({`,
+        `  id: "panel",`,
+        `  component: () => <div>{label}</div>,`,
+        `});`,
+      ].join("\n"),
+    );
+    const entry = await write(
+      dir,
+      "workflow.ts",
+      [
+        `import { defineWorkflow, z } from "@techery/weft-sdk";`,
+        `import panel from "./panel.ui.tsx";`,
+        `export default defineWorkflow(`,
+        `  { description: "ui", input: z.object({}), output: z.object({}) },`,
+        `  async (ctx) => { await ctx.ui.render({ key: "panel", view: panel, props: {} }); return {}; },`,
+        `);`,
+      ].join("\n"),
+    );
+
+    const first = await bundleWorkflow({ entry, cwd: dir });
+    await writeFile(helper, `export const label = "second";`, "utf8");
+    const changed = await bundleWorkflow({ entry, cwd: dir });
+
+    expect(first.uiCatalog.assets[0]?.revision).toMatch(/^auto-[0-9a-f]{12}$/);
+    expect(changed.uiCatalog.assets[0]?.revision).not.toBe(first.uiCatalog.assets[0]?.revision);
   });
 
   it("rejects dynamic imports from the browser asset graph", async () => {

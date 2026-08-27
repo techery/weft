@@ -15,7 +15,7 @@ export function PageHeader({ title, summary, aside }: Props) {
       <ScreenTitle>{title}</ScreenTitle>
       {summary ? <span className={styles.summary}>{summary}</span> : null}
       <span className={styles.spacer} />
-      {aside}
+      {aside ? <span className={styles.aside}>{aside}</span> : null}
     </div>
   );
 }

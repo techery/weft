@@ -25,7 +25,9 @@ const Finding = z.object({
     .string()
     .describe("Concrete skill and Weft source paths, commands, or contracts that prove the defect."),
   affectedFiles: z
-    .array(z.string())
+    .array(
+      z.string().describe("Repository-relative canonical skill source or test path affected by the finding."),
+    )
     .describe("Canonical in-repository files that must change to resolve this finding."),
 });
 
@@ -37,7 +39,11 @@ const Audit = z.object({
     .string()
     .describe("Evidence-based verification conclusion describing the current skill's readiness."),
   checkedSources: z
-    .array(z.string())
+    .array(
+      z
+        .string()
+        .describe("Repository-relative Weft source, test, or generated-skill path checked by the verifier."),
+    )
     .min(1)
     .describe(
       "Current Weft implementation, test, CLI, and documentation paths inspected during verification.",
@@ -73,11 +79,19 @@ const AuthorResult = z.object({
     .string()
     .describe("Concise account of the skill work performed and the source-backed decisions made."),
   sourcePaths: z
-    .array(z.string())
+    .array(
+      z
+        .string()
+        .describe("Repository-relative authoritative Weft source or test path inspected by the author."),
+    )
     .min(1)
     .describe("Most important current Weft source and test paths inspected while authoring the skill."),
   files: z
-    .array(z.string())
+    .array(
+      z
+        .string()
+        .describe("Repository-relative canonical skill source or focused test path changed by the author."),
+    )
     .describe(
       "Files the author believes it changed; the workflow separately verifies the captured patch files.",
     ),
@@ -124,7 +138,11 @@ const WorkflowOutput = z.object({
     .string()
     .describe("Weft Git commit inspected as the source baseline for this maintenance run."),
   relevantChanges: z
-    .array(z.string())
+    .array(
+      z
+        .string()
+        .describe("Git status and repository-relative path for one relevant change since the selected base."),
+    )
     .describe("Changed Weft paths and statuses since the requested base that informed the skill refresh."),
   skillSource: z
     .literal(SKILL_SOURCE)
@@ -153,7 +171,13 @@ export default defineWorkflow(
         .default("main")
         .describe("Git ref used to identify Weft changes that may require canonical skill updates."),
       sourcePatterns: z
-        .array(z.string())
+        .array(
+          z
+            .string()
+            .describe(
+              "Repository-relative glob used to discover authoritative Weft implementation or documentation.",
+            ),
+        )
         .min(1)
         .default([...DEFAULT_SOURCE_PATTERNS])
         .describe(
@@ -164,7 +188,7 @@ export default defineWorkflow(
         .int()
         .min(10)
         .max(400)
-        .default(160)
+        .default(40)
         .describe("Maximum prioritized source paths supplied to each authoring and verification agent."),
       maxRepairRounds: z
         .number()
@@ -175,17 +199,17 @@ export default defineWorkflow(
         .describe(
           "Maximum repair-and-reverify cycles before the workflow fails closed with unresolved evidence.",
         ),
-      authorWith: Provider.default("claude").describe(
+      authorWith: Provider.default("codex").describe(
         "Provider responsible for creating or repairing the canonical skill.",
       ),
       verifyWith: z
         .array(Provider)
         .min(1)
-        .default(["codex", "claude"])
+        .default(["codex"])
         .describe("Providers that independently audit the generated skill; duplicate entries are removed."),
     }),
     output: WorkflowOutput,
-    defaults: { effort: "high" },
+    defaults: { effort: "medium" },
   },
   async (ctx, { base, sourcePatterns, maxSourceFiles, maxRepairRounds, authorWith, verifyWith }) => {
     const providers = unique(verifyWith);
@@ -223,9 +247,13 @@ export default defineWorkflow(
       {
         schema: AuthorResult,
         provider: authorWith,
+        effort: "medium",
         key: "skill:author",
         isolation: "worktree",
         write: { paths: [...WRITE_SCOPE], mode: "strict" },
+        maxTurns: 20,
+        timeout: "12m",
+        repair: 1,
         tasks: false,
       },
     );
@@ -246,6 +274,7 @@ export default defineWorkflow(
       base,
       sourceFiles,
       relevantChanges,
+      checkEvidence: checks.map((check) => check.evidence ?? check.status),
     });
 
     while ((!auditsPass(audits) || !checksPass(checks)) && repairRounds < maxRepairRounds) {
@@ -263,9 +292,13 @@ export default defineWorkflow(
         {
           schema: AuthorResult,
           provider: authorWith,
+          effort: "medium",
           key: `skill:repair:${repairRounds}`,
           isolation: "worktree",
           write: { paths: [...WRITE_SCOPE], mode: "strict" },
+          maxTurns: 16,
+          timeout: "10m",
+          repair: 1,
           tasks: false,
         },
       );
@@ -284,6 +317,7 @@ export default defineWorkflow(
         base,
         sourceFiles,
         relevantChanges,
+        checkEvidence: checks.map((check) => check.evidence ?? check.status),
       });
     }
 
@@ -328,6 +362,7 @@ interface AuditContext {
   base: string;
   sourceFiles: string[];
   relevantChanges: string[];
+  checkEvidence: string[];
 }
 
 async function auditSkill(
@@ -342,8 +377,11 @@ async function auditSkill(
         ctx.agent(auditPrompt(audit, provider), {
           schema: Audit,
           provider,
-          effort: "high",
+          effort: "medium",
           key: `skill:verify:${audit.round}:${provider}`,
+          maxTurns: 12,
+          timeout: "8m",
+          repair: 1,
           tasks: false,
         }),
     ),
@@ -411,7 +449,8 @@ function authorPrompt(input: {
     "before a project has .weft state and must print only a complete SKILL.md document to stdout.",
     "",
     "Inspect the current repository yourself. Treat implementation, tests, and CLI registration as authority;",
-    "use README/docs as explanations that must be checked against code. Pay special attention to changed paths.",
+    "use README/docs as explanations that must be checked against code. Start with changed and core paths below,",
+    "then inspect additional files only when a concrete contract needs evidence; do not scan every listed directory.",
     "",
     "The generated skill must:",
     "- use Agent Skills SKILL.md frontmatter with name=weft and a concise, discriminating description;",
@@ -427,6 +466,7 @@ function authorPrompt(input: {
     "",
     "Return disposition=unchanged only after running or inspecting the generated command and confirming it is current.",
     "List only files actually changed in files, and list the most important inspected sources in sourcePaths.",
+    "Keep command execution focused: run the generated-skill validator and focused CLI skill tests at most once each.",
   ].join("\n");
 }
 
@@ -443,7 +483,10 @@ function auditPrompt(audit: AuditContext, provider: string): string {
     "Set all audience booleans true only when the emitted original can be installed for repository-local Codex, Claude Code,",
     "and agent-neutral Agent Skills consumers. Set pass=true only when findings is empty. Every finding needs concrete",
     "source evidence and affected files. Do not report prose preferences as defects.",
+    "The workflow already ran its deterministic generated-output and focused CLI tests; use that evidence below.",
+    "Do not rerun broad test suites. Inspect only the source needed to prove or refute a concrete contract.",
     "",
+    `Deterministic check evidence:\n${lines(audit.checkEvidence, "(no evidence recorded)")}`,
     `Relevant changes:\n${lines(audit.relevantChanges, "(none detected)")}`,
     `Priority source inventory:\n${lines(audit.sourceFiles, "(none)")}`,
   ].join("\n");

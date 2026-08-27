@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import { shallowDiff } from "../src/commands/diff.ts";
+import { runnerFor } from "../src/commands/test.ts";
 import { parseDynamicFlags } from "../src/flags.ts";
 import { answerLine } from "../src/format.ts";
 import type { CliIo } from "../src/io.ts";
@@ -634,6 +635,23 @@ describe("weft skill", () => {
     expect(printed.text).toContain("`loopUntilDry` has no");
     expect(printed.text).toContain("result-schema export");
     expect(printed.text).not.toContain("Each also exports a schema builder");
+  });
+});
+
+describe("weft test", () => {
+  it("uses the project's package manager without installing dependencies", async () => {
+    const root = await tempRoot();
+
+    expect(runnerFor(root, ["vitest", "run", "test/workflows"])).toEqual([
+      "npx",
+      ["--no-install", "vitest", "run", "test/workflows"],
+    ]);
+
+    await write(root, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+    expect(runnerFor(root, ["vitest", "run", "test/workflows"])).toEqual([
+      "pnpm",
+      ["exec", "vitest", "run", "test/workflows"],
+    ]);
   });
 });
 

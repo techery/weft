@@ -20,7 +20,8 @@ export interface DiscoveredUiEntry {
   file: string;
   assetKey: string;
   id: string;
-  revision: string;
+  /** Undefined means derive a dependency-aware revision from the compiled browser bundle. */
+  revision?: string;
   mode: UiViewMode;
 }
 
@@ -66,7 +67,7 @@ export function discoverUiViews(root: string): UiDiscovery {
           entry = {
             file,
             id: meta.id,
-            revision: meta.revision,
+            ...(meta.revision !== undefined ? { revision: meta.revision } : {}),
             mode: meta.mode,
             assetKey: createHash("sha256").update(displayPath(root, file)).digest("hex"),
           };
@@ -118,14 +119,15 @@ export async function compileUiCatalog(
         `UI view ${JSON.stringify(entry.id)} is ${size} bytes; limit is ${MAX_UI_BUNDLE_BYTES}`,
       );
     }
+    const hash = createHash("sha256").update(code).digest("hex");
     assets.push({
       assetKey: entry.assetKey,
       id: entry.id,
-      revision: entry.revision,
+      revision: entry.revision ?? `auto-${hash.slice(0, 12)}`,
       mode: entry.mode,
       protocol: 1,
       code,
-      hash: createHash("sha256").update(code).digest("hex"),
+      hash,
     });
   }
   const buildHash = createHash("sha256")
@@ -148,7 +150,7 @@ export async function compileUiCatalog(
 function readStaticMetadata(
   source: string,
   file: string,
-): { id: string; revision: string; mode: UiViewMode } {
+): { id: string; revision?: string; mode: UiViewMode } {
   const parsed = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const assignment = parsed.statements.find(ts.isExportAssignment);
   const expression = assignment?.expression;
@@ -161,19 +163,24 @@ function readStaticMetadata(
   if (!object || !ts.isObjectLiteralExpression(object)) {
     throw metadataError(file, "UI view definition must be an object literal");
   }
-  const literal = (name: string): string => {
+  const literal = (name: string, required = true): string | undefined => {
     const property = object.properties.find(
       (candidate): candidate is ts.PropertyAssignment =>
         ts.isPropertyAssignment(candidate) &&
         ((ts.isIdentifier(candidate.name) && candidate.name.text === name) ||
           (ts.isStringLiteral(candidate.name) && candidate.name.text === name)),
     );
-    if (!property || !ts.isStringLiteral(property.initializer) || property.initializer.text.trim() === "") {
+    if (!property) {
+      if (!required) return undefined;
+      throw metadataError(file, `${name} must be a non-empty string literal`);
+    }
+    if (!ts.isStringLiteral(property.initializer) || property.initializer.text.trim() === "") {
       throw metadataError(file, `${name} must be a non-empty string literal`);
     }
     return property.initializer.text;
   };
-  return { id: literal("id"), revision: literal("revision"), mode };
+  const revision = literal("revision", false);
+  return { id: literal("id")!, ...(revision !== undefined ? { revision } : {}), mode };
 }
 
 function metadataError(file: string, message: string): GateError {

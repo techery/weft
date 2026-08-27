@@ -1,0 +1,36 @@
+- generic [ref=f6e3]:
+  - banner [ref=f6e4]:
+    - generic [ref=f6e5]:
+      - link "w weft" [ref=f6e6] [cursor=pointer]:
+        - /url: /queue
+        - generic [ref=f6e7]: w
+        - generic [ref=f6e8]: weft
+      - generic [ref=f6e9]: weft
+    - navigation [ref=f6e10]:
+      - link "Queue" [ref=f6e11] [cursor=pointer]:
+        - /url: /queue
+      - link "Runs" [ref=f6e12] [cursor=pointer]:
+        - /url: /runs
+      - link "Workflows" [ref=f6e13] [cursor=pointer]:
+        - /url: /workflows
+      - link "Settings" [ref=f6e14] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=f6e15]: daemon · 127.0.0.1:4788
+  - generic [ref=f6e19]:
+    - generic [ref=f6e20]:
+      - heading "Runs" [level=1] [ref=f6e21]
+      - generic [ref=f6e23]:
+        - button "All" [pressed] [ref=f6e24] [cursor=pointer]
+        - button "Needs you" [ref=f6e25] [cursor=pointer]
+        - button "Running" [ref=f6e26] [cursor=pointer]
+        - button "Finished" [ref=f6e27] [cursor=pointer]
+    - generic [ref=f6e28]:
+      - generic [ref=f6e29]:
+        - generic [ref=f6e30]: Run
+        - generic [ref=f6e31]: Where it stands
+        - generic [ref=f6e32]: State
+        - generic [ref=f6e33]: Started
+        - generic [ref=f6e34]: Elapsed
+        - generic [ref=f6e35]: Cost
+      - paragraph [ref=f6e36]: Reading the journal…
+    - paragraph [ref=f6e37]: Every run keeps its journal, artifacts and staged changes for 30 days — open one to read what happened, even after it finished.

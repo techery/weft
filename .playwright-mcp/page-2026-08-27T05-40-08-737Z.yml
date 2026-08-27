@@ -1,0 +1,136 @@
+- generic [ref=f10e3]:
+  - banner [ref=f10e4]:
+    - generic [ref=f10e5]:
+      - link "w weft" [ref=f10e6] [cursor=pointer]:
+        - /url: /queue
+        - generic [ref=f10e7]: w
+        - generic [ref=f10e8]: weft
+      - generic [ref=f10e9]: weft
+    - navigation [ref=f10e10]:
+      - link "Queue" [ref=f10e11] [cursor=pointer]:
+        - /url: /queue
+      - link "Runs" [ref=f10e12] [cursor=pointer]:
+        - /url: /runs
+      - link "Workflows" [ref=f10e13] [cursor=pointer]:
+        - /url: /workflows
+      - link "Settings" [ref=f10e14] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=f10e15]: daemon · 127.0.0.1:4788
+  - generic [ref=f10e18]:
+    - generic [ref=f10e19]:
+      - generic [ref=f10e20]:
+        - heading "Workflows" [level=1] [ref=f10e21]
+        - generic [ref=f10e22]: .weft/workflows/ · 4 in the registry
+      - generic [ref=f10e25]:
+        - article [ref=f10e26] [cursor=pointer]:
+          - generic [ref=f10e27]:
+            - button "audit-and-fix .weft/workflows/audit-and-fix.ts Find bugs, verify across vendors, fix with approval last — success — p50 — cost —" [pressed] [ref=f10e28]:
+              - generic [ref=f10e29]:
+                - generic [ref=f10e30]: audit-and-fix
+                - generic [ref=f10e33]: .weft/workflows/audit-and-fix.ts
+              - generic [ref=f10e34]: Find bugs, verify across vendors, fix with approval
+              - generic [ref=f10e35]:
+                - generic [ref=f10e36]:
+                  - generic [ref=f10e37]: last
+                  - generic [ref=f10e38]: —
+                - generic [ref=f10e39]:
+                  - generic [ref=f10e40]: success
+                  - generic [ref=f10e41]: —
+                - generic [ref=f10e44]:
+                  - generic [ref=f10e45]: p50
+                  - generic [ref=f10e46]: —
+                - generic [ref=f10e47]:
+                  - generic [ref=f10e48]: cost
+                  - generic [ref=f10e49]: —
+            - button "Run…" [ref=f10e51]
+        - article [ref=f10e52] [cursor=pointer]:
+          - generic [ref=f10e53]:
+            - button "ensure-code-coverage .weft/workflows/ensure-code-coverage.ts Measure Weft code coverage, add meaningful tests for real gaps, and fail closed until numeric and quality gates pass. last 6 h success 50% p50 00:58 cost —" [ref=f10e54]:
+              - generic [ref=f10e55]:
+                - generic [ref=f10e56]: ensure-code-coverage
+                - generic [ref=f10e59]: .weft/workflows/ensure-code-coverage.ts
+              - generic [ref=f10e60]: Measure Weft code coverage, add meaningful tests for real gaps, and fail closed until numeric and quality gates pass.
+              - generic [ref=f10e61]:
+                - generic [ref=f10e62]:
+                  - generic [ref=f10e63]: last
+                  - generic [ref=f10e64]: 6 h
+                - generic [ref=f10e65]:
+                  - generic [ref=f10e66]: success
+                  - generic [ref=f10e67]: 50%
+                - generic [ref=f10e71]:
+                  - generic [ref=f10e72]: p50
+                  - generic [ref=f10e73]: 00:58
+                - generic [ref=f10e74]:
+                  - generic [ref=f10e75]: cost
+                  - generic [ref=f10e76]: —
+            - button "Run…" [ref=f10e78]
+        - article [ref=f10e79] [cursor=pointer]:
+          - generic [ref=f10e80]:
+            - button "maintain-agent-skill .weft/workflows/maintain-agent-skill.ts Create, verify, and refresh Weft's canonical Agent Skill for Codex, Claude Code, and other coding agents. last 7 h success 20% p50 19:20 cost 5.4M tok" [ref=f10e81]:
+              - generic [ref=f10e82]:
+                - generic [ref=f10e83]: maintain-agent-skill
+                - generic [ref=f10e86]: .weft/workflows/maintain-agent-skill.ts
+              - generic [ref=f10e87]: Create, verify, and refresh Weft's canonical Agent Skill for Codex, Claude Code, and other coding agents.
+              - generic [ref=f10e88]:
+                - generic [ref=f10e89]:
+                  - generic [ref=f10e90]: last
+                  - generic [ref=f10e91]: 7 h
+                - generic [ref=f10e92]:
+                  - generic [ref=f10e93]: success
+                  - generic [ref=f10e94]: 20%
+                - generic [ref=f10e98]:
+                  - generic [ref=f10e99]: p50
+                  - generic [ref=f10e100]: 19:20
+                - generic [ref=f10e101]:
+                  - generic [ref=f10e102]: cost
+                  - generic [ref=f10e103]: 5.4M tok
+            - button "Run…" [ref=f10e105]
+        - article [ref=f10e106] [cursor=pointer]:
+          - generic [ref=f10e107]:
+            - button "review .weft/workflows/review.ts Review changed files; keep only findings that survive refutation last — success — p50 — cost —" [ref=f10e108]:
+              - generic [ref=f10e109]:
+                - generic [ref=f10e110]: review
+                - generic [ref=f10e113]: .weft/workflows/review.ts
+              - generic [ref=f10e114]: Review changed files; keep only findings that survive refutation
+              - generic [ref=f10e115]:
+                - generic [ref=f10e116]:
+                  - generic [ref=f10e117]: last
+                  - generic [ref=f10e118]: —
+                - generic [ref=f10e119]:
+                  - generic [ref=f10e120]: success
+                  - generic [ref=f10e121]: —
+                - generic [ref=f10e124]:
+                  - generic [ref=f10e125]: p50
+                  - generic [ref=f10e126]: —
+                - generic [ref=f10e127]:
+                  - generic [ref=f10e128]: cost
+                  - generic [ref=f10e129]: —
+            - button "Run…" [ref=f10e131]
+    - complementary [ref=f10e132]:
+      - generic [ref=f10e133]:
+        - heading "audit-and-fix" [level=2] [ref=f10e134]
+        - generic [ref=f10e135]: Find bugs, verify across vendors, fix with approval
+        - generic [ref=f10e136]: .weft/workflows/audit-and-fix.ts
+      - button "Run…" [ref=f10e138] [cursor=pointer]
+      - generic [ref=f10e139]:
+        - generic [ref=f10e140]: Last runs
+        - generic [ref=f10e141]: no runs in the window
+      - generic [ref=f10e142]:
+        - generic [ref=f10e143]: Recent runs
+        - generic [ref=f10e144]: no runs in the last 30 days
+      - generic [ref=f10e145]:
+        - generic [ref=f10e146]: Latest run shape
+        - generic [ref=f10e147]: no runs yet — phases are read off the newest one
+      - region [ref=f10e148]:
+        - heading "Tasks · 0" [level=3] [ref=f10e149]
+        - generic [ref=f10e150]: no tasks — agents can create them with the bound weft CLI
+      - generic [ref=f10e151]:
+        - generic [ref=f10e152]:
+          - generic [ref=f10e153]: file
+          - generic [ref=f10e154]: .weft/workflows/audit-and-fix.ts
+        - generic [ref=f10e155]:
+          - generic [ref=f10e156]: runs · 30d
+          - generic [ref=f10e157]: "0"
+        - generic [ref=f10e158]:
+          - generic [ref=f10e159]: spend · 30d
+          - generic [ref=f10e160]: $0.00

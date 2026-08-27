@@ -7,6 +7,8 @@
   height: 44px;
   border-bottom: 1px solid var(--color-divider);
   background: var(--color-surface);
+  position: relative;
+  z-index: 10;
 }
 .brand {
   display: flex;
@@ -63,4 +65,38 @@
   font-size: 11px;
   color: var(--color-neutral-600);
   white-space: nowrap;
+}
+@media (max-width: 760px) {
+  .bar {
+    height: auto;
+    min-height: 44px;
+    gap: 8px;
+    padding: 5px 10px;
+  }
+  .repo,
+  .daemon {
+    display: none;
+  }
+  .nav {
+    min-width: 0;
+    margin-left: auto;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+}
+@media (max-width: 430px) {
+  .brandLink {
+    gap: 0;
+  }
+  .word {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
 }

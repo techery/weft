@@ -20,13 +20,21 @@ export function RunTableRow({ row, onOpen }: { row: RunTableEntry; onOpen: () =>
         <span className={styles.id}>{row.id}</span>
         <span className={styles.wf}>{row.wf}</span>
       </span>
-      <span className={styles.outcome}>{row.outcome}</span>
-      <span className={styles.state} style={{ color: STATE_TEXT[row.state] }}>
+      <span className={styles.outcome} data-label="Where it stands">
+        {row.outcome}
+      </span>
+      <span className={styles.state} data-label="State" style={{ color: STATE_TEXT[row.state] }}>
         {RUN_STATE_LABEL[row.state]}
       </span>
-      <span className={styles.started}>{row.started}</span>
-      <span className={styles.dur}>{row.dur}</span>
-      <span className={styles.cost}>{row.cost}</span>
+      <span className={styles.started} data-label="Started">
+        {row.started}
+      </span>
+      <span className={styles.dur} data-label="Elapsed">
+        {row.dur}
+      </span>
+      <span className={styles.cost} data-label="Cost">
+        {row.cost || "—"}
+      </span>
     </button>
   );
 }

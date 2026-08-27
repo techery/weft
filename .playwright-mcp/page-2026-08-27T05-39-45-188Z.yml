@@ -1,0 +1,76 @@
+- generic [ref=f9e3]:
+  - banner [ref=f9e4]:
+    - generic [ref=f9e5]:
+      - link "w weft" [ref=f9e6] [cursor=pointer]:
+        - /url: /queue
+        - generic [ref=f9e7]: w
+        - generic [ref=f9e8]: weft
+      - generic [ref=f9e9]: weft
+    - navigation [ref=f9e10]:
+      - link "Queue" [ref=f9e11] [cursor=pointer]:
+        - /url: /queue
+      - link "Runs" [ref=f9e12] [cursor=pointer]:
+        - /url: /runs
+      - link "Workflows" [ref=f9e13] [cursor=pointer]:
+        - /url: /workflows
+      - link "Settings" [ref=f9e14] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=f9e15]: daemon · 127.0.0.1:4788
+  - generic [ref=f9e19]:
+    - generic [ref=f9e20]:
+      - heading "Settings" [level=1] [ref=f9e21]
+      - generic [ref=f9e22]: /Users/zen/w/beacon/weft/.weft/config.json · not created yet
+    - generic [ref=f9e23]:
+      - generic [ref=f9e24]: Approval policy
+      - paragraph [ref=f9e25]: "A workflow may raise a tier, never lower it. Auto-approvals are journaled as answered_by: \"policy\"."
+      - generic [ref=f9e26]:
+        - generic [ref=f9e27]: low
+        - generic [ref=f9e28]: unset · engine default
+        - generic [ref=f9e29]:
+          - button "auto" [pressed] [ref=f9e30] [cursor=pointer]
+          - button "ask" [ref=f9e31] [cursor=pointer]
+      - generic [ref=f9e32]:
+        - generic [ref=f9e33]: medium
+        - generic [ref=f9e34]: unset · engine default
+        - generic [ref=f9e35]:
+          - button "auto" [ref=f9e36] [cursor=pointer]
+          - button "ask" [pressed] [ref=f9e37] [cursor=pointer]
+      - generic [ref=f9e38]:
+        - generic [ref=f9e39]: high
+        - generic [ref=f9e40]: unset · engine default
+        - generic [ref=f9e41]:
+          - button "auto" [ref=f9e42] [cursor=pointer]
+          - button "ask" [pressed] [ref=f9e43] [cursor=pointer]
+      - generic [ref=f9e44]:
+        - generic [ref=f9e45]: irreversible
+        - generic [ref=f9e46]: unset · engine default
+        - generic [ref=f9e47]:
+          - button "auto" [ref=f9e48] [cursor=pointer]
+          - button "ask" [pressed] [ref=f9e49] [cursor=pointer]
+    - generic [ref=f9e50]:
+      - generic [ref=f9e51]: Budget & limits
+      - generic [ref=f9e52]:
+        - generic [ref=f9e53]:
+          - generic [ref=f9e54]: Agent concurrency · 14 agents
+          - generic [ref=f9e55]:
+            - generic [ref=f9e56]: "1"
+            - slider "Agent concurrency · 14 agents" [ref=f9e57]: "14"
+            - generic [ref=f9e58]: "24"
+        - generic [ref=f9e59]:
+          - generic [ref=f9e60]: Max turns per agent step
+          - textbox "Max turns per agent step" [ref=f9e61]: "50"
+      - paragraph [ref=f9e62]: Running with concurrency 14 · maxTurns 50 · maxDepth 3 · 20 min per step. Budgets are per run — weft has no repo-wide default, so a ceiling is set when a run is started.
+      - button "Save limits" [disabled] [ref=f9e64]
+    - generic [ref=f9e65]:
+      - generic [ref=f9e66]: Providers
+      - generic [ref=f9e67]:
+        - generic [ref=f9e68]: claude
+        - generic [ref=f9e69]: default · claude-opus-5
+        - generic [ref=f9e70]: ready
+      - generic [ref=f9e71]:
+        - generic [ref=f9e72]: codex
+        - generic [ref=f9e73]: ready
+      - generic [ref=f9e74]:
+        - generic [ref=f9e75]: mock
+        - generic [ref=f9e76]: ready
+      - paragraph [ref=f9e77]: "Credentials come from your Claude Code / Codex logins. Sandbox fetch allow-list: unset — every host is allowed."

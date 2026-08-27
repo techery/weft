@@ -1,5 +1,6 @@
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useSetAtom } from "jotai";
+import { useState } from "react";
 import {
   useRun,
   useWorkflow,
@@ -8,8 +9,9 @@ import {
   useWorkflows,
   useWorkflowTasks,
 } from "~/api/queries";
-import type { RunDetail, RunStatus, WorkflowRow } from "~/api/types";
+import type { RunDetail, RunStatus, WorkflowIssue, WorkflowRow } from "~/api/types";
 import { useOpenRun } from "~/app/useOpenRun";
+import { Button } from "~/components/atoms/Button";
 import { EmptyNote } from "~/components/molecules/EmptyNote";
 import type { HistoryBar } from "~/components/molecules/HistoryBars";
 import { WorkflowTableRow } from "~/components/molecules/WorkflowTableRow";
@@ -104,33 +106,7 @@ export function WorkflowsPage() {
               <span className={styles.issuesCount}>{workflowIssues.data.length}</span>
             </div>
             {workflowIssues.data.map((issue) => (
-              <article key={issue.file} className={styles.issue}>
-                <div className={styles.issueFile}>
-                  <span className={styles.issueMarker} aria-hidden="true">
-                    !
-                  </span>
-                  <span>{issue.file}</span>
-                </div>
-                <p className={styles.issueError}>{issue.error.split("\n", 1)[0]}</p>
-                {issue.diagnostics.length > 0 ? (
-                  <ul className={styles.diagnostics}>
-                    {issue.diagnostics.map((diagnostic) => (
-                      <li
-                        key={`${diagnostic.file}:${diagnostic.line}:${diagnostic.column}:${diagnostic.rule}`}
-                      >
-                        <span className={styles.diagnosticLocation}>
-                          {diagnostic.file}:{diagnostic.line}:{diagnostic.column}
-                        </span>{" "}
-                        <span className={styles.diagnosticRule}>{diagnostic.rule}</span>
-                        <span> {diagnostic.message}</span>
-                        {diagnostic.fixIt ? (
-                          <span className={styles.diagnosticFix}>Fix: {diagnostic.fixIt}</span>
-                        ) : null}
-                      </li>
-                    ))}
-                  </ul>
-                ) : null}
-              </article>
+              <WorkflowIssueCard key={issue.file} issue={issue} />
             ))}
           </section>
         ) : null}
@@ -153,6 +129,60 @@ export function WorkflowsPage() {
         />
       ) : null}
     </div>
+  );
+}
+
+const INITIAL_DIAGNOSTICS = 6;
+const MORE_DIAGNOSTICS = 50;
+
+/** A rejected file stays useful without letting hundreds of gate diagnostics consume the screen. */
+function WorkflowIssueCard({ issue }: { issue: WorkflowIssue }) {
+  const [visible, setVisible] = useState(INITIAL_DIAGNOSTICS);
+  const shown = issue.diagnostics.slice(0, visible);
+  const remaining = issue.diagnostics.length - shown.length;
+
+  return (
+    <article className={styles.issue}>
+      <div className={styles.issueFile}>
+        <span className={styles.issueMarker} aria-hidden="true">
+          !
+        </span>
+        <span>{issue.file}</span>
+      </div>
+      <p className={styles.issueError}>{issue.error.split("\n", 1)[0]}</p>
+      {shown.length > 0 ? (
+        <>
+          <span className={styles.diagnosticSummary}>
+            Showing {shown.length} of {issue.diagnostics.length} diagnostics
+          </span>
+          <ul className={styles.diagnostics}>
+            {shown.map((diagnostic) => (
+              <li key={`${diagnostic.file}:${diagnostic.line}:${diagnostic.column}:${diagnostic.rule}`}>
+                <span className={styles.diagnosticLocation}>
+                  {diagnostic.file}:{diagnostic.line}:{diagnostic.column}
+                </span>{" "}
+                <span className={styles.diagnosticRule}>{diagnostic.rule}</span>
+                <span> {diagnostic.message}</span>
+                {diagnostic.fixIt ? (
+                  <span className={styles.diagnosticFix}>Fix: {diagnostic.fixIt}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      {remaining > 0 ? (
+        <span className={styles.issueActions}>
+          <Button
+            variant="secondary"
+            size="smallWide"
+            onClick={() => setVisible((count) => count + MORE_DIAGNOSTICS)}
+          >
+            Show {Math.min(MORE_DIAGNOSTICS, remaining)} more · {remaining} remaining
+          </Button>
+        </span>
+      ) : null}
+    </article>
   );
 }
 

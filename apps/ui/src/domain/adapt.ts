@@ -281,6 +281,20 @@ function railOf(
       steps: loose.map((step) => railStep(step, waitingSeqs, runFinished)),
     });
   }
+  if (pending.length > 0) {
+    groups.push({
+      name: "needs you",
+      meta: `${pending.length} question${pending.length === 1 ? "" : "s"}`,
+      steps: pending.map((human) => ({
+        id: gateStepId(human.id),
+        kind: "human",
+        label: human.question,
+        meta: "answer required",
+        state: "waiting",
+        artifact: "",
+      })),
+    });
+  }
   return groups;
 }
 
@@ -706,11 +720,29 @@ export function adaptWorkflow(row: WorkflowRow, extras: WorkflowExtras = {}): Wo
     facts: factsOf(row, extras),
     recent: recent.map((run) => ({
       id: run.runId,
-      outcome: run.status,
+      outcome: workflowRunOutcome(run.status),
       ago: ago(run.createdAt),
     })),
     inputs: [],
   };
+}
+
+/** Human-facing lifecycle language shared with the queue and runs screens. */
+function workflowRunOutcome(status: RunStatus): string {
+  switch (status) {
+    case "waiting_for_human":
+      return "needs you";
+    case "waiting_for_signal":
+      return "waiting for signal";
+    case "complete":
+      return "done";
+    case "failed":
+      return "failed";
+    case "cancelled":
+      return "stopped";
+    default:
+      return "running";
+  }
 }
 
 /** Median run cost, in whatever unit was reported — or nothing, for a workflow never run. */

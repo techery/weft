@@ -49,3 +49,16 @@
   color: var(--color-danger);
   line-height: 1.5;
 }
+@media (max-width: 700px) {
+  .grid {
+    grid-template-columns: 1fr;
+    gap: 13px;
+  }
+  .actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .actions button {
+    width: 100%;
+  }
+}

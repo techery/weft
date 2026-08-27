@@ -47,7 +47,7 @@ export default defineWorkflow(
 );
 ```
 
-The companion component is ordinary React, with two important pieces of static metadata: a stable `id` and a semantic `revision`.
+The companion component is ordinary React. It requires a stable `id`; `revision` is an optional semantic override.
 
 ```tsx
 import { defineUiView, type InputViewProps } from "@techery/weft-sdk/ui";
@@ -106,7 +106,7 @@ export default defineUiView<Props, Answer>({
 
 The answer type is the schema's input type, while workflow code receives the schema's output type. That distinction matters for defaults, coercions, and transforms. The server remains responsible for applying the authoritative schema.
 
-The `id` and `revision` must be string literals so the compiler can extract them without executing browser code. TypeScript checks the props and candidate answer, while the Weft compiler independently checks the static metadata, import policy, and bundle limits.
+The `id` must be a non-empty string literal. When `revision` is present it must also be a non-empty string literal. When it is omitted, the compiler derives an automatic revision from the complete compiled browser bundle, so changes in imported components and helpers participate in presentation replay identity. TypeScript checks the props and candidate answer, while the Weft compiler independently checks the static metadata, import policy, and bundle limits.
 
 ## Rendering step results
 
@@ -234,7 +234,7 @@ deployment-review.ui.tsx
           └── Browser asset graph → bundled React application
 ```
 
-The Node graph intercepts the import before the React module enters the workflow's deterministic module graph. It statically validates the literal `id` and `revision`, records them in the compiled UI catalog, and emits an opaque token similar to:
+The Node graph intercepts the import before the React module enters the workflow's deterministic module graph. It statically validates the literal `id` and optional `revision`, records them in the compiled UI catalog, and emits an opaque token similar to:
 
 ```ts
 {
@@ -369,7 +369,7 @@ This propagation is a launch requirement. Without it, a direct import may compil
 The repository's automated coverage now proves the core implementation contracts:
 
 - A real file workflow imports `.ui.tsx`, compiles separate Node and browser graphs, records a presentation, and serves only its event-associated frame.
-- A visual-only edit changes `buildHash` but not `defHash`; revision and props participate in presentation identity.
+- A visual-only edit changes `buildHash` but not `defHash`; props and the explicit or dependency-aware automatic revision participate in presentation identity.
 - Replay does not duplicate `ctx.ui.render()` occurrences, and UI steps refuse stale reuse-by-key salvage.
 - A changed human interaction supersedes the old same-key request, and an old request ID cannot answer the run.
 - The answer schema—not the component—accepts or rejects the staged candidate.

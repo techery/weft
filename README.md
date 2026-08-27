@@ -139,8 +139,11 @@ node packages/cli/bin/weft.js new recurring-review --template review
 node packages/cli/bin/weft.js new issue-queue --template task
 
 # or put `weft` on your PATH for this checkout
-pnpm -C packages/cli link --global
+pnpm install:global
 ```
+
+`pnpm install:global` registers this checkout's CLI as the global `weft` command. Run it again
+after switching to a different checkout or pulling CLI changes you want to use locally.
 
 ## Workflow manager preview
 
@@ -400,6 +403,17 @@ changing Weft; [RELEASING.md](./RELEASING.md) covers publishing a validated rele
 
 Workflow tests run with zero model calls. Fixtures match on the step key, receive the real request, and go
 through the engine's normal schema validation — a fixture that would not pass in production fails the test.
+
+Put project workflow tests under `test/workflows/` and run them with:
+
+```sh
+weft test
+weft test test/workflows/review.test.ts
+weft test --watch
+```
+
+`weft test` delegates to the locally installed Vitest through the project's package manager; it never installs
+dependencies implicitly. Use `weft check` separately to validate workflow source and schemas.
 
 ```ts
 import { mock, runWorkflow } from "@techery/weft-testing";

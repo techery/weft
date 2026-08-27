@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { api } from "~/api/client";
 import type { PendingRequest, RunDetail, RunRow, StepState } from "~/api/types";
-import { adaptRun, adaptRunRows, ago, gateAnswer, gateStepId, schemaQuestions, stepId } from "./adapt";
+import {
+  adaptRun,
+  adaptRunRows,
+  adaptWorkflow,
+  ago,
+  gateAnswer,
+  gateStepId,
+  schemaQuestions,
+  stepId,
+} from "./adapt";
 import { splitDiff } from "./diff";
 import { journalEntries } from "./journal";
 import { runTabs } from "./views";
@@ -100,6 +109,14 @@ describe("the steps rail", () => {
     );
     expect(run.rail[0]?.steps[0]?.state).toBe("waiting");
     expect(run.rail[0]?.steps[0]?.meta).toBe("waiting on you");
+    expect(run.rail.at(-1)?.name).toBe("needs you");
+    expect(run.rail.at(-1)?.steps[0]).toMatchObject({
+      id: gateStepId("h1"),
+      kind: "human",
+      label: "land it?",
+      meta: "answer required",
+      state: "waiting",
+    });
     // The gate is addressable by the request that raised it, not by the step's seq.
     expect(run.gateStep).toBe(gateStepId("h1"));
     expect(run.steps[gateStepId("h1")]).toBeDefined();
@@ -245,6 +262,64 @@ describe("the runs table", () => {
     expect(rows[0]?.cost).toBe("$1.50");
     // A row fetched without ?spend=1 has no cost to show, and shows none.
     expect(rows[1]?.cost).toBe("");
+  });
+});
+
+describe("workflow history", () => {
+  it("uses the same human-facing lifecycle language as queue and runs", () => {
+    const workflow = adaptWorkflow(
+      { id: "release", name: "release", file: "release.ts", description: "Ship safely." },
+      {
+        stats: {
+          name: "release",
+          windowDays: 30,
+          runs: 3,
+          truncated: false,
+          settled: 1,
+          ok: 1,
+          failed: 0,
+          cancelled: 0,
+          successRate: 1,
+          p50Ms: 1_000,
+          p95Ms: 1_000,
+          usd: 0,
+          tokens: 0,
+          p50Usd: null,
+          lastRunAt: 3_000,
+          recent: [
+            {
+              runId: "needs-you",
+              status: "waiting_for_human",
+              createdAt: 3_000,
+              updatedAt: 3_000,
+              usd: 0,
+              tokens: 0,
+              agentSteps: 0,
+            },
+            {
+              runId: "working",
+              status: "executing",
+              createdAt: 2_000,
+              updatedAt: 2_000,
+              usd: 0,
+              tokens: 0,
+              agentSteps: 1,
+            },
+            {
+              runId: "finished",
+              status: "complete",
+              createdAt: 1_000,
+              updatedAt: 1_000,
+              usd: 0,
+              tokens: 0,
+              agentSteps: 1,
+            },
+          ],
+        },
+      },
+    );
+
+    expect(workflow.recent.map((run) => run.outcome)).toEqual(["needs you", "running", "done"]);
   });
 });
 

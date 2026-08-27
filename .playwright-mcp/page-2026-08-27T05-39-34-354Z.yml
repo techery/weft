@@ -1,0 +1,38 @@
+- generic [ref=f5e3]:
+  - banner [ref=f5e4]:
+    - generic [ref=f5e5]:
+      - link "w weft" [ref=f5e6] [cursor=pointer]:
+        - /url: /queue
+        - generic [ref=f5e7]: w
+        - generic [ref=f5e8]: weft
+      - generic [ref=f5e9]: weft
+    - navigation [ref=f5e10]:
+      - link "Queue" [ref=f5e11] [cursor=pointer]:
+        - /url: /queue
+      - link "Runs" [ref=f5e12] [cursor=pointer]:
+        - /url: /runs
+      - link "Workflows" [ref=f5e13] [cursor=pointer]:
+        - /url: /workflows
+      - link "Settings" [ref=f5e14] [cursor=pointer]:
+        - /url: /settings
+    - generic [ref=f5e15]: daemon · 127.0.0.1:4788
+  - generic [ref=f5e19]:
+    - generic [ref=f5e20]:
+      - heading "Queue" [level=1] [ref=f5e21]
+      - generic [ref=f5e37]: 0 waiting on you · 0 running
+      - generic [ref=f5e23]:
+        - generic [ref=f5e24]: quick start
+        - button "audit-and-fix" [ref=f5e38] [cursor=pointer]
+        - button "ensure-code-coverage" [ref=f5e39] [cursor=pointer]
+        - button "maintain-agent-skill" [ref=f5e40] [cursor=pointer]
+        - button "review" [ref=f5e41] [cursor=pointer]
+    - generic [ref=f5e25]:
+      - generic [ref=f5e26]:
+        - generic [ref=f5e27]: Waiting on you · 0
+        - generic [ref=f5e29]: blocks the run until answered
+      - generic [ref=f5e30]: Nothing is waiting on you.
+    - generic [ref=f5e31]:
+      - generic [ref=f5e32]:
+        - generic [ref=f5e33]: Running · 0
+        - generic [ref=f5e35]: pool 14 agents
+      - generic [ref=f5e42]: No runs are working right now.

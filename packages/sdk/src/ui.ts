@@ -1,6 +1,26 @@
 /** JSON values are the only data custom views may receive across the journal/frame boundary. */
 export type JsonPrimitive = string | number | boolean | null;
-export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+export interface JsonObject {
+  [key: string]: JsonValue | undefined;
+}
+export type JsonValue = JsonPrimitive | JsonValue[] | JsonObject;
+
+type IsJsonCompatible<T> = [T] extends [JsonPrimitive]
+  ? true
+  : T extends (...args: any[]) => unknown
+    ? false
+    : T extends readonly (infer Item)[]
+      ? IsJsonCompatible<Item>
+      : T extends object
+        ? false extends {
+            [Key in keyof T]-?: IsJsonCompatible<Exclude<T[Key], undefined>>;
+          }[keyof T]
+          ? false
+          : true
+        : false;
+
+type RequireJson<Props, Label extends string> =
+  false extends IsJsonCompatible<Props> ? { readonly [Key in Label]: never } : unknown;
 
 export type UiViewMode = "input" | "display";
 
@@ -48,20 +68,35 @@ export interface DisplayUiViewDefinition<Props> extends DisplayUiView<Props> {
   component(props: ResultViewProps<Props>): unknown;
 }
 
-export function defineUiView<Props, Answer>(definition: {
-  id: string;
-  revision: string;
-  component(props: InputViewProps<Props, Answer>): unknown;
-}): InputUiViewDefinition<Props, Answer> {
-  return Object.freeze({ kind: "weft.ui-view", mode: "input", ...definition });
+export function defineUiView<Props, Answer>(
+  definition: {
+    id: string;
+    revision?: string;
+    component(props: InputViewProps<Props, Answer>): unknown;
+  } & RequireJson<Props, "__ui_props_must_be_json"> &
+    RequireJson<Answer, "__ui_answer_must_be_json">,
+): InputUiViewDefinition<Props, Answer> {
+  return Object.freeze({
+    kind: "weft.ui-view",
+    mode: "input",
+    ...definition,
+    revision: definition.revision ?? "auto",
+  });
 }
 
-export function defineResultView<Props>(definition: {
-  id: string;
-  revision: string;
-  component(props: ResultViewProps<Props>): unknown;
-}): DisplayUiViewDefinition<Props> {
-  return Object.freeze({ kind: "weft.ui-view", mode: "display", ...definition });
+export function defineResultView<Props>(
+  definition: {
+    id: string;
+    revision?: string;
+    component(props: ResultViewProps<Props>): unknown;
+  } & RequireJson<Props, "__ui_props_must_be_json">,
+): DisplayUiViewDefinition<Props> {
+  return Object.freeze({
+    kind: "weft.ui-view",
+    mode: "display",
+    ...definition,
+    revision: definition.revision ?? "auto",
+  });
 }
 
 /** Token emitted into the Node workflow bundle by the gate compiler. */
@@ -96,5 +131,5 @@ export interface UiRenderOptions<Props> {
 }
 
 export interface UiApi {
-  render<Props>(opts: UiRenderOptions<Props>): Promise<void>;
+  render<Props>(opts: UiRenderOptions<Props> & RequireJson<Props, "__ui_props_must_be_json">): Promise<void>;
 }
