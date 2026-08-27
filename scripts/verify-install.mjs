@@ -76,7 +76,7 @@ try {
         run(cli, ["new", "probe"], { cwd: dir });
         return run(cli, ["check"], { cwd: dir });
       },
-      (out) => out.includes("probe.ts"),
+      (out) => out.includes("probe/main.ts"),
     ],
     [
       "weft-mcp initialize",
