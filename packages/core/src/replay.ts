@@ -374,12 +374,11 @@ export class ReplayIndex {
   }
 
   /**
-   * Humans carry no `key` — `ctx.human.ask/approve/review` and `gateStep` expose none —
-   * so two requests with the same question and schema are indistinguishable by content
-   * alone. Position is the only discriminator they have, and a position only means
-   * something while the script is unchanged. When it is not, handing over an arbitrary
-   * entry lets a SURVIVING gate consume the answer a DELETED sibling received, replaying
-   * a recorded denial as an approval with nothing in the journal to say so.
+   * Keyless human requests with the same question and schema are indistinguishable by
+   * content alone. Position is the only discriminator they have, and a position only
+   * means something while the script is unchanged. When it is not, handing over an
+   * arbitrary entry lets a SURVIVING gate consume the answer a DELETED sibling received,
+   * replaying a recorded denial as an approval with nothing in the journal to say so.
    *
    * So this mirrors {@link matchStep}: serve on position when positions are trusted, and
    * otherwise report the ambiguity rather than guess. The caller re-opens the request —

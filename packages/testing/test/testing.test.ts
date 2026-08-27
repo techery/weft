@@ -910,12 +910,12 @@ describe("side-effect fixtures", () => {
         name: "sequence-dx",
         description: "run stable item stages sequentially",
         input: z.object({}),
-        output: z.object({ values: z.array(z.string()) }),
+        output: z.object({ values: z.array(z.string()), after: z.string() }),
       },
-      async (ctx) => ({
-        values: await ctx.sequence(
+      async (ctx) => {
+        const values = await ctx.sequence(
           ["auth", "billing"],
-          { keyOf: (item) => item, phase: (item) => `Review ${item}`, keyPrefix: "module" },
+          { key: "module", keyOf: (item) => item, phase: (item) => `Review ${item}` },
           async (_item, item) => {
             const response = await item.ctx.agent("review", {
               key: item.key("review"),
@@ -923,21 +923,27 @@ describe("side-effect fixtures", () => {
             });
             return response.value;
           },
-        ),
-      }),
+        );
+        const after = await ctx.agent("after", {
+          key: "after-sequence",
+          schema: z.object({ value: z.string() }),
+        });
+        return { values, after: after.value };
+      },
     );
-    const provider = mock().on(
-      { key: "module:*:review" },
-      fixture.sequence([{ value: "auth-ok" }, { value: "billing-ok" }]),
-    );
+    const provider = mock()
+      .on({ key: "module:*:review" }, fixture.sequence([{ value: "auth-ok" }, { value: "billing-ok" }]))
+      .on({ key: "after-sequence" }, { value: "done" });
     const result = await runWorkflow(workflow, { input: {}, provider });
 
     expect(result.output.values).toEqual(["auth-ok", "billing-ok"]);
+    expect(result.output.after).toBe("done");
     expect(result.journal.step("module:auth:review").phase).toBe("Review auth");
     expect(result.journal.step("module:billing:review").phase).toBe("Review billing");
     expect(result.journal.ran("module:auth:review")).toBe(true);
     expect(result.journal.neverRan("module:other:review")).toBe(true);
     expect(result.journal.step("module:auth:review").payload).toMatchObject({ prompt: "review" });
+    expect(result.journal.step("after-sequence").phase).toBeUndefined();
   });
 
   test("sequence rejects duplicate item identity before dispatching any effect", async () => {
@@ -950,9 +956,16 @@ describe("side-effect fixtures", () => {
         output: z.object({}),
       },
       async (ctx) => {
-        await ctx.sequence(["same", "same"], { keyOf: (item) => item }, async (_item, scope) => {
-          await scope.ctx.agent("never", { key: scope.key("agent"), schema: z.object({ ok: z.boolean() }) });
-        });
+        await ctx.sequence(
+          ["same", "same"],
+          { key: "duplicate", keyOf: (item) => item },
+          async (_item, scope) => {
+            await scope.ctx.agent("never", {
+              key: scope.key("agent"),
+              schema: z.object({ ok: z.boolean() }),
+            });
+          },
+        );
         return {};
       },
     );

@@ -279,8 +279,9 @@ Durations are \`"250ms"\`, \`"90s"\`, \`"10m"\`, \`"2h"\`, \`"7d"\`, or a number
 | --- | --- |
 | \`ctx.agent(prompt, { schema, key, label, provider, providerOptions, providerRequirements, model, effort, isolation, write, maxTurns, timeout, retry, repair, onMaxTurns, onError })\` | the validated value |
 | \`ctx.agent.detailed(prompt, opts)\` | \`{ value, usage, files, patch, attempts, sessionId }\` |
-| \`ctx.sequence(items, { keyOf, phase?, keyPrefix? }, run)\` | sequential results with one stable keyed scope per item |
-| \`ctx.parallel(tasks, { concurrency, errors })\` | \`Settled<T>[]\`, in input order |
+| \`ctx.sequence(items, { key, keyOf, phase? }, run)\` | sequential results with one globally namespaced keyed scope per item |
+| \`ctx.parallel(tasks, { errors })\` | eager/mixed tasks as \`Settled<T>[]\`; no concurrency cap |
+| \`ctx.parallel(thunks, { concurrency, errors })\` | bounded thunk fan-out as \`Settled<T>[]\` |
 | \`ctx.parallel(items, mapper, { concurrency, errors })\` | bounded mapper fan-out as \`Settled<T>[]\` |
 | \`ctx.pipeline(items)\` | a lazy lane pipeline; no work starts until \`run\` |
 | \`ctx.pipeline.step(fn)\` | transform each surviving lane asynchronously |
@@ -326,7 +327,7 @@ array index:
 \`\`\`ts
 const reviewed = await ctx.sequence(
   items,
-  { keyOf: (item) => item.id, phase: (item) => \`Review \${item.id}\`, keyPrefix: "item" },
+  { key: "review", keyOf: (item) => item.id, phase: (item) => \`Review \${item.id}\` },
   (item, scope) =>
     scope.ctx.agent(\`Review \${item.path}\`, {
       key: scope.key("review"),
@@ -457,10 +458,10 @@ namespace.
 | \`ctx.tasks.setCriterion(id, criterionId, met, { key, ifRevision? })\` | void |
 
 Workflows that configure \`meta.tasks\` give agent steps a bounded read-only task snapshot by
-default. Set \`meta.tasks.agentAccess: "write"\` only when mutation should be the workflow-wide
-default, or set \`tasks: { mode: "write" }\` on the particular agent step that needs to mutate
-tasks. Use \`tasks: false\` on a step to omit context, or pass an explicit read selector when it
-needs only part of the snapshot, such as \`tasks: { mode: "read", statuses: ["blocked"] }\`.
+default. Set \`meta.tasks.agentAccess: "write"\` only when some agent step may mutate tasks, then
+opt that particular step into \`tasks: { mode: "write" }\`; a step can narrow but never exceed the
+workflow contract. Use \`tasks: false\` to omit context, or pass an explicit read selector such as
+\`tasks: { mode: "read", statuses: ["blocked"] }\`.
 The engine validates, journals, and applies structured
 \`taskOperations\` idempotently only after a write-authorized step succeeds; in read mode that
 array must be empty. Use workflow-owned \`ctx.tasks\` calls when the program, rather than the

@@ -4,7 +4,7 @@ import type { Ctx, Effort, ProviderId } from "./types.ts";
 interface WorkflowTaskSchemaEvolution {
   /** Increment when persisted extension values need an explicit migration. Defaults to 1. */
   schemaVersion?: number;
-  /** Default task authority for agent steps. Omitted means read-only; writes require an explicit opt-in. */
+  /** Maximum task authority for agent steps. Omitted means read-only; write steps must also opt in per call. */
   agentAccess?: false | "read" | "write";
 }
 

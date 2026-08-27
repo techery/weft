@@ -147,7 +147,12 @@ export default defineWorkflow(
       agentAccess: "write",
     },
   },
-  async (ctx) => ctx.agent("Track this", { key: "path-task", schema: z.object({ ok: z.boolean() }) }),
+  async (ctx) =>
+    ctx.agent("Track this", {
+      key: "path-task",
+      schema: z.object({ ok: z.boolean() }),
+      tasks: { mode: "write" },
+    }),
 );
 `,
     );
@@ -338,7 +343,12 @@ export default defineWorkflow(
           output: z.object({ verdict: z.string() }),
           tasks: { agentAccess: "write" },
         },
-        async (ctx) => ctx.agent("Is this fine?", { key: "verdict", schema: z.object({ verdict: z.string() }) }),
+        async (ctx) =>
+          ctx.agent("Is this fine?", {
+            key: "verdict",
+            schema: z.object({ verdict: z.string() }),
+            tasks: { mode: "write" },
+          }),
       );
       `,
     );

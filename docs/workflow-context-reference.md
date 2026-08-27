@@ -28,6 +28,22 @@ The TypeScript contract is defined by [`Ctx`](../packages/sdk/src/types.ts) and
 [`UiApi`](../packages/sdk/src/ui.ts). The runtime behavior is implemented in
 [`buildCtx`](../packages/core/src/ctx.ts).
 
+## Contents
+
+- [Mental model](#mental-model)
+- [Surface map](#surface-map)
+- [Agents](#agents)
+- [Fan-out and flow control](#fan-out-and-flow-control)
+- [Workflow and reusable composition](#workflow-and-reusable-composition)
+- [Humans and custom UI](#humans-and-custom-ui)
+- [Files, commands, environment, and HTTP](#files-commands-environment-and-http)
+- [Git](#git)
+- [Checks, patches, and notes](#checks-patches-and-notes)
+- [Durable workflow tasks](#durable-workflow-tasks)
+- [Durable waits and journaled values](#durable-waits-and-journaled-values)
+- [Structure, logging, and run metadata](#structure-logging-and-run-metadata)
+- [Recommended patterns](#recommended-patterns)
+
 ## Mental model
 
 ### Journaled steps and transparent orchestration
@@ -159,7 +175,8 @@ patch or `ctx.discard()` to close it without landing it. A run cannot complete w
 #### Workflow task context for agents
 
 Task context is available only when the workflow declares a task contract and the host has a task tracker.
-Use `tasks: false` to omit it, or pass a selector and an explicit mode:
+Use `tasks: false` to omit it, or pass a selector and an explicit mode. A step may narrow the workflow's
+`meta.tasks.agentAccess`, but cannot exceed it; write mode therefore requires workflow-level write authority:
 
 ```ts
 await ctx.agent("Reassess open parser work.", {
@@ -199,7 +216,7 @@ Accepts the same direct-prompt and reusable-agent forms, but returns operational
 ```ts
 type DetailedAgentResult<T> = {
   value: T;
-  usage: { input: number; output: number; cacheRead?: number; usd?: number };
+  usage: { input: number; output: number; cacheRead?: number; usd?: number; samples?: number };
   files: string[];
   patch?: { ref: string; key: string; files: string[]; quarantined?: boolean; outOfScope?: string[] };
   attempts: number;
@@ -234,8 +251,9 @@ Each result is `{ ok: true, value }` or `{ ok: false, error: StepError }`.
 
 - `errors: "settle"` is the default and lets the caller choose how to handle lane failures.
 - `errors: "throw"` waits for every lane to settle, then throws the first failure.
-- `concurrency` works with the item/mapper form or an array of thunks. It cannot limit promises that were
-  already started; Weft rejects that combination rather than pretend to bound it.
+- `concurrency` works with the item/mapper form or an array of thunks. Eager or mixed task arrays cannot accept
+  a concurrency option in TypeScript; the runtime also rejects casted or JavaScript callers rather than pretend
+  to limit promises that have already started.
 - The engine enforces its configured fan-out cap and global concurrent-step limit.
 - Cancellation propagates instead of becoming an ordinary settled failure.
 
@@ -312,9 +330,9 @@ Traverses items sequentially and gives each item a stable phase-scoped context a
 const outputs = await ctx.sequence(
   services,
   {
+    key: "deploy-service",
     keyOf: (service) => service.id,
     phase: (service) => `Deploy ${service.name}`,
-    keyPrefix: "service",
   },
   async (service, item) => {
     return item.ctx.workflow(deployService, service, {
@@ -324,9 +342,10 @@ const outputs = await ctx.sequence(
 );
 ```
 
-`keyOf` must return a unique, non-empty string without `:` for every item. `keyPrefix` and local keys have the
-same restriction. `item.key("deploy")` produces `service:<itemKey>:deploy`. The default phase is the item key
-and the default prefix is `item`.
+`key` is the stable call-site namespace and must be a non-empty string without `:`. `keyOf` must return a
+unique, non-empty string without `:` for every item, and local keys have the same restriction.
+`item.key("deploy")` produces `deploy-service:<itemKey>:deploy`. The default phase is the item key. Separate
+sequence calls must use separate `key` values because replay keys are unique across the whole run.
 
 Use `sequence` for ordered traversal where stable per-item structure matters. It stops on the first thrown
 failure and returns plain `Result[]`, not settled results.
@@ -359,8 +378,9 @@ composition whose individual effects should remain directly in the parent run.
 
 ### `ctx.scope(options)`
 
-Returns an immutable context that applies defaults to all nested calls, including nested namespaces such as
-`human.ask`, `git.branch.create`, and `agent.detailed`:
+Returns an immutable context that applies the supported `agent`, `tasks`, and `parallel` defaults. The execution
+scope also binds nested namespaces such as `human.ask`, `git.branch.create`, and `agent.detailed`, so an outer
+phase remains attached even when the method is reached through a nested property:
 
 ```ts
 const deepReview = ctx.scope({
@@ -405,6 +425,7 @@ Requests approval for an action with a risk tier:
 
 ```ts
 const decision = await ctx.gate({
+  key: "deploy:payments:production",
   action: "Deploy payments to production",
   risk: "high",
   detail: "Image sha256:abc123; migrations: none",
@@ -418,7 +439,8 @@ auto-approved and `medium`, `high`, and `irreversible` ask a person. Irreversibl
 confirmation token unless policy auto-approves them. Policy approvals are still journaled.
 
 The result is `{ approved, note?, answeredBy }`, where `answeredBy` is `"human"`, `"policy"`, or `"timeout"`.
-Use `gate` for risk policy, not for arbitrary typed input; use `human.ask` for typed questions.
+Use `gate` for risk policy, not for arbitrary typed input; use `human.ask` for typed questions. Give repeated or
+reorderable gates distinct `key` values so their answers remain replayable after source edits.
 
 ### `ctx.human.ask(options)`
 
@@ -473,7 +495,9 @@ const approval = await ctx.human.approve({
 ```
 
 Unlike `ctx.gate`, this method is an explicit human checkpoint. A denied or timed-out approval is returned as
-`{ approved: false, note? }`; workflow code decides what to do next.
+`{ approved: false, note? }`; workflow code decides what to do next. Approval timeouts may deny, escalate and
+keep waiting, or provide an explicit `{ default: { approved: false, note? } }`. The type and runtime reject an
+approval-producing timeout default because approval requires a human answer.
 
 ### `ctx.human.review(options)`
 

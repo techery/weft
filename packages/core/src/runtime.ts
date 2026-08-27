@@ -12,6 +12,7 @@ import {
   type CompiledUiCatalog,
   type CompiledUiViewToken,
   type CtxScopeOptions,
+  type GateRequest,
   type GateResult,
   isCancellation,
   type Risk,
@@ -259,8 +260,8 @@ export interface RunRuntimeOptions {
   workflowId: string;
   taskSchemaBinding?: string;
   taskSchemaVersion?: number;
-  /** Default task authority for agent steps that do not specify `tasks`. */
-  defaultAgentTaskContext?: false | "read" | "write";
+  /** Maximum workflow-declared task authority. Agent calls default to read and may only narrow it. */
+  agentTaskAccess?: false | "read" | "write";
   cwd: string;
   baseRef?: string;
   depth: number;
@@ -279,7 +280,7 @@ export class RunRuntime {
   readonly workflowId: string;
   readonly taskSchemaBinding: string | undefined;
   readonly taskSchemaVersion: number;
-  readonly defaultAgentTaskContext: false | "read" | "write";
+  readonly agentTaskAccess: false | "read" | "write";
   readonly cwd: string;
   readonly baseRef: string | undefined;
   readonly depth: number;
@@ -339,7 +340,7 @@ export class RunRuntime {
     this.workflowId = opts.workflowId;
     this.taskSchemaBinding = opts.taskSchemaBinding;
     this.taskSchemaVersion = opts.taskSchemaVersion ?? 1;
-    this.defaultAgentTaskContext = opts.defaultAgentTaskContext ?? false;
+    this.agentTaskAccess = opts.agentTaskAccess ?? false;
     this.cwd = opts.cwd;
     this.baseRef = opts.baseRef;
     this.depth = opts.depth;
@@ -1550,7 +1551,7 @@ export class RunRuntime {
     return { mode: "ask", confirm: risk === "irreversible" };
   }
 
-  async gateStep(req: { action: string; risk: Risk; detail?: string }): Promise<GateResult> {
+  async gateStep(req: GateRequest): Promise<GateResult> {
     const { mode, confirm } = this.resolveApproval(req.action, req.risk);
     const confirmToken = confirm ? `confirm:${sha256Hex(req.action).slice(0, 8)}` : undefined;
     const schemaJson = confirm
@@ -1570,6 +1571,7 @@ export class RunRuntime {
         };
     const outcome = await this.runHuman({
       kind: confirm ? "confirm" : "gate",
+      ...(req.key !== undefined ? { key: req.key } : {}),
       question: req.action,
       schemaJson,
       risk: req.risk,

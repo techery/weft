@@ -22,6 +22,7 @@ import {
   type AnySchema,
   CancelledError,
   type CheckDefinition,
+  type CheckExecutionResult,
   type CheckFn,
   type CheckInvocationOptions,
   type CheckOptions,
@@ -626,13 +627,39 @@ export function buildCtx(rt: RunRuntime): Ctx {
         { step: { kind: "agent", key: opts.key, label } },
       );
     }
+    if (opts.tasks !== undefined && opts.tasks !== false) {
+      if (!rt.host.taskTracker) {
+        throw new StepError("invalid_input", "ctx.agent: task context requires a workflow task tracker", {
+          step: { kind: "agent", key: opts.key, label },
+        });
+      }
+      if (rt.agentTaskAccess === false) {
+        throw new StepError(
+          "invalid_input",
+          "ctx.agent: task context is disabled for this workflow; declare meta.tasks.agentAccess",
+          { step: { kind: "agent", key: opts.key, label } },
+        );
+      }
+      if (opts.tasks.mode !== "read" && opts.tasks.mode !== "write") {
+        throw new StepError("invalid_input", "ctx.agent: tasks.mode must be explicitly read or write", {
+          step: { kind: "agent", key: opts.key, label },
+        });
+      }
+      if (opts.tasks.mode === "write" && rt.agentTaskAccess !== "write") {
+        throw new StepError(
+          "invalid_input",
+          "ctx.agent: tasks.mode write exceeds this workflow's agentAccess; declare meta.tasks.agentAccess as write",
+          { step: { kind: "agent", key: opts.key, label } },
+        );
+      }
+    }
     // In-place providers write in the integration root, where executing the human CLI
     // would bypass the journal boundary. Default task context is therefore isolated-only.
     const taskAccess =
       opts.tasks === false || !rt.host.taskTracker || mode.writeInPlace
         ? undefined
-        : (opts.tasks ?? (rt.defaultAgentTaskContext ? { mode: rt.defaultAgentTaskContext } : undefined));
-    const taskMode = taskAccess?.mode ?? "write";
+        : (opts.tasks ?? (rt.agentTaskAccess ? { mode: "read" as const } : undefined));
+    const taskMode = taskAccess?.mode ?? "read";
     const taskSelector: WorkflowTaskSelector | undefined = taskAccess
       ? {
           ...(taskAccess.ids ? { ids: taskAccess.ids } : {}),
@@ -2510,6 +2537,20 @@ export function buildCtx(rt: RunRuntime): Ctx {
       return outcome.answer as never;
     },
     approve: async (opts) => {
+      const approvalTimeoutDefault =
+        typeof opts.onTimeout === "object" && opts.onTimeout !== null ? opts.onTimeout.default : undefined;
+      if (
+        approvalTimeoutDefault !== undefined &&
+        (typeof approvalTimeoutDefault !== "object" ||
+          approvalTimeoutDefault === null ||
+          approvalTimeoutDefault.approved !== false)
+      ) {
+        throw new StepError(
+          "invalid_input",
+          "ctx.human.approve: onTimeout.default must deny; approval requires a human answer",
+          { step: { kind: "human", key: opts.key } },
+        );
+      }
       const outcome = await rt.runHuman({
         kind: "approve",
         ...(opts.key !== undefined ? { key: opts.key } : {}),
@@ -2568,7 +2609,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     opts: CheckOptions,
     definitionMeta?: { revision?: string; inputHash?: string },
   ): Promise<CheckResult> {
-    const normalize = (value: boolean | CheckResult): CheckResult => {
+    const normalize = (value: boolean | CheckExecutionResult): CheckResult => {
       if (typeof value === "boolean") {
         return { status: value ? "pass" : "fail", disposition: "executed" };
       }
@@ -2576,6 +2617,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
         throw new StepError("invalid_output", `check:${name} returned an invalid status`);
       }
       return { ...value, disposition: "executed" };
+    };
+    const reviveCheckResult = (journaled: unknown): CheckResult => {
+      const value = journaled as CheckExecutionResult & { disposition?: CheckResult["disposition"] };
+      return { ...value, disposition: value.disposition ?? "executed" };
     };
     const required = opts.policy === "required" || opts.required === true;
     const definitionPayload = {
@@ -2599,6 +2644,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         ...(opts.key !== undefined ? { key: opts.key } : {}),
         label: `check:${name}`,
         payload: { name, trustPrior: opts.trustPrior, required, ...definitionPayload },
+        revive: reviveCheckResult,
         onSettle: settle,
         execute: async () => ({
           value: {
@@ -2617,6 +2663,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         ...(opts.key !== undefined ? { key: opts.key } : {}),
         label: `check:${name}`,
         payload: { name, exec: opts.exec, required, ...definitionPayload },
+        revive: reviveCheckResult,
         onSettle: settle,
         execute: async (io) => {
           const stubbed = await rt.host.testHooks?.exec?.(file, args);
@@ -2654,6 +2701,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         ...(opts.key !== undefined ? { key: opts.key } : {}),
         label: `check:${name}`,
         payload: { name, fn: true, required, ...definitionPayload },
+        revive: reviveCheckResult,
         onSettle: settle,
         // A function check's real inputs live in its CLOSURE — invisible to the
         // content hash. Serving a journaled pass could vouch for an artifact a
@@ -2705,6 +2753,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
       ...(opts.key !== undefined ? { key: opts.key } : {}),
       label: `check:${name}`,
       payload: { name, skipped: true, reason: opts.skip?.reason, required, ...definitionPayload },
+      revive: reviveCheckResult,
       onSettle: settle,
       execute: async () => ({
         value: {
@@ -3618,9 +3667,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
   };
 
   const sequence: Ctx["sequence"] = async (items, opts, run) => {
-    const prefix = opts.keyPrefix ?? "item";
-    if (typeof prefix !== "string" || prefix.trim() === "" || prefix.includes(":")) {
-      throw new StepError("invalid_input", "ctx.sequence: keyPrefix must be a non-empty string without ':'");
+    const sequenceKey = opts.key;
+    if (typeof sequenceKey !== "string" || sequenceKey.trim() === "" || sequenceKey.includes(":")) {
+      throw new StepError("invalid_input", "ctx.sequence: key must be a non-empty string without ':'");
     }
     const identities = items.map((item, index) => {
       const itemKey = opts.keyOf(item, index);
@@ -3640,29 +3689,37 @@ export function buildCtx(rt: RunRuntime): Ctx {
       seen.add(itemKey);
     }
 
+    const parent = rt.activeScope();
     const results: unknown[] = [];
     for (let index = 0; index < items.length; index++) {
       const item = items[index]!;
       const itemKey = identities[index]!;
       const label = opts.phase?.(item, index) ?? itemKey;
-      const itemCtx = phase(label);
+      if (typeof label !== "string" || label.trim() === "") {
+        throw new StepError("invalid_input", "ctx.sequence: phase must be a non-empty string");
+      }
+      const cleanLabel = label.trim();
+      const fullName = parent?.phase ? `${parent.phase} / ${cleanLabel}` : cleanLabel;
+      const itemCtx = scopedContext(mergeScope(parent, { phase: fullName }));
       results.push(
-        await run(
-          item,
-          {
-            ctx: itemCtx,
-            itemKey,
-            key(local: string) {
-              if (typeof local !== "string" || local.trim() === "" || local.includes(":")) {
-                throw new StepError(
-                  "invalid_input",
-                  "ctx.sequence item key(): local key must be non-empty and cannot contain ':'",
-                );
-              }
-              return `${prefix}:${itemKey}:${local}`;
+        await rt.withScope(parent ?? {}, () =>
+          run(
+            item,
+            {
+              ctx: itemCtx,
+              itemKey,
+              key(local: string) {
+                if (typeof local !== "string" || local.trim() === "" || local.includes(":")) {
+                  throw new StepError(
+                    "invalid_input",
+                    "ctx.sequence item key(): local key must be non-empty and cannot contain ':'",
+                  );
+                }
+                return `${sequenceKey}:${itemKey}:${local}`;
+              },
             },
-          },
-          index,
+            index,
+          ),
         ),
       );
     }

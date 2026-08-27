@@ -39,7 +39,7 @@ export default defineWorkflow(
       .run();
     const children = await ctx.sequence(
       values,
-      { keyOf: (value) => String(value), phase: (value) => `Value ${value}`, keyPrefix: "value" },
+      { key: "value", keyOf: (value) => String(value), phase: (value) => `Value ${value}` },
       (value, item) => item.ctx.workflow(child, { n: value }, { key: item.key("double") }),
     );
     return {

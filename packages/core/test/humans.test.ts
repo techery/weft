@@ -190,6 +190,25 @@ describe("human review, confirm tokens, escalation", () => {
     expect(await handle.result).toEqual({ ok: true });
   });
 
+  test("human approval cannot default to approved on timeout", async () => {
+    const t = testEngine();
+    const def = defineWorkflow(
+      { description: "no timeout approval", input: z.object({}), output: z.object({}) },
+      async (ctx) => {
+        await ctx.human.approve({
+          action: "Deploy production",
+          timeout: 10,
+          onTimeout: { default: { approved: true } },
+        } as never);
+        return {};
+      },
+    );
+
+    const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(handle.result).rejects.toThrow(/approval requires a human answer/);
+    expect(await t.engine.pending(handle.runId)).toHaveLength(0);
+  });
+
   test("onTimeout: 'deny' on an ask throws human_timeout inside the workflow", async () => {
     const t = testEngine();
     const def = defineWorkflow(

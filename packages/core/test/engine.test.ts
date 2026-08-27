@@ -56,7 +56,7 @@ describe("engine end to end", () => {
 
     const recs = await records(t.journal, handle.runId);
     expect(recs.find((record) => record.ev.type === "run.created")?.ev).toMatchObject({
-      workflow: { taskContextVersion: 2 },
+      workflow: { taskContextVersion: 3 },
     });
     const types = recs.map((r) => r.ev.type);
     expect(types).toContain("run.created");
@@ -262,6 +262,7 @@ describe("engine end to end", () => {
           description: "edited agent task batch",
           input: z.object({}),
           output: z.object({ version: z.string() }),
+          tasks: { agentAccess: "write" },
         },
         async (ctx) => {
           const result = await ctx.agent(prompt, {
@@ -394,10 +395,12 @@ describe("engine end to end", () => {
     );
     const def = defineWorkflow(
       {
+        id: "task-conflict",
         name: "task-conflict",
         description: "retry task conflicts",
         input: z.object({}),
         output: z.object({}),
+        tasks: { agentAccess: "write" },
       },
       async (ctx) => {
         await ctx.agent("Record the finding", {
@@ -440,10 +443,12 @@ describe("engine end to end", () => {
     ]);
     const def = defineWorkflow(
       {
+        id: "replay-task-conflict",
         name: "replay-task-conflict",
         description: "retry replay settlement conflicts",
         input: z.object({}),
         output: z.object({}),
+        tasks: { agentAccess: "write" },
       },
       async (ctx) => {
         await ctx.agent("Record the finding", {
@@ -501,10 +506,12 @@ describe("engine end to end", () => {
     ]);
     const def = defineWorkflow(
       {
+        id: "unsuppressible-task-settlement",
         name: "unsuppressible-task-settlement",
         description: "settlement must finish",
         input: z.object({}),
         output: z.object({ suppressed: z.boolean() }),
+        tasks: { agentAccess: "write" },
       },
       async (ctx) => {
         const value = await ctx.agent("Record the task", {
@@ -555,7 +562,14 @@ describe("engine end to end", () => {
       ]),
     );
     const def = defineWorkflow(
-      { name: "reader", description: "read tasks", input: z.object({}), output: z.object({}) },
+      {
+        id: "reader",
+        name: "reader",
+        description: "read tasks",
+        input: z.object({}),
+        output: z.object({}),
+        tasks: {},
+      },
       async (ctx) => {
         await ctx.agent("Inspect the existing backlog", {
           schema: z.object({ ok: z.boolean() }),
@@ -576,6 +590,68 @@ describe("engine end to end", () => {
     expect(
       t.builder.calls.slice(1).every((call) => call.issues?.some((issue) => issue.path === "taskOperations")),
     ).toBe(true);
+  });
+
+  test("requires an explicit task mode before provider dispatch", async () => {
+    const t = testEngine({
+      taskTracker: {
+        snapshot: async () => ({ total: 0, truncated: false, tasks: [] }),
+        schema: async () => null,
+        applyBatch: async () => undefined,
+      },
+    });
+    const def = defineWorkflow(
+      {
+        id: "explicit-task-mode",
+        description: "require explicit task authority",
+        input: z.object({}),
+        output: z.object({}),
+        tasks: { agentAccess: "write" },
+      },
+      async (ctx) => {
+        await ctx.agent("Inspect tasks", {
+          key: "inspect",
+          schema: z.object({ ok: z.boolean() }),
+          tasks: {} as never,
+        });
+        return {};
+      },
+    );
+
+    const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(handle.result).rejects.toThrow(/tasks\.mode must be explicitly read or write/);
+    expect(t.builder.calls).toHaveLength(0);
+  });
+
+  test("step task authority cannot exceed the workflow contract", async () => {
+    const t = testEngine({
+      taskTracker: {
+        snapshot: async () => ({ total: 0, truncated: false, tasks: [] }),
+        schema: async () => null,
+        applyBatch: async () => undefined,
+      },
+    });
+    const def = defineWorkflow(
+      {
+        id: "bounded-task-mode",
+        description: "bound task authority",
+        input: z.object({}),
+        output: z.object({}),
+        tasks: {},
+      },
+      async (ctx) => {
+        await ctx.agent("Mutate tasks", {
+          key: "mutate",
+          schema: z.object({ ok: z.boolean() }),
+          tasks: { mode: "write" },
+        });
+        return {};
+      },
+    );
+
+    const handle = await t.engine.start(def, { input: {}, cwd: await tempDir() });
+    await expect(handle.result).rejects.toThrow(/tasks\.mode write exceeds this workflow's agentAccess/);
+    expect(t.builder.calls).toHaveLength(0);
   });
 
   test("parallel collects per-branch failures; ok() records drops", async () => {
@@ -646,7 +722,12 @@ describe("engine end to end", () => {
     const def = defineWorkflow(
       { description: "invalid cap", input: z.object({}), output: z.object({}) },
       async (ctx) => {
-        await ctx.parallel([Promise.resolve(1), Promise.resolve(2)], { concurrency: 1 });
+        await (
+          ctx.parallel as unknown as (
+            tasks: Promise<number>[],
+            options: { concurrency: number },
+          ) => Promise<unknown>
+        )([Promise.resolve(1), Promise.resolve(2)], { concurrency: 1 });
         return {};
       },
     );
@@ -1338,7 +1419,7 @@ describe("engine end to end", () => {
             trust: { run: input.priorRun, reason: "same validated input" },
           },
         );
-        return { disposition: result.disposition ?? "executed" };
+        return { disposition: result.disposition };
       },
     );
     const trustedHandle = await t.engine.start(trusted, {

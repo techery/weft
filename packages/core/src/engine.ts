@@ -50,8 +50,8 @@ const SHUTDOWN_DRAIN_MS = 5_000;
  */
 const TERMINAL_DRAIN_MS = 5_000;
 
-/** Journal format where workflow metadata controls default agent task authority. */
-const TASK_CONTEXT_VERSION = 2;
+/** Journal format where workflow metadata caps authority and calls opt into writes. */
+const TASK_CONTEXT_VERSION = 3;
 
 type DefaultTaskAccess = false | "read" | "write";
 
@@ -69,8 +69,7 @@ function replayTaskAccess(records: JournalRecord[], def: WorkflowDefinition): De
   const created = records.find((record) => record.ev.type === "run.created")?.ev;
   if (created?.type === "run.created") {
     const version = created.workflow.taskContextVersion ?? 0;
-    if (version === 1) return "write";
-    if (version >= TASK_CONTEXT_VERSION) return configuredTaskAccess(def);
+    if (version >= 1) return configuredTaskAccess(def);
   }
   if (
     records.some(
@@ -82,7 +81,7 @@ function replayTaskAccess(records: JournalRecord[], def: WorkflowDefinition): De
         (record.ev.payload as { op?: unknown }).op === "task.observe",
     )
   ) {
-    return "write";
+    return configuredTaskAccess(def);
   }
   // No historical agent identity can be invalidated before the first agent is
   // scheduled, so an old run suspended earlier may safely adopt the new default.
@@ -465,7 +464,7 @@ export class Engine implements EngineHost {
       workflowId,
       ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
       taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
-      defaultAgentTaskContext: this.taskTracker ? configuredTaskAccess(def) : false,
+      agentTaskAccess: this.taskTracker ? configuredTaskAccess(def) : false,
       cwd: opts.cwd,
       depth: 0,
       shared,
@@ -666,7 +665,7 @@ export class Engine implements EngineHost {
       workflowId: resumedWorkflowId,
       ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
       taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
-      defaultAgentTaskContext: replayTaskAccess(records, def),
+      agentTaskAccess: replayTaskAccess(records, def),
       cwd: created.cwd,
       depth: created.depth,
       shared,
@@ -1518,7 +1517,7 @@ export class Engine implements EngineHost {
       workflowId: childWorkflowId,
       ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
       taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
-      defaultAgentTaskContext: resuming
+      agentTaskAccess: resuming
         ? replayTaskAccess(records, def)
         : this.taskTracker
           ? configuredTaskAccess(def)
@@ -2208,7 +2207,7 @@ export class Engine implements EngineHost {
       workflowId: replayWorkflowId,
       ...(taskSchemaBinding ? { taskSchemaBinding } : {}),
       taskSchemaVersion: def.meta.tasks?.schemaVersion ?? 1,
-      defaultAgentTaskContext: replayTaskAccess(records, def),
+      agentTaskAccess: replayTaskAccess(records, def),
       cwd: created.cwd,
       depth: created.depth,
       shared: {

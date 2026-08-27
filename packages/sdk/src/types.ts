@@ -144,7 +144,7 @@ export interface WorkflowTaskSnapshot<Extensions = unknown> {
 }
 
 /** Per-agent authority over the automatically injected task observation. */
-export type AgentTaskAccess = WorkflowTaskSelector & { mode?: "read" | "write" };
+export type AgentTaskAccess = WorkflowTaskSelector & { mode: "read" | "write" };
 
 export interface WorkflowTaskCreateInput<Extensions = unknown> {
   title: string;
@@ -369,6 +369,11 @@ export interface ParallelOptions {
   errors?: "settle" | "throw";
 }
 
+/** Eager promises have already started, so a concurrency cap cannot govern them. */
+export type ParallelEagerOptions = Omit<ParallelOptions, "concurrency"> & { concurrency?: never };
+
+export type ParallelThunk<T> = () => Promise<T> | T;
+
 // ---------------------------------------------------------------------------
 // Reusable authoring definitions and execution scopes
 // ---------------------------------------------------------------------------
@@ -424,7 +429,10 @@ export interface Pipeline<Item, Prev> {
 }
 
 export interface ParallelFn {
-  <T>(tasks: ReadonlyArray<ParallelTask<T>>, opts?: ParallelOptions): Promise<Settled<T>[]>;
+  /** Mixed/eager arrays are supported only without a concurrency cap. */
+  <T>(tasks: ReadonlyArray<ParallelTask<T>>, opts?: ParallelEagerOptions): Promise<Settled<T>[]>;
+  /** Thunks have not started yet, so Weft can enforce the requested concurrency. */
+  <T>(tasks: ReadonlyArray<ParallelThunk<T>>, opts?: ParallelOptions): Promise<Settled<T>[]>;
   <Item, Result>(
     items: ReadonlyArray<Item>,
     run: (item: Item, index: number) => Promise<Result> | Result,
@@ -442,12 +450,12 @@ export interface SequenceItemContext<TaskExtensionInput = unknown, TaskExtension
 }
 
 export interface SequenceOptions<Item> {
+  /** Stable call-site namespace; generated item keys are `<key>:<itemKey>:<local>`. */
+  key: string;
   /** Stable identity for the item; duplicate identities fail before any item runs. */
   keyOf(item: Item, index: number): string;
   /** Cosmetic phase label. Defaults to the stable item key. */
   phase?(item: Item, index: number): string;
-  /** Prefix for generated step keys; defaults to `item`. */
-  keyPrefix?: string;
 }
 
 export type SequenceFn<TaskExtensionInput = unknown, TaskExtensions = TaskExtensionInput> = <Item, Result>(
@@ -465,6 +473,8 @@ export type SequenceFn<TaskExtensionInput = unknown, TaskExtensions = TaskExtens
 // ---------------------------------------------------------------------------
 
 export interface GateRequest {
+  /** Stable replay identity for this policy gate. */
+  key?: string;
   action: string;
   risk: Risk;
   detail?: string;
@@ -516,7 +526,8 @@ export interface HumanApproveOptions {
   action: string;
   detail?: string;
   timeout?: Duration;
-  onTimeout?: HumanTimeoutPolicy<{ approved: boolean; note?: string }>;
+  /** Approval checkpoints may escalate or deny on timeout, but never auto-approve. */
+  onTimeout?: "deny" | "escalate" | { default: { approved: false; note?: string } };
 }
 
 export interface HumanReviewArtifactSubject {
@@ -790,7 +801,7 @@ export interface CheckExecutionResult {
 }
 
 export interface CheckResult extends CheckExecutionResult {
-  disposition?: CheckDisposition;
+  disposition: CheckDisposition;
 }
 
 export interface CheckRunContext {
@@ -811,7 +822,7 @@ export type CheckOptions = CheckCommonOptions &
     | { exec: [string, ...string[]]; fn?: never; trustPrior?: never; skip?: never }
     | {
         exec?: never;
-        fn: (signal: AbortSignal) => Promise<boolean | CheckResult> | boolean | CheckResult;
+        fn: (signal: AbortSignal) => Promise<boolean | CheckExecutionResult> | boolean | CheckExecutionResult;
         trustPrior?: never;
         skip?: never;
       }
@@ -953,7 +964,7 @@ export interface CheckFn {
    */
   fn(
     name: string,
-    run: (signal: AbortSignal) => Promise<boolean | CheckResult> | boolean | CheckResult,
+    run: (signal: AbortSignal) => Promise<boolean | CheckExecutionResult> | boolean | CheckExecutionResult,
     opts?: CheckCommonOptions,
   ): Promise<CheckResult>;
   /** @deprecated Use invocation `{ trust }` on a revisioned reusable check. */

@@ -824,13 +824,13 @@ describe("a `key` disambiguates two identically worded gates", () => {
     // Same wording, different meaning — the case the keyless guard has to re-ask about
     // and a `key` should make reusable.
     const bothGates = async (ctx: any) => {
-      await ctx.human.approve({ action: "ship?", key: "gate:staging" });
-      const b = await ctx.human.approve({ action: "ship?", key: "gate:prod" });
+      await ctx.gate({ action: "ship?", risk: "high", key: "gate:staging" });
+      const b = await ctx.gate({ action: "ship?", risk: "high", key: "gate:prod" });
       const c = await ctx.human.approve({ action: "done?" });
       return { second: b.approved, done: c.approved };
     };
     const prodOnly = async (ctx: any) => {
-      const b = await ctx.human.approve({ action: "ship?", key: "gate:prod" });
+      const b = await ctx.gate({ action: "ship?", risk: "high", key: "gate:prod" });
       const c = await ctx.human.approve({ action: "done?" });
       return { second: b.approved, done: c.approved };
     };
