@@ -1,7 +1,7 @@
 import { isValidElement, type ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { Button, TextField, Toggle, Toolbar, WeftTheme, weftStyles } from "../src/index.ts";
 import { ArrowRightIcon } from "../src/icons.ts";
+import { Button, TextField, Toggle, Toolbar, WeftTheme, weftStyles } from "../src/index.ts";
 
 describe("design-system primitives", () => {
   it("exports semantic toolbar and Phosphor icons", () => {

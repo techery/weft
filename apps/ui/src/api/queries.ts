@@ -78,7 +78,11 @@ export function useWorkflows(): UseQueryResult<WorkflowRow[]> {
 }
 
 export function useWorkflowIssues(): UseQueryResult<WorkflowIssue[]> {
-  return useQuery({ queryKey: [...keys.workflows, "issues"], queryFn: api.workflowIssues, staleTime: 30_000 });
+  return useQuery({
+    queryKey: [...keys.workflows, "issues"],
+    queryFn: api.workflowIssues,
+    staleTime: 30_000,
+  });
 }
 
 export function useWorkflow(name: string): UseQueryResult<WorkflowDetail> {

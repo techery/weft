@@ -18,8 +18,8 @@ export type {
   RegistryLoadResult,
   RegistryOptions,
   WorkflowInspection,
-  WorkflowLoadIssue,
   WorkflowListEntry,
+  WorkflowLoadIssue,
   WorkflowRegistry,
 } from "./registry.ts";
 export { createWorkflowRegistry } from "./registry.ts";

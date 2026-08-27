@@ -85,8 +85,8 @@ export type {
   LoadOptions,
   RegistryLoadResult,
   WorkflowInspection,
-  WorkflowLoadIssue,
   WorkflowListEntry,
+  WorkflowLoadIssue,
 } from "@techery/weft-gate";
 export {
   bundleWorkflow,

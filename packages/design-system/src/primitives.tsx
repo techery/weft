@@ -38,7 +38,9 @@ type ToolbarProps = HTMLAttributes<HTMLDivElement>;
 
 /** A semantic action group with a stable height and vertically centered contents. */
 export function Toolbar({ className, ...rest }: ToolbarProps) {
-  return <div role="toolbar" className={className ? `weft-toolbar ${className}` : "weft-toolbar"} {...rest} />;
+  return (
+    <div role="toolbar" className={className ? `weft-toolbar ${className}` : "weft-toolbar"} {...rest} />
+  );
 }
 
 export function CountBadge({ bg, fg, children }: { bg: string; fg: string; children: string }) {
