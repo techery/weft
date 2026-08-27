@@ -100,6 +100,19 @@ node packages/cli/bin/weft.js new triage
 pnpm -C packages/cli link --global
 ```
 
+## Workflow manager preview
+
+The local workflow manager’s workflow view shows the registry and an internal inspector for each workflow.
+These screenshots were captured from the active app at `http://127.0.0.1:4788/workflows`.
+
+### Workflow list
+
+![Weft workflow list](./docs/weft-workflow-list.png)
+
+### Specific workflow run
+
+![Weft workflow run detail](./docs/weft-workflow-run-3460761a.png)
+
 `bin/weft.js` asks the manifest which shape this package is in: a published install's
 `exports` point at `dist/`, so it loads the compiled ESM; a checkout's point at `src/*.ts`,
 so it registers tsx and loads the sources. The CLI therefore works straight after
@@ -392,9 +405,10 @@ This repository implements the design in the two design documents. Where it does
    up yet, so every Claude step pays for the SDK-MCP tool round trip even when its schema would fit the
    native path. The schema lint that flags what the native path would reject exists; the native branch does
    not.
-3. **The web UI is a single-file page served by the daemon, not a Vite + React app.** It covers the run
-   list, live tree, report, and answering pending requests over SSE, but it is one hand-written HTML file
-   rather than the component-based UI the design describes.
+3. **The built web UI is a Vite + React app served by the daemon.** `apps/ui` builds the workflow manager
+   into `packages/daemon/web/`, and `weft ui` serves that bundle with client-side routes, API-backed views,
+   and live journal updates over SSE. A fresh checkout that has not run `pnpm build` uses the daemon's
+   single-file built-in fallback instead; that legacy surface remains available at `/legacy`.
 4. **TypeScript is pinned to 5.9.** The gate needs the in-process compiler API to parse workflow scripts and
    apply its AST rules; the native 7.x compiler does not expose it yet. Unpinning waits on that API.
 5. **Replay identity is content plus `key`, and the world is not in it.** A step's identity hashes its
