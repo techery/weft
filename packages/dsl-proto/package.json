@@ -1,22 +1,21 @@
 {
-  "name": "@techery/weft",
+  "name": "@techery/weft-dsl-proto",
   "version": "0.1.0",
-  "description": "weft CLI: runs, workflow-bound task tracking, gates, reports, debugging, and UI.",
+  "description": "Type-only prototype of the intended Weft context DSL.",
   "keywords": [
     "weft",
     "workflow",
-    "agents",
-    "ai",
-    "durable",
+    "dsl",
+    "prototype",
     "typescript"
   ],
   "license": "MIT",
   "author": "Techery",
-  "homepage": "https://github.com/techery/weft/tree/main/packages/cli#readme",
+  "homepage": "https://github.com/techery/weft/tree/main/packages/dsl-proto#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/techery/weft.git",
-    "directory": "packages/cli"
+    "directory": "packages/dsl-proto"
   },
   "bugs": {
     "url": "https://github.com/techery/weft/issues"
@@ -32,15 +31,11 @@
       "default": "./src/index.ts"
     }
   },
-  "bin": {
-    "weft": "./bin/weft.js"
-  },
   "files": [
-    "bin",
     "dist",
     "src",
-    "weft-lint-biome.json",
     "README.md",
+    "PROTOTYPE.md",
     "LICENSE"
   ],
   "publishConfig": {
@@ -56,21 +51,11 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "clean": "rm -rf dist"
+    "check:docs": "node scripts/check-declaration-docs.mjs",
+    "clean": "rm -rf dist",
+    "typecheck": "pnpm run check:docs && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@biomejs/biome": "2.5.10",
-    "@techery/weft-host": "workspace:*",
-    "@techery/weft-core": "workspace:*",
-    "@techery/weft-sdk": "workspace:*",
-    "@techery/weft-daemon": "workspace:*",
-    "commander": "^15.0.0",
-    "@clack/prompts": "^1.7.0",
-    "log-update": "^8.0.0",
-    "picocolors": "^1.1.1",
-    "@techery/weft-gate": "workspace:*"
-  },
-  "devDependencies": {
-    "tsx": "^4.23.12"
+    "zod": "^4.4.3"
   }
 }

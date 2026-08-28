@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
 import { shallowDiff } from "../src/commands/diff.ts";
+import { selectWorkflows, weftLintRunner } from "../src/commands/lint.ts";
 import {
   bunRunnerFor,
   DEFAULT_WORKFLOW_TEST_PATTERN,
@@ -426,8 +427,20 @@ describe("weft check", () => {
 
     const checked = await cli("--cwd", root, "--mock", "check", "--no-tsc");
     expect(checked.text).toContain("audit/main.ts");
+    expect(checked.text).toContain("lint: fixed Weft TypeScript profile");
     expect(checked.text).not.toContain("schema.ts");
     expect(checked.exitCode).toBeUndefined();
+  });
+
+  it("fails when the unified fixed lint profile reports a general rule", async () => {
+    const root = await tempRoot();
+    await write(root, "biome.json", '{"linter":{"enabled":false}}\n');
+    await write(root, ".weft/workflows/audit/main.ts", `const unused = 1;\n${AUDIT}`);
+
+    const checked = await cli("--cwd", root, "--mock", "check", "audit", "--no-tsc");
+
+    expect(checked.text).toContain("lint: fixed Weft TypeScript profile");
+    expect(checked.exitCode).toBe(1);
   });
 
   it("fails when the TypeScript pass reports a real error", async () => {
@@ -748,6 +761,74 @@ describe("weft test", () => {
     expect(selectRunner(root, "node")).toBe("node");
     expect(selectRunner(root, "bun")).toBe("bun");
     expect(selectRunner(root, "vitest")).toBe("vitest");
+  });
+});
+
+describe("weft lint", () => {
+  it("runs the fixed bundled rule profile in a new project", async () => {
+    const root = await tempRoot();
+    await write(root, ".weft/workflows/audit/main.ts", AUDIT);
+
+    const linted = await cli("--cwd", root, "lint");
+
+    expect(linted.text).toContain("running Weft lint");
+    expect(linted.text).toContain(".weft/workflows");
+    expect(linted.exitCode).toBeUndefined();
+  });
+
+  it("reports Weft-specific replay-safety rules with fix guidance", async () => {
+    const root = await tempRoot();
+    await write(root, ".weft/workflows/bad/main.ts", `${AUDIT}\nimport "./lib/clock.ts";\n`);
+    await write(root, ".weft/workflows/bad/lib/clock.ts", "export const stamp = Date.now();\n");
+
+    const linted = await cli("--cwd", root, "lint");
+
+    expect(linted.text).toContain("weft/no-date-now");
+    expect(linted.text).toContain("lib/clock.ts");
+    expect(linted.text).toContain("use ctx.now()");
+    expect(linted.exitCode).toBe(1);
+  });
+
+  it("does not let repository Biome configuration weaken the fixed profile", async () => {
+    const root = await tempRoot();
+    await write(root, "biome.json", '{"linter":{"enabled":false}}\n');
+    await write(root, ".weft/workflows/audit/main.ts", `const unused = 1;\n${AUDIT}`);
+
+    const linted = await cli("--cwd", root, "lint");
+
+    expect(linted.exitCode).toBe(1);
+  });
+
+  it("always invokes bundled Biome with Weft's config and only exposes safe fixes", () => {
+    const [program, args] = weftLintRunner([".weft/workflows"], { fix: true });
+
+    expect(program).toBe(process.execPath);
+    expect(args[0]).toMatch(/@biomejs[/+]biome.*bin[/]biome$/);
+    expect(args).toEqual([
+      args[0],
+      "lint",
+      "--config-path",
+      expect.stringMatching(/packages[/]cli[/]weft-lint-biome\.json$/),
+      "--error-on-warnings",
+      "--write",
+      ".weft/workflows",
+    ]);
+  });
+
+  it("selects a single workflow by callable name or durable id", async () => {
+    const root = await tempRoot();
+    const file = path.join(root, ".weft", "workflows", "audit", "main.ts");
+    const inspection = {
+      entries: [{ id: "durable-audit", name: "audit", file, description: "audit" }],
+      issues: [],
+    };
+
+    expect(selectWorkflows(inspection, [path.dirname(path.dirname(file))], "audit").targets).toEqual([
+      path.dirname(file),
+    ]);
+    expect(selectWorkflows(inspection, [path.dirname(path.dirname(file))], "durable-audit").targets).toEqual([
+      path.dirname(file),
+    ]);
   });
 });
 

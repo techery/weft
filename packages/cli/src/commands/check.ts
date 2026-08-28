@@ -1,7 +1,7 @@
 /**
- * `weft check [name]` — validate package layout and run the gate ahead of a run. Every
- * workflow package has one `main.ts`; its relative imports are bundled, so a banned global
- * hiding under `lib/` fails here rather than three agent steps in.
+ * `weft check [name]` — the unified pre-run validation command. It enforces the fixed
+ * Weft lint profile, validates package layout and executable contracts, bundles relative
+ * imports, reports schema warnings, and runs a best-effort TypeScript typecheck.
  *
  * Findings print as `file:line:col  rule  message` with the fix-it underneath, and any
  * finding at all fails the command. The `tsc --noEmit` pass that catches a missing
@@ -18,6 +18,7 @@ import { Command } from "commander";
 import pc from "picocolors";
 import { allowBareOf, openWeft, workflowDirs } from "../context.ts";
 import { type CliIo, say } from "../io.ts";
+import { runWeftLint } from "./lint.ts";
 
 const run = promisify(execFile);
 
@@ -28,7 +29,7 @@ interface CheckOptions {
 
 export function checkCommand(io: CliIo): Command {
   return new Command("check")
-    .description("gate (and type-check) the workflows in this repo")
+    .description("lint, gate, bundle, schema-check, and type-check workflows")
     .argument("[name]", "check one workflow instead of all of them")
     .option("--no-tsc", "skip the best-effort tsc --noEmit pass")
     .action(async (name: string | undefined, opts: CheckOptions, cmd: Command) => {
@@ -44,10 +45,17 @@ export function checkCommand(io: CliIo): Command {
           for (const issue of selection.issues) renderIssue(io, issue);
           const diagnostics = selection.issues.flatMap((issue) => issue.diagnostics);
           if (diagnostics.length > 0) say(io, ...diagnostics.flatMap((d) => renderDiagnostic(d)));
-          if (selection.issues.length > 0) {
+          let lintExit = 0;
+          if (selection.lintTargets.length > 0) {
+            io.out(pc.dim("lint: fixed Weft TypeScript profile"));
+            lintExit = await runWeftLint(selection.lintTargets, weft.cwd);
+          }
+          if (selection.issues.length > 0 || lintExit !== 0) {
             const violations =
               diagnostics.length + selection.issues.filter((issue) => issue.diagnostics.length === 0).length;
-            io.out(pc.red(`${violations} violation${violations === 1 ? "" : "s"}`));
+            if (violations > 0) {
+              io.out(pc.red(`${violations} violation${violations === 1 ? "" : "s"}`));
+            }
             process.exitCode = 1;
           }
           return;
@@ -71,11 +79,14 @@ export function checkCommand(io: CliIo): Command {
           }
         }
 
-        if (findings.length > 0 || selection.issues.length > 0) {
+        io.out(pc.dim("lint: fixed Weft TypeScript profile"));
+        const lintExit = await runWeftLint(selection.lintTargets, weft.cwd);
+
+        if (findings.length > 0 || selection.issues.length > 0 || lintExit !== 0) {
           if (findings.length > 0) say(io, "", ...findings.flatMap((d) => renderDiagnostic(d)));
           const violations =
             findings.length + selection.issues.filter((issue) => issue.diagnostics.length === 0).length;
-          io.out(pc.red(`${violations} violation${violations === 1 ? "" : "s"}`));
+          if (violations > 0) io.out(pc.red(`${violations} violation${violations === 1 ? "" : "s"}`));
           process.exitCode = 1;
           return;
         }
@@ -146,22 +157,39 @@ async function filesToCheck(
   name?: string,
 ): Promise<{
   files: string[];
+  lintTargets: string[];
   issues: Array<{ file: string; error: string; diagnostics: GateDiagnostic[] }>;
 }> {
   const inspection = await registry.listWithIssues();
   if (name === undefined) {
-    return { files: inspection.entries.map((entry) => entry.file), issues: inspection.issues };
+    return {
+      files: inspection.entries.map((entry) => entry.file),
+      lintTargets: [...new Set(dirs.filter((dir) => existsSync(dir)))],
+      issues: inspection.issues,
+    };
   }
 
   const hit = inspection.entries.find((entry) => entry.name === name);
-  if (hit) return { files: [hit.file], issues: [] };
+  if (hit) return { files: [hit.file], lintTargets: [path.dirname(hit.file)], issues: [] };
   const packageDirs = dirs.map((dir) => path.join(dir, name));
   const directIssues = inspection.issues.filter((issue) =>
     packageDirs.some(
       (packageDir) => issue.file === packageDir || issue.file.startsWith(`${packageDir}${path.sep}`),
     ),
   );
-  if (directIssues.length > 0) return { files: [], issues: directIssues };
+  if (directIssues.length > 0) {
+    return {
+      files: [],
+      lintTargets: [
+        ...new Set(
+          directIssues.map((issue) =>
+            path.basename(issue.file) === "main.ts" ? path.dirname(issue.file) : issue.file,
+          ),
+        ),
+      ],
+      issues: directIssues,
+    };
+  }
   throw new Error(
     `unknown workflow "${name}" — no ${packageDirs.map((dir) => path.relative(process.cwd(), dir)).join(", ")} and nothing named it`,
   );

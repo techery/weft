@@ -108,6 +108,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@biomejs/biome':
+        specifier: 2.5.10
+        version: 2.5.10
       '@clack/prompts':
         specifier: ^1.7.0
         version: 1.7.0
@@ -204,6 +207,12 @@ importers:
       react:
         specifier: ^19.2.8
         version: 19.2.8
+
+  packages/dsl-proto:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/gate:
     dependencies:

@@ -131,7 +131,10 @@ Treat the package boundary as part of the executable workflow contract:
 - \`main.ts\` is the only registry entry point. Put schemas and other implementation code
   under \`lib/\`; imports from \`main.ts\` are bundled and content-hashed with the workflow.
 - Keep workflow-owned tests under \`tests/\`. With no pattern, \`weft test\` runs every
-  \`.weft/workflows/*/tests/**/*.test.ts\` using Node's test runner.
+  \`.weft/workflows/*/tests/**/*.test.ts\` using Node's test runner. \`weft check\` also
+  enforces Weft's fixed TypeScript and replay-safety lint rules over every workflow package;
+  repository linter configuration does not change that contract. Use \`weft lint --fix\`
+  only for a focused lint pass with safe automatic fixes.
 - Record behavior and contract changes in the package's \`CHANGELOG.md\`.
 - \`weft workflow list\`, \`weft check\`, and \`weft doctor\` fail closed on flat \`*.ts\`
   entries, missing required package members, or name mismatches.
@@ -594,7 +597,8 @@ either to a registry root containing those packages or directly to one complete 
 | \`weft report <run>\` | the generated markdown report |
 | \`weft explain <run> <key\\|seq>\` | one step: route, exact prompt, output, usage, attempts |
 | \`weft diff <a> <b>\` | two runs' step outputs, matched by key — field-level, not prose |
-| \`weft check [name]\` | fatal gate/bundle/UI checks plus \`tsc --noEmit\` when available. \`--no-tsc\` |
+| \`weft check [name]\` | unified fixed lint, gate, bundle, schema/UI, and \`tsc --noEmit\` validation. \`--no-tsc\` |
+| \`weft lint [name]\` | focused lint-only subset of \`check\`; \`--fix\` applies safe general-rule fixes |
 | \`weft test [pattern]\` | run workflow tests with Vitest, Bun, or Node's \`node:test\`. With no pattern, runs \`.weft/workflows/*/tests/**/*.test.ts\` using Node; \`--runner\`, \`--watch\`, \`--coverage\` |
 | \`weft new <name> [--template simple\\|review\\|task]\` | scaffold \`<name>/{main.ts,lib/,tests/,CHANGELOG.md}\`; never overwrites |
 | \`weft workflow list\` (alias \`ls\`) | list loadable definitions and rejected workflow files |
@@ -617,7 +621,7 @@ record, and \`remove --yes\` only for a task with no dependents.
 The typical loop:
 
 \`\`\`bash
-weft check review                          # gate + types, before anything costs money
+weft check review                          # lint + gate + bundle + schemas + types
 weft run review --base main --watch        # live tree until it settles or suspends
 weft answer 9c4f1a7e h1 '{"approved":true}'  # if it parked on a person
 weft resume 9c4f1a7e                        # continue from the journal

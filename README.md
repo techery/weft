@@ -380,7 +380,7 @@ and the runnable [`examples/09-custom-react-ui`](./examples/09-custom-react-ui).
 | `@techery/weft-testing` | `runWorkflow` harness, mock fixtures, journal assertions, store conformance suites. |
 | `@techery/weft-design-system` | React primitives, tokens, and theme used by the Workflow Manager and optional custom workflow views. |
 | `@techery/weft-host` | Engine assembly shared by the hosts: config loading, stores, providers, workflow registry. |
-| `@techery/weft`, `@techery/weft-mcp`, `@techery/weft-daemon` | Hosts. CLI: run, resume, task, workflow, ls, status, answer, cancel, report, replay, check, explain, diff, new, skill, ui, doctor. MCP: `weft.run/wait/answer/resume/list/report/types`. Daemon: serves the web UI and wakes suspended runs. |
+| `@techery/weft`, `@techery/weft-mcp`, `@techery/weft-daemon` | Hosts. CLI: run, resume, task, workflow, ls, status, answer, cancel, report, replay, check, lint, test, explain, diff, new, skill, ui, doctor. MCP: `weft.run/wait/answer/resume/list/report/types`. Daemon: serves the web UI and wakes suspended runs. |
 
 ## Apps
 
@@ -432,6 +432,30 @@ the live journal and keeps a fixed address at `/legacy` either way.
 Development setup, focused and release-grade validation, workflow/custom-UI conventions, and documentation
 expectations now live in [CONTRIBUTING.md](./CONTRIBUTING.md). The contributor guide is the source of truth for
 changing Weft; [RELEASING.md](./RELEASING.md) covers publishing a validated release.
+
+## Linting workflows
+
+`weft check` is the unified pre-run command: it runs the fixed lint profile, Weft gate and bundle validation,
+schema checks, and the TypeScript typecheck. Use `weft lint` only when you want the faster lint-only subset or
+safe automatic fixes:
+
+```sh
+weft lint
+weft lint review
+weft lint --fix
+```
+
+With no name, `weft lint` covers `.weft/workflows` plus every repeatable
+`--extra-workflow-dir`; pass a callable name or durable workflow ID to lint one package. The result never
+depends on a repository's ESLint, Oxlint, or Biome installation or configuration. Weft runs its bundled
+Biome recommended profile over package TypeScript and applies its own executable-workflow rules through the
+gate: ambient time/randomness, timers, fetch, environment reads, locale/GC behavior, CommonJS, and undeclared
+bare imports are rejected because they are not replay-safe. Package-layout and bundle diagnostics are part of
+the same lint result.
+
+`--fix` applies only safe fixes from the general TypeScript profile; Weft-specific findings include guidance
+but require an intentional source change. A successful `weft check` therefore includes a successful lint;
+there is no need to run both commands before starting a workflow.
 
 ## Testing workflows
 

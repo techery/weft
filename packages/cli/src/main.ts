@@ -18,6 +18,7 @@ import { checkCommand } from "./commands/check.ts";
 import { diffCommand } from "./commands/diff.ts";
 import { doctorCommand } from "./commands/doctor.ts";
 import { explainCommand } from "./commands/explain.ts";
+import { lintCommand } from "./commands/lint.ts";
 import { lsCommand } from "./commands/ls.ts";
 import { newCommand } from "./commands/new.ts";
 import { replayCommand } from "./commands/replay.ts";
@@ -76,6 +77,7 @@ export function buildProgram(io: CliIo = consoleIo): Command {
     explainCommand,
     diffCommand,
     checkCommand,
+    lintCommand,
     newCommand,
     skillCommand,
     doctorCommand,
