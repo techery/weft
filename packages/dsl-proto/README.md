@@ -12,6 +12,7 @@ npm i @techery/weft-dsl-proto
 
 - Source: [`packages/dsl-proto`](https://github.com/techery/weft/tree/main/packages/dsl-proto)
 - Prototype contract and module map: [`PROTOTYPE.md`](./PROTOTYPE.md)
+- Developer introduction and design story: [`WEFT-DSL-BLOG.md`](./WEFT-DSL-BLOG.md)
 - Ten-round DX and type-safety log: [`DESIGN-ROUNDS.md`](./DESIGN-ROUNDS.md)
 - Refined coding workflows: [`src/examples/refined`](./src/examples/refined)
 - Adversarial workflow rounds: [`src/examples/rounds`](./src/examples/rounds)
