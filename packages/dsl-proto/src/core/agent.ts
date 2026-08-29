@@ -1,6 +1,8 @@
 /** Declaration-only agent surface for the Weft DSL prototype. */
 
+import type { ContextSnapshot } from "./context-sources.ts";
 import type { GoalDefinition, GoalResult } from "./goals.ts";
+import type { WriteScope } from "./path-policies.ts";
 import type {
   AnySchema,
   Duration,
@@ -11,6 +13,7 @@ import type {
   Provider,
   ProviderRequirements,
   WorkflowNode,
+  WorkspaceSnapshotRef,
 } from "./shared.ts";
 import type { AgentTaskAccess } from "./tasks.ts";
 import type { Ctx } from "./workflow.ts";
@@ -18,16 +21,6 @@ import type { Ctx } from "./workflow.ts";
 // ---------------------------------------------------------------------------
 // Agents and reusable recipes
 // ---------------------------------------------------------------------------
-
-/**
- * Why: Makes file mutation authority explicit and lets the engine detect or reject out-of-scope edits.
- * Use: Pass it as `write` on an agent call, using `strict` mode for hard enforcement.
- */
-export interface WriteScope {
-  paths: string[];
-  also?: string[];
-  mode?: "warn" | "strict";
-}
 
 /**
  * Why: Gives the agent DSL an explicit usage contract instead of relying on untyped values.
@@ -42,16 +35,24 @@ export interface Usage {
 }
 
 /**
+ * Why: Prevents structurally similar user data from masquerading as an engine-captured patch handle.
+ * Use: It is minted only by the internal engine and carried opaquely by `PatchRef`.
+ */
+declare const patchRefBrand: unique symbol;
+
+/**
  * Why: Represents an isolated writer's captured change without embedding patch bytes in ordinary workflow values.
  * Use: Pass it to integration, composition, discard, or reporting operations.
  */
 export interface PatchRef {
-  ref: string;
-  key: string;
-  files: string[];
-  baseTree: string;
-  quarantined?: boolean;
-  outOfScope?: string[];
+  readonly ref: string;
+  readonly key: string;
+  readonly files: string[];
+  readonly base: WorkspaceSnapshotRef;
+  readonly baseTree: string;
+  readonly quarantined?: boolean;
+  readonly outOfScope?: string[];
+  readonly [patchRefBrand]: true;
 }
 
 /**
@@ -146,6 +147,23 @@ export interface AgentGoalOptions {
 }
 
 /**
+ * Why: Adds a per-session call budget to one explicitly allowed operation without granting its host capabilities.
+ * Use: Put it in `AgentExecutionOptions.tools`; the host still resolves bindings and enforces operation authorization.
+ */
+export interface AgentToolGrant<
+  Definition extends WorkflowNode<"weft.operation"> = WorkflowNode<"weft.operation">,
+> {
+  operation: Definition;
+  maxCalls?: number;
+}
+
+/**
+ * Why: Restricts agent tool use to nominal operation definitions instead of prompt-described or provider-global tools.
+ * Use: List a definition directly for default limits or use `AgentToolGrant` for an explicit call budget.
+ */
+export type AgentTool = WorkflowNode<"weft.operation"> | AgentToolGrant;
+
+/**
  * Why: Gives the agent DSL an explicit agent execution options contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
  */
@@ -163,6 +181,8 @@ export interface AgentExecutionOptions {
   onMaxTurns?: "finalize" | "fail";
   onError?: "throw" | "null";
   tasks?: false | AgentTaskAccess;
+  tools?: readonly AgentTool[];
+  context?: readonly ContextSnapshot<unknown>[];
 }
 
 /**
@@ -178,10 +198,14 @@ export type AgentDefinitionDefaults = Omit<
  * Why: Names a reusable typed role with one prompt, output schema, and routing defaults.
  * Use: Create it with `defineAgent` and invoke it through `ctx.agent({ agent, input, ... })`.
  */
-export interface AgentDefinition<Input, S extends AnySchema, ParsedInput = Input>
-  extends WorkflowNode<"weft.agent"> {
+export interface AgentDefinition<
+  Input,
+  S extends AnySchema,
+  ParsedInput = Input,
+  Name extends string = string,
+> extends WorkflowNode<"weft.agent"> {
   readonly kind: "weft.agent";
-  readonly name: string;
+  readonly name: Name;
   readonly description?: string;
   readonly prompt: string | PromptDefinition<Input, ParsedInput>;
   readonly schema: S;
@@ -192,8 +216,8 @@ export interface AgentDefinition<Input, S extends AnySchema, ParsedInput = Input
  * Why: Declares a reusable agent role without starting a model session.
  * Use: Use the static-prompt or typed-prompt overload at module scope, then pass the definition to `ctx.agent`.
  */
-export interface StaticAgentConfig<S extends AnySchema> {
-  name: string;
+export interface StaticAgentConfig<S extends AnySchema, Name extends string = string> {
+  name: Name;
   description?: string;
   prompt: string;
   schema: S;
@@ -204,8 +228,8 @@ export interface StaticAgentConfig<S extends AnySchema> {
  * Why: Gives the agent DSL an explicit prompted agent config contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
  */
-export interface PromptedAgentConfig<Input, ParsedInput, S extends AnySchema> {
-  name: string;
+export interface PromptedAgentConfig<Input, ParsedInput, S extends AnySchema, Name extends string = string> {
+  name: Name;
   description?: string;
   prompt: PromptDefinition<Input, ParsedInput>;
   schema: S;
@@ -216,17 +240,20 @@ export interface PromptedAgentConfig<Input, ParsedInput, S extends AnySchema> {
  * Why: Declares a reusable agent role without starting a model session.
  * Use: Use the static-prompt or typed-prompt overload at module scope, then pass the definition to `ctx.agent`.
  */
-export declare function defineAgent<S extends AnySchema>(
-  config: StaticAgentConfig<S>,
-): AgentDefinition<void, S, void>;
+export declare function defineAgent<S extends AnySchema, const Name extends string = string>(
+  config: StaticAgentConfig<S, Name>,
+): AgentDefinition<void, S, void, Name>;
 
 /**
  * Why: Declares a reusable agent role without starting a model session.
  * Use: Use the static-prompt or typed-prompt overload at module scope, then pass the definition to `ctx.agent`.
  */
-export declare function defineAgent<Input, ParsedInput, S extends AnySchema>(
-  config: PromptedAgentConfig<Input, ParsedInput, S>,
-): AgentDefinition<Input, S, ParsedInput>;
+export declare function defineAgent<
+  Input,
+  ParsedInput,
+  S extends AnySchema,
+  const Name extends string = string,
+>(config: PromptedAgentConfig<Input, ParsedInput, S, Name>): AgentDefinition<Input, S, ParsedInput, Name>;
 
 /**
  * Why: Gives the agent DSL an explicit goal invocation base contract instead of relying on untyped values.
@@ -429,8 +456,12 @@ export interface AgentFn<Workspace extends boolean = false> {
  * Why: Gives the agent DSL an explicit recipe config contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
  */
-export interface RecipeConfig<InputSchema extends AnySchema, OutputSchema extends AnySchema> {
-  name: string;
+export interface RecipeConfig<
+  InputSchema extends AnySchema,
+  OutputSchema extends AnySchema,
+  Name extends string = string,
+> {
+  name: Name;
   description?: string;
   input: InputSchema;
   output: OutputSchema;
@@ -444,10 +475,15 @@ export interface RecipeConfig<InputSchema extends AnySchema, OutputSchema extend
  * Why: Provides schema-backed reusable orchestration without creating a separate child run.
  * Use: Create it with `defineRecipe` and invoke it through `ctx.recipe`, sequence, or parallel composition.
  */
-export interface RecipeDefinition<Input, Output, ParsedInput = Input, RawOutput = Output>
-  extends WorkflowNode<"weft.recipe"> {
+export interface RecipeDefinition<
+  Input,
+  Output,
+  ParsedInput = Input,
+  RawOutput = Output,
+  Name extends string = string,
+> extends WorkflowNode<"weft.recipe"> {
   readonly kind: "weft.recipe";
-  readonly name: string;
+  readonly name: Name;
   readonly description?: string;
   readonly input: AnySchema;
   readonly output: AnySchema;
@@ -460,11 +496,16 @@ export interface RecipeDefinition<Input, Output, ParsedInput = Input, RawOutput 
  * Why: Declares transparent reusable orchestration with validated input and output.
  * Use: Use it when nested effects should remain in the current run and journal.
  */
-export declare function defineRecipe<InputSchema extends AnySchema, OutputSchema extends AnySchema>(
-  config: RecipeConfig<InputSchema, OutputSchema>,
+export declare function defineRecipe<
+  InputSchema extends AnySchema,
+  OutputSchema extends AnySchema,
+  const Name extends string = string,
+>(
+  config: RecipeConfig<InputSchema, OutputSchema, Name>,
 ): RecipeDefinition<
   InferIn<InputSchema>,
   InferOut<OutputSchema>,
   InferOut<InputSchema>,
-  InferIn<OutputSchema>
+  InferIn<OutputSchema>,
+  Name
 >;

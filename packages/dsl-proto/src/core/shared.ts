@@ -92,6 +92,12 @@ export type InferOut<S extends AnySchema> = NonNullable<S["~standard"]["types"]>
  * Use: Use a millisecond number or a compact value such as `"30s"`, `"5m"`, or `"2h"`.
  */
 export type Duration = number | `${number}${"ms" | "s" | "m" | "h" | "d"}`;
+
+/**
+ * Why: Gives declaration-only nodes an auditable name for a host-registered adapter without embedding its implementation.
+ * Use: Reference a stable integration binding such as `github.pull-request.create`; the host resolves and authorizes it.
+ */
+export type HostBinding = `${string}.${string}`;
 /**
  * Why: Makes authorization policy explicit for operations whose effects have different consequences.
  * Use: Use it on gates, commands, and Git writes so the host can apply the correct approval policy.
@@ -112,12 +118,17 @@ export type WorkflowNodeKind =
   | "weft.artifact"
   | "weft.check"
   | "weft.check-suite"
+  | "weft.context-source"
+  | "weft.delivery"
   | "weft.goal"
   | "weft.observer"
   | "weft.operation"
+  | "weft.path-policy"
   | "weft.prompt"
   | "weft.recipe"
+  | "weft.review"
   | "weft.task-contract"
+  | "weft.trigger"
   | "weft.ui-view"
   | "weft.workflow";
 
@@ -135,6 +146,58 @@ export interface WorkflowNode<Kind extends WorkflowNodeKind = WorkflowNodeKind> 
   readonly kind: Kind;
   readonly [workflowNodeBrand]: true;
 }
+
+/**
+ * Why: Prevents ordinary strings and counters from masquerading as an engine-observed workspace generation.
+ * Use: Receive it from workspace, check, goal, patch, review, and promotion results when exact-generation proof matters.
+ */
+declare const workspaceSnapshotBrand: unique symbol;
+
+/**
+ * Why: Identifies one immutable workspace tree generation with engine-minted nominal provenance.
+ * Use: Compare or carry it as a unit instead of reconstructing identity from unrelated string and number fields.
+ */
+export interface WorkspaceSnapshotRef {
+  readonly workspaceId: string;
+  readonly generation: number;
+  readonly treeHash: string;
+  readonly [workspaceSnapshotBrand]: true;
+}
+
+/**
+ * Why: Preserves the established goal/check term while making its engine-owned snapshot identity explicit.
+ * Use: Accept it where a verdict names the exact workspace subject it evaluated.
+ */
+export type WorkspaceSubject = WorkspaceSnapshotRef;
+
+/**
+ * Why: Prevents ordinary payloads from claiming that the engine observed and attested evidence for an external subject.
+ * Use: It is carried only by `EvidenceRef` values minted at engine-controlled evidence boundaries.
+ */
+declare const evidenceRefBrand: unique symbol;
+
+/**
+ * Why: Gives independently produced evidence one nominal, digest-addressed link to the exact subject it observed.
+ * Use: Carry context, artifact, or workspace evidence without reducing provenance to a structurally forgeable payload.
+ */
+export interface EvidenceRef<Kind extends string = string, Payload = unknown, Subject = unknown> {
+  readonly kind: Kind;
+  readonly ref: string;
+  readonly sha256: string;
+  readonly subject: Subject;
+  readonly createdAt: string;
+  readonly [evidenceRefBrand]: Payload;
+}
+
+/**
+ * Why: Specializes general evidence to an engine-minted workspace generation for freshness-sensitive promotion.
+ * Use: Pass check, goal, review, or delivery attestations where every proof must name one exact workspace subject.
+ */
+export type SubjectAttestation<
+  Kind extends string = string,
+  Payload = unknown,
+  Subject extends WorkspaceSubject = WorkspaceSubject,
+> = EvidenceRef<Kind, Payload, Subject>;
 
 /**
  * Why: Preserves both successful values and lane failures without losing input order during concurrent work.
@@ -263,9 +326,10 @@ export type PromptPart = string | PromptSection | false | null | undefined | rea
  * Why: Separates reusable typed prompt rendering from the agent role that executes it.
  * Use: Create one with `definePrompt`, then pass it to `defineAgent`.
  */
-export interface PromptDefinition<Input, ParsedInput = Input> extends WorkflowNode<"weft.prompt"> {
+export interface PromptDefinition<Input, ParsedInput = Input, Name extends string = string>
+  extends WorkflowNode<"weft.prompt"> {
   readonly kind: "weft.prompt";
-  readonly name: string;
+  readonly name: Name;
   readonly input?: AnySchema;
   readonly render: (input: ParsedInput) => string;
   readonly __input?: Input;
@@ -296,8 +360,8 @@ export declare function renderPrompt(parts: PromptPart): string;
  * Why: Declares a reusable input-to-prompt contract without invoking a provider.
  * Use: Use it at module scope and supply the result to `defineAgent`.
  */
-export interface SchemaPromptConfig<S extends AnySchema> {
-  name: string;
+export interface SchemaPromptConfig<S extends AnySchema, Name extends string = string> {
+  name: Name;
   input: S;
   render: (input: InferOut<S>) => PromptPart;
 }
@@ -306,16 +370,16 @@ export interface SchemaPromptConfig<S extends AnySchema> {
  * Why: Declares a reusable input-to-prompt contract without invoking a provider.
  * Use: Use it at module scope and supply the result to `defineAgent`.
  */
-export declare function definePrompt<S extends AnySchema>(
-  config: SchemaPromptConfig<S>,
-): PromptDefinition<InferIn<S>, InferOut<S>>;
+export declare function definePrompt<S extends AnySchema, const Name extends string = string>(
+  config: SchemaPromptConfig<S, Name>,
+): PromptDefinition<InferIn<S>, InferOut<S>, Name>;
 
 /**
  * Why: Declares a reusable input-to-prompt contract without invoking a provider.
  * Use: Use it at module scope and supply the result to `defineAgent`.
  */
-export interface TypedPromptConfig<Input> {
-  name: string;
+export interface TypedPromptConfig<Input, Name extends string = string> {
+  name: Name;
   render: (input: Input) => PromptPart;
 }
 
@@ -323,4 +387,6 @@ export interface TypedPromptConfig<Input> {
  * Why: Declares a reusable input-to-prompt contract without invoking a provider.
  * Use: Use it at module scope and supply the result to `defineAgent`.
  */
-export declare function definePrompt<Input>(config: TypedPromptConfig<Input>): PromptDefinition<Input>;
+export declare function definePrompt<Input, const Name extends string = string>(
+  config: TypedPromptConfig<Input, Name>,
+): PromptDefinition<Input, Input, Name>;

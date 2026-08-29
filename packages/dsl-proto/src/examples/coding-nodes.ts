@@ -17,11 +17,14 @@ const openPullRequest = defineOperation({
   input: PullRequestInput,
   output: PullRequestResult,
   capabilities: ["network", "git:read"],
-  defaults: { risk: "high", timeout: "2m", attempts: 2 },
-  run: async ({ branch }, { signal }) => {
-    signal.throwIfAborted();
-    return { number: 42, url: `https://example.com/pulls/${encodeURIComponent(branch)}` };
+  defaults: { timeout: "2m", attempts: 2 },
+  authorization: {
+    mode: "required",
+    action: "open a pull request",
+    risk: "high",
+    timeout: "24h",
   },
+  binding: "github.pull-request.create",
 });
 
 const CiLookup = z.object({ pullRequest: z.number().int() });
@@ -39,10 +42,7 @@ const waitForCi = defineObserver({
   source: {
     kind: "poll",
     every: "30s",
-    observe: async ({ pullRequest }, { signal }) => {
-      signal.throwIfAborted();
-      return { status: "passed" as const, runId: `ci:${pullRequest}` };
-    },
+    binding: "github.actions.status",
   },
   defaults: { timeout: "2h" },
   complete: (state) => (state.status === "passed" ? { status: "passed" as const, runId: state.runId } : null),
@@ -68,10 +68,20 @@ const DeliveryOutput = z.object({
 defineWorkflow(
   { id: "operation-observer-artifact", input: DeliveryInput, output: DeliveryOutput },
   async (ctx, input) => {
-    const pullRequest = await ctx.operation(openPullRequest, input, {
-      key: "open-pull-request",
-      risk: "high",
+    const candidate = await ctx.operation.prepare(openPullRequest, input, {
+      key: "prepare-pull-request",
+      label: "Freeze pull request input",
     });
+    const authorization = await ctx.operation.authorize(openPullRequest, candidate, {
+      key: "authorize-pull-request",
+      label: "Authorize pull request creation",
+      detail: `Open ${input.title} from ${input.branch}`,
+    });
+    const pullRequest = await ctx.operation.execute(
+      openPullRequest,
+      { candidate, authorization },
+      { key: "open-pull-request", label: "Open pull request" },
+    );
 
     const ci = await ctx.observe(waitForCi, { pullRequest: pullRequest.number }, { key: "wait-for-ci" });
 

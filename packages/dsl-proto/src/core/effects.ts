@@ -1,7 +1,7 @@
 /** Declaration-only effects surface for the Weft DSL prototype. */
 import type { AgentDefinition } from "./agent.ts";
 import type { CommandResult } from "./checks.ts";
-import type { AnySchema, Duration, InferIn, InferOut, Risk } from "./shared.ts";
+import type { AnySchema, Duration, InferIn, InferOut } from "./shared.ts";
 
 // ---------------------------------------------------------------------------
 // Repository, process, network, wait, and Git effects
@@ -11,8 +11,14 @@ import type { AnySchema, Duration, InferIn, InferOut, Risk } from "./shared.ts";
  * Why: Prevents secret values from becoming ordinary strings that could leak into journals or outputs.
  * Use: Obtain one with `ctx.secret` and pass it only to supported headers or process environments.
  */
+declare const secretHandleBrand: unique symbol;
+
+/**
+ * Why: Prevents workflow-authored objects from masquerading as opaque secret capabilities minted by the host.
+ * Use: Obtain one with `ctx.secret`; its value is never structurally constructible or readable by workflow code.
+ */
 export interface SecretHandle {
-  readonly __weftSecret: string;
+  readonly [secretHandleBrand]: true;
 }
 
 /**
@@ -72,7 +78,6 @@ export interface ExecOptions {
   cwd?: string;
   timeout?: Duration;
   env?: Record<string, string | SecretHandle>;
-  risk?: Risk;
 }
 
 /**
@@ -121,9 +126,8 @@ export interface BashFn {
  */
 export interface FetchOptions {
   key?: string;
-  method?: string;
+  method?: "GET" | "HEAD";
   headers?: Record<string, string | SecretHandle>;
-  body?: string;
   timeout?: Duration;
 }
 
@@ -358,18 +362,10 @@ export interface GitCompareResult {
 }
 
 /**
- * Why: Gives the effects DSL an explicit git risk options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
-export interface GitRiskOptions {
-  risk?: Risk;
-}
-
-/**
  * Why: Gives the effects DSL an explicit git add options contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
  */
-export interface GitAddOptions extends GitRiskOptions {
+export interface GitAddOptions {
   paths: string[];
 }
 
@@ -377,7 +373,7 @@ export interface GitAddOptions extends GitRiskOptions {
  * Why: Gives the effects DSL an explicit git commit options contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
  */
-export interface GitCommitOptions extends GitRiskOptions {
+export interface GitCommitOptions {
   message: string;
   paths?: string[];
 }
@@ -386,7 +382,7 @@ export interface GitCommitOptions extends GitRiskOptions {
  * Why: Gives the effects DSL an explicit git checkout options contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
  */
-export interface GitCheckoutOptions extends GitRiskOptions {
+export interface GitCheckoutOptions {
   discard?: boolean;
 }
 
@@ -394,34 +390,15 @@ export interface GitCheckoutOptions extends GitRiskOptions {
  * Why: Gives the effects DSL an explicit git fetch options contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
  */
-export interface GitFetchOptions extends GitRiskOptions {
+export interface GitFetchOptions {
   remote?: string;
-}
-
-/**
- * Why: Gives the effects DSL an explicit git pull options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
-export interface GitPullOptions extends GitFetchOptions {
-  rebase?: boolean;
-  branch?: string;
-}
-
-/**
- * Why: Gives the effects DSL an explicit git push options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
-export interface GitPushOptions extends GitFetchOptions {
-  branch?: string;
-  setUpstream?: boolean;
-  forceWithLease?: boolean;
 }
 
 /**
  * Why: Gives the effects DSL an explicit git rebase options contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
  */
-export interface GitRebaseOptions<Context> extends GitRiskOptions {
+export interface GitRebaseOptions<Context> {
   onto: string;
   onConflict: GitConflictResolver<Context>;
 }
@@ -438,7 +415,7 @@ export interface GitHeadResult {
  * Why: Gives the effects DSL an explicit git reset options contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
  */
-export interface GitResetOptions extends GitRiskOptions {
+export interface GitResetOptions {
   to: string;
   mode?: "soft" | "mixed" | "hard";
 }
@@ -447,24 +424,16 @@ export interface GitResetOptions extends GitRiskOptions {
  * Why: Gives the effects DSL an explicit git apply options contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
  */
-export interface GitApplyOptions extends GitRiskOptions {
+export interface GitApplyOptions {
   patch: string;
   threeWay?: boolean;
-}
-
-/**
- * Why: Gives the effects DSL an explicit git tag options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
-export interface GitTagOptions extends GitRiskOptions {
-  ref?: string;
 }
 
 /**
  * Why: Gives the effects DSL an explicit git branch create options contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
  */
-export interface GitBranchCreateOptions extends GitRiskOptions {
+export interface GitBranchCreateOptions {
   from?: string;
   checkout?: boolean;
 }
@@ -473,7 +442,7 @@ export interface GitBranchCreateOptions extends GitRiskOptions {
  * Why: Gives the effects DSL an explicit git branch delete options contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
  */
-export interface GitBranchDeleteOptions extends GitRiskOptions {
+export interface GitBranchDeleteOptions {
   force?: boolean;
 }
 
@@ -481,8 +450,16 @@ export interface GitBranchDeleteOptions extends GitRiskOptions {
  * Why: Gives the effects DSL an explicit git stash push options contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
  */
-export interface GitStashPushOptions extends GitRiskOptions {
+export interface GitStashPushOptions {
   message?: string;
+}
+
+/**
+ * Why: Keeps destructive cleanup options local to a workflow-owned workspace instead of reusing remote-risk vocabulary.
+ * Use: Pass it only through the workspace-capable Git API when untracked files may be removed.
+ */
+export interface GitCleanOptions {
+  force?: boolean;
 }
 
 /**
@@ -500,15 +477,15 @@ export interface GitBranchApi {
  */
 export interface GitStashApi {
   push(opts?: GitStashPushOptions): Promise<void>;
-  pop(opts?: GitRiskOptions): Promise<void>;
-  drop(opts?: GitRiskOptions): Promise<void>;
+  pop(): Promise<void>;
+  drop(): Promise<void>;
 }
 
 /**
- * Why: Collects typed journaled Git reads and risk-aware writes behind the workflow context.
- * Use: Use `ctx.git` or a workspace-bound `git` API instead of spawning Git directly.
+ * Why: Keeps repository observations and host-controlled remote fetch available without granting local mutation authority.
+ * Use: Plain workflows receive this surface; fetched refs remain a read-only remote interaction governed by the host.
  */
-export interface GitApi {
+export interface GitReadApi {
   status(): Promise<GitStatusResult>;
   head(): Promise<GitShaResult>;
   branches(): Promise<GitBranchesResult>;
@@ -521,20 +498,30 @@ export interface GitApi {
   fileAt(ref: string, path: string): Promise<GitContentResult>;
   snapshot(): Promise<GitRefResult>;
   compare(opts: GitCompareOptions): Promise<GitCompareResult>;
+  fetch(opts?: GitFetchOptions): Promise<void>;
+}
+
+/**
+ * Why: Groups mutations that are safe only inside an engine-owned isolated workspace.
+ * Use: The workflow context exposes it only when its workspace type parameter is exactly `true`.
+ */
+export interface WorkspaceGitMutationApi {
   add(opts: GitAddOptions): Promise<void>;
   commit(opts: GitCommitOptions): Promise<GitShaResult>;
   checkout(ref: string, opts?: GitCheckoutOptions): Promise<void>;
-  fetch(opts?: GitFetchOptions): Promise<void>;
-  pull(opts?: GitPullOptions): Promise<void>;
-  push(opts?: GitPushOptions): Promise<void>;
   rebase<Context = unknown>(opts: GitRebaseOptions<Context>): Promise<GitHeadResult>;
   reset(opts: GitResetOptions): Promise<void>;
   apply(opts: GitApplyOptions): Promise<void>;
-  tag(name: string, opts?: GitTagOptions): Promise<GitShaResult>;
   branch: GitBranchApi;
   stash: GitStashApi;
-  clean(opts?: GitBranchDeleteOptions): Promise<void>;
+  clean(opts?: GitCleanOptions): Promise<void>;
 }
+
+/**
+ * Why: Provides one useful full Git capability for workflow-owned workspaces without reintroducing remote publication.
+ * Use: Receive it only from `Ctx<..., true>`; plain workflows are limited to `GitReadApi`.
+ */
+export interface GitApi extends GitReadApi, WorkspaceGitMutationApi {}
 
 /**
  * Why: Defines a bounded durable local polling loop that can suspend between attempts.

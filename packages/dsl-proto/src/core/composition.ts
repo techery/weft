@@ -58,8 +58,12 @@ export interface SequenceOptions<Item> {
  * Why: Gives the composition DSL an explicit sequence item context contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding composition API.
  */
-export interface SequenceItemContext<TaskInput = unknown, TaskOutput = TaskInput> {
-  ctx: Ctx<TaskInput, TaskOutput>;
+export interface SequenceItemContext<
+  TaskInput = unknown,
+  TaskOutput = TaskInput,
+  Workspace extends boolean = false,
+> {
+  ctx: Ctx<TaskInput, TaskOutput, Workspace>;
   itemKey: string;
   key(local: string): string;
 }
@@ -68,13 +72,13 @@ export interface SequenceItemContext<TaskInput = unknown, TaskOutput = TaskInput
  * Why: Defines ordered item traversal with stable item identities and nested key namespaces.
  * Use: Use `ctx.sequence` when later items may depend on changes produced by earlier items.
  */
-export interface SequenceFn<TaskInput = unknown, TaskOutput = TaskInput> {
+export interface SequenceFn<TaskInput = unknown, TaskOutput = TaskInput, Workspace extends boolean = false> {
   <Item, Result>(
     items: ReadonlyArray<Item>,
     opts: SequenceOptions<Item>,
     run: (
       item: Item,
-      scope: SequenceItemContext<TaskInput, TaskOutput>,
+      scope: SequenceItemContext<TaskInput, TaskOutput, Workspace>,
       index: number,
     ) => Promise<Result> | Result,
   ): Promise<Result[]>;

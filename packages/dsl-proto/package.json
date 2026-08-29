@@ -36,6 +36,7 @@
     "src",
     "README.md",
     "PROTOTYPE.md",
+    "DESIGN-ROUNDS.md",
     "LICENSE"
   ],
   "publishConfig": {
@@ -53,6 +54,7 @@
     "build": "tsc -p tsconfig.build.json",
     "check:docs": "node scripts/check-declaration-docs.mjs",
     "clean": "rm -rf dist",
+    "prepack": "pnpm run clean && pnpm run build && pnpm run typecheck",
     "typecheck": "pnpm run check:docs && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

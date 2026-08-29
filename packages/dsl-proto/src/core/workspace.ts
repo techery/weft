@@ -1,7 +1,8 @@
 /** Declaration-only workspace surface for the Weft DSL prototype. */
 import type { PatchRef } from "./agent.ts";
 import type { GitConflictResolver } from "./effects.ts";
-import type { Risk } from "./shared.ts";
+import type { WriteScope } from "./path-policies.ts";
+import type { Risk, WorkspaceSnapshotRef } from "./shared.ts";
 import type { Ctx } from "./workflow.ts";
 
 // ---------------------------------------------------------------------------
@@ -39,7 +40,7 @@ export interface IntegrationLedger {
  * Use: Import it when declaring, configuring, or consuming the corresponding workspace API.
  */
 export interface CaptureOptions {
-  paths: string[];
+  scope: WriteScope;
 }
 
 /**
@@ -92,6 +93,7 @@ export interface NestedWorkspaceApi<TaskInput = unknown, TaskOutput = TaskInput>
  */
 export interface ActiveWorkspaceApi<TaskInput = unknown, TaskOutput = TaskInput>
   extends NestedWorkspaceApi<TaskInput, TaskOutput> {
+  readonly subject: WorkspaceSnapshotRef;
   readonly id: string;
   readonly path: string;
   readonly branch: string;

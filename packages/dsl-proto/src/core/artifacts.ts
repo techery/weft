@@ -1,6 +1,14 @@
 /** Declaration-only artifact surface for the Weft DSL prototype. */
 
-import type { AnySchema, InferIn, InferOut, WorkflowNode } from "./shared.ts";
+import type {
+  AnySchema,
+  EvidenceRef,
+  InferIn,
+  InferOut,
+  SubjectAttestation,
+  WorkflowNode,
+  WorkspaceSubject,
+} from "./shared.ts";
 
 // ---------------------------------------------------------------------------
 // Typed immutable artifacts
@@ -13,9 +21,10 @@ import type { AnySchema, InferIn, InferOut, WorkflowNode } from "./shared.ts";
 export interface ArtifactDefinition<
   ContentSchema extends AnySchema,
   MetadataSchema extends AnySchema | undefined = undefined,
+  Name extends string = string,
 > extends WorkflowNode<"weft.artifact"> {
   readonly kind: "weft.artifact";
-  readonly name: string;
+  readonly name: Name;
   readonly mediaType: string;
   readonly content: ContentSchema;
   readonly metadata?: MetadataSchema;
@@ -26,8 +35,8 @@ export interface ArtifactDefinition<
  * Why: Collects fields shared by artifacts with and without typed metadata.
  * Use: Extend it through the metadata-specific configuration accepted by `defineArtifact`.
  */
-export interface ArtifactConfigBase<ContentSchema extends AnySchema> {
-  name: string;
+export interface ArtifactConfigBase<ContentSchema extends AnySchema, Name extends string = string> {
+  name: Name;
   mediaType: string;
   content: ContentSchema;
   extension?: string;
@@ -37,8 +46,8 @@ export interface ArtifactConfigBase<ContentSchema extends AnySchema> {
  * Why: Prevents metadata from being supplied when an artifact intentionally has no metadata schema.
  * Use: Pass it to `defineArtifact` for a content-only artifact such as a plain test log.
  */
-export interface ContentOnlyArtifactConfig<ContentSchema extends AnySchema>
-  extends ArtifactConfigBase<ContentSchema> {
+export interface ContentOnlyArtifactConfig<ContentSchema extends AnySchema, Name extends string = string>
+  extends ArtifactConfigBase<ContentSchema, Name> {
   metadata?: undefined;
 }
 
@@ -46,8 +55,11 @@ export interface ContentOnlyArtifactConfig<ContentSchema extends AnySchema>
  * Why: Couples artifact metadata to a runtime schema instead of allowing unvalidated descriptive objects.
  * Use: Pass it to `defineArtifact` for plans, reports, or other content needing typed provenance fields.
  */
-export interface MetadataArtifactConfig<ContentSchema extends AnySchema, MetadataSchema extends AnySchema>
-  extends ArtifactConfigBase<ContentSchema> {
+export interface MetadataArtifactConfig<
+  ContentSchema extends AnySchema,
+  MetadataSchema extends AnySchema,
+  Name extends string = string,
+> extends ArtifactConfigBase<ContentSchema, Name> {
   metadata: MetadataSchema;
 }
 
@@ -55,17 +67,28 @@ export interface MetadataArtifactConfig<ContentSchema extends AnySchema, Metadat
  * Why: Declares a reusable immutable artifact contract without storing any content.
  * Use: Use the content-only overload when callers should capture only schema-validated content.
  */
-export declare function defineArtifact<ContentSchema extends AnySchema>(
-  config: ContentOnlyArtifactConfig<ContentSchema>,
-): ArtifactDefinition<ContentSchema>;
+export declare function defineArtifact<ContentSchema extends AnySchema, const Name extends string = string>(
+  config: ContentOnlyArtifactConfig<ContentSchema, Name>,
+): ArtifactDefinition<ContentSchema, undefined, Name>;
 
 /**
  * Why: Declares a reusable immutable artifact contract without storing any content.
  * Use: Use the metadata overload when every capture must also cross a typed metadata boundary.
  */
-export declare function defineArtifact<ContentSchema extends AnySchema, MetadataSchema extends AnySchema>(
-  config: MetadataArtifactConfig<ContentSchema, MetadataSchema>,
-): ArtifactDefinition<ContentSchema, MetadataSchema>;
+export declare function defineArtifact<
+  ContentSchema extends AnySchema,
+  MetadataSchema extends AnySchema,
+  const Name extends string = string,
+>(
+  config: MetadataArtifactConfig<ContentSchema, MetadataSchema, Name>,
+): ArtifactDefinition<ContentSchema, MetadataSchema, Name>;
+
+/**
+ * Why: Recovers the exact definition-time artifact name for heterogeneous registries and diagnostics.
+ * Use: Apply it to a concrete `defineArtifact` result; broad legacy definitions continue to produce `string`.
+ */
+export type ArtifactNameOf<Definition> =
+  Definition extends ArtifactDefinition<any, any, infer Name> ? Name : never;
 
 /**
  * Why: Carries content through the artifact schema before immutable storage occurs.
@@ -96,7 +119,7 @@ export interface MetadataArtifactInput<Content, Metadata> extends ArtifactConten
  * Use: Use it when binding `ctx.artifact` or constructing its internal invocation.
  */
 export type ArtifactCaptureInputOf<Definition> =
-  Definition extends ArtifactDefinition<infer ContentSchema, infer MetadataSchema>
+  Definition extends ArtifactDefinition<infer ContentSchema, infer MetadataSchema, any>
     ? MetadataSchema extends AnySchema
       ? MetadataArtifactInput<InferIn<ContentSchema>, InferIn<MetadataSchema>>
       : ContentOnlyArtifactInput<InferIn<ContentSchema>>
@@ -106,20 +129,40 @@ export type ArtifactCaptureInputOf<Definition> =
  * Why: Records immutable storage identity and the validated content type without returning large content inline.
  * Use: Pass the reference to reviews, workflow outputs, reports, or later artifact consumers.
  */
-export interface ArtifactRefBase<Content> {
-  ref: string;
-  name: string;
-  sha256: string;
-  size: number;
-  mediaType: string;
+declare const artifactRefBrand: unique symbol;
+
+/**
+ * Why: Records immutable storage identity and the validated content type without returning large content inline.
+ * Use: Pass the reference to reviews, workflow outputs, reports, or later artifact consumers.
+ */
+export interface ArtifactRefBase<
+  Content,
+  Subject extends WorkspaceSubject | undefined = WorkspaceSubject | undefined,
+  Name extends string = string,
+> {
+  readonly ref: string;
+  readonly name: Name;
+  readonly sha256: string;
+  readonly size: number;
+  readonly mediaType: string;
+  readonly subject: Subject;
+  readonly sources: readonly EvidenceRef[];
+  readonly attestation: Subject extends WorkspaceSubject
+    ? SubjectAttestation<"artifact", Content, Subject>
+    : undefined;
   readonly __content?: Content;
+  readonly [artifactRefBrand]: Name;
 }
 
 /**
  * Why: Makes the absence of artifact metadata explicit for consumers and conditional helpers.
  * Use: It is returned when the artifact definition has no metadata schema.
  */
-export interface ContentOnlyArtifactRef<Content> extends ArtifactRefBase<Content> {
+export interface ContentOnlyArtifactRef<
+  Content,
+  Subject extends WorkspaceSubject | undefined = WorkspaceSubject | undefined,
+  Name extends string = string,
+> extends ArtifactRefBase<Content, Subject, Name> {
   metadata?: never;
 }
 
@@ -127,7 +170,12 @@ export interface ContentOnlyArtifactRef<Content> extends ArtifactRefBase<Content
  * Why: Preserves validated provenance metadata alongside the immutable artifact reference.
  * Use: It is returned when the artifact definition declares a metadata schema.
  */
-export interface MetadataArtifactRef<Content, Metadata> extends ArtifactRefBase<Content> {
+export interface MetadataArtifactRef<
+  Content,
+  Metadata,
+  Subject extends WorkspaceSubject | undefined = WorkspaceSubject | undefined,
+  Name extends string = string,
+> extends ArtifactRefBase<Content, Subject, Name> {
   metadata: Metadata;
 }
 
@@ -135,28 +183,63 @@ export interface MetadataArtifactRef<Content, Metadata> extends ArtifactRefBase<
  * Why: Derives the exact immutable reference returned for an artifact definition.
  * Use: Apply it to a definition in workflow outputs, review subjects, or engine invocation results.
  */
-export type ArtifactRefOf<Definition> =
-  Definition extends ArtifactDefinition<infer ContentSchema, infer MetadataSchema>
+export type ArtifactRefOf<
+  Definition,
+  Subject extends WorkspaceSubject | undefined = WorkspaceSubject | undefined,
+> =
+  Definition extends ArtifactDefinition<infer ContentSchema, infer MetadataSchema, infer Name>
     ? MetadataSchema extends AnySchema
-      ? MetadataArtifactRef<InferOut<ContentSchema>, InferOut<MetadataSchema>>
-      : ContentOnlyArtifactRef<InferOut<ContentSchema>>
+      ? MetadataArtifactRef<InferOut<ContentSchema>, InferOut<MetadataSchema>, Subject, Name>
+      : ContentOnlyArtifactRef<InferOut<ContentSchema>, Subject, Name>
     : never;
 
 /**
- * Why: Supplies stable replay identity and an optional human label for one artifact capture.
- * Use: Pass it as the final argument to `ctx.artifact`.
+ * Why: Holds capture fields that do not depend on whether the artifact is bound to a workspace subject.
+ * Use: Extend it through the bound or unbound capture-options branch.
  */
-export interface ArtifactCaptureOptions {
+export interface ArtifactCaptureOptionsBase {
   key: string;
   label?: string;
+  sources?: readonly EvidenceRef[];
 }
 
 /**
- * Why: Exposes typed artifact capture without making storage mechanics part of workflow code.
- * Use: Call `ctx.artifact(definition, input, options)` and retain the returned immutable reference.
+ * Why: Makes an exact workspace subject mandatory when capture should mint subject-bound artifact evidence.
+ * Use: Pass the current nominal workspace subject; the returned reference retains it exactly.
  */
-export type ArtifactFn = <Definition extends WorkflowNode<"weft.artifact">>(
-  definition: Definition,
-  input: ArtifactCaptureInputOf<Definition>,
-  options: ArtifactCaptureOptions,
-) => Promise<ArtifactRefOf<Definition>>;
+export interface SubjectArtifactCaptureOptions<Subject extends WorkspaceSubject>
+  extends ArtifactCaptureOptionsBase {
+  subject: Subject;
+}
+
+/**
+ * Why: Makes the absence of workspace authority explicit for artifacts such as global reports or logs.
+ * Use: Omit `subject`; the returned reference has `subject` and `attestation` fixed to `undefined`.
+ */
+export interface UnboundArtifactCaptureOptions extends ArtifactCaptureOptionsBase {
+  subject?: undefined;
+}
+
+/**
+ * Why: Selects the exact capture-options branch from the subject carried by an internal or generic invocation.
+ * Use: Parameterize it with a nominal subject for bound capture or `undefined` for unbound capture.
+ */
+export type ArtifactCaptureOptionsFor<Subject extends WorkspaceSubject | undefined> =
+  Subject extends WorkspaceSubject ? SubjectArtifactCaptureOptions<Subject> : UnboundArtifactCaptureOptions;
+
+/**
+ * Why: Exposes typed artifact capture while correlating an exact optional subject with the returned reference.
+ * Use: Supply a subject for attested workspace evidence, or omit it for an explicitly unbound artifact.
+ */
+export interface ArtifactFn {
+  <Definition extends WorkflowNode<"weft.artifact">, Subject extends WorkspaceSubject>(
+    definition: Definition,
+    input: ArtifactCaptureInputOf<Definition>,
+    options: SubjectArtifactCaptureOptions<Subject>,
+  ): Promise<ArtifactRefOf<Definition, Subject>>;
+  <Definition extends WorkflowNode<"weft.artifact">>(
+    definition: Definition,
+    input: ArtifactCaptureInputOf<Definition>,
+    options: UnboundArtifactCaptureOptions,
+  ): Promise<ArtifactRefOf<Definition, undefined>>;
+}

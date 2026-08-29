@@ -8,21 +8,18 @@ import type {
   CheckSuiteResult,
 } from "./checks.ts";
 import type { HumanReviewOptions, HumanReviewResult } from "./human.ts";
-import type { AnySchema, InferIn, InferOut, WorkflowNode } from "./shared.ts";
+import type {
+  AnySchema,
+  InferIn,
+  InferOut,
+  SubjectAttestation,
+  WorkflowNode,
+  WorkspaceSubject,
+} from "./shared.ts";
 
 // ---------------------------------------------------------------------------
 // Agent goals
 // ---------------------------------------------------------------------------
-
-/**
- * Why: Binds evidence to one concrete workspace tree so later mutations can make earlier verdicts stale.
- * Use: Store it on check and goal results and compare generations before promotion.
- */
-export interface WorkspaceSubject {
-  workspaceId: string;
-  generation: number;
-  treeHash: string;
-}
 
 /**
  * Why: Gives the goals DSL an explicit goal component contract instead of relying on untyped values.
@@ -100,10 +97,14 @@ export interface GoalDefaults {
  * Why: Names the ordered completion contract that keeps an implementation agent active until verification accepts.
  * Use: Create it with `defineGoal`, then attach it to an agent call through `goal.definition`.
  */
-export interface GoalDefinition<Input = void, Results = Record<string, unknown>, ParsedInput = Input>
-  extends WorkflowNode<"weft.goal"> {
+export interface GoalDefinition<
+  Input = void,
+  Results = Record<string, unknown>,
+  ParsedInput = Input,
+  Name extends string = string,
+> extends WorkflowNode<"weft.goal"> {
   readonly kind: "weft.goal";
-  readonly name: string;
+  readonly name: Name;
   readonly input?: AnySchema;
   readonly defaults?: Readonly<GoalDefaults>;
   readonly __input?: Input;
@@ -151,8 +152,8 @@ export type GoalComponentMap = Record<string, GoalComponent<any>>;
  * Why: Gives the goals DSL an explicit goal config base contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding goals API.
  */
-export interface GoalConfigBase {
-  name: string;
+export interface GoalConfigBase<Name extends string = string> {
+  name: Name;
   defaults?: GoalDefaults;
 }
 
@@ -160,8 +161,11 @@ export interface GoalConfigBase {
  * Why: Gives the goals DSL an explicit schema components goal config contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding goals API.
  */
-export interface SchemaComponentsGoalConfig<S extends AnySchema, Components extends GoalComponentMap>
-  extends GoalConfigBase {
+export interface SchemaComponentsGoalConfig<
+  S extends AnySchema,
+  Components extends GoalComponentMap,
+  Name extends string = string,
+> extends GoalConfigBase<Name> {
   input: S;
   components: (input: InferOut<S>, use: GoalUse) => Components;
 }
@@ -170,7 +174,8 @@ export interface SchemaComponentsGoalConfig<S extends AnySchema, Components exte
  * Why: Gives the goals DSL an explicit static components goal config contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding goals API.
  */
-export interface StaticComponentsGoalConfig<Components extends GoalComponentMap> extends GoalConfigBase {
+export interface StaticComponentsGoalConfig<Components extends GoalComponentMap, Name extends string = string>
+  extends GoalConfigBase<Name> {
   components: (input: undefined, use: GoalUse) => Components;
 }
 
@@ -180,7 +185,8 @@ export interface StaticComponentsGoalConfig<Components extends GoalComponentMap>
  */
 export interface CheckGoalConfig<
   Definition extends CheckDefinition<any, any, any, any> | CheckSuiteDefinition<any, any, any>,
-> extends GoalConfigBase {
+  Name extends string = string,
+> extends GoalConfigBase<Name> {
   check: Definition;
 }
 
@@ -188,8 +194,12 @@ export interface CheckGoalConfig<
  * Why: Gives the goals DSL an explicit human review goal config contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding goals API.
  */
-export interface HumanReviewGoalConfig<InputSchema extends AnySchema, ReviewSchema extends AnySchema, Props>
-  extends GoalConfigBase {
+export interface HumanReviewGoalConfig<
+  InputSchema extends AnySchema,
+  ReviewSchema extends AnySchema,
+  Props,
+  Name extends string = string,
+> extends GoalConfigBase<Name> {
   input: InputSchema;
   humanReview: (input: InferOut<InputSchema>) => HumanReviewComponentOptions<ReviewSchema, Props>;
 }
@@ -198,7 +208,8 @@ export interface HumanReviewGoalConfig<InputSchema extends AnySchema, ReviewSche
  * Why: Gives the goals DSL an explicit agent review goal config contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding goals API.
  */
-export interface AgentReviewGoalConfig<Input, S extends AnySchema, ParsedInput> extends GoalConfigBase {
+export interface AgentReviewGoalConfig<Input, S extends AnySchema, ParsedInput, Name extends string = string>
+  extends GoalConfigBase<Name> {
   agentReview: AgentDefinition<Input, S, ParsedInput>;
 }
 
@@ -233,17 +244,21 @@ export interface AgentReviewGoalResults<Result> {
 export declare function defineGoal<
   S extends AnySchema,
   const Components extends Record<string, GoalComponent<any>>,
+  const Name extends string = string,
 >(
-  config: SchemaComponentsGoalConfig<S, Components>,
-): GoalDefinition<InferIn<S>, ResultsOfComponents<Components>, InferOut<S>>;
+  config: SchemaComponentsGoalConfig<S, Components, Name>,
+): GoalDefinition<InferIn<S>, ResultsOfComponents<Components>, InferOut<S>, Name>;
 
 /**
  * Why: Declares an agent completion contract without running checks or reviewers.
  * Use: Use the component, check, human-review, or agent-review overload and attach the result to an agent invocation.
  */
-export declare function defineGoal<const Components extends GoalComponentMap>(
-  config: StaticComponentsGoalConfig<Components>,
-): GoalDefinition<undefined, ResultsOfComponents<Components>>;
+export declare function defineGoal<
+  const Components extends GoalComponentMap,
+  const Name extends string = string,
+>(
+  config: StaticComponentsGoalConfig<Components, Name>,
+): GoalDefinition<undefined, ResultsOfComponents<Components>, undefined, Name>;
 
 /**
  * Why: Declares an agent completion contract without running checks or reviewers.
@@ -251,9 +266,15 @@ export declare function defineGoal<const Components extends GoalComponentMap>(
  */
 export declare function defineGoal<
   Definition extends CheckDefinition<any, any, any, any> | CheckSuiteDefinition<any, any, any>,
+  const Name extends string = string,
 >(
-  config: CheckGoalConfig<Definition>,
-): GoalDefinition<CheckDefinitionInput<Definition>, CheckGoalResults<CheckDefinitionResult<Definition>>>;
+  config: CheckGoalConfig<Definition, Name>,
+): GoalDefinition<
+  CheckDefinitionInput<Definition>,
+  CheckGoalResults<CheckDefinitionResult<Definition>>,
+  CheckDefinitionInput<Definition>,
+  Name
+>;
 
 /**
  * Why: Declares an agent completion contract without running checks or reviewers.
@@ -263,21 +284,35 @@ export declare function defineGoal<
   InputSchema extends AnySchema,
   ReviewSchema extends AnySchema,
   Props = never,
+  const Name extends string = string,
 >(
-  config: HumanReviewGoalConfig<InputSchema, ReviewSchema, Props>,
+  config: HumanReviewGoalConfig<InputSchema, ReviewSchema, Props, Name>,
 ): GoalDefinition<
   InferIn<InputSchema>,
   HumanReviewGoalResults<HumanReviewResult<InferOut<ReviewSchema>>>,
-  InferOut<InputSchema>
+  InferOut<InputSchema>,
+  Name
 >;
 
 /**
  * Why: Declares an agent completion contract without running checks or reviewers.
  * Use: Use the component, check, human-review, or agent-review overload and attach the result to an agent invocation.
  */
-export declare function defineGoal<Input, S extends AnySchema, ParsedInput>(
-  config: AgentReviewGoalConfig<Input, S, ParsedInput>,
-): GoalDefinition<Input, AgentReviewGoalResults<AgentResult<InferOut<S>>>, ParsedInput>;
+export declare function defineGoal<
+  Input,
+  S extends AnySchema,
+  ParsedInput,
+  const Name extends string = string,
+>(
+  config: AgentReviewGoalConfig<Input, S, ParsedInput, Name>,
+): GoalDefinition<Input, AgentReviewGoalResults<AgentResult<InferOut<S>>>, ParsedInput, Name>;
+
+/**
+ * Why: Recovers the exact definition-time goal name carried through goal invocation references.
+ * Use: Apply it to a concrete `defineGoal` result; broad legacy definitions continue to produce `string`.
+ */
+export type GoalNameOf<Definition> =
+  Definition extends GoalDefinition<any, any, any, infer Name> ? Name : never;
 
 /**
  * Why: Gives the goals DSL an explicit goal attempt contract instead of relying on untyped values.
@@ -289,6 +324,7 @@ export interface GoalAttempt<Results> {
   subject: WorkspaceSubject;
   results: Partial<Results>;
   evidence: string;
+  attestation: SubjectAttestation<"goal-attempt", Partial<Results>>;
 }
 
 /**
@@ -302,4 +338,5 @@ export interface GoalResult<Results = Record<string, unknown>> {
   history: GoalAttempt<Results>[];
   evidence: string;
   subject: WorkspaceSubject;
+  attestation: SubjectAttestation<"goal", Results>;
 }

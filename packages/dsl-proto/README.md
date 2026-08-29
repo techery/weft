@@ -11,8 +11,10 @@ npm i @techery/weft-dsl-proto
 ```
 
 - Source: [`packages/dsl-proto`](https://github.com/techery/weft/tree/main/packages/dsl-proto)
-- Workflow examples: [`src/examples/workflows.ts`](./src/examples/workflows.ts)
-- Coding-node examples: [`src/examples/coding-nodes.ts`](./src/examples/coding-nodes.ts)
-- Internal execution example: [`src/examples/internal-engine.ts`](./src/examples/internal-engine.ts)
+- Prototype contract and module map: [`PROTOTYPE.md`](./PROTOTYPE.md)
+- Ten-round DX and type-safety log: [`DESIGN-ROUNDS.md`](./DESIGN-ROUNDS.md)
+- Refined coding workflows: [`src/examples/refined`](./src/examples/refined)
+- Adversarial workflow rounds: [`src/examples/rounds`](./src/examples/rounds)
+- Internal execution proof: [`src/examples/internal-engine.ts`](./src/examples/internal-engine.ts)
 - Issues: https://github.com/techery/weft/issues
 - License: MIT

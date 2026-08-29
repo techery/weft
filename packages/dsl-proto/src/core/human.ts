@@ -1,4 +1,5 @@
 /** Declaration-only human surface for the Weft DSL prototype. */
+import type { ArtifactRefBase } from "./artifacts.ts";
 import type { AnySchema, Duration, InferIn, InferOut, WorkflowNode } from "./shared.ts";
 
 // ---------------------------------------------------------------------------
@@ -54,12 +55,15 @@ export interface HumanReviewArtifactSubject {
  * Why: Gives the human DSL an explicit human review subject contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding human API.
  */
-export type HumanReviewSubject = HumanReviewFileSubject | HumanReviewArtifactSubject;
+export type HumanReviewSubject =
+  | HumanReviewFileSubject
+  | HumanReviewArtifactSubject
+  | ArtifactRefBase<unknown>;
 /**
  * Why: Gives the human DSL an explicit human review attachment contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding human API.
  */
-export type HumanReviewAttachment = HumanReviewArtifactSubject;
+export type HumanReviewAttachment = HumanReviewArtifactSubject | ArtifactRefBase<unknown>;
 
 /**
  * Why: Gives the human DSL an explicit reviewed subject contract instead of relying on untyped values.
@@ -92,13 +96,26 @@ export interface ReviewedArtifactSubject {
 export type ReviewedSubject = ReviewedFileSubject | ReviewedArtifactSubject;
 
 /**
+ * Why: Preserves an exact immutable artifact reference through review while mapping path/content requests to engine snapshots.
+ * Use: Derive the `HumanReviewResult.subject` type from the subject passed to `ctx.human.review`.
+ */
+export type ReviewedSubjectOf<Subject> =
+  Subject extends ArtifactRefBase<unknown>
+    ? Subject
+    : Subject extends HumanReviewFileSubject
+      ? ReviewedFileSubject
+      : Subject extends HumanReviewArtifactSubject
+        ? ReviewedArtifactSubject
+        : never;
+
+/**
  * Why: Keeps a review decision attributable and bound to the exact file or artifact generation observed.
  * Use: Read it from `ctx.human.review` or a human-review goal component.
  */
-export interface HumanReviewResult<T> {
+export interface HumanReviewResult<T, Subject = ReviewedSubject> {
   answer: T;
   reviewer: ReviewerIdentity;
-  subject: ReviewedSubject;
+  subject: Subject;
   submittedAt: string;
   waitedMs: number;
 }
@@ -122,11 +139,16 @@ export interface HumanEditFileResult {
  * Why: Gives the human DSL an explicit ui view ref contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding human API.
  */
-export interface UiViewRef<Props, Answer = never, Mode extends "input" | "display" = "input" | "display">
-  extends WorkflowNode<"weft.ui-view"> {
+export interface UiViewRef<
+  Props,
+  Answer = never,
+  Mode extends "input" | "display" = "input" | "display",
+  Id extends string = string,
+  Revision extends string = string,
+> extends WorkflowNode<"weft.ui-view"> {
   readonly kind: "weft.ui-view";
-  readonly id: string;
-  readonly revision: string;
+  readonly id: Id;
+  readonly revision: Revision;
   readonly __props?: Props;
   readonly __answer?: Answer;
   readonly __mode?: Mode;
@@ -153,9 +175,14 @@ export interface ResultUiComponentProps<Props> {
  * Why: Declares a schema-backed interactive view while leaving submission and validation under host control.
  * Use: Use it for a custom `human.ask` or `human.review` presentation.
  */
-export interface UiViewConfig<PropsSchema extends AnySchema, AnswerSchema extends AnySchema> {
-  id: string;
-  revision?: string;
+export interface UiViewConfig<
+  PropsSchema extends AnySchema,
+  AnswerSchema extends AnySchema,
+  Id extends string = string,
+  Revision extends string = string,
+> {
+  id: Id;
+  revision?: Revision;
   props: PropsSchema;
   answer: AnswerSchema;
   component: (props: InputUiComponentProps<InferOut<PropsSchema>, InferIn<AnswerSchema>>) => unknown;
@@ -165,17 +192,26 @@ export interface UiViewConfig<PropsSchema extends AnySchema, AnswerSchema extend
  * Why: Declares a schema-backed interactive view while leaving submission and validation under host control.
  * Use: Use it for a custom `human.ask` or `human.review` presentation.
  */
-export declare function defineUiView<PropsSchema extends AnySchema, AnswerSchema extends AnySchema>(
-  config: UiViewConfig<PropsSchema, AnswerSchema>,
-): UiViewRef<InferOut<PropsSchema>, InferIn<AnswerSchema>, "input">;
+export declare function defineUiView<
+  PropsSchema extends AnySchema,
+  AnswerSchema extends AnySchema,
+  const Id extends string = string,
+  const Revision extends string = string,
+>(
+  config: UiViewConfig<PropsSchema, AnswerSchema, Id, Revision>,
+): UiViewRef<InferOut<PropsSchema>, InferIn<AnswerSchema>, "input", Id, Revision>;
 
 /**
  * Why: Declares a schema-backed read-only presentation for completed workflow data.
  * Use: Pass the returned view to `ctx.ui.render` with validated props.
  */
-export interface ResultViewConfig<PropsSchema extends AnySchema> {
-  id: string;
-  revision?: string;
+export interface ResultViewConfig<
+  PropsSchema extends AnySchema,
+  Id extends string = string,
+  Revision extends string = string,
+> {
+  id: Id;
+  revision?: Revision;
   props: PropsSchema;
   component: (props: ResultUiComponentProps<InferOut<PropsSchema>>) => unknown;
 }
@@ -184,9 +220,13 @@ export interface ResultViewConfig<PropsSchema extends AnySchema> {
  * Why: Declares a schema-backed read-only presentation for completed workflow data.
  * Use: Pass the returned view to `ctx.ui.render` with validated props.
  */
-export declare function defineResultView<PropsSchema extends AnySchema>(
-  config: ResultViewConfig<PropsSchema>,
-): UiViewRef<InferOut<PropsSchema>, never, "display">;
+export declare function defineResultView<
+  PropsSchema extends AnySchema,
+  const Id extends string = string,
+  const Revision extends string = string,
+>(
+  config: ResultViewConfig<PropsSchema, Id, Revision>,
+): UiViewRef<InferOut<PropsSchema>, never, "display", Id, Revision>;
 
 /**
  * Why: Gives the human DSL an explicit input ui binding contract instead of relying on untyped values.
@@ -244,10 +284,14 @@ export interface HumanApproveOptions {
  * Why: Gives the human DSL an explicit human review options contract instead of relying on untyped values.
  * Use: Import it when declaring, configuring, or consuming the corresponding human API.
  */
-export interface HumanReviewOptions<S extends AnySchema, Props = never> {
+export interface HumanReviewOptions<
+  S extends AnySchema,
+  Props = never,
+  Subject extends HumanReviewSubject = HumanReviewSubject,
+> {
   key?: string;
   question?: string;
-  subject: HumanReviewSubject;
+  subject: Subject;
   attachments?: HumanReviewAttachment[];
   schema: S;
   timeout?: Duration;
@@ -274,9 +318,9 @@ export interface HumanEditFileOptions {
 export interface HumanApi {
   ask<S extends AnySchema, Props = never>(opts: HumanAskOptions<S, Props>): Promise<InferOut<S>>;
   approve(opts: HumanApproveOptions): Promise<HumanApprovalResult>;
-  review<S extends AnySchema, Props = never>(
-    opts: HumanReviewOptions<S, Props>,
-  ): Promise<HumanReviewResult<InferOut<S>>>;
+  review<S extends AnySchema, Props = never, Subject extends HumanReviewSubject = HumanReviewSubject>(
+    opts: HumanReviewOptions<S, Props, Subject>,
+  ): Promise<HumanReviewResult<InferOut<S>, ReviewedSubjectOf<Subject>>>;
   editFile(opts: HumanEditFileOptions): Promise<HumanEditFileResult>;
 }
 

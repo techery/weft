@@ -4,6 +4,7 @@ import {
   defineCheck,
   defineCheckSuite,
   defineGoal,
+  definePathPolicy,
   definePrompt,
   defineRecipe,
   defineResultView,
@@ -25,6 +26,15 @@ const BugInput = z.object({
 });
 
 const BuildResult = z.object({ summary: z.string(), redEvidence: z.string() });
+
+const bugWriterPaths = definePathPolicy({
+  name: "bug-writer-paths",
+  description: "Canonicalizes caller-proposed bug-fix paths inside the workspace.",
+  revision: "v1",
+  roots: ["."],
+  deny: [".git/**", ".weft/**"],
+  grantTtl: "1h",
+});
 
 const bugPrompt = definePrompt({
   name: "bug-prompt",
@@ -63,7 +73,7 @@ const lint = defineCheck({
   name: "lint",
   policy: "required",
   defaults: { timeout: "2m" },
-  command: () => ["pnpm", "lint"],
+  command: ["pnpm", "lint"],
   parse: ({ exitCode, stdout }) => ({
     status: exitCode === 0 ? ("pass" as const) : ("fail" as const),
     evidence: stdout,
@@ -90,11 +100,16 @@ const staticGoal = defineGoal({ name: "lint-complete", check: lint });
 const patchBugWorkflow = defineWorkflow(
   { id: "patch-bug", input: BugInput, output: BuildResult },
   async (ctx, input) => {
+    const writeScope = await ctx.paths.resolve(
+      bugWriterPaths,
+      { proposedPaths: input.allowedPaths },
+      { key: "developer-write-scope", label: "Resolve bug-fix paths" },
+    );
     const built = await ctx.agent({
       key: "developer",
       agent: developer,
       input: { ticket: input },
-      write: { paths: input.allowedPaths, mode: "strict" },
+      write: writeScope,
       goal: { definition: goal, input: { testCommand: input.testCommand } },
     });
 
@@ -140,14 +155,19 @@ const branchDeliveryWorkflow = defineWorkflow(
     workspace: ({ input }) => ({ branch: `feature/${input.ticket}`, from: "main" }),
   },
   async (ctx, input) => {
-    const built = await ctx.phase("Build", (phase) =>
-      phase.agent({
+    const built = await ctx.phase("Build", async (phase) => {
+      const writeScope = await phase.paths.resolve(
+        bugWriterPaths,
+        { proposedPaths: input.allowedPaths },
+        { key: "developer-write-scope", label: "Resolve branch bug-fix paths" },
+      );
+      return phase.agent({
         key: "developer",
         agent: developer,
         input: { ticket: input },
-        write: { paths: input.allowedPaths, mode: "strict" },
-      }),
-    );
+        write: writeScope,
+      });
+    });
 
     // Workspace writes are already present and never yield a patch to integrate.
     expectType<undefined>(built.patch);

@@ -177,11 +177,15 @@ export interface WorkflowTasksApi<ExtensionInput = unknown, Extensions = Extensi
  * Why: Pins workflow-specific task extensions to a schema and semantic revision.
  * Use: Create one with `defineTaskContract` and attach it to workflow metadata.
  */
-export interface TaskContract<S extends AnySchema> extends WorkflowNode<"weft.task-contract"> {
+export interface TaskContract<
+  S extends AnySchema,
+  Revision extends string = string,
+  Version extends number = number,
+> extends WorkflowNode<"weft.task-contract"> {
   readonly kind: "weft.task-contract";
   readonly schema: S;
-  readonly revision: string;
-  readonly version: number;
+  readonly revision: Revision;
+  readonly version: Version;
   readonly agentAccess?: false | "read" | "write";
   readonly migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
 }
@@ -190,10 +194,14 @@ export interface TaskContract<S extends AnySchema> extends WorkflowNode<"weft.ta
  * Why: Declares typed durable task extensions and their evolution policy.
  * Use: Use it at module scope, then pass the returned contract as `defineWorkflow` metadata `tasks`.
  */
-export interface TaskContractConfig<S extends AnySchema> {
+export interface TaskContractConfig<
+  S extends AnySchema,
+  Revision extends string = string,
+  Version extends number = number,
+> {
   schema: S;
-  revision: string;
-  version?: number;
+  revision: Revision;
+  version?: Version;
   agentAccess?: false | "read" | "write";
   migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
 }
@@ -202,6 +210,8 @@ export interface TaskContractConfig<S extends AnySchema> {
  * Why: Declares typed durable task extensions and their evolution policy.
  * Use: Use it at module scope, then pass the returned contract as `defineWorkflow` metadata `tasks`.
  */
-export declare function defineTaskContract<S extends AnySchema>(
-  config: TaskContractConfig<S>,
-): TaskContract<S>;
+export declare function defineTaskContract<
+  S extends AnySchema,
+  const Revision extends string = string,
+  const Version extends number = number,
+>(config: TaskContractConfig<S, Revision, Version>): TaskContract<S, Revision, Version>;

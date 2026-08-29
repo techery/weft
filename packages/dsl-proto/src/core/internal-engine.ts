@@ -3,34 +3,93 @@
 import type {
   AgentDefinition,
   AgentResult,
+  AnyAgentCall,
   AnyDefinedAgentCall,
   GoalInvocationBase,
+  InlineAgentCall,
   PatchAgentResult,
   RecipeDefinition,
   WorkspaceWriteAgentResult,
-  WriteScope,
 } from "./agent.ts";
-import type { ArtifactCaptureInputOf, ArtifactCaptureOptions, ArtifactRefOf } from "./artifacts.ts";
+import type { ArtifactCaptureInputOf, ArtifactCaptureOptionsFor, ArtifactRefOf } from "./artifacts.ts";
 import type {
+  AnyCheckDefinition,
   CheckDefinition,
   CheckInvocationOptions,
   CheckResultOf,
   CheckSuiteDefinition,
   CheckSuiteInvocationOptions,
   CheckSuiteResult,
+  CheckWaiverAuthorizeOptions,
+  CheckWaiverRef,
+  FailedCheckResultOf,
+  WaiverEligibleCheckDefinition,
 } from "./checks.ts";
-import type { GoalDefinition, GoalResult, WorkspaceSubject } from "./goals.ts";
+import type {
+  ContextInvocationOptions,
+  ContextSnapshotOf,
+  ContextSourceDefinition,
+  ContextSourceInputOf,
+} from "./context-sources.ts";
+import type {
+  DeliveryAuthorizationRef,
+  DeliveryAuthorizeOptions,
+  DeliveryDefinition,
+  DeliveryInvocationOptions,
+  DeliveryPrepareOptions,
+  DeliveryReceipt,
+  DeliveryRunRequest,
+  PromotionCandidateInput,
+  PromotionCandidateRef,
+} from "./deliveries.ts";
+import type { GoalDefinition, GoalResult } from "./goals.ts";
 import type { UiViewRef } from "./human.ts";
 import type {
+  DetailedObserverResult,
   ObserverInputOf,
   ObserverInvocationOptions,
   ObserverInvocationOptionsOf,
   ObserverOutputOf,
 } from "./observers.ts";
-import type { OperationInputOf, OperationInvocationOptions, OperationOutputOf } from "./operations.ts";
-import type { AnySchema, InferOut, PromptDefinition, WorkflowNode } from "./shared.ts";
+import type {
+  DirectOperationDefinition,
+  OperationAttemptCandidateOf,
+  OperationAttemptIdempotencyOf,
+  OperationAttemptPrimaryOf,
+  OperationAttemptRecoveryOf,
+  OperationAttemptRefMarker,
+  OperationAttemptResult,
+  OperationAuthorizationRef,
+  OperationAuthorizeOptions,
+  OperationCandidateRef,
+  OperationInputOf,
+  OperationInvocationOptions,
+  OperationOutputOf,
+  OperationPrepareOptions,
+  OperationReceiptCompensationOf,
+  OperationRecoveryCandidateRef,
+  OperationRecoveryResult,
+  ProtectedOperationDefinition,
+  ProtectedOperationExecution,
+  RecoverableOperationInvocationOptions,
+  RecoverableOperationReceiptMarker,
+} from "./operations.ts";
+import type {
+  PathPolicyDefinition,
+  PathPolicyRequest,
+  PathPolicyResolveOptions,
+  WriteScope,
+} from "./path-policies.ts";
+import type { ReviewFindingOf, ReviewInputOf, ReviewInvocationOptions, ReviewResult } from "./reviews.ts";
+import type { AnySchema, InferOut, PromptDefinition, WorkflowNode, WorkspaceSubject } from "./shared.ts";
 import type { TaskContract } from "./tasks.ts";
-import type { InferWorkflowInput, InferWorkflowOutput } from "./workflow.ts";
+import type { TriggerInputOf, TriggerOutputOf } from "./triggers.ts";
+import type {
+  InferWorkflowInput,
+  InferWorkflowOutput,
+  WorkflowDefinition,
+  WorkflowRunReceipt,
+} from "./workflow.ts";
 
 // ---------------------------------------------------------------------------
 // Bound invocation identity and inference
@@ -44,13 +103,27 @@ export type WorkflowInvocationKind =
   | "agent.run"
   | "artifact.capture"
   | "check.run"
+  | "check.authorize"
   | "check-suite.run"
+  | "context.resolve"
+  | "delivery.authorize"
+  | "delivery.prepare"
+  | "delivery.run"
   | "goal.evaluate"
   | "observer.wait"
+  | "operation.authorize"
+  | "operation.prepare"
+  | "operation.recoverable.register"
+  | "operation.recoverable.run"
+  | "operation.recovery.prepare"
+  | "operation.recovery.run"
   | "operation.run"
+  | "path-policy.resolve"
   | "prompt.render"
   | "recipe.run"
+  | "review.run"
   | "task-contract.apply"
+  | "trigger.admit"
   | "ui.request"
   | "ui.render"
   | "workflow.run";
@@ -64,6 +137,16 @@ export interface WorkflowExecutionContext {
   parentStepKey?: string;
   signal: AbortSignal;
   subject?: WorkspaceSubject;
+}
+
+/**
+ * Why: Gives pre-run trigger admission cancellation and host-delivery identity without inventing a workflow run ID.
+ * Use: Bind it only while an authenticated source invokes `trigger.admit` before the child run exists.
+ */
+export interface TriggerExecutionContext {
+  deliveryId: string;
+  receivedAt: string;
+  signal: AbortSignal;
 }
 
 /**
@@ -90,12 +173,13 @@ export interface WorkflowInvocation<
   Node extends WorkflowNode = WorkflowNode,
   Input = unknown,
   Output = unknown,
+  Context extends WorkflowExecutionContext | TriggerExecutionContext = WorkflowExecutionContext,
 > {
   readonly kind: Kind;
   readonly node: Node;
   readonly key: string;
   readonly input: Input;
-  readonly context: WorkflowExecutionContext;
+  readonly context: Context;
   readonly [workflowInvocationBrand]: WorkflowInvocationTypes<Input, Output>;
 }
 
@@ -104,7 +188,13 @@ export interface WorkflowInvocation<
  * Use: Apply it in handlers, tests, and adapters that need the exact input accepted by an invocation.
  */
 export type WorkflowInvocationInput<Invocation> =
-  Invocation extends WorkflowInvocation<WorkflowInvocationKind, WorkflowNode, infer Input, unknown>
+  Invocation extends WorkflowInvocation<
+    WorkflowInvocationKind,
+    WorkflowNode,
+    infer Input,
+    unknown,
+    WorkflowExecutionContext | TriggerExecutionContext
+  >
     ? Input
     : never;
 
@@ -113,7 +203,13 @@ export type WorkflowInvocationInput<Invocation> =
  * Use: Use it as the resolved type of `InternalEngine.execute` and specialized internal handlers.
  */
 export type WorkflowInvocationOutput<Invocation> =
-  Invocation extends WorkflowInvocation<WorkflowInvocationKind, WorkflowNode, unknown, infer Output>
+  Invocation extends WorkflowInvocation<
+    WorkflowInvocationKind,
+    WorkflowNode,
+    unknown,
+    infer Output,
+    WorkflowExecutionContext | TriggerExecutionContext
+  >
     ? Output
     : never;
 
@@ -179,21 +275,48 @@ export type CheckDefinitionInput<Node> =
  * Why: Adds check-specific policy overrides to the generic bound invocation without changing its domain input.
  * Use: The check binder copies `ctx.check` invocation options into this state for the check handler.
  */
-export interface CheckInvocationState {
-  readonly options?: CheckInvocationOptions;
+export interface CheckInvocationState<
+  Node extends AnyCheckDefinition = AnyCheckDefinition,
+  Subject extends WorkspaceSubject = WorkspaceSubject,
+> {
+  readonly options?: CheckInvocationOptions<Node, Subject>;
 }
 
 /**
  * Why: Models one deterministic check as typed input translated into structured, generation-aware evidence.
  * Use: Create it behind `ctx.check` or while expanding a goal component.
  */
-export type CheckInvocation<Node extends WorkflowNode<"weft.check">> = WorkflowInvocation<
-  "check.run",
+export type CheckInvocation<
+  Node extends AnyCheckDefinition,
+  Subject extends WorkspaceSubject = WorkspaceSubject,
+> = WorkflowInvocation<"check.run", Node, CheckDefinitionInput<Node>, CheckResultOf<Node, Subject>> &
+  CheckInvocationState<Node, Subject>;
+
+/**
+ * Why: Carries the exact executed failure and bounded request used to authorize one eligible check exception.
+ * Use: Bind it behind `ctx.check.authorize`; the host derives policy fields from the definition, not this request.
+ */
+export interface CheckWaiverAuthorizationInput<
+  Node extends WaiverEligibleCheckDefinition,
+  Subject extends WorkspaceSubject,
+> {
+  readonly failure: FailedCheckResultOf<Node, Subject>;
+  readonly options: CheckWaiverAuthorizeOptions;
+}
+
+/**
+ * Why: Models waiver authorization as exact failed evidence translated into a nominal definition-bound capability.
+ * Use: Execute it behind `ctx.check.authorize` before invoking the matching eligible check with `waive`.
+ */
+export type CheckWaiverAuthorizationInvocation<
+  Node extends WaiverEligibleCheckDefinition,
+  Subject extends WorkspaceSubject,
+> = WorkflowInvocation<
+  "check.authorize",
   Node,
-  CheckDefinitionInput<Node>,
-  CheckResultOf<Node>
-> &
-  CheckInvocationState;
+  CheckWaiverAuthorizationInput<Node, Subject>,
+  CheckWaiverRef<Node, Subject>
+>;
 
 /**
  * Why: Recovers the raw input declared by a parameterized check suite.
@@ -213,45 +336,84 @@ export type CheckSuiteDefinitionMembers<Node> =
  * Why: Adds suite concurrency and policy overrides to its bound invocation.
  * Use: The suite binder copies `ctx.check` options here before the engine expands member checks.
  */
-export interface CheckSuiteInvocationState {
-  readonly options?: CheckSuiteInvocationOptions;
+export interface CheckSuiteInvocationState<Subject extends WorkspaceSubject = WorkspaceSubject> {
+  readonly options?: CheckSuiteInvocationOptions<Subject>;
 }
 
 /**
  * Why: Models a named check suite as typed input translated into independently visible member results.
  * Use: Create it behind the suite overload of `ctx.check` or while expanding a goal.
  */
-export type CheckSuiteInvocation<Node extends WorkflowNode<"weft.check-suite">> = WorkflowInvocation<
+export type CheckSuiteInvocation<
+  Node extends WorkflowNode<"weft.check-suite">,
+  Subject extends WorkspaceSubject = WorkspaceSubject,
+> = WorkflowInvocation<
   "check-suite.run",
   Node,
   CheckSuiteDefinitionInput<Node>,
-  CheckSuiteResult<CheckSuiteDefinitionMembers<Node>>
+  CheckSuiteResult<CheckSuiteDefinitionMembers<Node>, Subject>
 > &
-  CheckSuiteInvocationState;
+  CheckSuiteInvocationState<Subject>;
 
 // ---------------------------------------------------------------------------
-// Artifact, operation, and observer invocations
+// Artifact, context, path-policy, operation, and observer invocations
 // ---------------------------------------------------------------------------
 
 /**
  * Why: Carries capture identity and presentation metadata beside an artifact's schema-derived content input.
  * Use: The artifact handler reads it when storing content and producing the immutable reference.
  */
-export interface ArtifactInvocationState {
-  readonly options: ArtifactCaptureOptions;
+export interface ArtifactInvocationState<
+  Subject extends WorkspaceSubject | undefined = WorkspaceSubject | undefined,
+> {
+  readonly options: ArtifactCaptureOptionsFor<Subject>;
 }
 
 /**
  * Why: Models artifact capture as validated content and metadata translated into an immutable typed reference.
  * Use: Create it behind `ctx.artifact` before delegating storage to the generic executor.
  */
-export type ArtifactInvocation<Node extends WorkflowNode<"weft.artifact">> = WorkflowInvocation<
-  "artifact.capture",
+export type ArtifactInvocation<
+  Node extends WorkflowNode<"weft.artifact">,
+  Subject extends WorkspaceSubject | undefined = WorkspaceSubject | undefined,
+> = WorkflowInvocation<"artifact.capture", Node, ArtifactCaptureInputOf<Node>, ArtifactRefOf<Node, Subject>> &
+  ArtifactInvocationState<Subject>;
+
+/**
+ * Why: Carries freshness overrides beside a context source's schema-derived lookup input.
+ * Use: The context handler merges it with source trust/freshness policy before resolving the host binding.
+ */
+export interface ContextSourceInvocationState {
+  readonly options: ContextInvocationOptions;
+}
+
+/**
+ * Why: Models a read-only context source as typed lookup translated into a nominal provenance-bearing snapshot.
+ * Use: Create it behind `ctx.context` before delegating the host read to the generic executor.
+ */
+export type ContextSourceInvocation<Node extends ContextSourceDefinition<AnySchema, AnySchema, string>> =
+  WorkflowInvocation<"context.resolve", Node, ContextSourceInputOf<Node>, ContextSnapshotOf<Node>> &
+    ContextSourceInvocationState;
+
+/**
+ * Why: Carries durable resolution identity beside one untrusted path proposal.
+ * Use: The path handler uses it while canonicalizing paths and minting an exact-subject grant.
+ */
+export interface PathPolicyInvocationState {
+  readonly options: PathPolicyResolveOptions;
+}
+
+/**
+ * Why: Models path policy resolution as an untrusted proposal translated into nominal write authority.
+ * Use: Create it behind `ctx.paths.resolve` before any writer receives the returned scope.
+ */
+export type PathPolicyInvocation<Node extends PathPolicyDefinition> = WorkflowInvocation<
+  "path-policy.resolve",
   Node,
-  ArtifactCaptureInputOf<Node>,
-  ArtifactRefOf<Node>
+  PathPolicyRequest,
+  WriteScope<Node>
 > &
-  ArtifactInvocationState;
+  PathPolicyInvocationState;
 
 /**
  * Why: Carries per-call authorization and retry limits beside an operation's schema-derived domain input.
@@ -262,10 +424,10 @@ export interface OperationInvocationState {
 }
 
 /**
- * Why: Models an authorized atomic operation as typed input translated into a validated integration result.
- * Use: Create it behind `ctx.operation` before invoking the generic executor.
+ * Why: Models an explicitly unprotected atomic operation as typed input translated into validated output.
+ * Use: Create it only behind the direct `ctx.operation` overload for definitions with `mode: "none"`.
  */
-export type OperationInvocation<Node extends WorkflowNode<"weft.operation">> = WorkflowInvocation<
+export type OperationInvocation<Node extends DirectOperationDefinition> = WorkflowInvocation<
   "operation.run",
   Node,
   OperationInputOf<Node>,
@@ -274,13 +436,145 @@ export type OperationInvocation<Node extends WorkflowNode<"weft.operation">> = W
   OperationInvocationState;
 
 /**
+ * Why: Carries stable identity while the engine validates and freezes protected operation input.
+ * Use: The preparation handler records it with the definition and input digests.
+ */
+export interface OperationPrepareInvocationState {
+  readonly options: OperationPrepareOptions;
+}
+
+/**
+ * Why: Models protected input preparation as raw typed input translated into a nominal immutable candidate.
+ * Use: Create it behind `ctx.operation.prepare` before requesting candidate-specific authority.
+ */
+export type OperationPrepareInvocation<
+  Node extends ProtectedOperationDefinition,
+  Input extends OperationInputOf<Node> = OperationInputOf<Node>,
+> = WorkflowInvocation<"operation.prepare", Node, Input, OperationCandidateRef<Node, Input>> &
+  OperationPrepareInvocationState;
+
+/**
+ * Why: Carries candidate-specific presentation without changing protected operation policy.
+ * Use: The authorization handler combines it with the frozen candidate and definition policy.
+ */
+export interface OperationAuthorizeInvocationState {
+  readonly options: OperationAuthorizeOptions;
+}
+
+/**
+ * Why: Models authorization as an immutable candidate translated into a candidate-bound capability token.
+ * Use: Create it behind `ctx.operation.authorize` and consume the result only with that candidate.
+ */
+export type OperationAuthorizeInvocation<
+  Node extends ProtectedOperationDefinition,
+  Candidate extends OperationCandidateRef<Node>,
+> = WorkflowInvocation<"operation.authorize", Node, Candidate, OperationAuthorizationRef<Node, Candidate>> &
+  OperationAuthorizeInvocationState;
+
+/**
+ * Why: Models protected execution as matching candidate and authority translated into validated operation output.
+ * Use: Create it behind `ctx.operation.execute`; the handler consumes authority and revalidates both digests.
+ */
+export type ProtectedOperationInvocation<
+  Node extends ProtectedOperationDefinition,
+  Candidate extends OperationCandidateRef<Node>,
+> = WorkflowInvocation<
+  "operation.run",
+  Node,
+  ProtectedOperationExecution<Node, Candidate>,
+  OperationOutputOf<Node>
+> &
+  OperationInvocationState;
+
+/**
+ * Why: Carries exact frozen primary execution and normalized recovery state into pre-dispatch registration.
+ * Use: Bind it behind `ctx.operation.recoverable`; the handler commits it before any primary adapter dispatch.
+ */
+export interface RecoverableOperationRegistrationInput<Attempt extends OperationAttemptRefMarker> {
+  readonly execution: ProtectedOperationExecution<
+    OperationAttemptPrimaryOf<Attempt>,
+    OperationAttemptCandidateOf<Attempt>
+  >;
+  readonly recovery: OperationAttemptRecoveryOf<Attempt>;
+  readonly options: RecoverableOperationInvocationOptions<OperationAttemptIdempotencyOf<Attempt>>;
+}
+
+/**
+ * Why: Models atomic recovery registration as normalized intent translated into a nominal pre-dispatch attempt.
+ * Use: Execute it before `RecoverableOperationExecutionInvocation`; replay rehydrates the same attempt reference.
+ */
+export type RecoverableOperationRegistrationInvocation<Attempt extends OperationAttemptRefMarker> =
+  WorkflowInvocation<
+    "operation.recoverable.register",
+    OperationAttemptPrimaryOf<Attempt>,
+    RecoverableOperationRegistrationInput<Attempt>,
+    Attempt
+  >;
+
+/**
+ * Why: Models one registered remote dispatch as a nominal attempt translated into host-classified commit evidence.
+ * Use: Execute it behind `ctx.operation.executeRecoverable`; ambiguity includes automatic cancellation evidence.
+ */
+export type RecoverableOperationExecutionInvocation<Attempt extends OperationAttemptRefMarker> =
+  WorkflowInvocation<
+    "operation.recoverable.run",
+    OperationAttemptPrimaryOf<Attempt>,
+    Attempt,
+    OperationAttemptResult<Attempt>
+  >;
+
+/**
+ * Why: Models registered success-receipt mapping as exact receipt input translated into a compensation candidate.
+ * Use: Execute it behind `ctx.operation.prepareRecovery`; attempts without success receipts cannot enter this path.
+ */
+export type OperationRecoveryPrepareInvocation<Receipt extends RecoverableOperationReceiptMarker> =
+  WorkflowInvocation<
+    "operation.recovery.prepare",
+    OperationReceiptCompensationOf<Receipt>,
+    Receipt,
+    OperationRecoveryCandidateRef<Receipt>
+  > &
+    OperationPrepareInvocationState;
+
+/**
+ * Why: Carries explicit protected compensation state without letting receipt or candidate relationships be swapped.
+ * Use: Bind it behind `ctx.operation.recover` after ordinary authorization of the receipt-derived candidate.
+ */
+export interface OperationRecoveryExecutionInput<
+  Receipt extends RecoverableOperationReceiptMarker,
+  Candidate extends OperationRecoveryCandidateRef<Receipt>,
+  IdempotencyKey extends string,
+> {
+  readonly receipt: Receipt;
+  readonly execution: ProtectedOperationExecution<OperationReceiptCompensationOf<Receipt>, Candidate>;
+  readonly options: RecoverableOperationInvocationOptions<IdempotencyKey>;
+}
+
+/**
+ * Why: Models explicit compensation as receipt-bound authorized input translated into classified recovery evidence.
+ * Use: Execute it behind `ctx.operation.recover`; ordinary primary output cannot authorize this invocation.
+ */
+export type OperationRecoveryInvocation<
+  Receipt extends RecoverableOperationReceiptMarker,
+  Candidate extends OperationRecoveryCandidateRef<Receipt>,
+  IdempotencyKey extends string,
+> = WorkflowInvocation<
+  "operation.recovery.run",
+  OperationReceiptCompensationOf<Receipt>,
+  OperationRecoveryExecutionInput<Receipt, Candidate, IdempotencyKey>,
+  OperationRecoveryResult<Receipt, Candidate, IdempotencyKey>
+>;
+
+/**
  * Why: Carries durable identity and wait overrides beside an observer's schema-derived lookup input.
  * Use: The observer handler merges it with source configuration and definition defaults.
  */
 export interface ObserverInvocationState<
   Options extends ObserverInvocationOptions = ObserverInvocationOptions,
+  Mode extends "output" | "detailed" = "output" | "detailed",
 > {
   readonly options: Options;
+  readonly mode: Mode;
 }
 
 /**
@@ -293,7 +587,110 @@ export type ObserverInvocation<Node extends WorkflowNode<"weft.observer">> = Wor
   ObserverInputOf<Node>,
   ObserverOutputOf<Node>
 > &
-  ObserverInvocationState<ObserverInvocationOptionsOf<Node>>;
+  ObserverInvocationState<ObserverInvocationOptionsOf<Node>, "output">;
+
+/**
+ * Why: Models the same durable wait with its engine-minted subject, provenance, and evidence retained.
+ * Use: Create it behind `ctx.observe.detailed` when downstream decisions require more than parsed output.
+ */
+export type DetailedObserverInvocation<Node extends WorkflowNode<"weft.observer">> = WorkflowInvocation<
+  "observer.wait",
+  Node,
+  ObserverInputOf<Node>,
+  DetailedObserverResult<Node>
+> &
+  ObserverInvocationState<ObserverInvocationOptionsOf<Node>, "detailed">;
+
+// ---------------------------------------------------------------------------
+// Review and verified-delivery invocations
+// ---------------------------------------------------------------------------
+
+/**
+ * Why: Carries the exact subject and durable identity used to guard one reusable review evaluation.
+ * Use: The review handler verifies the subject before and after nested evaluator effects.
+ */
+export interface ReviewInvocationState<Subject extends WorkspaceSubject = WorkspaceSubject> {
+  readonly options: ReviewInvocationOptions<Subject>;
+}
+
+/**
+ * Why: Models review as typed input translated into a subject-bound verdict and nominal attestation.
+ * Use: Create it behind `ctx.review` while keeping any later rework in ordinary workflow code.
+ */
+export type ReviewInvocation<
+  Node extends WorkflowNode<"weft.review">,
+  Subject extends WorkspaceSubject = WorkspaceSubject,
+> = WorkflowInvocation<
+  "review.run",
+  Node,
+  ReviewInputOf<Node>,
+  ReviewResult<ReviewFindingOf<Node>, Subject>
+> &
+  ReviewInvocationState<Subject>;
+
+/**
+ * Why: Carries the stable key used while validating evidence and freezing delivery input.
+ * Use: The promotion handler records it beside the candidate minting step.
+ */
+export interface DeliveryPrepareInvocationState {
+  readonly options: DeliveryPrepareOptions;
+}
+
+/**
+ * Why: Models promotion preparation as proof-bearing input translated into a nominal candidate reference.
+ * Use: Create it behind `ctx.delivery.prepare` before any delivery authorization is requested.
+ */
+export type DeliveryPrepareInvocation<
+  Node extends DeliveryDefinition<any, any>,
+  Subject extends WorkspaceSubject = WorkspaceSubject,
+> = WorkflowInvocation<
+  "delivery.prepare",
+  Node,
+  PromotionCandidateInput<Node, Subject>,
+  PromotionCandidateRef<Node, Subject>
+> &
+  DeliveryPrepareInvocationState;
+
+/**
+ * Why: Carries candidate-specific authorization presentation without changing the frozen candidate.
+ * Use: The authorization handler combines it with the delivery definition's non-weakenable policy.
+ */
+export interface DeliveryAuthorizeInvocationState {
+  readonly options: DeliveryAuthorizeOptions;
+}
+
+/**
+ * Why: Models authorization as one promotion candidate translated into a candidate-specific capability token.
+ * Use: Create it behind `ctx.delivery.authorize` and consume its result only in the matching run request.
+ */
+export type DeliveryAuthorizeInvocation<
+  Node extends DeliveryDefinition<any, any>,
+  Candidate extends PromotionCandidateRef<Node, WorkspaceSubject>,
+> = WorkflowInvocation<"delivery.authorize", Node, Candidate, DeliveryAuthorizationRef<Node, Candidate>> &
+  DeliveryAuthorizeInvocationState;
+
+/**
+ * Why: Carries bounded retry and stable identity for one atomic delivery execution.
+ * Use: The delivery handler applies it only after revalidating candidate and authorization references.
+ */
+export interface DeliveryRunInvocationState {
+  readonly options: DeliveryInvocationOptions;
+}
+
+/**
+ * Why: Models atomic delivery as authorized candidate state translated into a generation-bound receipt.
+ * Use: Create it behind callable `ctx.delivery` after preparation and authorization both succeed.
+ */
+export type DeliveryRunInvocation<
+  Node extends DeliveryDefinition<any, any>,
+  Candidate extends PromotionCandidateRef<Node, WorkspaceSubject>,
+> = WorkflowInvocation<
+  "delivery.run",
+  Node,
+  DeliveryRunRequest<Node, Candidate>,
+  DeliveryReceipt<Node, Candidate>
+> &
+  DeliveryRunInvocationState;
 
 // ---------------------------------------------------------------------------
 // Agent and goal invocations
@@ -309,10 +706,14 @@ export type AgentNodeOf<Call extends AnyDefinedAgentCall> = Call["agent"];
  * Why: Recovers the schema-validated domain value produced by the agent role in a complete call.
  * Use: It is the value inside the agent result envelope selected for the invocation policy.
  */
-export type AgentValueOf<Call extends AnyDefinedAgentCall> =
-  Call["agent"] extends AgentDefinition<infer _Input, infer Schema, infer _ParsedInput>
+export type AgentValueOf<Call extends AnyAgentCall> =
+  Call extends InlineAgentCall<infer Schema>
     ? InferOut<Schema>
-    : never;
+    : Call extends AnyDefinedAgentCall
+      ? Call["agent"] extends AgentDefinition<infer _Input, infer Schema, infer _ParsedInput>
+        ? InferOut<Schema>
+        : never
+      : never;
 
 /**
  * Why: Names the structural carrier used to detect a goal attached to an agent invocation.
@@ -326,7 +727,7 @@ interface AgentGoalCarrier<Definition extends GoalDefinition<unknown, unknown, u
  * Why: Recovers the accepted goal result only when the concrete agent call attaches a goal definition.
  * Use: It controls whether the agent result contains a required `goal` field.
  */
-export type AgentGoalOf<Call extends AnyDefinedAgentCall> =
+export type AgentGoalOf<Call extends AnyAgentCall> =
   Call extends AgentGoalCarrier<infer Definition>
     ? Definition extends GoalDefinition<unknown, infer Results, unknown>
       ? GoalResult<Results>
@@ -354,7 +755,7 @@ interface NullableAgentCarrier {
  * Use: It forms the non-null result side of `AgentInvocationOutput`.
  */
 export type AgentInvocationEnvelope<
-  Call extends AnyDefinedAgentCall,
+  Call extends AnyAgentCall,
   Workspace extends boolean,
 > = Call extends AgentWriteCarrier
   ? Workspace extends true
@@ -364,10 +765,10 @@ export type AgentInvocationEnvelope<
 
 /**
  * Why: Preserves nullable failure behavior as part of the invocation's exact output rather than the reusable agent node.
- * Use: It is the output extracted when `InternalEngine.execute` receives a defined-agent invocation.
+ * Use: It is the output extracted when `InternalEngine.execute` receives a defined or inline agent invocation.
  */
 export type AgentInvocationOutput<
-  Call extends AnyDefinedAgentCall,
+  Call extends AnyAgentCall,
   Workspace extends boolean,
 > = Call extends NullableAgentCarrier
   ? AgentInvocationEnvelope<Call, Workspace> | null
@@ -389,6 +790,33 @@ export type DefinedAgentInvocation<
   Call extends AnyDefinedAgentCall,
   Workspace extends boolean,
 > = WorkflowInvocation<"agent.run", AgentNodeOf<Call>, Call, AgentInvocationOutput<Call, Workspace>> &
+  AgentInvocationState<Workspace>;
+
+/**
+ * Why: Gives an inline `ctx.agent` call an engine-normalized node without requiring authors to define a reusable role.
+ * Use: The context binder creates it internally from the inline schema before generic execution.
+ */
+export interface InlineAgentNode<Schema extends AnySchema = AnySchema> extends WorkflowNode<"weft.agent"> {
+  readonly kind: "weft.agent";
+  readonly name: "inline-agent";
+  readonly schema: Schema;
+}
+
+/**
+ * Why: Recovers the exact engine-normalized node for an inline agent call.
+ * Use: Preserve the inline result schema while keeping the closed invocation union node-backed.
+ */
+export type InlineAgentNodeOf<Call extends InlineAgentCall<any>> =
+  Call extends InlineAgentCall<infer Schema> ? InlineAgentNode<Schema> : never;
+
+/**
+ * Why: Binds a complete inline agent call to the same exact input-to-output execution path as reusable agent roles.
+ * Use: Create it behind the inline `ctx.agent` overload before passing it to `InternalEngine.execute`.
+ */
+export type InlineAgentInvocation<
+  Call extends InlineAgentCall<any>,
+  Workspace extends boolean,
+> = WorkflowInvocation<"agent.run", InlineAgentNodeOf<Call>, Call, AgentInvocationOutput<Call, Workspace>> &
   AgentInvocationState<Workspace>;
 
 /**
@@ -507,24 +935,42 @@ export type TaskContractInvocation<Node extends WorkflowNode<"weft.task-contract
 >;
 
 /**
+ * Why: Models authenticated external admission as raw event input translated into an atomic launch decision.
+ * Use: Create it only in the host ingress layer; running workflows cannot invoke triggers through `Ctx`.
+ */
+export type TriggerAdmissionInvocation<Node extends WorkflowNode<"weft.trigger">> = WorkflowInvocation<
+  "trigger.admit",
+  Node,
+  TriggerInputOf<Node>,
+  TriggerOutputOf<Node>,
+  TriggerExecutionContext
+>;
+
+/**
  * Why: Records whether a workflow invocation owns a root lifecycle or delegates a child run from a parent.
  * Use: The workflow handler uses it to establish the correct journal, budget, status, and task boundaries.
  */
-export interface WorkflowRunInvocationState {
+export interface WorkflowRunInvocationState<Mode extends "output" | "detailed" = "output" | "detailed"> {
   readonly lifecycle: "root" | "child";
+  readonly mode: Mode;
 }
 
 /**
  * Why: Models a workflow as validated launch input translated into its validated durable run output.
  * Use: Create it at the host entrypoint or behind `ctx.workflow` before generic execution.
  */
-export type WorkflowRunInvocation<Node extends WorkflowNode<"weft.workflow">> = WorkflowInvocation<
-  "workflow.run",
-  Node,
-  InferWorkflowInput<Node>,
-  InferWorkflowOutput<Node>
-> &
-  WorkflowRunInvocationState;
+export type WorkflowRunInvocation<Node extends WorkflowDefinition<any, any, any, any, any, any, any>> =
+  WorkflowInvocation<"workflow.run", Node, InferWorkflowInput<Node>, InferWorkflowOutput<Node>> &
+    WorkflowRunInvocationState<"output">;
+
+/**
+ * Why: Models a child run whose validated output retains engine-minted invocation lineage and optional workspace.
+ * Use: Create it behind `ctx.workflow.detailed`; root launches remain host-owned entrypoint invocations.
+ */
+export type DetailedWorkflowRunInvocation<
+  Node extends WorkflowDefinition<any, any, any, any, any, any, any>,
+> = WorkflowInvocation<"workflow.run", Node, InferWorkflowInput<Node>, WorkflowRunReceipt<Node>> &
+  WorkflowRunInvocationState<"detailed">;
 
 // ---------------------------------------------------------------------------
 // Generic engine boundary
@@ -554,6 +1000,30 @@ type AnyArtifactInvocation = WorkflowInvocation<
   ArtifactInvocationState;
 
 /**
+ * Why: Gives the dispatcher an erased read-only context member with freshness options visible.
+ * Use: It participates in the closed `AnyWorkflowInvocation` union used by the internal executor.
+ */
+type AnyContextSourceInvocation = WorkflowInvocation<
+  "context.resolve",
+  WorkflowNode<"weft.context-source">,
+  unknown,
+  unknown
+> &
+  ContextSourceInvocationState;
+
+/**
+ * Why: Gives the dispatcher an erased path-policy member with resolution identity visible.
+ * Use: It participates in the closed `AnyWorkflowInvocation` union used by the internal executor.
+ */
+type AnyPathPolicyInvocation = WorkflowInvocation<
+  "path-policy.resolve",
+  WorkflowNode<"weft.path-policy">,
+  PathPolicyRequest,
+  unknown
+> &
+  PathPolicyInvocationState;
+
+/**
  * Why: Gives the dispatcher an erased operation member with authorization and retry options visible.
  * Use: It participates in the closed `AnyWorkflowInvocation` union used by the internal executor.
  */
@@ -564,6 +1034,75 @@ type AnyOperationInvocation = WorkflowInvocation<
   unknown
 > &
   OperationInvocationState;
+
+/**
+ * Why: Gives the dispatcher an erased protected-operation preparation member with durable options visible.
+ * Use: It participates in the closed `AnyWorkflowInvocation` union used by the internal executor.
+ */
+type AnyOperationPrepareInvocation = WorkflowInvocation<
+  "operation.prepare",
+  WorkflowNode<"weft.operation">,
+  unknown,
+  unknown
+> &
+  OperationPrepareInvocationState;
+
+/**
+ * Why: Gives the dispatcher an erased protected-operation authorization member with presentation options visible.
+ * Use: It participates in the closed `AnyWorkflowInvocation` union used by the internal executor.
+ */
+type AnyOperationAuthorizeInvocation = WorkflowInvocation<
+  "operation.authorize",
+  WorkflowNode<"weft.operation">,
+  unknown,
+  unknown
+> &
+  OperationAuthorizeInvocationState;
+
+/**
+ * Why: Gives the dispatcher an erased pre-dispatch recovery-registration member.
+ * Use: It participates in the closed union while exact callers retain attempt and recovery relationships.
+ */
+type AnyRecoverableOperationRegistrationInvocation = WorkflowInvocation<
+  "operation.recoverable.register",
+  WorkflowNode<"weft.operation">,
+  unknown,
+  unknown
+>;
+
+/**
+ * Why: Gives the dispatcher an erased recoverable primary-dispatch member.
+ * Use: It participates in the closed union while exact callers retain host-classified attempt results.
+ */
+type AnyRecoverableOperationExecutionInvocation = WorkflowInvocation<
+  "operation.recoverable.run",
+  WorkflowNode<"weft.operation">,
+  unknown,
+  unknown
+>;
+
+/**
+ * Why: Gives the dispatcher an erased receipt-bound compensation-preparation member.
+ * Use: It participates in the closed union while exact callers retain their nominal recovery candidate.
+ */
+type AnyOperationRecoveryPrepareInvocation = WorkflowInvocation<
+  "operation.recovery.prepare",
+  WorkflowNode<"weft.operation">,
+  unknown,
+  unknown
+> &
+  OperationPrepareInvocationState;
+
+/**
+ * Why: Gives the dispatcher an erased explicit compensation-execution member.
+ * Use: It participates in the closed union while exact callers retain classified recovery evidence.
+ */
+type AnyOperationRecoveryInvocation = WorkflowInvocation<
+  "operation.recovery.run",
+  WorkflowNode<"weft.operation">,
+  unknown,
+  unknown
+>;
 
 /**
  * Why: Gives the dispatcher an erased observer member with durable wait options visible.
@@ -578,6 +1117,49 @@ type AnyObserverInvocation = WorkflowInvocation<
   ObserverInvocationState;
 
 /**
+ * Why: Gives the dispatcher an erased review member with exact-subject guard options visible.
+ * Use: It participates in the closed `AnyWorkflowInvocation` union used by the internal executor.
+ */
+type AnyReviewInvocation = WorkflowInvocation<"review.run", WorkflowNode<"weft.review">, unknown, unknown> &
+  ReviewInvocationState;
+
+/**
+ * Why: Gives the dispatcher an erased candidate-preparation member with its durable options visible.
+ * Use: It participates in the closed `AnyWorkflowInvocation` union used by the internal executor.
+ */
+type AnyDeliveryPrepareInvocation = WorkflowInvocation<
+  "delivery.prepare",
+  WorkflowNode<"weft.delivery">,
+  unknown,
+  unknown
+> &
+  DeliveryPrepareInvocationState;
+
+/**
+ * Why: Gives the dispatcher an erased candidate-authorization member with its presentation options visible.
+ * Use: It participates in the closed `AnyWorkflowInvocation` union used by the internal executor.
+ */
+type AnyDeliveryAuthorizeInvocation = WorkflowInvocation<
+  "delivery.authorize",
+  WorkflowNode<"weft.delivery">,
+  unknown,
+  unknown
+> &
+  DeliveryAuthorizeInvocationState;
+
+/**
+ * Why: Gives the dispatcher an erased delivery execution member with retry options visible.
+ * Use: It participates in the closed `AnyWorkflowInvocation` union used by the internal executor.
+ */
+type AnyDeliveryRunInvocation = WorkflowInvocation<
+  "delivery.run",
+  WorkflowNode<"weft.delivery">,
+  unknown,
+  unknown
+> &
+  DeliveryRunInvocationState;
+
+/**
  * Why: Gives the dispatcher an erased recipe invocation member while exact callers retain their concrete generic type.
  * Use: It participates in the closed `AnyWorkflowInvocation` union used by the internal executor.
  */
@@ -589,6 +1171,17 @@ type AnyRecipeInvocation = WorkflowInvocation<"recipe.run", WorkflowNode<"weft.r
  */
 type AnyCheckInvocation = WorkflowInvocation<"check.run", WorkflowNode<"weft.check">, unknown, unknown> &
   CheckInvocationState;
+
+/**
+ * Why: Gives the dispatcher an erased waiver-authorization member while exact callers retain definition and subject.
+ * Use: It participates in the closed internal invocation union beside ordinary check execution.
+ */
+type AnyCheckWaiverAuthorizationInvocation = WorkflowInvocation<
+  "check.authorize",
+  WorkflowNode<"weft.check">,
+  unknown,
+  unknown
+>;
 
 /**
  * Why: Gives the dispatcher an erased suite invocation member with the state required by its handler.
@@ -649,6 +1242,18 @@ type AnyTaskContractInvocation = WorkflowInvocation<
 >;
 
 /**
+ * Why: Gives the dispatcher an erased external-admission member with its pre-run context still visible.
+ * Use: It participates in the closed union while concrete trigger callers retain exact event and result types.
+ */
+type AnyTriggerAdmissionInvocation = WorkflowInvocation<
+  "trigger.admit",
+  WorkflowNode<"weft.trigger">,
+  unknown,
+  unknown,
+  TriggerExecutionContext
+>;
+
+/**
  * Why: Gives the dispatcher an erased workflow-run member with lifecycle state visible to its handler.
  * Use: It participates in the closed `AnyWorkflowInvocation` union used by the internal executor.
  */
@@ -661,22 +1266,36 @@ type AnyWorkflowRunInvocation = WorkflowInvocation<
   WorkflowRunInvocationState;
 
 /**
- * Why: Closes the internal execution surface over every current `define*` result and UI execution mode.
- * Use: Constrain the generic executor and exhaustively dispatch on `invocation.kind` when implementing the engine.
+ * Why: Closes the node-backed execution surface over every current definition, inline agent, and UI mode.
+ * Use: Constrain the definition dispatcher; primitive context effects remain a separate host/journal layer.
  */
 export type AnyWorkflowInvocation =
   | AnyPromptRenderInvocation
   | AnyArtifactInvocation
+  | AnyContextSourceInvocation
+  | AnyPathPolicyInvocation
   | AnyOperationInvocation
+  | AnyOperationPrepareInvocation
+  | AnyOperationAuthorizeInvocation
+  | AnyRecoverableOperationRegistrationInvocation
+  | AnyRecoverableOperationExecutionInvocation
+  | AnyOperationRecoveryPrepareInvocation
+  | AnyOperationRecoveryInvocation
   | AnyObserverInvocation
+  | AnyReviewInvocation
+  | AnyDeliveryPrepareInvocation
+  | AnyDeliveryAuthorizeInvocation
+  | AnyDeliveryRunInvocation
   | AnyRecipeInvocation
   | AnyCheckInvocation
+  | AnyCheckWaiverAuthorizationInvocation
   | AnyCheckSuiteInvocation
   | AnyAgentInvocation
   | AnyGoalEvaluationInvocation
   | AnyUiRequestInvocation
   | AnyUiRenderInvocation
   | AnyTaskContractInvocation
+  | AnyTriggerAdmissionInvocation
   | AnyWorkflowRunInvocation;
 
 /**
