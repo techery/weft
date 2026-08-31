@@ -3,12 +3,12 @@ import type { AgentDefinition, AgentResult, AgentTypesOf } from "./agent.ts";
 import type {
   AnyCheckDefinition,
   CheckDefinition,
-  CheckInputOf,
   CheckInputModeOf,
+  CheckInputOf,
   CheckResultOf,
   CheckSuiteDefinition,
-  CheckSuiteInputOf,
   CheckSuiteInputModeOf,
+  CheckSuiteInputOf,
   CheckSuiteMembersOf,
   CheckSuiteResult,
   CheckSuiteTypes,
@@ -20,8 +20,8 @@ import type {
   DefinitionTypeCarrier,
   InferIn,
   InferOut,
-  InputOf,
   InputMode,
+  InputOf,
   OutputOf,
   ParsedInputOf,
   PromotionProof,
@@ -35,8 +35,7 @@ import type {
 // ---------------------------------------------------------------------------
 
 /** Goal component. */
-export interface GoalComponent<Result>
-  extends DefinitionTypeCarrier<{ result: Result }> {
+export interface GoalComponent<Result> extends DefinitionTypeCarrier<{ result: Result }> {
   readonly kind: "weft.goal-component";
 }
 
@@ -114,10 +113,8 @@ export interface GoalTypes {
  * Why: Names the ordered completion contract that keeps an implementation agent active until verification accepts.
  * Use: Create it with `defineGoal`, then attach it to an agent call through `goal.definition`.
  */
-export interface GoalDefinition<
-  Types extends GoalTypes = GoalTypes,
-  Name extends string = string,
-> extends WorkflowNode<"weft.goal">,
+export interface GoalDefinition<Types extends GoalTypes = GoalTypes, Name extends string = string>
+  extends WorkflowNode<"weft.goal">,
     DefinitionTypeCarrier<Types> {
   readonly kind: "weft.goal";
   readonly name: Name;
@@ -126,8 +123,7 @@ export interface GoalDefinition<
 }
 
 /** Exact hidden type relationships carried by one reusable goal definition. */
-export type GoalTypesOf<Definition> =
-  Definition extends GoalDefinition<infer Types, any> ? Types : never;
+export type GoalTypesOf<Definition> = Definition extends GoalDefinition<infer Types, any> ? Types : never;
 
 /** Exact component-result map carried by one reusable goal definition. */
 export type GoalResultsOf<Definition> = GoalTypesOf<Definition>["results"];
@@ -138,37 +134,35 @@ type ResultsOfComponents<Components extends Record<string, GoalComponent<any>>> 
 };
 
 /** Input accepted by a check or check-suite definition. */
-type CheckDefinitionInput<Definition> =
-  Definition extends AnyCheckDefinition
-    ? CheckInputOf<Definition>
-    : Definition extends CheckSuiteDefinition<any, any>
-      ? CheckSuiteInputOf<Definition>
-      : never;
+type CheckDefinitionInput<Definition> = Definition extends AnyCheckDefinition
+  ? CheckInputOf<Definition>
+  : Definition extends CheckSuiteDefinition<any, any>
+    ? CheckSuiteInputOf<Definition>
+    : never;
 
 /** Schema-validated input accepted by a check or check-suite implementation. */
-type CheckDefinitionParsedInput<Definition> =
-  Definition extends CheckDefinition<any, any> | CheckSuiteDefinition<any, any>
-    ? ParsedInputOf<Definition>
-    : never;
+type CheckDefinitionParsedInput<Definition> = Definition extends
+  | CheckDefinition<any, any>
+  | CheckSuiteDefinition<any, any>
+  ? ParsedInputOf<Definition>
+  : never;
 
 /**
  * Why: Preserves whether a goal derived from a check definition requires an explicit input property.
  * Use: It is carried into the corresponding `GoalDefinition` instead of re-deriving presence from the input value type.
  */
-type CheckDefinitionInputMode<Definition> =
-  Definition extends AnyCheckDefinition
-    ? CheckInputModeOf<Definition>
-    : Definition extends CheckSuiteDefinition<any, any>
-      ? CheckSuiteInputModeOf<Definition>
-      : InputMode;
+type CheckDefinitionInputMode<Definition> = Definition extends AnyCheckDefinition
+  ? CheckInputModeOf<Definition>
+  : Definition extends CheckSuiteDefinition<any, any>
+    ? CheckSuiteInputModeOf<Definition>
+    : InputMode;
 
 /** Result produced by a check or check-suite definition. */
-type CheckDefinitionResult<Definition> =
-  Definition extends AnyCheckDefinition
-    ? CheckResultOf<Definition>
-    : Definition extends CheckSuiteDefinition<any, any>
-      ? CheckSuiteResult<CheckSuiteMembersOf<Definition>>
-      : never;
+type CheckDefinitionResult<Definition> = Definition extends AnyCheckDefinition
+  ? CheckResultOf<Definition>
+  : Definition extends CheckSuiteDefinition<any, any>
+    ? CheckSuiteResult<CheckSuiteMembersOf<Definition>>
+    : never;
 
 /** Goal component map. */
 export type GoalComponentMap = Record<string, GoalComponent<any>>;
@@ -218,8 +212,7 @@ export interface HumanReviewGoalConfig<
 export interface AgentReviewGoalConfig<
   Definition extends AgentDefinition<any, any>,
   Name extends string = string,
->
-  extends GoalConfigBase<Name> {
+> extends GoalConfigBase<Name> {
   agentReview: Definition;
 }
 
@@ -345,14 +338,10 @@ export declare function defineGoal<
  * Why: Recovers the exact definition-time goal name carried through goal invocation references.
  * Use: Apply it to a concrete `defineGoal` result; broad legacy definitions continue to produce `string`.
  */
-export type GoalNameOf<Definition> =
-  Definition extends GoalDefinition<any, infer Name> ? Name : never;
+export type GoalNameOf<Definition> = Definition extends GoalDefinition<any, infer Name> ? Name : never;
 
 /** Goal attempt. */
-export interface GoalAttempt<
-  Results,
-  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
-> {
+export interface GoalAttempt<Results, Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef> {
   readonly attempt: number;
   readonly status: "met" | "rejected" | "error" | "superseded";
   readonly candidate: Candidate;

@@ -608,30 +608,19 @@ describe("weft skill", () => {
       "<!-- weft-dsl-proto-reference:start -->",
       "<!-- weft-dsl-proto-reference:end -->",
     );
-    const advancedBlock = boundedSection(
-      prototypeBlock,
-      "#### Advanced-only `ctx` additions",
-      "<!-- weft-dsl-proto-reference:end -->",
-    );
     const inventory = async (mode: string) => {
       const { stdout } = await run(process.execPath, ["scripts/list-dsl-proto-authoring-surface.mjs", mode], {
         cwd: process.cwd(),
       });
       return stdout.trim().split("\n").filter(Boolean);
     };
-    const [ctxSurfaces, builders, advancedSurfaces] = await Promise.all([
-      inventory("--ctx"),
-      inventory("--builders"),
-      inventory("--advanced-ctx"),
-    ]);
+    const [ctxSurfaces, builders] = await Promise.all([inventory("--ctx"), inventory("--builders")]);
 
     expect(ctxSurfaces.length).toBeGreaterThan(100);
     expect(builders.length).toBeGreaterThan(20);
-    expect(advancedSurfaces.length).toBeGreaterThan(10);
     expect(ctxSurfaces.filter((surface) => !hasApiToken(prototypeBlock, surface))).toEqual([]);
     expect(builders.filter((builder) => !hasApiToken(prototypeBlock, builder))).toEqual([]);
     expect(hasApiToken(prototypeBlock, "z")).toBe(true);
-    expect(advancedSurfaces.filter((surface) => !hasApiToken(advancedBlock, surface))).toEqual([]);
   });
 
   it("separates the runnable SDK from the declaration-only DSL prototype", async () => {
@@ -644,12 +633,10 @@ describe("weft skill", () => {
     expect(printed.text).toContain("ctx.agent(planner, issue");
     expect(printed.text).toContain('failure: "return"');
     expect(printed.text).toContain("ctx.workspace.snapshot");
-    expect(printed.text).toContain(".mapEffect");
     expect(printed.text).toContain("a phase labels effects");
     expect(printed.text).toContain("prototype step owns a callback");
     expect(printed.text).toContain("needs no separate `.stage(...)` layer");
-    expect(printed.text).toContain("sameSnapshot");
-    expect(printed.text).toContain("assertUnchanged");
+    expect(printed.text).toContain("future host performs those comparisons internally");
     expect(printed.text).toContain("A `subject` is simply the thing");
     expect(printed.text).toContain("const planner = defineAgent");
     expect(printed.text).toContain(

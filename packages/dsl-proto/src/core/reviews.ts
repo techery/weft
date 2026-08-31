@@ -59,10 +59,8 @@ export interface ReviewTypes {
  * Why: Represents a reusable review strategy whose engine binding guarantees one unchanged workspace candidate.
  * Use: Create it with `defineReview`, then invoke it through `ctx.review` with an exact candidate.
  */
-export interface ReviewDefinition<
-  Types extends ReviewTypes = ReviewTypes,
-  Name extends string = string,
-> extends WorkflowNode<"weft.review">,
+export interface ReviewDefinition<Types extends ReviewTypes = ReviewTypes, Name extends string = string>
+  extends WorkflowNode<"weft.review">,
     DefinitionTypeCarrier<Types> {
   readonly kind: "weft.review";
   readonly name: Name;
@@ -72,8 +70,7 @@ export interface ReviewDefinition<
 }
 
 /** Exact hidden type relationships carried by one reusable review definition. */
-export type ReviewTypesOf<Definition> =
-  Definition extends ReviewDefinition<infer Types, any> ? Types : never;
+export type ReviewTypesOf<Definition> = Definition extends ReviewDefinition<infer Types, any> ? Types : never;
 
 /**
  * Why: Declares schemas, orchestration, and pure acceptance policy without freezing one reviewer topology.
@@ -134,8 +131,7 @@ export type ReviewFindingOf<Definition> =
  * Why: Recovers the exact definition-time review name for heterogeneous registries and audit projections.
  * Use: Apply it to a concrete `defineReview` result; broad legacy definitions continue to produce `string`.
  */
-export type ReviewNameOf<Definition> =
-  Definition extends ReviewDefinition<any, infer Name> ? Name : never;
+export type ReviewNameOf<Definition> = Definition extends ReviewDefinition<any, infer Name> ? Name : never;
 
 /**
  * Why: Binds review execution to a durable key and one engine-minted workspace generation.

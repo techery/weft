@@ -4,14 +4,16 @@ Type-only prototype of the intended Weft context DSL.
 
 ## Latest prototype revision
 
-This working-tree revision makes the proposed DSL smaller and more literal:
+This revision makes the proposed DSL smaller and more literal:
 
 - one `ctx.agent(...)` function handles reusable agents, one-off prompts, authorized writes, and returned failure;
-- `ctx.step(...)` names durable workflow sections, while pipeline effects use `.mapEffect(...)`;
+- ordinary TypeScript functions and loops replace recipes, pipelines, and sequence helpers;
+- `ctx.step(...)` names durable workflow sections and `ctx.parallel.all/settled` handles keyed fan-out;
+- one callable `ctx.operation(...)` covers direct, protected, and recoverable effects;
+- one callable `ctx.delivery(...)` performs verified promotion;
 - `ctx.workspace.snapshot` captures the current state, and checks, reviews, artifacts, and delivery bind to a
   `candidate`;
-- the host must atomically reject stale candidates and evidence from another candidate; explicit comparison and
-  freshness assertions live only on the advanced surface;
+- the host must atomically reject stale candidates and evidence from another candidate;
 - task contracts have no author-facing version, revision, or migration API because task state is run-scoped and
   short-lived.
 
@@ -29,10 +31,7 @@ npm i @techery/weft-dsl-proto
 - Prototype contract and module map: [`PROTOTYPE.md`](./PROTOTYPE.md)
 - Developer introduction and design story: [`WEFT-DSL-BLOG.md`](./WEFT-DSL-BLOG.md)
 - Eleven-round DX and type-safety log: [`DESIGN-ROUNDS.md`](./DESIGN-ROUNDS.md)
-- Advanced operation and delivery lifecycle types: [`@techery/weft-dsl-proto/advanced`](./src/advanced.ts)
-- Type-only workflow harness contract (no executable harness here): [`@techery/weft-dsl-proto/testing`](./src/testing.ts)
 - Refined coding workflows: [`src/examples/refined`](./src/examples/refined)
-- Adversarial workflow rounds: [`src/examples/rounds`](./src/examples/rounds)
 - Internal execution proof: [`src/examples/internal-engine.ts`](./src/examples/internal-engine.ts)
 - Issues: https://github.com/techery/weft/issues
 - License: MIT

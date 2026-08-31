@@ -19,10 +19,9 @@ import type {
   WorkspaceSnapshotRef,
 } from "./shared.ts";
 import type { AgentTaskAccess } from "./tasks.ts";
-import type { WorkflowCtx } from "./workflow.ts";
 
 // ---------------------------------------------------------------------------
-// Agents and reusable recipes
+// Agents
 // ---------------------------------------------------------------------------
 
 /** Usage. */
@@ -169,10 +168,8 @@ export interface AgentTypes {
  * Why: Names a reusable typed role with one prompt, output schema, and routing defaults.
  * Use: Create it with `defineAgent`, then pass the definition as the first argument to `ctx.agent`.
  */
-export interface AgentDefinition<
-  Types extends AgentTypes = AgentTypes,
-  Name extends string = string,
-> extends WorkflowNode<"weft.agent">,
+export interface AgentDefinition<Types extends AgentTypes = AgentTypes, Name extends string = string>
+  extends WorkflowNode<"weft.agent">,
     DefinitionTypeCarrier<Types> {
   readonly kind: "weft.agent";
   readonly name: Name;
@@ -183,15 +180,13 @@ export interface AgentDefinition<
 }
 
 /** Exact hidden type relationships carried by one reusable agent definition. */
-export type AgentTypesOf<Definition> =
-  Definition extends AgentDefinition<infer Types, any> ? Types : never;
+export type AgentTypesOf<Definition> = Definition extends AgentDefinition<infer Types, any> ? Types : never;
 
 /**
  * Why: Recovers the exact definition-time name retained by one reusable agent role.
  * Use: Apply it to `typeof agent` when building typed registries or provenance views.
  */
-export type AgentNameOf<Definition> =
-  Definition extends AgentDefinition<any, infer Name> ? Name : never;
+export type AgentNameOf<Definition> = Definition extends AgentDefinition<any, infer Name> ? Name : never;
 
 /**
  * Why: Declares a reusable agent role without starting a model session.
@@ -241,7 +236,9 @@ export declare function defineAgent<
   ParsedInput,
   S extends AnySchema,
   const Name extends string = string,
->(config: PromptedAgentConfig<Input, ParsedInput, S, Name>): AgentDefinition<
+>(
+  config: PromptedAgentConfig<Input, ParsedInput, S, Name>,
+): AgentDefinition<
   {
     input: Input;
     parsedInput: ParsedInput;
@@ -300,15 +297,12 @@ export type GoalInputModeOf<Definition> =
  * Use: It is applied by `GoalInvocation`, `bindGoal`, and agent call types.
  */
 export type GoalInputArgument<Definition extends AnyGoalDefinition> =
-  GoalInputModeOf<Definition> extends "none"
-    ? NoGoalInput
-    : RequiredGoalInput<GoalInputOf<Definition>>;
+  GoalInputModeOf<Definition> extends "none" ? NoGoalInput : RequiredGoalInput<GoalInputOf<Definition>>;
 
 /** Goal invocation. */
-export type GoalInvocation<Definition extends AnyGoalDefinition> =
-  Definition extends AnyGoalDefinition
-    ? GoalInvocationBase<Definition> & GoalInputArgument<Definition>
-    : never;
+export type GoalInvocation<Definition extends AnyGoalDefinition> = Definition extends AnyGoalDefinition
+  ? GoalInvocationBase<Definition> & GoalInputArgument<Definition>
+  : never;
 
 /**
  * Why: Gives the author-facing name to a definition-correlated goal invocation passed into an agent call.
@@ -373,12 +367,11 @@ export interface AgentCallWithGoal<Definition extends AnyGoalDefinition> {
  * Why: Selects the correlated goal field for both inline and reusable agent calls.
  * Use: Supply a concrete goal definition type or leave the goal generic as `undefined`.
  */
-export type AgentGoalArgument<Goal extends AnyGoalDefinition | undefined> =
-  [Goal] extends [undefined]
-    ? AgentCallWithoutGoal
-    : Goal extends AnyGoalDefinition
-      ? AgentCallWithGoal<Goal>
-      : never;
+export type AgentGoalArgument<Goal extends AnyGoalDefinition | undefined> = [Goal] extends [undefined]
+  ? AgentCallWithoutGoal
+  : Goal extends AnyGoalDefinition
+    ? AgentCallWithGoal<Goal>
+    : never;
 
 /** Inline agent call. */
 export interface InlineAgentFields<S extends AnySchema> {
@@ -429,10 +422,7 @@ export type DefinedAgentCall<
   Definition extends AnyAgentDefinition = AnyAgentDefinition,
   Goal extends AnyGoalDefinition | undefined = undefined,
 > = Definition extends AnyAgentDefinition
-  ? AgentCallBase &
-    DefinedAgentFields<Definition> &
-    DefinedAgentInput<Definition> &
-    AgentGoalArgument<Goal>
+  ? AgentCallBase & DefinedAgentFields<Definition> & DefinedAgentInput<Definition> & AgentGoalArgument<Goal>
   : never;
 
 /** Any agent call. */
@@ -461,11 +451,7 @@ export interface AgentFailure {
  * Why: Makes optional agent failure explicit and exhaustively branchable while preserving successful result metadata.
  * Use: Request it with `failure: "return"`; branch on `ok` instead of catching or testing a nullable result.
  */
-export type AgentOutcome<
-  Value,
-  Goal = undefined,
-  Success = AgentResult<Value, Goal>,
-> =
+export type AgentOutcome<Value, Goal = undefined, Success = AgentResult<Value, Goal>> =
   | { readonly ok: true; readonly result: Success }
   | {
       readonly ok: false;
@@ -487,9 +473,8 @@ export interface AgentCallOptionsBase extends Omit<AgentExecutionOptions, "key">
  * Why: Correlates an invocation's optional completion goal with the exact goal input accepted by its definition.
  * Use: Name a reusable options object with the concrete goal type when needed; inline objects infer it automatically.
  */
-export type AgentCallOptions<
-  Goal extends AnyGoalDefinition | undefined = undefined,
-> = AgentCallOptionsBase & AgentGoalArgument<Goal>;
+export type AgentCallOptions<Goal extends AnyGoalDefinition | undefined = undefined> = AgentCallOptionsBase &
+  AgentGoalArgument<Goal>;
 
 /**
  * Why: Gives one-off prompt/schema calls the same first-argument position as reusable agent definitions.
@@ -511,14 +496,14 @@ export type AgentGoalResultOf<Goal extends AnyGoalDefinition | undefined> =
  * Why: Derives the validated output of one exact reusable agent definition.
  * Use: It is used by the unified agent-call return types.
  */
-export type AgentOutputOf<Definition extends AnyAgentDefinition> =
-  AgentTypesOf<Definition>["output"];
+export type AgentOutputOf<Definition extends AnyAgentDefinition> = AgentTypesOf<Definition>["output"];
 
 /** Exact completion-goal definition inferred from one invocation options object. */
-type AgentGoalDefinitionOfOptions<Options> =
-  Options extends { readonly goal: GoalInvocationBase<infer Definition> }
-    ? Definition
-    : undefined;
+type AgentGoalDefinitionOfOptions<Options> = Options extends {
+  readonly goal: GoalInvocationBase<infer Definition>;
+}
+  ? Definition
+  : undefined;
 
 /** Revalidates an inferred goal binding against the exact definition carried by that same options object. */
 type CorrelatedAgentOptions<Options> = Options extends {
@@ -531,20 +516,16 @@ type CorrelatedAgentOptions<Options> = Options extends {
  * Why: Selects patch semantics from the exact write option while remaining safe for widened option objects.
  * Use: Concrete `write` returns a write result; optional or union-typed `write` returns every possible success envelope.
  */
-export type AgentSuccessResult<
-  Value,
-  Goal,
-  Options,
-  Workspace extends boolean,
-> = Options extends { readonly write: WriteScope }
+export type AgentSuccessResult<Value, Goal, Options, Workspace extends boolean> = Options extends {
+  readonly write: WriteScope;
+}
   ? Workspace extends true
     ? WorkspaceWriteAgentResult<Value, Goal>
     : PatchAgentResult<Value, Goal>
   : "write" extends keyof Options
-    ? | AgentResult<Value, Goal>
-      | (Workspace extends true
-          ? WorkspaceWriteAgentResult<Value, Goal>
-          : PatchAgentResult<Value, Goal>)
+    ?
+        | AgentResult<Value, Goal>
+        | (Workspace extends true ? WorkspaceWriteAgentResult<Value, Goal> : PatchAgentResult<Value, Goal>)
     : AgentResult<Value, Goal>;
 
 /**
@@ -594,10 +575,7 @@ type RequiredAgentArguments<
  * Use: Call `ctx.agent(definition, input, options)`; omit input for a static definition or use an inline prompt/schema object.
  */
 export interface AgentFn<Workspace extends boolean = false> {
-  <
-    Definition extends RequiredInputAgentDefinition,
-    const Options extends AgentCallOptionsBase,
-  >(
+  <Definition extends RequiredInputAgentDefinition, const Options extends AgentCallOptionsBase>(
     ...args: RequiredAgentArguments<Definition, Options>
   ): Promise<
     AgentCallResult<
@@ -607,10 +585,7 @@ export interface AgentFn<Workspace extends boolean = false> {
       Workspace
     >
   >;
-  <
-    Definition extends InputlessAgentDefinition,
-    const Options extends AgentCallOptionsBase,
-  >(
+  <Definition extends InputlessAgentDefinition, const Options extends AgentCallOptionsBase>(
     definition: Definition,
     options: Options & CorrelatedAgentOptions<Options>,
   ): Promise<
@@ -625,12 +600,7 @@ export interface AgentFn<Workspace extends boolean = false> {
     inline: InlineAgentDefinition<S>,
     options: Options & CorrelatedAgentOptions<Options>,
   ): Promise<
-    AgentCallResult<
-      InferOut<S>,
-      AgentGoalResultOf<AgentGoalDefinitionOfOptions<Options>>,
-      Options,
-      Workspace
-    >
+    AgentCallResult<InferOut<S>, AgentGoalResultOf<AgentGoalDefinitionOfOptions<Options>>, Options, Workspace>
   >;
 }
 
@@ -638,12 +608,11 @@ export interface AgentFn<Workspace extends boolean = false> {
 type ReviewAgentTaskAccess = Omit<AgentTaskAccess, "mode"> & { readonly mode: "read" };
 
 /** Removes writes, delegated operations, and write-capable task access from review invocation policy. */
-export type ReviewAgentCallOptionsBase =
-  Omit<AgentCallOptionsBase, "write" | "tasks" | "tools"> & {
-    readonly write?: never;
-    readonly tasks?: false | ReviewAgentTaskAccess;
-    readonly tools?: never;
-  };
+export type ReviewAgentCallOptionsBase = Omit<AgentCallOptionsBase, "write" | "tasks" | "tools"> & {
+  readonly write?: never;
+  readonly tasks?: false | ReviewAgentTaskAccess;
+  readonly tools?: never;
+};
 
 /** Correlated options accepted by the read-only agent surface exposed during a review. */
 export type ReviewAgentCallOptions<Goal extends AnyGoalDefinition | undefined = undefined> =
@@ -654,10 +623,7 @@ export type ReviewAgentCallOptions<Goal extends AnyGoalDefinition | undefined = 
  * Use: Expose it through `ReviewCtx`; full workflow contexts continue to receive `AgentFn`.
  */
 export interface ReadOnlyAgentApi {
-  <
-    Definition extends RequiredInputAgentDefinition,
-    const Options extends ReviewAgentCallOptionsBase,
-  >(
+  <Definition extends RequiredInputAgentDefinition, const Options extends ReviewAgentCallOptionsBase>(
     ...args: RequiredAgentArguments<Definition, Options>
   ): Promise<
     AgentCallResult<
@@ -667,10 +633,7 @@ export interface ReadOnlyAgentApi {
       false
     >
   >;
-  <
-    Definition extends InputlessAgentDefinition,
-    const Options extends ReviewAgentCallOptionsBase,
-  >(
+  <Definition extends InputlessAgentDefinition, const Options extends ReviewAgentCallOptionsBase>(
     definition: Definition,
     options: Options & CorrelatedAgentOptions<Options>,
   ): Promise<
@@ -685,98 +648,6 @@ export interface ReadOnlyAgentApi {
     inline: InlineAgentDefinition<S>,
     options: Options & CorrelatedAgentOptions<Options>,
   ): Promise<
-    AgentCallResult<
-      InferOut<S>,
-      AgentGoalResultOf<AgentGoalDefinitionOfOptions<Options>>,
-      Options,
-      false
-    >
+    AgentCallResult<InferOut<S>, AgentGoalResultOf<AgentGoalDefinitionOfOptions<Options>>, Options, false>
   >;
 }
-
-/** Recipe config. */
-export interface RecipeConfig<
-  InputSchema extends AnySchema,
-  OutputSchema extends AnySchema,
-  Name extends string = string,
-> {
-  name: Name;
-  description?: string;
-  input: InputSchema;
-  output: OutputSchema;
-  run: (
-    ctx: WorkflowCtx<any, any>,
-    input: InferOut<InputSchema>,
-  ) => Promise<InferIn<OutputSchema>> | InferIn<OutputSchema>;
-}
-
-/**
- * Why: Names the hidden schema and value relationships carried by one reusable recipe definition.
- * Use: Recipe builders construct it; authors normally consume its fields through definition extractors.
- */
-export interface RecipeTypes {
-  readonly input: unknown;
-  readonly parsedInput: unknown;
-  readonly output: unknown;
-  readonly rawOutput: unknown;
-  readonly inputSchema: AnySchema;
-  readonly outputSchema: AnySchema;
-}
-
-/**
- * Why: Provides schema-backed reusable orchestration without creating a separate child run.
- * Use: Create it with `defineRecipe` and invoke it through `ctx.recipe`, sequence, or parallel composition.
- */
-export interface RecipeDefinition<
-  Types extends RecipeTypes = RecipeTypes,
-  Name extends string = string,
-> extends WorkflowNode<"weft.recipe">,
-    DefinitionTypeCarrier<Types> {
-  readonly kind: "weft.recipe";
-  readonly name: Name;
-  readonly description?: string;
-  readonly input: Types["inputSchema"];
-  readonly output: Types["outputSchema"];
-}
-
-/** Erased reusable recipe family used by composition and engine dispatch. */
-export type AnyRecipeDefinition = RecipeDefinition<any, string>;
-
-/** Exact hidden type relationships carried by one reusable recipe definition. */
-export type RecipeTypesOf<Definition> =
-  Definition extends RecipeDefinition<infer Types, any> ? Types : never;
-
-/**
- * Why: Recovers the exact definition-time name retained by one reusable recipe.
- * Use: Apply it to `typeof recipe` when building typed registries or provenance views.
- */
-export type RecipeNameOf<Definition> =
-  Definition extends RecipeDefinition<any, infer Name> ? Name : never;
-
-/** Raw schema-bound input retained by one reusable recipe definition. */
-export type RecipeInputOf<Definition extends AnyRecipeDefinition> = RecipeTypesOf<Definition>["input"];
-
-/** Validated output retained by one reusable recipe definition. */
-export type RecipeOutputOf<Definition extends AnyRecipeDefinition> = RecipeTypesOf<Definition>["output"];
-
-/**
- * Why: Declares transparent reusable orchestration with validated input and output.
- * Use: Use it when nested effects should remain in the current run and journal.
- */
-export declare function defineRecipe<
-  InputSchema extends AnySchema,
-  OutputSchema extends AnySchema,
-  const Name extends string = string,
->(
-  config: RecipeConfig<InputSchema, OutputSchema, Name>,
-): RecipeDefinition<
-  {
-    input: InferIn<InputSchema>;
-    parsedInput: InferOut<InputSchema>;
-    output: InferOut<OutputSchema>;
-    rawOutput: InferIn<OutputSchema>;
-    inputSchema: InputSchema;
-    outputSchema: OutputSchema;
-  },
-  Name
->;

@@ -201,8 +201,7 @@ const candidateReview = defineReview({
   name: "refined-issue-candidate-review",
   input: ReviewInputSchema,
   finding: FindingSchema,
-  evaluate: async (ctx, input) =>
-    (await ctx.agent(reviewer, input, { key: "reviewer" })).value,
+  evaluate: async (ctx, input) => (await ctx.agent(reviewer, input, { key: "reviewer" })).value,
   accept: ({ assessments }) => assessments.every(({ disposition }) => disposition !== "blocking"),
 });
 
@@ -409,8 +408,7 @@ export const issueToReviewedPrWorkflow: WorkflowContract<
       return blocked(input, "issue-ineligible", 0, null, issueSnapshot.evidence.ref);
     }
 
-    const plan = (await ctx.agent(planner, issue, { key: "plan", context: [issueSnapshot] }))
-      .value;
+    const plan = (await ctx.agent(planner, issue, { key: "plan", context: [issueSnapshot] })).value;
     let feedback: z.infer<typeof FeedbackSchema>[] = [];
 
     for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -420,11 +418,15 @@ export const issueToReviewedPrWorkflow: WorkflowContract<
         { proposedPaths: plan.proposedPaths },
         { key: "paths" },
       );
-      const implementation = await attemptCtx.agent(implementer, { issue, plan, attempt, feedback }, {
-        key: "implement",
-        context: [issueSnapshot],
-        write: scope,
-      });
+      const implementation = await attemptCtx.agent(
+        implementer,
+        { issue, plan, attempt, feedback },
+        {
+          key: "implement",
+          context: [issueSnapshot],
+          write: scope,
+        },
+      );
       const changedFiles = [...new Set(implementation.files)].sort();
 
       if (changedFiles.length === 0) {
@@ -523,7 +525,7 @@ export const issueToReviewedPrWorkflow: WorkflowContract<
           sources: [issueSnapshot.evidence, refreshed.evidence, quality.attestation, review.attestation],
         },
       );
-      const receipt = await attemptCtx.delivery.run(delivery, {
+      const receipt = await attemptCtx.delivery(delivery, {
         key: "publish-pull-request",
         candidate,
         input: {

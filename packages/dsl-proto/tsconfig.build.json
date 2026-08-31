@@ -10,5 +10,5 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "include": ["src/index.ts", "src/advanced.ts", "src/testing.ts", "src/core/**/*.ts"]
+  "include": ["src/index.ts", "src/core/**/*.ts"]
 }

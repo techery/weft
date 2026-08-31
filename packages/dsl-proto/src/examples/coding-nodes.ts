@@ -68,7 +68,7 @@ const DeliveryOutput = z.object({
 defineWorkflow(
   { id: "operation-observer-artifact", input: DeliveryInput, output: DeliveryOutput },
   async (ctx, input) => {
-    const pullRequest = await ctx.operation.run(openPullRequest, input, {
+    const pullRequest = await ctx.operation(openPullRequest, input, {
       key: "open-pull-request",
       label: "Open pull request",
       authorization: { detail: `Open ${input.title} from ${input.branch}` },

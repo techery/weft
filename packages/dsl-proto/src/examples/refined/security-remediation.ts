@@ -10,10 +10,10 @@ import {
   definePrompt,
   defineReview,
   defineWorkflow,
+  type WaiverEligibleCheckDefinition,
   type WriteScope,
   z,
 } from "../../index.ts";
-import type { WaiverEligibleCheckDefinition } from "../../advanced.ts";
 
 /** Why: Keeps compile-time security assertions readable without adding runtime behavior. Use: Pass inferred definitions or capabilities to it below. */
 declare function expectType<Type>(value: Type): void;
@@ -210,27 +210,30 @@ const adversarialSecurityReview = defineReview({
       };
     }
 
-    const report = await ctx.agent({
-      prompt: [
-        `Try to refute case ${current.caseId} on exact tree ${input.candidateTree}.`,
-        `Inspect the diff for ${input.changedFiles.join(", ")}.`,
-        `Implementation claim: ${input.implementationSummary}.`,
-        `Verification evidence: ${input.verificationRefs.join(", ")}.`,
-        "Look for incomplete upgrades, lockfile drift, regressions, scope violations, and weakened tests.",
-        "Report concrete findings only. Do not modify files, use the network, or trust the implementation claim.",
-      ],
-      schema: AdversarialReviewReport,
-    }, {
-      key: "adversarial-review:agent",
-      provider: {
-        id: "codex",
-        effort: "high",
-        options: { sandboxMode: "read-only", networkAccess: false, webSearch: "disabled" },
+    const report = await ctx.agent(
+      {
+        prompt: [
+          `Try to refute case ${current.caseId} on exact tree ${input.candidateTree}.`,
+          `Inspect the diff for ${input.changedFiles.join(", ")}.`,
+          `Implementation claim: ${input.implementationSummary}.`,
+          `Verification evidence: ${input.verificationRefs.join(", ")}.`,
+          "Look for incomplete upgrades, lockfile drift, regressions, scope violations, and weakened tests.",
+          "Report concrete findings only. Do not modify files, use the network, or trust the implementation claim.",
+        ],
+        schema: AdversarialReviewReport,
       },
-      maxTurns: 16,
-      timeout: "25m",
-      context: [currentSnapshot],
-    });
+      {
+        key: "adversarial-review:agent",
+        provider: {
+          id: "codex",
+          effort: "high",
+          options: { sandboxMode: "read-only", networkAccess: false, webSearch: "disabled" },
+        },
+        maxTurns: 16,
+        timeout: "25m",
+        context: [currentSnapshot],
+      },
+    );
     return {
       summary: report.value.summary,
       sourceEvidence: [currentSnapshot.evidence],
@@ -354,13 +357,17 @@ const securityRemediationWorkflow = defineWorkflow(
       { proposedPaths: securityCase.remediationPaths },
       { key: "remediation-paths", label: `Resolve paths for ${securityCase.caseId}` },
     );
-    const implementation = await ctx.agent(remediationDeveloper, {
-      securityCase,
-    }, {
-      key: "implement-remediation",
-      context: [caseSnapshot],
-      write: writeScope,
-    });
+    const implementation = await ctx.agent(
+      remediationDeveloper,
+      {
+        securityCase,
+      },
+      {
+        key: "implement-remediation",
+        context: [caseSnapshot],
+        write: writeScope,
+      },
+    );
     const changedFiles = [...new Set(implementation.files)].sort();
     if (changedFiles.length === 0) throw new Error("Remediation agent produced no candidate changes");
     const candidate = ctx.workspace.snapshot;
@@ -434,7 +441,7 @@ const securityRemediationWorkflow = defineWorkflow(
         ],
       },
     );
-    const delivery = await ctx.delivery.run(publishSecurityRemediation, {
+    const delivery = await ctx.delivery(publishSecurityRemediation, {
       key: "publish-remediation",
       label: `Publish ${securityCase.caseId}`,
       candidate,

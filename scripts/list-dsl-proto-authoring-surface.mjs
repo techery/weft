@@ -26,7 +26,6 @@ if (diagnostics.length > 0) {
   );
 }
 const checker = program.getTypeChecker();
-const facade = requiredSource("packages/dsl-proto/src/facade.ts");
 const index = requiredSource("packages/dsl-proto/src/index.ts");
 const checks = requiredSource("packages/dsl-proto/src/core/checks.ts");
 const composition = requiredSource("packages/dsl-proto/src/core/composition.ts");
@@ -37,11 +36,15 @@ const mode = process.argv[2] ?? "--ctx";
 
 if (mode === "--ctx") {
   const surface = new Set();
-  collectExportedType(facade, "WorkflowCtx", "ctx", surface);
-  collectExportedType(facade, "WorkspaceCtx", "ctx", surface);
-  collectOwnInterface(facade, "CandidateWorkspaceContext", "candidate", surface);
-  collectOwnInterface(facade, "ParallelLaneContext", "lane", surface);
-  collectOwnInterface(facade, "SequenceItemContext", "scope", surface);
+  collectExportedType(workflow, "WorkflowCtx", "ctx", surface);
+  collectExportedType(workflow, "WorkspaceCtx", "ctx", surface);
+  collectOwnInterface(
+    requiredSource("packages/dsl-proto/src/core/workspace.ts"),
+    "CandidateWorkspaceContext",
+    "candidate",
+    surface,
+  );
+  collectOwnInterface(composition, "ParallelLaneContext", "lane", surface);
   collectExportedType(workflow, "ReviewCtx", "reviewCtx", surface);
   collectExportedType(composition, "ReviewParallelLaneContext", "reviewLane", surface);
   collectExportedType(operations, "OperationRunContext", "operationCtx", surface);
@@ -50,25 +53,8 @@ if (mode === "--ctx") {
   console.log([...surface].sort().join("\n"));
 } else if (mode === "--builders") {
   console.log(authoringValues(index).sort().join("\n"));
-} else if (mode === "--advanced-ctx") {
-  const ordinary = new Set();
-  const advanced = new Set();
-  collectExportedType(facade, "WorkflowCtx", "ctx", ordinary);
-  collectExportedType(facade, "WorkspaceCtx", "ctx", ordinary);
-  collectExportedType(workflow, "WorkflowCtx", "ctx", advanced);
-  collectExportedType(workflow, "WorkspaceCtx", "ctx", advanced);
-  collectOwnInterface(facade, "ParallelLaneContext", "lane", ordinary);
-  collectOwnInterface(facade, "SequenceItemContext", "scope", ordinary);
-  collectOwnInterface(composition, "ParallelLaneContext", "lane", advanced);
-  collectOwnInterface(composition, "SequenceItemContext", "scope", advanced);
-  console.log(
-    [...advanced]
-      .filter((surface) => !ordinary.has(surface))
-      .sort()
-      .join("\n"),
-  );
 } else {
-  fail(`unknown mode: ${mode}; expected --ctx, --builders, or --advanced-ctx`);
+  fail(`unknown mode: ${mode}; expected --ctx or --builders`);
 }
 
 function collectExportedType(source, name, prefix, output) {
@@ -105,11 +91,6 @@ function collectMembers(type, prefix, output, seen) {
     if (callable) output.add(memberPath);
     if (container) collectMembers(memberType, memberPath, output, seen);
     else if (!callable) output.add(memberPath);
-    if (memberPath === "ctx.pipeline") {
-      for (const signature of checker.getSignaturesOfType(memberType, ts.SignatureKind.Call)) {
-        collectMembers(checker.getReturnTypeOfSignature(signature), memberPath, output, seen);
-      }
-    }
   }
 }
 

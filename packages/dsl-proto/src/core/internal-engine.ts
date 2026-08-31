@@ -9,7 +9,6 @@ import type {
   GoalInvocationBase,
   InlineAgentCall,
   PatchAgentResult,
-  RecipeDefinition,
   WorkspaceWriteAgentResult,
 } from "./agent.ts";
 import type { ArtifactCaptureInputOf, ArtifactCaptureOptionsFor, ArtifactRefOf } from "./artifacts.ts";
@@ -129,7 +128,6 @@ export type WorkflowInvocationKind =
   | "operation.run"
   | "path-policy.resolve"
   | "prompt.render"
-  | "recipe.run"
   | "review.run"
   | "task-contract.apply"
   | "trigger.admit"
@@ -223,7 +221,7 @@ export type WorkflowInvocationOutput<Invocation> =
     : never;
 
 // ---------------------------------------------------------------------------
-// Prompt, recipe, check, and suite invocations
+// Prompt, check, and suite invocations
 // ---------------------------------------------------------------------------
 
 /**
@@ -245,36 +243,10 @@ export type PromptRenderInvocation<Node extends WorkflowNode<"weft.prompt">> = W
 >;
 
 /**
- * Why: Recovers the raw input carried by a schema-backed recipe definition.
- * Use: It supplies the input side of `RecipeInvocation` without widening the recipe result.
- */
-export type RecipeDefinitionInput<Node> =
-  Node extends RecipeDefinition<infer Types, any> ? Types["input"] : never;
-
-/**
- * Why: Recovers the validated output carried by a schema-backed recipe definition.
- * Use: It supplies the output side of `RecipeInvocation` after the recipe's output boundary validates.
- */
-export type RecipeDefinitionOutput<Node> =
-  Node extends RecipeDefinition<infer Types, any> ? Types["output"] : never;
-
-/**
- * Why: Models transparent recipe composition as a typed input-to-output operation in the current run.
- * Use: Create it behind `ctx.recipe`, sequence, or parallel composition before generic execution.
- */
-export type RecipeInvocation<Node extends WorkflowNode<"weft.recipe">> = WorkflowInvocation<
-  "recipe.run",
-  Node,
-  RecipeDefinitionInput<Node>,
-  RecipeDefinitionOutput<Node>
->;
-
-/**
  * Why: Recovers the raw invocation input declared by a reusable deterministic check.
  * Use: It supplies the input side of `CheckInvocation`, including `void` for static checks.
  */
-export type CheckDefinitionInput<Node> =
-  CheckInputOf<Node>;
+export type CheckDefinitionInput<Node> = CheckInputOf<Node>;
 
 /**
  * Why: Adds check-specific policy overrides to the generic bound invocation without changing its domain input.
@@ -327,15 +299,13 @@ export type CheckWaiverAuthorizationInvocation<
  * Why: Recovers the raw input declared by a parameterized check suite.
  * Use: It supplies the input side of `CheckSuiteInvocation`, including `void` for a static suite.
  */
-export type CheckSuiteDefinitionInput<Node> =
-  CheckSuiteInputOf<Node>;
+export type CheckSuiteDefinitionInput<Node> = CheckSuiteInputOf<Node>;
 
 /**
  * Why: Recovers the member map whose names and result types must remain visible after suite execution.
  * Use: It supplies the result side of `CheckSuiteInvocation`.
  */
-export type CheckSuiteDefinitionMembers<Node> =
-  CheckSuiteMembersOf<Node>;
+export type CheckSuiteDefinitionMembers<Node> = CheckSuiteMembersOf<Node>;
 
 /**
  * Why: Adds suite concurrency and policy overrides to its bound invocation.
@@ -381,7 +351,12 @@ export interface ArtifactInvocationState<
 export type ArtifactInvocation<
   Node extends WorkflowNode<"weft.artifact">,
   Candidate extends WorkspaceSnapshotRef | undefined = WorkspaceSnapshotRef | undefined,
-> = WorkflowInvocation<"artifact.capture", Node, ArtifactCaptureInputOf<Node>, ArtifactRefOf<Node, Candidate>> &
+> = WorkflowInvocation<
+  "artifact.capture",
+  Node,
+  ArtifactCaptureInputOf<Node>,
+  ArtifactRefOf<Node, Candidate>
+> &
   ArtifactInvocationState<Candidate>;
 
 /**
@@ -450,7 +425,7 @@ export interface OperationPrepareInvocationState {
 
 /**
  * Why: Models protected input preparation as raw typed input translated into a nominal immutable candidate.
- * Use: Create it behind `ctx.operation.prepare` before requesting candidate-specific authority.
+ * Use: Create it during the internal prepare stage of a protected `ctx.operation` call.
  */
 export type OperationPrepareInvocation<
   Node extends ProtectedOperationDefinition,
@@ -468,7 +443,7 @@ export interface OperationAuthorizeInvocationState {
 
 /**
  * Why: Models authorization as an immutable candidate translated into a candidate-bound capability token.
- * Use: Create it behind `ctx.operation.authorize` and consume the result only with that candidate.
+ * Use: Create it during internal authorization and consume the result only with that candidate.
  */
 export type OperationAuthorizeInvocation<
   Node extends ProtectedOperationDefinition,
@@ -478,7 +453,7 @@ export type OperationAuthorizeInvocation<
 
 /**
  * Why: Models protected execution as matching candidate and authority translated into validated operation output.
- * Use: Create it behind `ctx.operation.execute`; the handler consumes authority and revalidates both digests.
+ * Use: Create it during internal execution; the handler consumes authority and revalidates both digests.
  */
 export type ProtectedOperationInvocation<
   Node extends ProtectedOperationDefinition,
@@ -493,7 +468,7 @@ export type ProtectedOperationInvocation<
 
 /**
  * Why: Carries exact frozen primary execution and normalized recovery state into pre-dispatch registration.
- * Use: Bind it behind `ctx.operation.recoverable`; the handler commits it before any primary adapter dispatch.
+ * Use: Bind it inside a recoverable call; the handler commits it before any primary adapter dispatch.
  */
 export interface RecoverableOperationRegistrationInput<Attempt extends OperationAttemptRefMarker> {
   readonly execution: ProtectedOperationExecution<
@@ -518,7 +493,7 @@ export type RecoverableOperationRegistrationInvocation<Attempt extends Operation
 
 /**
  * Why: Models one registered remote dispatch as a nominal attempt translated into host-classified commit evidence.
- * Use: Execute it behind `ctx.operation.executeRecoverable`; ambiguity includes automatic cancellation evidence.
+ * Use: Execute it in the recoverable dispatch stage; ambiguity includes automatic cancellation evidence.
  */
 export type RecoverableOperationExecutionInvocation<Attempt extends OperationAttemptRefMarker> =
   WorkflowInvocation<
@@ -530,7 +505,7 @@ export type RecoverableOperationExecutionInvocation<Attempt extends OperationAtt
 
 /**
  * Why: Models registered success-receipt mapping as exact receipt input translated into a compensation candidate.
- * Use: Execute it behind `ctx.operation.prepareRecovery`; attempts without success receipts cannot enter this path.
+ * Use: Execute it during recovery preparation; attempts without success receipts cannot enter this path.
  */
 export type OperationRecoveryPrepareInvocation<Receipt extends RecoverableOperationReceiptMarker> =
   WorkflowInvocation<
@@ -543,7 +518,7 @@ export type OperationRecoveryPrepareInvocation<Receipt extends RecoverableOperat
 
 /**
  * Why: Carries explicit protected compensation state without letting receipt or candidate relationships be swapped.
- * Use: Bind it behind `ctx.operation.recover` after ordinary authorization of the receipt-derived candidate.
+ * Use: Bind it during recovery after authorization of the receipt-derived candidate.
  */
 export interface OperationRecoveryExecutionInput<
   Receipt extends RecoverableOperationReceiptMarker,
@@ -557,7 +532,7 @@ export interface OperationRecoveryExecutionInput<
 
 /**
  * Why: Models explicit compensation as receipt-bound authorized input translated into classified recovery evidence.
- * Use: Execute it behind `ctx.operation.recover`; ordinary primary output cannot authorize this invocation.
+ * Use: Execute it in the recovery stage; ordinary primary output cannot authorize this invocation.
  */
 export type OperationRecoveryInvocation<
   Receipt extends RecoverableOperationReceiptMarker,
@@ -643,7 +618,7 @@ export interface DeliveryPrepareInvocationState {
 
 /**
  * Why: Models promotion preparation as proof-bearing input translated into a nominal candidate reference.
- * Use: Create it behind `ctx.delivery.prepare` before any delivery authorization is requested.
+ * Use: Create it during the internal delivery prepare stage before authorization is requested.
  */
 export type DeliveryPrepareInvocation<
   Node extends DeliveryDefinition<any, any>,
@@ -666,7 +641,7 @@ export interface DeliveryAuthorizeInvocationState {
 
 /**
  * Why: Models authorization as one promotion candidate translated into a candidate-specific capability token.
- * Use: Create it behind `ctx.delivery.authorize` and consume its result only in the matching run request.
+ * Use: Create it during internal delivery authorization and consume it only in the matching run request.
  */
 export type DeliveryAuthorizeInvocation<
   Node extends DeliveryDefinition<any, any>,
@@ -774,11 +749,7 @@ export type AgentInvocationOutput<
   Call extends AnyAgentCall,
   Workspace extends boolean,
 > = Call extends ReturnedAgentFailureCarrier
-  ? AgentOutcome<
-      AgentValueOf<Call>,
-      AgentGoalOf<Call>,
-      AgentInvocationEnvelope<Call, Workspace>
-    >
+  ? AgentOutcome<AgentValueOf<Call>, AgentGoalOf<Call>, AgentInvocationEnvelope<Call, Workspace>>
   : AgentInvocationEnvelope<Call, Workspace>;
 
 /**
@@ -849,15 +820,13 @@ export interface GoalEvaluationInput<Input> {
  * Why: Recovers the domain input expected by a named goal definition.
  * Use: It specializes `GoalEvaluationInput` for the selected goal node.
  */
-export type GoalDefinitionInput<Node> =
-  Node extends GoalDefinition<any, any> ? InputOf<Node> : never;
+export type GoalDefinitionInput<Node> = Node extends GoalDefinition<any, any> ? InputOf<Node> : never;
 
 /**
  * Why: Recovers the accepted component result map produced by a named goal definition.
  * Use: It specializes the final `GoalResult` returned by goal execution.
  */
-export type GoalDefinitionResults<Node> =
-  Node extends GoalDefinition<any, any> ? GoalResultsOf<Node> : never;
+export type GoalDefinitionResults<Node> = Node extends GoalDefinition<any, any> ? GoalResultsOf<Node> : never;
 
 /**
  * Why: Models bounded goal evaluation as a candidate-bound input translated into accepted, generation-scoped evidence.
@@ -965,17 +934,24 @@ export interface WorkflowRunInvocationState<Mode extends "output" | "detailed" =
  * Why: Models a workflow as validated launch input translated into its validated durable run output.
  * Use: Create it at the host entrypoint or behind `ctx.workflow` before generic execution.
  */
-export type WorkflowRunInvocation<Node extends WorkflowDefinition<any, any>> =
-  WorkflowInvocation<"workflow.run", Node, InferWorkflowInput<Node>, InferWorkflowOutput<Node>> &
-    WorkflowRunInvocationState<"output">;
+export type WorkflowRunInvocation<Node extends WorkflowDefinition<any, any>> = WorkflowInvocation<
+  "workflow.run",
+  Node,
+  InferWorkflowInput<Node>,
+  InferWorkflowOutput<Node>
+> &
+  WorkflowRunInvocationState<"output">;
 
 /**
  * Why: Models a child run whose validated output retains engine-minted invocation lineage and optional workspace.
  * Use: Create it behind `ctx.workflow.detailed`; root launches remain host-owned entrypoint invocations.
  */
-export type DetailedWorkflowRunInvocation<
-  Node extends WorkflowDefinition<any, any>,
-> = WorkflowInvocation<"workflow.run", Node, InferWorkflowInput<Node>, WorkflowRunReceipt<Node>> &
+export type DetailedWorkflowRunInvocation<Node extends WorkflowDefinition<any, any>> = WorkflowInvocation<
+  "workflow.run",
+  Node,
+  InferWorkflowInput<Node>,
+  WorkflowRunReceipt<Node>
+> &
   WorkflowRunInvocationState<"detailed">;
 
 // ---------------------------------------------------------------------------
@@ -1166,12 +1142,6 @@ type AnyDeliveryRunInvocation = WorkflowInvocation<
   DeliveryRunInvocationState;
 
 /**
- * Why: Gives the dispatcher an erased recipe invocation member while exact callers retain their concrete generic type.
- * Use: It participates in the closed `AnyWorkflowInvocation` union used by the internal executor.
- */
-type AnyRecipeInvocation = WorkflowInvocation<"recipe.run", WorkflowNode<"weft.recipe">, unknown, unknown>;
-
-/**
  * Why: Gives the dispatcher an erased check invocation member with the state required by its handler.
  * Use: It participates in the closed `AnyWorkflowInvocation` union used by the internal executor.
  */
@@ -1292,7 +1262,6 @@ export type AnyWorkflowInvocation =
   | AnyDeliveryPrepareInvocation
   | AnyDeliveryAuthorizeInvocation
   | AnyDeliveryRunInvocation
-  | AnyRecipeInvocation
   | AnyCheckInvocation
   | AnyCheckWaiverAuthorizationInvocation
   | AnyCheckSuiteInvocation

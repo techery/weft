@@ -5,7 +5,6 @@ import {
   defineGoal,
   definePathPolicy,
   definePrompt,
-  defineRecipe,
   defineResultView,
   defineTaskContract,
   defineUiView,
@@ -103,11 +102,15 @@ const patchBugWorkflow = defineWorkflow(
       { proposedPaths: input.allowedPaths },
       { key: "developer-write-scope", label: "Resolve bug-fix paths" },
     );
-    const built = await ctx.agent(developer, { ticket: input }, {
-      key: "developer",
-      write: writeScope,
-      goal: { definition: goal, input: { testCommand: input.testCommand } },
-    });
+    const built = await ctx.agent(
+      developer,
+      { ticket: input },
+      {
+        key: "developer",
+        write: writeScope,
+        goal: { definition: goal, input: { testCommand: input.testCommand } },
+      },
+    );
 
     expectType<PatchRef>(built.patch);
     expectType<"met">(built.goal.status);
@@ -156,10 +159,14 @@ const branchDeliveryWorkflow = defineWorkflow(
         { proposedPaths: input.allowedPaths },
         { key: "developer-write-scope", label: "Resolve branch bug-fix paths" },
       );
-      return step.agent(developer, { ticket: input }, {
-        key: "developer",
-        write: writeScope,
-      });
+      return step.agent(
+        developer,
+        { ticket: input },
+        {
+          key: "developer",
+          write: writeScope,
+        },
+      );
     });
 
     // Workspace writes are already present and never yield a patch to integrate.
@@ -180,17 +187,14 @@ const branchDeliveryWorkflow = defineWorkflow(
   },
 );
 
-const recipe = defineRecipe({
-  name: "inspect-ticket",
-  input: z.object({ ticket: z.string() }),
-  output: z.object({ ticket: z.string() }),
-  run: async (_ctx, input) => input,
-});
+async function inspectTicket(ticket: { ticket: string }): Promise<{ ticket: string }> {
+  return ticket;
+}
 
 const compositionWorkflow = defineWorkflow(
   { id: "composition", input: z.array(z.object({ ticket: z.string() })), output: z.array(z.string()) },
   async (ctx, input) => {
-    const results = await ctx.parallel.all(input, (item, lane) => lane.recipe(recipe, item), {
+    const results = await ctx.parallel.all(input, (item) => inspectTicket(item), {
       key: "inspect",
       keyOf: (item) => item.ticket,
       concurrency: 2,
@@ -207,19 +211,25 @@ const Tasks = defineTaskContract({
 const taskWorkflow = defineWorkflow(
   { id: "task-workflow", input: BugInput, output: BuildResult, tasks: Tasks },
   async (ctx, input) => {
-    await ctx.tasks.upsert({
-      dedupeKey: input.ticket,
-      set: {
-        title: input.ticket,
-        description: "Bug",
-        extensions: { ticket: input.ticket, branch: null },
+    await ctx.tasks.upsert(
+      {
+        dedupeKey: input.ticket,
+        set: {
+          title: input.ticket,
+          description: "Bug",
+          extensions: { ticket: input.ticket, branch: null },
+        },
       },
-    }, { key: "task:intake" });
-    const result = await ctx.agent({ prompt: "Summarize", schema: BuildResult }, {
-      key: "read",
-      failure: "return",
-      tasks: { mode: "read", dedupeKeys: [input.ticket] },
-    });
+      { key: "task:intake" },
+    );
+    const result = await ctx.agent(
+      { prompt: "Summarize", schema: BuildResult },
+      {
+        key: "read",
+        failure: "return",
+        tasks: { mode: "read", dedupeKeys: [input.ticket] },
+      },
+    );
     if (!result.ok) return { summary: "unavailable", redEvidence: "unavailable" };
     return result.result.value;
   },
@@ -233,7 +243,6 @@ expectType<"weft.check-suite">(quality.kind);
 expectType<"weft.goal">(goal.kind);
 expectType<"weft.ui-view">(reviewView.kind);
 expectType<"weft.ui-view">(resultView.kind);
-expectType<"weft.recipe">(recipe.kind);
 expectType<"weft.task-contract">(Tasks.kind);
 expectType<"weft.workflow">(patchBugWorkflow.kind);
 expectType<"weft.workflow">(branchDeliveryWorkflow.kind);

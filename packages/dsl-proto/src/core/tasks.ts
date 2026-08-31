@@ -121,10 +121,7 @@ export interface WorkflowTasksApi<ExtensionInput = unknown, Extensions = Extensi
     selector: WorkflowTaskSelector,
     opts: WorkflowTaskStepOptions,
   ): Promise<WorkflowTaskSnapshot<Extensions>>;
-  upsert(
-    input: WorkflowTaskUpsertInput<ExtensionInput>,
-    opts: WorkflowTaskStepOptions,
-  ): Promise<void>;
+  upsert(input: WorkflowTaskUpsertInput<ExtensionInput>, opts: WorkflowTaskStepOptions): Promise<void>;
   update(
     id: string,
     input: WorkflowTaskUpdateInput<ExtensionInput>,

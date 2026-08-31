@@ -1,5 +1,9 @@
 # DSL workflow design rounds
 
+> Historical record: the round fixtures described here were removed from the active source tree after their
+> findings were folded into the canonical DSL. Use Git history at commit `929b8c4` to inspect the original files.
+> Current authoring guidance lives in `PROTOTYPE.md` and `WEFT-DSL-BLOG.md`.
+
 This log records eleven compile-time authoring rounds against the declaration-only DSL. Each round uses
 concrete coding workflows, an adversarial type/DX review, and an API-minimization pass. A proposed feature
 is accepted only when it makes a safety boundary expressible or removes repeated accidental complexity; a

@@ -96,8 +96,7 @@ export interface DefinitionTypeCarrier<Types> {
  * Why: Recovers the complete hidden type bag of a DSL definition without depending on generic parameter order.
  * Use: Prefer the narrower field extractors unless generic tooling genuinely needs the whole definition relationship.
  */
-export type TypesOf<Definition> =
-  Definition extends DefinitionTypeCarrier<infer Types> ? Types : never;
+export type TypesOf<Definition> = Definition extends DefinitionTypeCarrier<infer Types> ? Types : never;
 
 /**
  * Why: Recovers the author-supplied input type from any definition that carries one in its hidden type bag.
@@ -163,7 +162,6 @@ export type WorkflowNodeKind =
   | "weft.operation"
   | "weft.path-policy"
   | "weft.prompt"
-  | "weft.recipe"
   | "weft.review"
   | "weft.task-contract"
   | "weft.trigger"

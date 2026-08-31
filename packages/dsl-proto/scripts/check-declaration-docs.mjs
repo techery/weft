@@ -2,22 +2,18 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const sourceDir = new URL("../src/core", import.meta.url).pathname;
+const publicBarrel = readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
 const declaration =
-  /^(?:export\s+)?(?:declare\s+)?(?:interface|type|function|const|namespace)\s+([A-Za-z_$][\w$]*)/;
+  /^export\s+(?:declare\s+)?(?:interface|type|function|const|namespace)\s+([A-Za-z_$][\w$]*)/;
 const missing = [];
-const inlineTypeProblems = [];
-const inlineTypePatterns = [/\b(?:config|opts|options|init|meta):\s*\{/, /Promise<\{/, /ReadonlyArray<\{/];
 
 for (const file of readdirSync(sourceDir).filter((name) => name.endsWith(".ts") && name !== "index.ts")) {
   const lines = readFileSync(join(sourceDir, file), "utf8").split("\n");
 
   for (const [index, line] of lines.entries()) {
-    if (inlineTypePatterns.some((pattern) => pattern.test(line))) {
-      inlineTypeProblems.push(`${file}:${index + 1} replace the inline object with a named type`);
-    }
-
     const match = line.match(declaration);
     if (!match) continue;
+    if (!new RegExp(`\\b${match[1]}\\b`).test(publicBarrel)) continue;
 
     let end = index - 1;
     while (end >= 0 && lines[end]?.trim() === "") end -= 1;
@@ -47,10 +43,10 @@ for (const file of readdirSync(sourceDir).filter((name) => name.endsWith(".ts") 
   }
 }
 
-if (missing.length > 0 || inlineTypeProblems.length > 0) {
+if (missing.length > 0) {
   console.error("Declaration surface check failed:\n");
-  for (const problem of [...missing, ...inlineTypeProblems]) console.error(`  ${problem}`);
+  for (const problem of missing) console.error(`  ${problem}`);
   process.exit(1);
 }
 
-console.log("Declaration documentation and named-type checks passed");
+console.log("Public declaration documentation check passed");

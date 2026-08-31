@@ -125,7 +125,7 @@ export type PromotionEvidence<Snapshot extends WorkspaceSnapshotRef = WorkspaceS
 
 /**
  * Why: Collects the exact snapshot, frozen delivery input, proofs, and immutable supporting artifacts atomically.
- * Use: Pass it to `ctx.delivery.prepare`; the host rejects mixed or stale snapshots before minting a candidate.
+ * Use: The host derives it from a `ctx.delivery` request and rejects mixed or stale snapshots.
  */
 export interface PromotionCandidateInput<
   Definition extends DeliveryDefinition<any, any>,
@@ -165,7 +165,7 @@ export interface PromotionCandidateRef<
 
 /**
  * Why: Recovers the delivery definition already carried nominally by an engine-minted promotion candidate.
- * Use: Build advanced lifecycle helpers without asking authors to repeat the delivery definition.
+ * Use: Build internal lifecycle helpers without repeating the delivery definition.
  */
 export type PromotionCandidateDefinitionOf<Candidate> =
   Candidate extends PromotionCandidateRef<infer Definition, any> ? Definition : never;
@@ -179,7 +179,7 @@ export type PromotionCandidateSnapshotOf<Candidate> =
 
 /**
  * Why: Prevents a general gate answer or approval for another candidate from authorizing delivery.
- * Use: Receive it from `ctx.delivery.authorize` and pass it unchanged with its candidate to `ctx.delivery`.
+ * Use: The engine mints it during the one-shot `ctx.delivery` lifecycle and consumes it with the same candidate.
  */
 declare const deliveryAuthorizationBrand: unique symbol;
 
@@ -203,7 +203,7 @@ export interface DeliveryAuthorizationRef<
 
 /**
  * Why: Recovers the delivery definition already bound into candidate-specific delivery authority.
- * Use: Infer receipt output when advanced execution starts from the authorization reference.
+ * Use: Infer receipt output when internal execution starts from the authorization reference.
  */
 export type DeliveryAuthorizationDefinitionOf<Authorization> =
   Authorization extends DeliveryAuthorizationRef<infer Definition, any> ? Definition : never;
@@ -217,7 +217,7 @@ export type DeliveryAuthorizationCandidateOf<Authorization> =
 
 /**
  * Why: Supplies durable identity and labels while the engine validates and freezes a promotion candidate.
- * Use: Pass it to `ctx.delivery.prepare` with a stable key.
+ * Use: The engine derives it from the stable key on the public `ctx.delivery` call.
  */
 export interface DeliveryPrepareOptions {
   key: string;
@@ -226,7 +226,7 @@ export interface DeliveryPrepareOptions {
 
 /**
  * Why: Adds candidate-specific detail and timeout to the authorization policy declared by a delivery definition.
- * Use: Pass it to `ctx.delivery.authorize`; it cannot weaken the definition's action or risk.
+ * Use: The engine derives it from public authorization presentation; it cannot weaken action or risk.
  */
 export interface DeliveryAuthorizeOptions {
   key: string;
@@ -234,12 +234,6 @@ export interface DeliveryAuthorizeOptions {
   detail?: string;
   timeout?: Duration;
 }
-
-/**
- * Why: Lets advanced delivery authorization inherit its durable key from the prepared promotion candidate.
- * Use: Pass it to the candidate-only `authorize` overload; the engine derives the authorization subkey.
- */
-export type AdvancedDeliveryAuthorizeOptions = Omit<DeliveryAuthorizeOptions, "key">;
 
 /**
  * Why: Pairs exactly one promotion candidate with the authorization minted for that candidate.
@@ -265,12 +259,6 @@ export interface DeliveryInvocationOptions {
 }
 
 /**
- * Why: Lets advanced delivery execution inherit durable identity from candidate-bound authorization.
- * Use: Pass it to `ctx.delivery.execute` after candidate-only authorization.
- */
-export type AdvancedDeliveryInvocationOptions = Omit<DeliveryInvocationOptions, "key">;
-
-/**
  * Why: Carries candidate-specific approval presentation inside one author-facing delivery call.
  * Use: Supply optional detail or a tighter approval timeout without changing declared action or risk.
  */
@@ -283,7 +271,7 @@ export interface DeliveryRunAuthorizationOptions {
 
 /**
  * Why: Gives ordinary authors one durable delivery key while retaining the exact candidate and its proofs.
- * Use: Pass it to `ctx.delivery.run`; the host atomically rejects stale candidates or mismatched proofs.
+ * Use: Pass it to `ctx.delivery`; the host atomically rejects stale candidates or mismatched proofs.
  */
 export interface DeliveryOneShotRequest<
   Definition extends DeliveryDefinition<any, any>,
@@ -318,49 +306,11 @@ export interface DeliveryReceipt<
   readonly attestation: SubjectAttestation<"delivery", DeliveryOutputOf<Definition>, Candidate["snapshot"]>;
 }
 
-/** Ordinary one-shot verified delivery calls. */
-export interface DeliveryApi {
-  run<Definition extends DeliveryDefinition<any, any>, Snapshot extends WorkspaceSnapshotRef>(
-    definition: Definition,
-    request: DeliveryOneShotRequest<Definition, Snapshot>,
-  ): Promise<DeliveryReceipt<Definition, PromotionCandidateRef<Definition, Snapshot>>>;
-}
-
-/**
- * Why: Adds the explicit candidate and authorization lifecycle to the ordinary delivery facade.
- * Use: Import its contracts from `/advanced`; ordinary workflow contexts expose only `DeliveryApi`.
- */
-export interface DeliveryFn extends DeliveryApi {
-  prepare<Definition extends DeliveryDefinition<any, any>, Snapshot extends WorkspaceSnapshotRef>(
-    definition: Definition,
-    input: PromotionCandidateInput<Definition, Snapshot>,
-    options: DeliveryPrepareOptions,
-  ): Promise<PromotionCandidateRef<Definition, Snapshot>>;
-  authorize<Definition extends DeliveryDefinition<any, any>, Snapshot extends WorkspaceSnapshotRef>(
-    candidate: PromotionCandidateRef<Definition, Snapshot>,
-    options: AdvancedDeliveryAuthorizeOptions,
-  ): Promise<DeliveryAuthorizationRef<Definition, PromotionCandidateRef<Definition, Snapshot>>>;
-  authorize<
-    Definition extends DeliveryDefinition<any, any>,
-    Candidate extends PromotionCandidateRef<Definition, WorkspaceSnapshotRef>,
-  >(
-    definition: Definition,
-    candidate: Candidate,
-    options: DeliveryAuthorizeOptions,
-  ): Promise<DeliveryAuthorizationRef<Definition, Candidate>>;
-  execute<
-    Definition extends DeliveryDefinition<any, any>,
-    Candidate extends PromotionCandidateRef<Definition, WorkspaceSnapshotRef>,
-  >(
-    authorization: DeliveryAuthorizationRef<Definition, Candidate>,
-    options: AdvancedDeliveryInvocationOptions,
-  ): Promise<DeliveryReceipt<Definition, Candidate>>;
-  <
-    Definition extends DeliveryDefinition<any, any>,
-    Candidate extends PromotionCandidateRef<Definition, WorkspaceSnapshotRef>,
-  >(
-    definition: Definition,
-    request: DeliveryRunRequest<Definition, Candidate>,
-    options: DeliveryInvocationOptions,
-  ): Promise<DeliveryReceipt<Definition, Candidate>>;
-}
+/** One-shot verified delivery call. */
+export type DeliveryApi = <
+  Definition extends DeliveryDefinition<any, any>,
+  Snapshot extends WorkspaceSnapshotRef,
+>(
+  definition: Definition,
+  request: DeliveryOneShotRequest<Definition, Snapshot>,
+) => Promise<DeliveryReceipt<Definition, PromotionCandidateRef<Definition, Snapshot>>>;

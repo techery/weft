@@ -276,8 +276,7 @@ export interface CheckTypes {
 }
 
 /** Exact hidden type relationships carried by one reusable check definition. */
-export type CheckTypesOf<Definition> =
-  Definition extends CheckDefinition<infer Types, any> ? Types : never;
+export type CheckTypesOf<Definition> = Definition extends CheckDefinition<infer Types, any> ? Types : never;
 
 /** Hidden relationship bag constructed by the check builder overloads. */
 type DefinedCheckTypes<
@@ -303,10 +302,10 @@ type CheckTypesWithWaiver<Waiver extends CheckWaiverPolicy> = Omit<CheckTypes, "
 };
 
 /** Broad hidden relationship bag constrained to one waiver branch and definition-form input mode. */
-type CheckTypesWithWaiverAndInputMode<
-  Waiver extends CheckWaiverPolicy,
-  Mode extends InputMode,
-> = Omit<CheckTypes, "waiver" | "inputMode"> & {
+type CheckTypesWithWaiverAndInputMode<Waiver extends CheckWaiverPolicy, Mode extends InputMode> = Omit<
+  CheckTypes,
+  "waiver" | "inputMode"
+> & {
   readonly waiver: Waiver;
   readonly inputMode: Mode;
 };
@@ -320,10 +319,8 @@ type CheckDefinitionWithInputMode<Mode extends InputMode> =
  * Why: Captures a named deterministic verification contract independently from any particular invocation.
  * Use: Create it with `defineCheck`, then invoke it through `ctx.check`, a suite, or an agent goal.
  */
-export interface CheckDefinition<
-  Types extends CheckTypes = CheckTypes,
-  Name extends string = string,
-> extends WorkflowNode<"weft.check">,
+export interface CheckDefinition<Types extends CheckTypes = CheckTypes, Name extends string = string>
+  extends WorkflowNode<"weft.check">,
     DefinitionTypeCarrier<Types> {
   readonly kind: "weft.check";
   readonly name: Name;
@@ -504,10 +501,7 @@ export declare function defineCheck<
     Waiver,
     Revision
   >,
-): CheckDefinition<
-  DefinedCheckTypes<InferIn<S>, InferOut<S>, Result, Waiver, Revision, "required">,
-  Name
->;
+): CheckDefinition<DefinedCheckTypes<InferIn<S>, InferOut<S>, Result, Waiver, Revision, "required">, Name>;
 
 /**
  * Why: Declares a reusable command or function check without executing it.
@@ -599,12 +593,7 @@ export type CheckSuiteTypesOf<Definition> =
   Definition extends CheckSuiteDefinition<infer Types, any> ? Types : never;
 
 /** Hidden relationship bag constructed by the check-suite builder overloads. */
-type DefinedCheckSuiteTypes<
-  Input,
-  Members extends CheckSuiteMembers,
-  ParsedInput,
-  Mode extends InputMode,
-> = {
+type DefinedCheckSuiteTypes<Input, Members extends CheckSuiteMembers, ParsedInput, Mode extends InputMode> = {
   readonly input: Input;
   readonly parsedInput: ParsedInput;
   readonly members: Members;
@@ -667,9 +656,7 @@ export declare function defineCheckSuite<
 ): CheckSuiteDefinition<DefinedCheckSuiteTypes<InferIn<S>, Members, InferOut<S>, "required">, Name>;
 
 /** Named suite members inferred from static check definitions. */
-type StaticCheckMembers<
-  Checks extends readonly CheckDefinitionWithInputMode<"none">[],
-> = {
+type StaticCheckMembers<Checks extends readonly CheckDefinitionWithInputMode<"none">[]> = {
   [Definition in Checks[number] as Definition["name"]]: CheckSuiteMember<Definition>;
 };
 
@@ -731,10 +718,10 @@ export type CheckResultOf<Definition, Candidate extends WorkspaceSnapshotRef = W
  * Why: Narrows authorization input to an actually executed failure for one exact check definition and candidate.
  * Use: Check `status === "fail"` and `disposition === "executed"` before calling `ctx.check.authorizeWaiver`.
  */
-export type FailedCheckResultOf<Definition, Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef> = Extract<
-  CheckResultOf<Definition, Candidate>,
-  ExecutedFailedCheckResult<any, any, any>
->;
+export type FailedCheckResultOf<
+  Definition,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
+> = Extract<CheckResultOf<Definition, Candidate>, ExecutedFailedCheckResult<any, any, any>>;
 
 /**
  * Why: Carries the exact suite member results, workspace generation, and attestation shared by both verdict branches.
@@ -1010,12 +997,7 @@ export type CheckWaiverAuthorizeFn = <
  */
 export interface CheckFn {
   readonly authorizeWaiver: CheckWaiverAuthorizeFn;
-  /** @deprecated Use `authorizeWaiver` to keep failed-check exception authority explicit. */
-  readonly authorize: CheckWaiverAuthorizeFn;
-  <
-    Definition extends CheckDefinitionWithInputMode<"none">,
-    Candidate extends WorkspaceSnapshotRef,
-  >(
+  <Definition extends CheckDefinitionWithInputMode<"none">, Candidate extends WorkspaceSnapshotRef>(
     definition: Definition,
     opts: CheckInvocationOptions<Definition, Candidate>,
   ): Promise<CheckResultOf<Definition, Candidate>>;
@@ -1023,10 +1005,7 @@ export interface CheckFn {
     definition: Definition,
     opts: UnboundCheckInvocationOptions,
   ): Promise<CheckResultOf<Definition, WorkspaceSnapshotRef>>;
-  <
-    Definition extends CheckDefinitionWithInputMode<"required">,
-    Candidate extends WorkspaceSnapshotRef,
-  >(
+  <Definition extends CheckDefinitionWithInputMode<"required">, Candidate extends WorkspaceSnapshotRef>(
     definition: Definition,
     input: CheckInputOf<Definition>,
     opts: CheckInvocationOptions<Definition, Candidate>,

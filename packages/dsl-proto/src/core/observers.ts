@@ -59,20 +59,17 @@ export interface ObserverTrustMetadata<
 }
 
 /** Trust levels a host may return after enforcing a declared observer floor. */
-export type ObserverTrustLevelAtLeast<Level extends ObserverTrustLevel> =
-  Level extends "authoritative" ? "authoritative" : ObserverTrustLevel;
+export type ObserverTrustLevelAtLeast<Level extends ObserverTrustLevel> = Level extends "authoritative"
+  ? "authoritative"
+  : ObserverTrustLevel;
 
 /** Allowed authority literals retained from an observer trust policy. */
-export type ObserverTrustAuthorityOf<Policy extends ObserverTrustPolicy> =
-  Policy["authorities"][number];
+export type ObserverTrustAuthorityOf<Policy extends ObserverTrustPolicy> = Policy["authorities"][number];
 
 /** Exact trust metadata guaranteed after one observer policy is enforced. */
 export type ObserverTrustMetadataOfPolicy<Policy extends ObserverTrustPolicy> =
   Policy extends ObserverTrustPolicy
-    ? ObserverTrustMetadata<
-        ObserverTrustLevelAtLeast<Policy["minimum"]>,
-        ObserverTrustAuthorityOf<Policy>
-      >
+    ? ObserverTrustMetadata<ObserverTrustLevelAtLeast<Policy["minimum"]>, ObserverTrustAuthorityOf<Policy>>
     : never;
 
 /**
@@ -338,13 +335,7 @@ export declare function defineObserver<
   const Source extends BoundSignalObserverSource<InferOut<InputSchema>>,
 >(
   config: SignalObserverConfig<InputSchema, StateSchema, OutputSchema, Name, Source>,
-): ObserverDefinition<
-  InputSchema,
-  StateSchema,
-  OutputSchema,
-  Source,
-  Name
->;
+): ObserverDefinition<InputSchema, StateSchema, OutputSchema, Source, Name>;
 
 /**
  * Why: Declares signal-first observation as one durable engine-owned state machine, not a workflow-authored race.
@@ -412,36 +403,42 @@ export type ObserverSourceOf<Definition> =
     : never;
 
 /** Trust policy retained by one exact observer endpoint. */
-type ObserverEndpointTrustPolicy<Endpoint> =
-  Endpoint extends { readonly trust: infer Trust extends ObserverTrustPolicy }
-    ? Trust
-    : Endpoint extends { readonly trust?: infer Trust }
-      ? Extract<Trust, ObserverTrustPolicy>
-      : never;
+type ObserverEndpointTrustPolicy<Endpoint> = Endpoint extends {
+  readonly trust: infer Trust extends ObserverTrustPolicy;
+}
+  ? Trust
+  : Endpoint extends { readonly trust?: infer Trust }
+    ? Extract<Trust, ObserverTrustPolicy>
+    : never;
 
 /** Trust-policy union reachable from an observer source. */
-type ObserverTrustPoliciesOfSource<Source> =
-  Source extends {
-    readonly kind: "signal-first";
-    readonly signal: infer Signal;
-    readonly fallback: infer Fallback;
-  }
-    ? ObserverEndpointTrustPolicy<Signal> | ObserverEndpointTrustPolicy<Fallback>
-    : Source extends { readonly kind: "signal" }
+type ObserverTrustPoliciesOfSource<Source> = Source extends {
+  readonly kind: "signal-first";
+  readonly signal: infer Signal;
+  readonly fallback: infer Fallback;
+}
+  ? ObserverEndpointTrustPolicy<Signal> | ObserverEndpointTrustPolicy<Fallback>
+  : Source extends { readonly kind: "signal" }
+    ? ObserverEndpointTrustPolicy<Source>
+    : Source extends { readonly kind: "poll" }
       ? ObserverEndpointTrustPolicy<Source>
-      : Source extends { readonly kind: "poll" }
-        ? ObserverEndpointTrustPolicy<Source>
-        : never;
+      : never;
 
 /** Whether any reachable observer completion endpoint may omit attested trust. */
-type ObserverSourceMayLackTrust<Source> =
-  Source extends { readonly kind: "signal-first"; readonly fallback: infer Fallback }
-    ? Fallback extends { readonly trust: ObserverTrustPolicy } ? false : true
-    : Source extends { readonly kind: "signal" }
-      ? false
-      : Source extends { readonly kind: "poll" }
-        ? Source extends { readonly trust: ObserverTrustPolicy } ? false : true
-        : true;
+type ObserverSourceMayLackTrust<Source> = Source extends {
+  readonly kind: "signal-first";
+  readonly fallback: infer Fallback;
+}
+  ? Fallback extends { readonly trust: ObserverTrustPolicy }
+    ? false
+    : true
+  : Source extends { readonly kind: "signal" }
+    ? false
+    : Source extends { readonly kind: "poll" }
+      ? Source extends { readonly trust: ObserverTrustPolicy }
+        ? false
+        : true
+      : true;
 
 /** Trust metadata and presence derived from an exact observer source. */
 type ObserverTrustMetadataOfSource<Source> =
@@ -449,8 +446,7 @@ type ObserverTrustMetadataOfSource<Source> =
   | (ObserverSourceMayLackTrust<Source> extends true ? undefined : never);
 
 /** Exact trust metadata reachable from one observer definition's retained source policy. */
-export type ObserverTrustMetadataOf<Definition> =
-  ObserverTrustMetadataOfSource<ObserverSourceOf<Definition>>;
+export type ObserverTrustMetadataOf<Definition> = ObserverTrustMetadataOfSource<ObserverSourceOf<Definition>>;
 
 /**
  * Why: Recovers an observer definition's literal name for nominal subjects and provenance.
@@ -545,29 +541,27 @@ export type ObserverEndpointKind = "signal" | "poll" | "implemented-poll";
  * Why: Maps one retained observer source branch to the strategy the engine must record.
  * Use: It is the source-level implementation behind `ObserverStrategyOf`.
  */
-type ObserverStrategyOfSource<Source> =
-  Source extends { readonly kind: "signal-first" }
-    ? "signal-first"
-    : Source extends { readonly kind: "signal" }
-      ? "signal"
-      : Source extends { readonly kind: "poll" }
-        ? "poll"
-        : ObserverStrategy;
+type ObserverStrategyOfSource<Source> = Source extends { readonly kind: "signal-first" }
+  ? "signal-first"
+  : Source extends { readonly kind: "signal" }
+    ? "signal"
+    : Source extends { readonly kind: "poll" }
+      ? "poll"
+      : ObserverStrategy;
 
 /**
  * Why: Maps one retained observer source branch to only the endpoints capable of completing it.
  * Use: It is the source-level implementation behind `ObserverEndpointOf`.
  */
-type ObserverEndpointOfSource<Source> =
-  Source extends { readonly kind: "signal-first" }
-    ? "signal" | "poll"
-    : Source extends { readonly kind: "signal" }
-      ? "signal"
-      : Source extends ImplementedPollObserverSource<infer _ParsedInput, infer _RawState>
-        ? "implemented-poll"
-        : Source extends BoundPollObserverSource
-          ? "poll"
-          : ObserverEndpointKind;
+type ObserverEndpointOfSource<Source> = Source extends { readonly kind: "signal-first" }
+  ? "signal" | "poll"
+  : Source extends { readonly kind: "signal" }
+    ? "signal"
+    : Source extends ImplementedPollObserverSource<infer _ParsedInput, infer _RawState>
+      ? "implemented-poll"
+      : Source extends BoundPollObserverSource
+        ? "poll"
+        : ObserverEndpointKind;
 
 /**
  * Why: Retains the exact strategy guaranteed by an observer definition instead of widening detailed provenance.
@@ -627,9 +621,9 @@ interface ObserverProvenanceBase<
 }
 
 /** Required, optional, or absent provenance trust selected from the source. */
-type ObserverProvenanceTrustField<
-  Trust extends ObserverTrustMetadata | undefined,
-> = [Trust] extends [undefined]
+type ObserverProvenanceTrustField<Trust extends ObserverTrustMetadata | undefined> = [Trust] extends [
+  undefined,
+]
   ? { readonly trust?: never }
   : undefined extends Trust
     ? { readonly trust?: Readonly<Exclude<Trust, undefined>> }

@@ -1,20 +1,11 @@
 /** Declaration-only workflow surface for the Weft DSL prototype. */
-import type {
-  AgentExecutionOptions,
-  AgentFn,
-  AnyRecipeDefinition,
-  PatchRef,
-  ReadOnlyAgentApi,
-  RecipeInputOf,
-  RecipeOutputOf,
-} from "./agent.ts";
+import type { AgentExecutionOptions, AgentFn, PatchRef, ReadOnlyAgentApi } from "./agent.ts";
 import type { ArtifactFn } from "./artifacts.ts";
 import type { CheckFn } from "./checks.ts";
-import type { ParallelFn, Pipeline, ReviewParallelFn, SequenceFn } from "./composition.ts";
+import type { ParallelFn, ReviewParallelFn } from "./composition.ts";
 import type { ContextFn } from "./context-sources.ts";
-import type { DeliveryFn } from "./deliveries.ts";
+import type { DeliveryApi } from "./deliveries.ts";
 import type {
-  BashFn,
   DurableEffectOptions,
   EnvApi,
   ExecFn,
@@ -22,12 +13,11 @@ import type {
   FsApi,
   GitApi,
   GitReadApi,
-  PollOptions,
   SecretHandle,
 } from "./effects.ts";
 import type { HumanApi, UiApi } from "./human.ts";
 import type { ObserverFn } from "./observers.ts";
-import type { OperationFn } from "./operations.ts";
+import type { OperationApi } from "./operations.ts";
 import type { PathPolicyApi } from "./path-policies.ts";
 import type { ReviewFn } from "./reviews.ts";
 import type {
@@ -40,7 +30,6 @@ import type {
   InferOut,
   NominalValue,
   Provider,
-  Settled,
   WorkflowNode,
   WorkspaceSnapshotRef,
 } from "./shared.ts";
@@ -48,8 +37,6 @@ import type { AgentTaskAccess, TaskContract, WorkflowTasksApi } from "./tasks.ts
 import type { TriggerRunProvenance } from "./triggers.ts";
 import type {
   ActiveWorkspaceApi,
-  GateRequest,
-  GateResult,
   IntegrateOptions,
   IntegrationLedger,
   NestedWorkspaceApi,
@@ -113,7 +100,7 @@ export interface CtxScopeOptions {
   tasks?: false | AgentTaskAccess;
   parallel?: ParallelScopeDefaults;
   budget?: BudgetLimits;
-  /** Prefixes every durable effect key bound through the returned scope and composes with nested prefixes. */
+  /** Prefixes durable child keys and composes with nested scopes. */
   keyPrefix?: string;
 }
 
@@ -122,12 +109,6 @@ export interface SubWorkflowOptions {
   key: string;
   label?: string;
   budget?: ChildWorkflowBudget;
-}
-
-/** Signal options. */
-export interface SignalOptions {
-  key: string;
-  timeout?: Duration;
 }
 
 /**
@@ -174,9 +155,8 @@ declare const workflowRunSubjectBrand: unique symbol;
  * Why: Identifies one exact parent-to-child invocation independently from whether the child owned a workspace.
  * Use: Carry it unchanged with its receipt; workspace authority, when present, remains a separate nominal snapshot.
  */
-export interface WorkflowRunSubject<
-  Definition extends AnyWorkflowDefinition = AnyWorkflowDefinition,
-> extends NominalValue<readonly ["workflow-run-subject", Definition]> {
+export interface WorkflowRunSubject<Definition extends AnyWorkflowDefinition = AnyWorkflowDefinition>
+  extends NominalValue<readonly ["workflow-run-subject", Definition]> {
   readonly parentRunId: string;
   readonly childRunId: string;
   readonly definitionDigest: string;
@@ -194,9 +174,8 @@ declare const workflowRunProvenanceBrand: unique symbol;
  * Why: Records the resolved invocation key, exact digests, lifecycle timestamps, and optional child workspace snapshot.
  * Use: Audit a child result without treating a plain child as if it created workspace authority.
  */
-export interface WorkflowRunProvenance<
-  Definition extends AnyWorkflowDefinition = AnyWorkflowDefinition,
-> extends NominalValue<readonly ["workflow-run-provenance", Definition]> {
+export interface WorkflowRunProvenance<Definition extends AnyWorkflowDefinition = AnyWorkflowDefinition>
+  extends NominalValue<readonly ["workflow-run-provenance", Definition]> {
   readonly parentRunId: string;
   readonly childRunId: string;
   readonly invocationKey: string;
@@ -219,9 +198,8 @@ declare const workflowRunReceiptBrand: unique symbol;
  * Why: Returns validated child output with exact invocation identity, digests, optional workspace, and attestation.
  * Use: Prefer it when a parent must prove child lineage or preserve a child-owned workspace snapshot downstream.
  */
-export interface WorkflowRunReceipt<
-  Definition extends AnyWorkflowDefinition,
-> extends NominalValue<readonly ["workflow-run-receipt", Definition]> {
+export interface WorkflowRunReceipt<Definition extends AnyWorkflowDefinition>
+  extends NominalValue<readonly ["workflow-run-receipt", Definition]> {
   readonly value: InferWorkflowOutput<Definition>;
   readonly childRunId: string;
   readonly definitionDigest: string;
@@ -257,7 +235,7 @@ export interface WorkflowFn {
 
 /**
  * Why: Centralizes every durable effect so replay can identify, validate, and resume workflow work.
- * Use: The engine passes it to workflow and recipe callbacks; call its methods instead of ambient side effects.
+ * Use: The engine passes it to workflow callbacks; call its methods instead of ambient side effects.
  */
 export interface Ctx<
   TaskExtensionInput = unknown,
@@ -268,45 +246,27 @@ export interface Ctx<
   artifact: ArtifactFn;
   context: ContextFn;
   parallel: ParallelFn<TaskExtensionInput, TaskExtensions, Workspace>;
-  sequence: SequenceFn<TaskExtensionInput, TaskExtensions, Workspace>;
-  pipeline<Item>(items: ReadonlyArray<Item>): Pipeline<
-    Item,
-    Item,
-    TaskExtensionInput,
-    TaskExtensions,
-    Workspace
-  >;
-  successes<T>(settled: ReadonlyArray<Settled<T>>): T[];
-  all<T>(settled: ReadonlyArray<Settled<T>>): T[];
-  recipe<Definition extends AnyRecipeDefinition>(
-    definition: Definition,
-    input: RecipeInputOf<Definition>,
-  ): Promise<RecipeOutputOf<Definition>>;
   workflow: WorkflowFn;
   scope(opts: CtxScopeOptions): Ctx<TaskExtensionInput, TaskExtensions, Workspace>;
-  step(key: string): Ctx<TaskExtensionInput, TaskExtensions, Workspace>;
   step<Result>(
     key: string,
     run: (ctx: Ctx<TaskExtensionInput, TaskExtensions, Workspace>) => Promise<Result> | Result,
   ): Promise<Result>;
   policy: PolicyApi;
-  /** @deprecated Use `policy.decide`; a gate result is not candidate-bound authorization. */
-  gate(req: GateRequest): Promise<GateResult>;
   human: HumanApi;
   observe: ObserverFn;
-  operation: OperationFn;
+  operation: OperationApi;
   paths: PathPolicyApi;
   ui: UiApi;
   fs: FsApi;
   exec: ExecFn;
-  bash: BashFn;
   fetch: FetchFn;
   env: EnvApi;
   secret(name: string, opts: DurableEffectOptions): SecretHandle;
   git: Workspace extends true ? GitApi : GitReadApi;
   check: CheckFn;
   review: ReviewFn;
-  delivery: DeliveryFn;
+  delivery: DeliveryApi;
   integrate(patches: ReadonlyArray<PatchRef>, opts: IntegrateOptions): Promise<IntegrationLedger>;
   discard(patches: ReadonlyArray<PatchRef>, opts: DurableEffectOptions): Promise<void>;
   note(note: NoteInput): Promise<void>;
@@ -314,8 +274,6 @@ export interface Ctx<
   workspace: Workspace extends true
     ? ActiveWorkspaceApi<TaskExtensionInput, TaskExtensions>
     : NestedWorkspaceApi<TaskExtensionInput, TaskExtensions>;
-  poll<S extends AnySchema>(opts: PollOptions<S>): Promise<InferOut<S>>;
-  signal<S extends AnySchema>(name: string, schema: S, opts: SignalOptions): Promise<InferOut<S>>;
   cancellation: WorkflowCancellation;
   sleep(duration: Duration, opts: DurableEffectOptions): Promise<void>;
   now(opts: DurableEffectOptions): Promise<number>;
@@ -327,34 +285,23 @@ export interface Ctx<
 }
 
 /**
- * Why: Gives ordinary workflow and recipe orchestration a concise read-only repository context name.
+ * Why: Gives ordinary workflow orchestration a concise read-only repository context name.
  * Use: Prefer it to `Ctx<..., false>` in exported helper and definition signatures.
  */
-export type WorkflowCtx<TaskInput = unknown, TaskOutput = TaskInput> = Ctx<
-  TaskInput,
-  TaskOutput,
-  false
->;
+export type WorkflowCtx<TaskInput = unknown, TaskOutput = TaskInput> = Ctx<TaskInput, TaskOutput, false>;
 
 /**
  * Why: Gives workflow-owned and candidate workspaces a concise direct-write context name.
  * Use: Prefer it to `Ctx<..., true>` in helpers that intentionally require isolated workspace mutation.
  */
-export type WorkspaceCtx<TaskInput = unknown, TaskOutput = TaskInput> = Ctx<
-  TaskInput,
-  TaskOutput,
-  true
->;
+export type WorkspaceCtx<TaskInput = unknown, TaskOutput = TaskInput> = Ctx<TaskInput, TaskOutput, true>;
 
 /**
  * Why: Restricts reusable review evaluators to observation, read-only agents, and diagnostics rather than delivery or mutation authority.
  * Use: It is supplied to `defineReview` evaluators; consequential effects remain in the calling workflow.
  */
 export interface ReviewCtx
-  extends Pick<
-    WorkflowCtx,
-    "context" | "fs" | "observe" | "cancellation" | "log" | "budget" | "run"
-  > {
+  extends Pick<WorkflowCtx, "context" | "fs" | "observe" | "cancellation" | "log" | "budget" | "run"> {
   readonly agent: ReadOnlyAgentApi;
   readonly parallel: ReviewParallelFn;
   readonly git: GitReadApi;
@@ -416,11 +363,7 @@ export interface WorkflowMeta<
 }
 
 /** Public, inert metadata retained on a workflow definition. */
-export interface WorkflowMetaView<
-  InS extends AnySchema,
-  OutS extends AnySchema,
-  Id extends string = string,
-> {
+export interface WorkflowMetaView<InS extends AnySchema, OutS extends AnySchema, Id extends string = string> {
   readonly id: Id;
   readonly name?: string;
   readonly description?: string;
@@ -449,10 +392,8 @@ export interface WorkflowTypes {
  * Why: Carries a fully typed workflow contract through one hidden type bag without exposing its executable callback.
  * Use: Export the value returned by `defineWorkflow` or pass it to `ctx.workflow` and public extractor types.
  */
-export interface WorkflowDefinition<
-  Types extends WorkflowTypes = WorkflowTypes,
-  Id extends string = string,
-> extends WorkflowNode<"weft.workflow">,
+export interface WorkflowDefinition<Types extends WorkflowTypes = WorkflowTypes, Id extends string = string>
+  extends WorkflowNode<"weft.workflow">,
     DefinitionTypeCarrier<Types> {
   readonly kind: "weft.workflow";
   readonly id: Id;
@@ -502,8 +443,7 @@ export type WorkflowTypesOf<Definition> =
  * Why: Recovers the stable literal identity retained by an exact workflow definition.
  * Use: Key registries and provenance-aware tooling from the definition instead of repeating its ID.
  */
-export type WorkflowIdOf<Definition> =
-  Definition extends WorkflowDefinition<any, infer Id> ? Id : never;
+export type WorkflowIdOf<Definition> = Definition extends WorkflowDefinition<any, infer Id> ? Id : never;
 
 /**
  * Why: Recovers the exact workspace-ownership mode retained by a workflow definition.
@@ -554,8 +494,7 @@ export type WorkflowInputOf<Definition> =
  * Why: Recovers the raw input type carried by a workflow definition for callers and test harnesses.
  * Use: Apply it to a `WorkflowDefinition` type when deriving launch inputs.
  */
-export type InferWorkflowInput<Definition> =
-  WorkflowInputOf<Definition>;
+export type InferWorkflowInput<Definition> = WorkflowInputOf<Definition>;
 
 /**
  * Why: Recovers the validated result value carried by one workflow definition through its hidden type bag.
@@ -568,8 +507,7 @@ export type WorkflowOutputOf<Definition> =
  * Why: Recovers the validated output type carried by a workflow definition.
  * Use: Apply it to a `WorkflowDefinition` type when consuming child-run or test results.
  */
-export type InferWorkflowOutput<Definition> =
-  WorkflowOutputOf<Definition>;
+export type InferWorkflowOutput<Definition> = WorkflowOutputOf<Definition>;
 
 /** Input inferred from a task contract. */
 type TaskInputOf<Tasks> = Tasks extends TaskContract<infer S extends AnySchema> ? InferIn<S> : unknown;

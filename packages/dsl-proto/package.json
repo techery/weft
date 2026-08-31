@@ -28,12 +28,6 @@
   "exports": {
     ".": {
       "types": "./src/index.ts"
-    },
-    "./advanced": {
-      "types": "./src/advanced.ts"
-    },
-    "./testing": {
-      "types": "./src/testing.ts"
     }
   },
   "files": [
@@ -51,12 +45,6 @@
     "exports": {
       ".": {
         "types": "./dist/index.d.ts"
-      },
-      "./advanced": {
-        "types": "./dist/advanced.d.ts"
-      },
-      "./testing": {
-        "types": "./dist/testing.d.ts"
       }
     }
   },

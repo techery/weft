@@ -1,40 +1,4 @@
 import { z } from "zod";
-
-import {
-  type ArtifactInvocation,
-  type CheckInvocation,
-  type CheckSuiteDefinitionMembers,
-  type CheckSuiteInvocation,
-  type CheckWaiverAuthorizationInvocation,
-  type DefinedAgentInvocation,
-  type DeliveryAuthorizeInvocation,
-  type DeliveryPrepareInvocation,
-  type DeliveryRunInvocation,
-  type DetailedObserverInvocation,
-  type DetailedWorkflowRunInvocation,
-  type GoalDefinitionResults,
-  type GoalEvaluationInvocation,
-  type InlineAgentInvocation,
-  internalEngine,
-  type ObserverInvocation,
-  type OperationAuthorizeInvocation,
-  type OperationInvocation,
-  type OperationPrepareInvocation,
-  type OperationRecoveryInvocation,
-  type OperationRecoveryPrepareInvocation,
-  type PathPolicyInvocation,
-  type PromptRenderInvocation,
-  type ProtectedOperationInvocation,
-  type RecipeInvocation,
-  type RecoverableOperationExecutionInvocation,
-  type RecoverableOperationRegistrationInvocation,
-  type ReviewInvocation,
-  type TaskContractInvocation,
-  type TriggerAdmissionInvocation,
-  type UiRenderInvocation,
-  type UiRequestInvocation,
-  type WorkflowRunInvocation,
-} from "../core/internal-engine.ts";
 import {
   type AgentOutcome,
   type AgentResult,
@@ -54,7 +18,6 @@ import {
   defineOperation,
   definePathPolicy,
   definePrompt,
-  defineRecipe,
   defineResultView,
   defineReview,
   defineTaskContract,
@@ -83,6 +46,40 @@ import {
   type WorkspaceWriteAgentResult,
   type WriteScope,
 } from "../core/index.ts";
+import {
+  type ArtifactInvocation,
+  type CheckInvocation,
+  type CheckSuiteDefinitionMembers,
+  type CheckSuiteInvocation,
+  type CheckWaiverAuthorizationInvocation,
+  type DefinedAgentInvocation,
+  type DeliveryAuthorizeInvocation,
+  type DeliveryPrepareInvocation,
+  type DeliveryRunInvocation,
+  type DetailedObserverInvocation,
+  type DetailedWorkflowRunInvocation,
+  type GoalDefinitionResults,
+  type GoalEvaluationInvocation,
+  type InlineAgentInvocation,
+  internalEngine,
+  type ObserverInvocation,
+  type OperationAuthorizeInvocation,
+  type OperationInvocation,
+  type OperationPrepareInvocation,
+  type OperationRecoveryInvocation,
+  type OperationRecoveryPrepareInvocation,
+  type PathPolicyInvocation,
+  type PromptRenderInvocation,
+  type ProtectedOperationInvocation,
+  type RecoverableOperationExecutionInvocation,
+  type RecoverableOperationRegistrationInvocation,
+  type ReviewInvocation,
+  type TaskContractInvocation,
+  type TriggerAdmissionInvocation,
+  type UiRenderInvocation,
+  type UiRequestInvocation,
+  type WorkflowRunInvocation,
+} from "../core/internal-engine.ts";
 
 declare function expectType<T>(value: T): void;
 
@@ -140,13 +137,6 @@ const suiteNode = defineCheckSuite({
 });
 
 const goalNode = defineGoal({ name: "internal-goal", check: suiteNode });
-
-const recipeNode = defineRecipe({
-  name: "internal-recipe",
-  input: ExampleInput,
-  output: ExampleOutput,
-  run: async (_ctx, { task }) => ({ summary: task }),
-});
 
 const inputViewNode = defineUiView({
   id: "internal-input-view",
@@ -307,7 +297,6 @@ declare const promptInvocation: PromptRenderInvocation<typeof promptNode>;
 declare const agentInvocation: DefinedAgentInvocation<ExampleAgentCall, false>;
 declare const workspaceAgentInvocation: DefinedAgentInvocation<ExampleGoalAgentCall, true>;
 declare const inlineAgentInvocation: InlineAgentInvocation<ExampleInlineAgentCall, false>;
-declare const recipeInvocation: RecipeInvocation<typeof recipeNode>;
 declare const checkInvocation: CheckInvocation<typeof checkNode>;
 declare const checkFailure: FailedCheckResultOf<typeof checkNode, WorkspaceSnapshotRef>;
 declare const checkWaiverInvocation: CheckWaiverAuthorizationInvocation<
@@ -384,7 +373,6 @@ expectType<Promise<WorkspaceWriteAgentResult<ExampleOutputValue, ExampleGoalResu
   internalEngine.execute(workspaceAgentInvocation),
 );
 expectType<Promise<AgentResult<ExampleOutputValue>>>(internalEngine.execute(inlineAgentInvocation));
-expectType<Promise<ExampleOutputValue>>(internalEngine.execute(recipeInvocation));
 expectType<Promise<CheckResultOf<typeof checkNode>>>(internalEngine.execute(checkInvocation));
 expectType<Promise<CheckWaiverRef<typeof checkNode, WorkspaceSnapshotRef>>>(
   internalEngine.execute(checkWaiverInvocation),

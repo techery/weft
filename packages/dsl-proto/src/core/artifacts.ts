@@ -227,7 +227,9 @@ export interface UnboundArtifactCaptureOptions extends ArtifactCaptureOptionsBas
  * Use: Parameterize it with a nominal candidate for bound capture or `undefined` for unbound capture.
  */
 export type ArtifactCaptureOptionsFor<Candidate extends WorkspaceSnapshotRef | undefined> =
-  Candidate extends WorkspaceSnapshotRef ? CandidateArtifactCaptureOptions<Candidate> : UnboundArtifactCaptureOptions;
+  Candidate extends WorkspaceSnapshotRef
+    ? CandidateArtifactCaptureOptions<Candidate>
+    : UnboundArtifactCaptureOptions;
 
 /**
  * Why: Exposes typed artifact capture while correlating an exact optional candidate with the returned reference.

@@ -61,9 +61,7 @@ export type ContextFreshnessStatus = "fresh" | "stale";
  * Why: Captures the host's observation window separately from the source's static freshness policy.
  * Use: Retain these timestamps with derived claims so later consumers can detect expired context.
  */
-export interface ContextFreshnessMetadata<
-  Status extends ContextFreshnessStatus = ContextFreshnessStatus,
-> {
+export interface ContextFreshnessMetadata<Status extends ContextFreshnessStatus = ContextFreshnessStatus> {
   observedAt: string;
   expiresAt: string;
   status: Status;
@@ -73,28 +71,29 @@ export interface ContextFreshnessMetadata<
  * Why: Retains the strongest trust level a source policy guarantees after the host rejects weaker observations.
  * Use: Derive snapshot trust metadata from a context source's declared minimum.
  */
-export type ContextTrustLevelAtLeast<Level extends ContextTrustLevel> =
-  Level extends "authoritative"
-    ? "authoritative"
-    : Level extends "authenticated"
-      ? "authenticated" | "authoritative"
-      : ContextTrustLevel;
+export type ContextTrustLevelAtLeast<Level extends ContextTrustLevel> = Level extends "authoritative"
+  ? "authoritative"
+  : Level extends "authenticated"
+    ? "authenticated" | "authoritative"
+    : ContextTrustLevel;
 
 /**
  * Why: Retains a source's declared authority literals while leaving unrestricted sources open to any host authority.
  * Use: Derive the `trust.authority` field of a context snapshot.
  */
-export type ContextTrustAuthorityOf<Policy extends ContextTrustPolicy> =
-  Policy extends { readonly authorities: readonly (infer Authority extends string)[] }
-    ? Authority
-    : string;
+export type ContextTrustAuthorityOf<Policy extends ContextTrustPolicy> = Policy extends {
+  readonly authorities: readonly (infer Authority extends string)[];
+}
+  ? Authority
+  : string;
 
 /**
  * Why: Makes a reject-stale policy guarantee a fresh returned snapshot while preserving both states for allow-stale sources.
  * Use: Derive the `freshness.status` field after host policy enforcement.
  */
-export type ContextFreshnessStatusOf<Policy extends ContextFreshnessPolicy> =
-  Policy["stale"] extends "reject" ? "fresh" : ContextFreshnessStatus;
+export type ContextFreshnessStatusOf<Policy extends ContextFreshnessPolicy> = Policy["stale"] extends "reject"
+  ? "fresh"
+  : ContextFreshnessStatus;
 
 /**
  * Why: Names the exact external subject selected by a source without exposing or replaying its potentially sensitive lookup input.

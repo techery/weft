@@ -194,11 +194,11 @@ async function discoverContext(
         ),
     },
   ];
-  const snapshots = await ctx.parallel.all(
-    queries,
-    (query) => query.run(),
-    { key, keyOf: (query) => query.key, concurrency: 2 },
-  );
+  const snapshots = await ctx.parallel.all(queries, (query) => query.run(), {
+    key,
+    keyOf: (query) => query.key,
+    concurrency: 2,
+  });
   let repository: DiscoveryBundle["repository"] | undefined;
   let release: DiscoveryBundle["release"] | undefined;
   for (const snapshot of snapshots) {
@@ -344,17 +344,21 @@ async function writeAndCommit(
     { proposedPaths: proposedPaths(packages) },
     { key: `${key}:paths` },
   );
-  const result = await ctx.agent(implementer, {
-    request,
-    repository: discovery.repository.value,
-    release: discovery.release.value,
-    plan,
-    blockingFindings: [...findings],
-  }, {
-    key,
-    context: [discovery.repository, discovery.release],
-    write: scope,
-  });
+  const result = await ctx.agent(
+    implementer,
+    {
+      request,
+      repository: discovery.repository.value,
+      release: discovery.release.value,
+      plan,
+      blockingFindings: [...findings],
+    },
+    {
+      key,
+      context: [discovery.repository, discovery.release],
+      write: scope,
+    },
+  );
   const paths = [...new Set(result.files)];
   if (paths.length === 0) throw new Error("Writer produced no changes");
   await ctx.git.add({ key: `${key}:git-add`, paths });
@@ -487,7 +491,7 @@ const dependencyMigrationWorkflow = defineWorkflow(
     );
 
     ctx.cancellation.throwIfRequested();
-    const delivered = await ctx.delivery.run(pullRequest, {
+    const delivered = await ctx.delivery(pullRequest, {
       key: "publish-pull-request",
       candidate: candidate.snapshot,
       input: {

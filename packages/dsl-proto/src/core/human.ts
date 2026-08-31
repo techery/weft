@@ -62,9 +62,7 @@ export interface HumanReviewArtifactPathSubject {
  * Why: Makes content-backed and path-backed artifact review subjects explicit and mutually exclusive.
  * Use: Pass exactly one material source to human review subjects and attachments.
  */
-export type HumanReviewArtifactSubject =
-  | HumanReviewArtifactContentSubject
-  | HumanReviewArtifactPathSubject;
+export type HumanReviewArtifactSubject = HumanReviewArtifactContentSubject | HumanReviewArtifactPathSubject;
 
 /** Human review subject. */
 export type HumanReviewSubject =
@@ -231,26 +229,6 @@ export interface HumanAskOptions<S extends AnySchema, Props = never> {
   ui?: InputUiBinding<Props, InferIn<S>>;
 }
 
-/** Denied approval default. */
-export interface DeniedApprovalDefault {
-  approved: false;
-  note?: string;
-}
-
-/** Human approval timeout default. */
-export interface HumanApprovalTimeoutDefault {
-  default: DeniedApprovalDefault;
-}
-
-/** Human approve options. */
-export interface HumanApproveOptions {
-  key: string;
-  action: string;
-  detail?: string;
-  timeout?: Duration;
-  onTimeout?: "deny" | "escalate" | HumanApprovalTimeoutDefault;
-}
-
 /**
  * Why: Describes one durable human confirmation used for workflow branching without minting effect authority.
  * Use: Pass it to `ctx.human.confirm`; protected actions still require candidate-bound authorization.
@@ -260,7 +238,7 @@ export interface HumanConfirmOptions {
   action: string;
   detail?: string;
   timeout?: Duration;
-  onTimeout?: "deny" | "escalate" | HumanApprovalTimeoutDefault;
+  onTimeout?: "deny" | "escalate" | { default: { confirmed: false; note?: string } };
 }
 
 /** Human review options. */
@@ -295,19 +273,10 @@ export interface HumanEditFileOptions {
 export interface HumanApi {
   ask<S extends AnySchema, Props = never>(opts: HumanAskOptions<S, Props>): Promise<InferOut<S>>;
   confirm(opts: HumanConfirmOptions): Promise<HumanConfirmationResult>;
-  /** @deprecated Use `confirm`; a confirmation is a branching answer, not effect authority. */
-  approve(opts: HumanApproveOptions): Promise<HumanApprovalResult>;
   review<S extends AnySchema, Props = never, Subject extends HumanReviewSubject = HumanReviewSubject>(
     opts: HumanReviewOptions<S, Props, Subject>,
   ): Promise<HumanReviewResult<InferOut<S>, ReviewedSubjectOf<Subject>>>;
   editFile(opts: HumanEditFileOptions): Promise<HumanEditFileResult>;
-}
-
-/** Human approval result. */
-export interface HumanApprovalResult {
-  approved: boolean;
-  note?: string;
-  reviewer: ReviewerIdentity;
 }
 
 /**

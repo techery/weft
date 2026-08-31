@@ -104,8 +104,7 @@ the host starts durable work only when a workflow invokes the matching \`ctx\` c
 | Family | Public values | Consumed by |
 | --- | --- | --- |
 | Workflows | \`defineWorkflow\` | host entrypoint, \`ctx.workflow\`, or \`ctx.workflow.detailed\` |
-| Recipes | \`defineRecipe\` | \`ctx.recipe\` or the recipe form of \`ctx.sequence\` |
-| Agents | \`defineAgent\` | \`ctx.agent\` or the agent form of \`ctx.sequence\` |
+| Agents | \`defineAgent\` | \`ctx.agent\` |
 | Prompt definitions | \`definePrompt\` | the typed \`prompt\` field of \`defineAgent\` |
 | Prompt helpers | \`prompt\`, \`prompt.section\`, \`prompt.json\`, \`renderPrompt\`, \`renderPromptDefinition\` | compose prompt parts or preview a prompt without starting durable work |
 | Goals | \`defineGoal\`, \`bindGoal\` | the \`goal\` option of \`ctx.agent\` |
@@ -114,16 +113,15 @@ the host starts durable work only when a workflow invokes the matching \`ctx\` c
 | Context sources | \`defineContextSource\` | \`ctx.context\` |
 | Observers | \`defineObserver\` | \`ctx.observe\` or \`ctx.observe.detailed\` |
 | Reviews | \`defineReview\` | \`ctx.review\` |
-| Operations | \`defineOperation\`, \`withRecovery\` | \`ctx.operation\`, \`ctx.operation.run\`, or \`ctx.operation.runRecoverable\` |
-| Deliveries | \`defineDelivery\` | \`ctx.delivery.run\`; the advanced surface also has the explicit \`ctx.delivery\` lifecycle |
+| Operations | \`defineOperation\`, \`withRecovery\` | \`ctx.operation\` |
+| Deliveries | \`defineDelivery\` | \`ctx.delivery\` |
 | Path policies | \`definePathPolicy\` | \`ctx.paths.resolve\` |
 | Human UI | \`defineUiView\`, \`defineResultView\` | \`ctx.human.ask\`, \`ctx.human.review\`, and \`ctx.ui.render\` |
 | Task state | \`defineTaskContract\` | the workflow's \`tasks\` metadata and \`ctx.tasks\` API |
 | Admission | \`defineTrigger\` | host registration; admitted provenance is readable at \`ctx.run.trigger\` |
 
-\`z\` is the package schema helper. \`@techery/weft-dsl-proto/testing\` separately exports
-\`testWorkflow\`; \`@techery/weft-dsl-proto/advanced\` opts into the explicit lifecycle
-context described below.
+\`z\` is the package schema helper. The root is the package's only authoring entrypoint;
+there is no second advanced workflow context or speculative testing subpath.
 
 Define reusable agents at module scope, then execute them through the single \`ctx.agent\`
 function:
@@ -185,9 +183,9 @@ Inputless definitions omit the input argument. One-off calls put \`{ prompt, sch
 definition position. There are no separate prototype \`agent.run\`, \`agent.write\`, or
 \`agent.try\` methods.
 
-The prototype also has one durable grouping concept: \`ctx.step("name", callback)\` namespaces
-arbitrary child effects. Inside a lane pipeline, \`.mapEffect("name", callback)\` is the
-effectful per-item transform; plain \`.map\` and \`.filter\` stay synchronous.
+The prototype has one durable grouping concept: \`ctx.step("name", callback)\` namespaces
+arbitrary child effects. Plain functions and bounded \`for...of\` loops handle same-run reuse
+and sequential traversal; \`ctx.parallel.all/settled\` handles keyed fan-out.
 This is different from the runnable SDK's \`ctx.phase("name")\`: a phase labels effects for
 presentation, while a prototype step owns a callback and gives its child effects a stable key
 namespace. The prototype therefore needs no separate \`.stage(...)\` layer.
@@ -212,8 +210,7 @@ const review = await ctx.review(candidateReview, reviewInput, {
 exact snapshot is being checked, reviewed, captured, or delivered. Candidate-bound host
 operations must atomically reject stale candidates and evidence from another candidate, so
 ordinary prototype workflows do not call manual sameness or freshness assertions.
-\`sameSnapshot\` and \`assertUnchanged\` exist only on the prototype's advanced surface for
-explicit diagnostics. A \`subject\` is simply the thing a human decision, observation, or
+The future host performs those comparisons internally. A \`subject\` is simply the thing a human decision, observation, or
 generic evidence record is about. That word remains useful for those APIs, but it is not the
 ordinary workspace API name.
 
@@ -238,28 +235,25 @@ effect takes a stable \`key\`, including filesystem, process, network, wait, and
 
 | Area | Complete surface | Meaning |
 | --- | --- | --- |
-| Definitions and children | \`ctx.agent\`, \`ctx.artifact\`, \`ctx.context\`, \`ctx.recipe\`, \`ctx.workflow\`, \`ctx.workflow.detailed\` | Run reusable definitions; \`detailed\` retains nominal child-run evidence |
-| Fan-out and order | \`ctx.parallel.all\`, \`ctx.parallel.settled\`, \`ctx.sequence\` | Required fan-out, inspected failures, or ordered keyed traversal |
-| Pipelines | \`ctx.pipeline\`, \`ctx.pipeline.mapEffect\`, \`ctx.pipeline.filter\`, \`ctx.pipeline.map\`, \`ctx.pipeline.all\`, \`ctx.pipeline.settled\` | Named durable effects, synchronous transforms, then explicit settlement |
-| Settlement and scopes | \`ctx.successes\`, \`ctx.all\`, \`ctx.scope\`, \`ctx.step\` | Unwrap settled values or create inherited/keyed scopes |
-| Lane/item context | \`lane.itemKey\`, \`lane.key\`, \`scope.itemKey\`, \`scope.key\` | Stable per-item identity; the lane or sequence scope is itself the scoped \`ctx\` |
+| Definitions and children | \`ctx.agent\`, \`ctx.artifact\`, \`ctx.context\`, \`ctx.workflow\`, \`ctx.workflow.detailed\` | Run reusable definitions; \`detailed\` retains nominal child-run evidence |
+| Fan-out | \`ctx.parallel.all\`, \`ctx.parallel.settled\` | Required fan-out or explicitly inspected failures |
+| Grouping and defaults | \`ctx.scope\`, \`ctx.step\` | Inherit invocation defaults or namespace a callback's durable effects |
+| Lane context | \`lane.itemKey\`, \`lane.key\` | Stable per-item identity; the lane itself is the scoped \`ctx\` |
 | Decisions and people | \`ctx.policy.decide\`, \`ctx.human.ask\`, \`ctx.human.confirm\`, \`ctx.human.review\`, \`ctx.human.editFile\` | Branching answers and human-authored input; none grants effect authority |
-| Deprecated branching aliases | \`ctx.human.approve\` | Compatibility only; prefer \`ctx.human.confirm\` |
 | Observation | \`ctx.observe\`, \`ctx.observe.detailed\` | Wait for an observer definition, optionally retaining provenance |
 | Checks and reviews | \`ctx.check\`, \`ctx.check.authorizeWaiver\`, \`ctx.review\` | Run checks/reviews and mint an exact failed-check waiver |
-| Deprecated check alias | \`ctx.check.authorize\` | Compatibility only; prefer \`ctx.check.authorizeWaiver\` |
-| Protected effects | \`ctx.operation\`, \`ctx.operation.run\`, \`ctx.operation.runRecoverable\`, \`ctx.delivery.run\`, \`ctx.paths.resolve\` | Direct calls, one-shot protected lifecycles, recoverable calls, verified delivery, and write-scope resolution |
+| Protected effects | \`ctx.operation\`, \`ctx.delivery\`, \`ctx.paths.resolve\` | The definition selects direct/protected/recoverable operation behavior; delivery requires a verified candidate |
 | Custom UI | \`ctx.ui.render\` | Render a result view; human input views attach to human calls |
 | Filesystem | \`ctx.fs.read\`, \`ctx.fs.glob\`, \`ctx.fs.stat\` | Journaled repository reads |
-| Process and network | \`ctx.exec\`, \`ctx.bash\`, \`ctx.fetch\`, \`ctx.env.get\`, \`ctx.secret\` | Journaled process/network/config effects; secrets remain opaque handles |
+| Process and network | \`ctx.exec\`, \`ctx.fetch\`, \`ctx.env.get\`, \`ctx.secret\` | Journaled process/network/config effects; secrets remain opaque handles |
 | Git reads | \`ctx.git.status\`, \`ctx.git.head\`, \`ctx.git.branches\`, \`ctx.git.mergeBase\`, \`ctx.git.changedSince\`, \`ctx.git.diff\`, \`ctx.git.log\`, \`ctx.git.show\`, \`ctx.git.blame\`, \`ctx.git.fileAt\`, \`ctx.git.snapshot\`, \`ctx.git.compare\`, \`ctx.git.fetch\` | Available in read-only and writable workflow contexts |
 | Git writes | \`ctx.git.add\`, \`ctx.git.commit\`, \`ctx.git.checkout\`, \`ctx.git.rebase\`, \`ctx.git.reset\`, \`ctx.git.apply\`, \`ctx.git.branch.create\`, \`ctx.git.branch.delete\`, \`ctx.git.stash.push\`, \`ctx.git.stash.pop\`, \`ctx.git.stash.drop\`, \`ctx.git.clean\` | Available only in \`WorkspaceCtx\` and candidate workspaces |
 | Patch and report state | \`ctx.integrate\`, \`ctx.discard\`, \`ctx.note\` | Land/discard patch refs or retain durable evidence notes |
 | Tasks | \`ctx.tasks.observe\`, \`ctx.tasks.upsert\`, \`ctx.tasks.update\`, \`ctx.tasks.note\`, \`ctx.tasks.setCriterion\` | Workflow-owned short-lived task context |
-| Nested workspaces | \`ctx.workspace.with\`, \`ctx.workspace.lease\` | Disposable candidate tree or exceptional durable checkout lease |
+| Nested workspaces | \`ctx.workspace.with\` | Disposable candidate tree for direct mutation and patch capture |
 | Active workspace identity | \`ctx.workspace.snapshot\`, \`ctx.workspace.id\`, \`ctx.workspace.path\`, \`ctx.workspace.branch\`, \`ctx.workspace.head\`, \`ctx.workspace.tree\`, \`ctx.workspace.generation\` | Present on \`WorkspaceCtx\`; read-only workflows expose only nested-workspace creation |
 | Candidate callback | \`candidate.apply\`, \`candidate.capture\` | Compose patches in a candidate workspace and capture the result |
-| Waiting | \`ctx.poll\`, \`ctx.signal\`, \`ctx.sleep\` | Durable local polling, external signals, and timers |
+| Waiting | \`ctx.sleep\` | Durable timers; reusable observation belongs in \`defineObserver\` and \`ctx.observe\` |
 | Cancellation | \`ctx.cancellation.signal\`, \`ctx.cancellation.reason\`, \`ctx.cancellation.throwIfRequested\` | Cooperate with, inspect, or throw the engine-owned cancellation decision |
 | Journaled values | \`ctx.now\`, \`ctx.random\`, \`ctx.uuid\` | Replay-stable clock, random, and UUID values |
 | Diagnostics | \`ctx.log\`, \`ctx.budget\`, \`ctx.run\` | Narration, budget view, and run/provenance metadata |
@@ -302,24 +296,6 @@ Three builder callbacks receive deliberately tiny execution contexts rather than
 an implemented polling observer gets \`observerCtx.signal\` and \`observerCtx.attempt\`; and a
 function-backed check gets \`checkCtx.signal\`. They support cancellation and bounded-attempt
 reporting, but cannot start nested effects.
-
-#### Advanced-only \`ctx\` additions
-
-Import the full context types from \`@techery/weft-dsl-proto/advanced\` only when implementing
-an explicit lifecycle. It adds these root members and callback shapes to the ordinary surface:
-
-| Area | Complete advanced-only surface |
-| --- | --- |
-| Deprecated gate | \`ctx.gate\` — compatibility only; prefer \`ctx.policy.decide\` for branching |
-| Operations | \`ctx.operation.prepare\`, \`ctx.operation.authorize\`, \`ctx.operation.execute\`, \`ctx.operation.recoverable\`, \`ctx.operation.executeRecoverable\`, \`ctx.operation.prepareRecovery\`, \`ctx.operation.recover\` |
-| Deliveries | callable \`ctx.delivery\`, plus \`ctx.delivery.prepare\`, \`ctx.delivery.authorize\`, \`ctx.delivery.execute\` |
-| Workspace diagnostics | \`ctx.workspace.sameSnapshot\`, \`ctx.workspace.assertUnchanged\` |
-| Composition callbacks | deprecated \`lane.ctx\` aliases the advanced parallel lane itself; advanced sequence callbacks use \`scope.ctx\` for effects and \`scope.itemKey\` / \`scope.key\` for identity |
-
-The ordinary facade intentionally hides those lifecycle transitions. Its one-shot operation and
-delivery calls make the future host validate and journal the same candidate/authorization steps
-internally. Unlike the advanced sequence callback, an ordinary root-package \`scope\` is itself
-the scoped context; do not copy \`scope.ctx\` between the two surfaces.
 
 <!-- weft-dsl-proto-reference:end -->
 

@@ -39,12 +39,6 @@ export interface NestedWorkspaceOptions {
   from?: string;
 }
 
-/** Checkout lease options. */
-export interface CheckoutLeaseOptions {
-  key: string;
-  checkout: string;
-}
-
 /**
  * Why: Provides a disposable direct-write tree for composing and verifying patches before promotion.
  * Use: Receive it inside `ctx.workspace.with` and finish by calling `capture`.
@@ -57,16 +51,9 @@ export interface CandidateWorkspaceContext<TaskInput = unknown, TaskOutput = Tas
 
 /** Nested workspace api. */
 export interface NestedWorkspaceApi<TaskInput = unknown, TaskOutput = TaskInput> {
-  /** Compares two independently loaded engine-minted workspace snapshots. */
-  sameSnapshot(left: WorkspaceSnapshotRef, right: WorkspaceSnapshotRef): boolean;
   with<Result>(
     opts: NestedWorkspaceOptions,
     run: (candidate: CandidateWorkspaceContext<TaskInput, TaskOutput>) => Promise<Result> | Result,
-  ): Promise<Result>;
-  /** Exceptional fallback for environments that cannot be reconstructed in a worktree. */
-  lease<Result>(
-    opts: CheckoutLeaseOptions,
-    run: (workspace: CandidateWorkspaceContext<TaskInput, TaskOutput>) => Promise<Result> | Result,
   ): Promise<Result>;
 }
 
@@ -76,8 +63,6 @@ export interface NestedWorkspaceApi<TaskInput = unknown, TaskOutput = TaskInput>
  */
 export interface ActiveWorkspaceApi<TaskInput = unknown, TaskOutput = TaskInput>
   extends NestedWorkspaceApi<TaskInput, TaskOutput> {
-  /** Advanced diagnostic that rejects when a snapshot no longer describes the active workspace generation. */
-  assertUnchanged(snapshot: WorkspaceSnapshotRef): Promise<void>;
   readonly snapshot: WorkspaceSnapshotRef;
   readonly id: string;
   readonly path: string;
@@ -114,29 +99,6 @@ export interface PolicyDecisionResult {
  */
 export interface PolicyApi {
   decide(request: PolicyDecisionRequest): Promise<PolicyDecisionResult>;
-}
-
-/**
- * Why: Preserves the previous gate request shape for advanced compatibility during migration.
- * Use: Prefer `PolicyDecisionRequest` and `ctx.policy.decide` in new workflow code.
- * @deprecated Use `PolicyDecisionRequest`.
- */
-export interface GateRequest {
-  key: string;
-  action: string;
-  risk: Risk;
-  detail?: string;
-}
-
-/**
- * Why: Preserves the previous boolean gate result for advanced compatibility during migration.
- * Use: Prefer `PolicyDecisionResult`, whose name and outcome do not imply reusable authority.
- * @deprecated Use `PolicyDecisionResult`.
- */
-export interface GateResult {
-  approved: boolean;
-  note?: string;
-  answeredBy: "human" | "policy" | "timeout";
 }
 
 /**
