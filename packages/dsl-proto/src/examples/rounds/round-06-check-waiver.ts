@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type ArtifactRefOf,
   type CheckInvocationOptions,
@@ -16,8 +18,7 @@ import {
   type ReviewEvaluation,
   type WorkflowNode,
   type WorkspaceSnapshotRef,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes compile-time contract assertions readable without adding runtime behavior. Use: Pass inferred DSL values to it in this typechecked example. */
 declare function expectType<Type>(value: Type): void;
@@ -31,42 +32,27 @@ const FREEZE_WAIVER_ACTION = "Authorize one exact production-freeze waiver";
 const FREEZE_WAIVER_MAX_TTL = "30m";
 const MAX_WAIVER_TTL_MS = 30 * 60 * 1_000;
 
-const WorkspaceSubjectSchema = z.object({
+const WorkspaceSnapshotSchema = z.object({
   workspaceId: z.string().min(1),
   generation: z.number().int().nonnegative(),
   treeHash: z.string().min(1),
 });
 
-/** Why: Names the serializable projection of engine-minted workspace identity used across host schemas. Use: Compare it back to the nominal subject; never reconstruct authority from it. */
-type WorkspaceSubjectValue = z.infer<typeof WorkspaceSubjectSchema>;
+/** Why: Names the serializable projection of engine-minted workspace identity used across host schemas. Use: Correlate stored evidence without reconstructing authority from it. */
+type WorkspaceSnapshotValue = z.infer<typeof WorkspaceSnapshotSchema>;
 
 const ArtifactPointer = z.object({
   ref: z.string().min(1),
   sha256: z.string().min(1),
 });
 
-/** Why: Projects nominal workspace identity into schema-safe evidence without claiming to mint a new subject. Use: Persist it beside the engine-owned check and delivery attestations. */
-function projectSubject(subject: WorkspaceSnapshotRef): WorkspaceSubjectValue {
+/** Why: Projects nominal workspace identity into schema-safe evidence without claiming to mint new authority. Use: Persist it beside the engine-owned check and delivery attestations. */
+function projectSnapshot(snapshot: WorkspaceSnapshotRef): WorkspaceSnapshotValue {
   return {
-    workspaceId: subject.workspaceId,
-    generation: subject.generation,
-    treeHash: subject.treeHash,
+    workspaceId: snapshot.workspaceId,
+    generation: snapshot.generation,
+    treeHash: snapshot.treeHash,
   };
-}
-
-/** Why: Fails closed whenever a wait, check, review, or host decision describes stale candidate bytes. Use: Call at every authority or evidence transition. */
-function requireSameSubject(
-  actual: WorkspaceSnapshotRef | WorkspaceSubjectValue,
-  expected: WorkspaceSnapshotRef,
-  label: string,
-): void {
-  if (
-    actual.workspaceId !== expected.workspaceId ||
-    actual.generation !== expected.generation ||
-    actual.treeHash !== expected.treeHash
-  ) {
-    throw new Error(`${label} does not describe the exact release candidate generation`);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +133,7 @@ const ChangeFreezeCheckInput = z.object({
 const productionChangeFreeze = defineCheck({
   name: FREEZE_CHECK_NAME,
   description:
-    "Checks the production freeze; only a human-requested, host-authorized, exact-subject grant may waive it.",
+    "Checks the production freeze; only a human-requested, host-authorized, exact-candidate grant may waive it.",
   input: ChangeFreezeCheckInput,
   policy: "required",
   revision: FREEZE_CHECK_REVISION,
@@ -176,7 +162,7 @@ const productionChangeFreeze = defineCheck({
 const CheckProofBase = z.object({
   name: z.string().min(1),
   revision: z.string().min(1),
-  subject: WorkspaceSubjectSchema,
+  snapshot: WorkspaceSnapshotSchema,
   attestationRef: z.string().min(1),
   summary: z.string().optional(),
   evidence: z.string().optional(),
@@ -197,7 +183,7 @@ const WaivedCheckProof = CheckProofBase.extend({
   disposition: z.literal("waived"),
 });
 
-/** Why: Names proof that an unwaivable check actually executed and passed on one exact subject. Use: Require it before human review or promotion. */
+/** Why: Names proof that an unwaivable check actually executed and passed on one exact candidate. Use: Require it before human review or promotion. */
 type ExecutedPassProofValue = z.infer<typeof ExecutedPassProof>;
 
 /** Why: Names the eligible failure a person may request to waive without treating that request as authority. Use: Bind it to the exact candidate review and nominal authorization request. */
@@ -214,14 +200,12 @@ function optionalCheckEvidence(result: CheckResult): { summary?: string; evidenc
   };
 }
 
-/** Why: Converts a broad result into positive, executed proof only after exact-subject validation. Use: Enforce the unwaivable integrity invariant. */
+/** Why: Converts a broad result into positive, executed proof only after exact-candidate validation. Use: Enforce the unwaivable integrity invariant. */
 function requireExecutedPass(
   name: string,
   revision: string,
   result: CheckResult,
-  subject: WorkspaceSnapshotRef,
 ): ExecutedPassProofValue {
-  requireSameSubject(result.subject, subject, name);
   if (result.status !== "pass" || result.disposition !== "executed") {
     throw new Error(`${name} must execute and pass; trusted or waived evidence is insufficient`);
   }
@@ -230,7 +214,7 @@ function requireExecutedPass(
     revision,
     status: "pass",
     disposition: "executed",
-    subject: projectSubject(result.subject),
+    snapshot: projectSnapshot(result.candidate),
     attestationRef: result.attestation.ref,
     ...optionalCheckEvidence(result),
   };
@@ -241,9 +225,7 @@ function requireExecutedFailure(
   name: typeof FREEZE_CHECK_NAME,
   revision: typeof FREEZE_CHECK_REVISION,
   result: CheckResult,
-  subject: WorkspaceSnapshotRef,
 ): ExecutedFailureProofValue {
-  requireSameSubject(result.subject, subject, name);
   if (result.status !== "fail" || result.disposition !== "executed") {
     throw new Error(`${name} is waiver-eligible only after an executed failure`);
   }
@@ -252,19 +234,17 @@ function requireExecutedFailure(
     revision,
     status: "fail",
     disposition: "executed",
-    subject: projectSubject(result.subject),
+    snapshot: projectSnapshot(result.candidate),
     attestationRef: result.attestation.ref,
     ...optionalCheckEvidence(result),
   };
 }
 
-/** Why: Accepts the exceptional path only when the failed result retained the exact nominal waiver ref on the unchanged subject. Use: Refine the waived result before projecting evidence. */
+/** Why: Accepts the exceptional path only when the failed result retained the exact nominal waiver ref. Use: Refine the waived result before projecting evidence. */
 function requireWaivedCheck(
   result: CheckResultOf<typeof productionChangeFreeze>,
   waiver: CheckWaiverRef<typeof productionChangeFreeze>,
-  subject: WorkspaceSnapshotRef,
 ): WaivedCheckProofValue {
-  requireSameSubject(result.subject, subject, FREEZE_CHECK_NAME);
   if (result.disposition !== "waived") {
     throw new Error("The eligible check did not record the authorized waiver disposition");
   }
@@ -276,7 +256,7 @@ function requireWaivedCheck(
     revision: FREEZE_CHECK_REVISION,
     status: "fail",
     disposition: "waived",
-    subject: projectSubject(result.subject),
+    snapshot: projectSnapshot(result.candidate),
     attestationRef: result.attestation.ref,
     ...optionalCheckEvidence(result),
   };
@@ -316,7 +296,7 @@ const WaiverReviewContent = z.object({
     repository: z.string().min(1),
     environment: z.literal("production"),
     head: z.string().min(1),
-    subject: WorkspaceSubjectSchema,
+    snapshot: WorkspaceSnapshotSchema,
   }),
   integrity: ExecutedPassProof,
   failedCheck: ExecutedFailureProof,
@@ -385,7 +365,7 @@ const CheckWaiverEvidence = z.object({
   action: z.literal(FREEZE_WAIVER_ACTION),
   risk: z.literal("high"),
   maxTtl: z.literal(FREEZE_WAIVER_MAX_TTL),
-  subject: WorkspaceSubjectSchema,
+  snapshot: WorkspaceSnapshotSchema,
   failureAttestationRef: z.string().min(1),
   reason: z.string().min(20),
   issue: z.string().min(1).optional(),
@@ -415,7 +395,7 @@ function projectCheckWaiver(waiver: CheckWaiverRef<typeof productionChangeFreeze
     action: waiver.action,
     risk: waiver.risk,
     maxTtl: waiver.maxTtl,
-    subject: projectSubject(waiver.subject),
+    snapshot: projectSnapshot(waiver.candidate),
     failureAttestationRef: waiver.failure.ref,
     reason: waiver.reason,
     ...(waiver.issue === undefined ? {} : { issue: waiver.issue }),
@@ -426,16 +406,14 @@ function projectCheckWaiver(waiver: CheckWaiverRef<typeof productionChangeFreeze
   };
 }
 
-/** Why: Verifies that nominal host authority preserved the failed check, human request, release identity, subject, and expiry bound. Use: Call immediately after `ctx.check.authorize`. */
+/** Why: Verifies that nominal host authority preserved the failed check, human request, release identity, and expiry bound. Use: Call immediately after `ctx.check.authorizeWaiver`. */
 function requireExactUnexpiredWaiver(
   waiver: CheckWaiverRef<typeof productionChangeFreeze>,
   release: ReleaseCaseValue,
-  subject: WorkspaceSnapshotRef,
   failure: ExecutedFailureProofValue,
   request: HumanWaiverRequestProofValue,
   nowMs: number,
 ): void {
-  requireSameSubject(waiver.subject, subject, "Waiver authorization");
   if (
     waiver.check !== release.waiverPolicy.eligibleCheck ||
     waiver.revision !== release.waiverPolicy.eligibleRevision ||
@@ -494,7 +472,7 @@ const DeliveryEvidenceContent = z.object({
     environment: z.literal("production"),
     branch: z.string().min(1),
     head: z.string().min(1),
-    subject: WorkspaceSubjectSchema,
+    snapshot: WorkspaceSnapshotSchema,
   }),
   integrity: ExecutedPassProof,
   freeze: ReleaseFreezeAcceptance,
@@ -521,22 +499,22 @@ type DeliveryEvidenceArtifactRef = ArtifactRefOf<typeof deliveryEvidenceArtifact
 
 const EvidenceReviewInput = z.object({
   releaseId: z.string().min(1),
-  subject: WorkspaceSubjectSchema,
+  snapshot: WorkspaceSnapshotSchema,
   integrity: ExecutedPassProof,
   freeze: ReleaseFreezeAcceptance,
   dossier: ArtifactPointer,
 });
 
 const EvidenceReviewFinding = z.object({
-  code: z.enum(["subject-mismatch", "integrity-not-executed", "waiver-chain-incomplete"]),
+  code: z.enum(["snapshot-mismatch", "integrity-not-executed", "waiver-chain-incomplete"]),
   message: z.string().min(1),
 });
 
-/** Why: Names deterministic review findings separately from their blocking disposition. Use: Return them from the exact-subject delivery evidence review. */
+/** Why: Names deterministic review findings separately from their blocking disposition. Use: Return them from the exact-candidate delivery evidence review. */
 type EvidenceReviewFindingValue = z.infer<typeof EvidenceReviewFinding>;
 
-/** Why: Compares serializable subject projections inside review input without treating them as authority. Use: Flag inconsistent evidence before engine-bound promotion preparation. */
-function sameProjectedSubject(left: WorkspaceSubjectValue, right: WorkspaceSubjectValue): boolean {
+/** Why: Compares serialized workspace snapshots inside review input without treating them as authority. Use: Flag inconsistent evidence before engine-bound promotion preparation. */
+function sameProjectedSnapshot(left: WorkspaceSnapshotValue, right: WorkspaceSnapshotValue): boolean {
   return (
     left.workspaceId === right.workspaceId &&
     left.generation === right.generation &&
@@ -547,15 +525,15 @@ function sameProjectedSubject(left: WorkspaceSubjectValue, right: WorkspaceSubje
 const deliveryEvidenceReview = defineReview({
   name: "round-06-review-check-waiver-evidence",
   description:
-    "Reviews the complete normal or exceptional check chain while the engine binds it to one workspace subject.",
+    "Reviews the complete normal or exceptional check chain while the engine binds it to one workspace candidate.",
   input: EvidenceReviewInput,
   finding: EvidenceReviewFinding,
   evaluate: (_ctx, input): ReviewEvaluation<EvidenceReviewFindingValue> => {
     const findings: EvidenceReviewFindingValue[] = [];
-    if (!sameProjectedSubject(input.integrity.subject, input.subject)) {
+    if (!sameProjectedSnapshot(input.integrity.snapshot, input.snapshot)) {
       findings.push({
-        code: "subject-mismatch",
-        message: "Integrity proof describes another workspace subject.",
+        code: "snapshot-mismatch",
+        message: "Integrity proof describes another workspace snapshot.",
       });
     }
     if (input.integrity.status !== "pass" || input.integrity.disposition !== "executed") {
@@ -564,16 +542,16 @@ const deliveryEvidenceReview = defineReview({
         message: "Unwaivable integrity proof must execute and pass.",
       });
     }
-    if (!sameProjectedSubject(input.freeze.result.subject, input.subject)) {
+    if (!sameProjectedSnapshot(input.freeze.result.snapshot, input.snapshot)) {
       findings.push({
-        code: "subject-mismatch",
-        message: "Freeze acceptance describes another workspace subject.",
+        code: "snapshot-mismatch",
+        message: "Freeze acceptance describes another workspace snapshot.",
       });
     }
     if (
       input.freeze.kind === "waived" &&
-      (!sameProjectedSubject(input.freeze.initialFailure.subject, input.subject) ||
-        !sameProjectedSubject(input.freeze.waiver.subject, input.subject) ||
+      (!sameProjectedSnapshot(input.freeze.initialFailure.snapshot, input.snapshot) ||
+        !sameProjectedSnapshot(input.freeze.waiver.snapshot, input.snapshot) ||
         input.freeze.initialFailure.attestationRef !== input.freeze.waiver.failureAttestationRef ||
         input.freeze.request.reason !== input.freeze.waiver.reason ||
         input.freeze.waiver.issue !== input.releaseId ||
@@ -679,12 +657,12 @@ const checkWaiverWorkflow = defineWorkflow(
     if (release.branch !== input.branch || release.baseRef !== input.baseRef) {
       throw new Error("Workflow workspace routing does not match the authoritative release case");
     }
-    const head = await ctx.git.head();
-    const status = await ctx.git.status();
+    const head = await ctx.git.head({ key: "read-authorized-release-head" });
+    const status = await ctx.git.status({ key: "read-authorized-release-status" });
     if (head.sha !== release.authorizedHead || status.branch !== release.branch || !status.clean) {
       throw new Error("Release checks require the authorized clean branch and exact head");
     }
-    const candidateSubject = ctx.workspace.subject;
+    const candidate = ctx.workspace.snapshot;
 
     const integrityResult = await ctx.check(
       artifactIntegrity,
@@ -701,7 +679,6 @@ const checkWaiverWorkflow = defineWorkflow(
         INTEGRITY_CHECK_NAME,
         INTEGRITY_CHECK_REVISION,
         integrityResult,
-        candidateSubject,
       );
     } catch (error) {
       return {
@@ -722,8 +699,6 @@ const checkWaiverWorkflow = defineWorkflow(
       key: "initial-production-change-freeze",
       policy: "required",
     });
-    requireSameSubject(initialFreezeResult.subject, candidateSubject, "Initial freeze check");
-
     let freezeAcceptance: ReleaseFreezeAcceptanceValue;
     let acceptedFreezeResult: CheckResultOf<typeof productionChangeFreeze> = initialFreezeResult;
     let waiverReviewArtifact: WaiverReviewArtifactRef | undefined;
@@ -735,7 +710,6 @@ const checkWaiverWorkflow = defineWorkflow(
           FREEZE_CHECK_NAME,
           FREEZE_CHECK_REVISION,
           initialFreezeResult,
-          candidateSubject,
         ),
       };
     } else {
@@ -751,7 +725,6 @@ const checkWaiverWorkflow = defineWorkflow(
         FREEZE_CHECK_NAME,
         FREEZE_CHECK_REVISION,
         initialFreezeResult,
-        candidateSubject,
       );
       waiverReviewArtifact = await ctx.artifact(
         waiverReviewArtifactDefinition,
@@ -762,7 +735,7 @@ const checkWaiverWorkflow = defineWorkflow(
               repository: release.repository,
               environment: release.environment,
               head: release.authorizedHead,
-              subject: projectSubject(candidateSubject),
+              snapshot: projectSnapshot(candidate),
             },
             integrity,
             failedCheck,
@@ -772,13 +745,13 @@ const checkWaiverWorkflow = defineWorkflow(
             workflowRunId: ctx.run.id,
             releaseId: release.releaseId,
             head: release.authorizedHead,
-            treeHash: candidateSubject.treeHash,
+            treeHash: candidate.treeHash,
           },
         },
         {
           key: "waiver-review-artifact",
           label: `Waiver request for ${release.releaseId}`,
-          subject: candidateSubject,
+          candidate,
           sources: [releaseSnapshot.evidence, integrityResult.attestation, initialFreezeResult.attestation],
         },
       );
@@ -801,10 +774,9 @@ const checkWaiverWorkflow = defineWorkflow(
         };
       }
       const waiverRequest = requireHumanWaiverRequest(humanReview, waiverReviewArtifact);
-      requireSameSubject(ctx.workspace.subject, candidateSubject, "Human waiver review");
 
       const requestedExpiresAtMs = Date.parse(waiverRequest.requestedExpiresAt);
-      const requestedAtMs = await ctx.now();
+      const requestedAtMs = await ctx.now({ key: "freeze-waiver-requested-at" });
       const requestedTtlMs = Math.floor(requestedExpiresAtMs - requestedAtMs);
       if (
         !Number.isFinite(requestedExpiresAtMs) ||
@@ -820,21 +792,19 @@ const checkWaiverWorkflow = defineWorkflow(
         };
       }
 
-      const waiver = await ctx.check.authorize(productionChangeFreeze, initialFreezeResult, {
+      const waiver = await ctx.check.authorizeWaiver(productionChangeFreeze, initialFreezeResult, {
         key: "authorize-production-freeze-waiver",
         reason: waiverRequest.reason,
         issue: release.releaseId,
         ttl: requestedTtlMs,
-        detail: `Reviewer ${waiverRequest.reviewerId} requested ${FREEZE_CHECK_REVISION} for exact subject ${candidateSubject.treeHash} and artifact ${waiverRequest.reviewedArtifact.sha256}.`,
+        detail: `Reviewer ${waiverRequest.reviewerId} requested ${FREEZE_CHECK_REVISION} for exact snapshot ${candidate.treeHash} and artifact ${waiverRequest.reviewedArtifact.sha256}.`,
       });
-      requireSameSubject(ctx.workspace.subject, candidateSubject, "Waiver authorization");
       requireExactUnexpiredWaiver(
         waiver,
         release,
-        candidateSubject,
         failedCheck,
         waiverRequest,
-        await ctx.now(),
+        await ctx.now({ key: "freeze-waiver-observed-at" }),
       );
 
       const waivedFreezeResult = await ctx.check(productionChangeFreeze, freezeInput, {
@@ -842,7 +812,7 @@ const checkWaiverWorkflow = defineWorkflow(
         policy: "required",
         waive: waiver,
       });
-      const waivedResult = requireWaivedCheck(waivedFreezeResult, waiver, candidateSubject);
+      const waivedResult = requireWaivedCheck(waivedFreezeResult, waiver);
       acceptedFreezeResult = waivedFreezeResult;
       freezeAcceptance = {
         kind: "waived",
@@ -853,7 +823,6 @@ const checkWaiverWorkflow = defineWorkflow(
       };
     }
 
-    requireSameSubject(ctx.workspace.subject, candidateSubject, "Delivery evidence capture");
     const dossier = await ctx.artifact(
       deliveryEvidenceArtifactDefinition,
       {
@@ -864,7 +833,7 @@ const checkWaiverWorkflow = defineWorkflow(
             environment: release.environment,
             branch: release.branch,
             head: release.authorizedHead,
-            subject: projectSubject(candidateSubject),
+            snapshot: projectSnapshot(candidate),
           },
           integrity,
           freeze: freezeAcceptance,
@@ -881,13 +850,13 @@ const checkWaiverWorkflow = defineWorkflow(
           workflowRunId: ctx.run.id,
           releaseId: release.releaseId,
           head: release.authorizedHead,
-          treeHash: candidateSubject.treeHash,
+          treeHash: candidate.treeHash,
         },
       },
       {
         key: "release-delivery-evidence",
         label: `Release evidence for ${release.releaseId}`,
-        subject: candidateSubject,
+        candidate,
         sources: [releaseSnapshot.evidence, integrityResult.attestation, acceptedFreezeResult.attestation],
       },
     );
@@ -897,14 +866,13 @@ const checkWaiverWorkflow = defineWorkflow(
       deliveryEvidenceReview,
       {
         releaseId: release.releaseId,
-        subject: projectSubject(candidateSubject),
+        snapshot: projectSnapshot(candidate),
         integrity,
         freeze: freezeAcceptance,
         dossier: { ref: dossier.ref, sha256: dossier.sha256 },
       },
-      { key: "review-delivery-evidence", subject: candidateSubject },
+      { key: "review-delivery-evidence", candidate },
     );
-    requireSameSubject(evidenceReview.subject, candidateSubject, "Delivery evidence review");
     if (evidenceReview.status !== "accepted") {
       return {
         status: "blocked",
@@ -915,11 +883,10 @@ const checkWaiverWorkflow = defineWorkflow(
       };
     }
 
-    requireSameSubject(ctx.workspace.subject, candidateSubject, "Delivery authorization");
     const deliveryCandidate = await ctx.delivery.prepare(
       publishProductionRelease,
       {
-        subject: candidateSubject,
+        snapshot: candidate,
         input: {
           releaseId: release.releaseId,
           repository: release.repository,
@@ -931,7 +898,7 @@ const checkWaiverWorkflow = defineWorkflow(
           freeze: freezeAcceptance,
           evidenceReviewRef: evidenceReview.evidence,
         },
-        evidence: [integrityResult.attestation, acceptedFreezeResult.attestation, evidenceReview.attestation],
+        proofs: [evidenceReview.proof],
         artifacts: waiverReviewArtifact === undefined ? [dossier] : [waiverReviewArtifact, dossier],
       },
       { key: "prepare-production-release", label: "Freeze verified production release" },
@@ -945,7 +912,6 @@ const checkWaiverWorkflow = defineWorkflow(
       { candidate: deliveryCandidate, authorization: deliveryAuthorization },
       { key: "publish-production-release", attempts: 1 },
     );
-    requireSameSubject(delivery.subject, candidateSubject, "Delivery receipt");
     if (
       delivery.value.releaseId !== release.releaseId ||
       delivery.value.head !== release.authorizedHead ||
@@ -955,6 +921,7 @@ const checkWaiverWorkflow = defineWorkflow(
     }
 
     await ctx.note({
+      key: "record-production-release",
       kind: "claim",
       text: `Published ${release.releaseId} from ${release.authorizedHead}.`,
       evidence: dossier.ref,
@@ -986,7 +953,7 @@ expectType<DeliveryInputOf<typeof publishProductionRelease>>({
     revision: INTEGRITY_CHECK_REVISION,
     status: "pass",
     disposition: "executed",
-    subject: { workspaceId: "workspace-1", generation: 1, treeHash: "tree-1" },
+    snapshot: { workspaceId: "workspace-1", generation: 1, treeHash: "tree-1" },
     attestationRef: "evidence:integrity",
   },
   freeze: {
@@ -996,7 +963,7 @@ expectType<DeliveryInputOf<typeof publishProductionRelease>>({
       revision: FREEZE_CHECK_REVISION,
       status: "pass",
       disposition: "executed",
-      subject: { workspaceId: "workspace-1", generation: 1, treeHash: "tree-1" },
+      snapshot: { workspaceId: "workspace-1", generation: 1, treeHash: "tree-1" },
       attestationRef: "evidence:freeze",
     },
   },
@@ -1007,7 +974,7 @@ expectType<DeliveryOutputOf<typeof publishProductionRelease>>(deliveryOutput);
 
 // Negative type and soundness cases:
 const incompleteStructuralWaiver = {
-  reason: "No subject, check, authorization, or expiry.",
+  reason: "No snapshot, check, authorization, or expiry.",
 };
 // @ts-expect-error A structural object cannot masquerade as engine-minted waiver authority.
 expectType<CheckWaiverRef<typeof productionChangeFreeze>>(incompleteStructuralWaiver);

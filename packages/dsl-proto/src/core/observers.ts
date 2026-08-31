@@ -2,11 +2,13 @@
 
 import type {
   AnySchema,
+  DefinitionTypeCarrier,
   Duration,
   EvidenceRef,
   HostBinding,
   InferIn,
   InferOut,
+  NominalValue,
   WorkflowNode,
 } from "./shared.ts";
 
@@ -48,10 +50,30 @@ export interface ObserverTrustPolicy {
  * Why: Records which allowed authority and trust level the host actually established for accepted state.
  * Use: Retain it from detailed observation provenance instead of copying the definition's requested policy.
  */
-export interface ObserverTrustMetadata {
-  level: ObserverTrustLevel;
-  authority: string;
+export interface ObserverTrustMetadata<
+  Level extends ObserverTrustLevel = ObserverTrustLevel,
+  Authority extends string = string,
+> {
+  readonly level: Level;
+  readonly authority: Authority;
 }
+
+/** Trust levels a host may return after enforcing a declared observer floor. */
+export type ObserverTrustLevelAtLeast<Level extends ObserverTrustLevel> =
+  Level extends "authoritative" ? "authoritative" : ObserverTrustLevel;
+
+/** Allowed authority literals retained from an observer trust policy. */
+export type ObserverTrustAuthorityOf<Policy extends ObserverTrustPolicy> =
+  Policy["authorities"][number];
+
+/** Exact trust metadata guaranteed after one observer policy is enforced. */
+export type ObserverTrustMetadataOfPolicy<Policy extends ObserverTrustPolicy> =
+  Policy extends ObserverTrustPolicy
+    ? ObserverTrustMetadata<
+        ObserverTrustLevelAtLeast<Policy["minimum"]>,
+        ObserverTrustAuthorityOf<Policy>
+      >
+    : never;
 
 /**
  * Why: Lets the engine reject correlation mismatches, replayed or conflicting event IDs, and non-monotonic state.
@@ -156,9 +178,10 @@ export interface SignalFirstObserverCoordination {
  * Why: Makes the single engine-owned signal/fallback state machine explicit on normalized definitions.
  * Use: Inspect `coordination`; workflow authors never race endpoint promises or reinterpret abort as fallback.
  */
-export interface SignalFirstObserverSource<ParsedInput> extends SignalFirstObserverSourceConfig<ParsedInput> {
-  readonly coordination: SignalFirstObserverCoordination;
-}
+export type SignalFirstObserverSource<
+  ParsedInput,
+  Source extends SignalFirstObserverSourceConfig<ParsedInput> = SignalFirstObserverSourceConfig<ParsedInput>,
+> = Source & { readonly coordination: SignalFirstObserverCoordination };
 
 /**
  * Why: Unifies pull, push, and signal-first observation behind one node while retaining source-specific fields.
@@ -187,20 +210,23 @@ export interface ObserverDefinition<
   OutputSchema extends AnySchema,
   Source extends ObserverSource<InferOut<InputSchema>, InferIn<StateSchema>>,
   Name extends string = string,
-> extends WorkflowNode<"weft.observer"> {
+> extends WorkflowNode<"weft.observer">,
+    DefinitionTypeCarrier<{
+      input: InferIn<InputSchema>;
+      parsedInput: InferOut<InputSchema>;
+      state: InferOut<StateSchema>;
+      rawState: InferIn<StateSchema>;
+      output: InferOut<OutputSchema>;
+      rawOutput: InferIn<OutputSchema>;
+      source: Source;
+    }> {
   readonly kind: "weft.observer";
   readonly name: Name;
   readonly description?: string;
   readonly input: InputSchema;
   readonly state: StateSchema;
   readonly output: OutputSchema;
-  readonly source: Source;
-  readonly identity?: ObserverIdentityContract<InferOut<InputSchema>, InferOut<StateSchema>>;
   readonly defaults: Readonly<ObserverDefaults>;
-  readonly complete: (
-    state: InferOut<StateSchema>,
-    input: InferOut<InputSchema>,
-  ) => InferIn<OutputSchema> | null;
 }
 
 /**
@@ -249,8 +275,11 @@ export interface BoundSignalObserverConfig<
   StateSchema extends AnySchema,
   OutputSchema extends AnySchema,
   Name extends string = string,
+  Source extends BoundSignalObserverSource<InferOut<InputSchema>> = BoundSignalObserverSource<
+    InferOut<InputSchema>
+  >,
 > extends ObserverConfigBase<InputSchema, StateSchema, OutputSchema, Name> {
-  source: BoundSignalObserverSource<InferOut<InputSchema>>;
+  source: Source;
 }
 
 /**
@@ -262,7 +291,10 @@ export type SignalObserverConfig<
   StateSchema extends AnySchema,
   OutputSchema extends AnySchema,
   Name extends string = string,
-> = BoundSignalObserverConfig<InputSchema, StateSchema, OutputSchema, Name>;
+  Source extends BoundSignalObserverSource<InferOut<InputSchema>> = BoundSignalObserverSource<
+    InferOut<InputSchema>
+  >,
+> = BoundSignalObserverConfig<InputSchema, StateSchema, OutputSchema, Name, Source>;
 
 /**
  * Why: Couples a signal-first strategy to one shared state and completion contract.
@@ -273,8 +305,11 @@ export interface SignalFirstObserverConfig<
   StateSchema extends AnySchema,
   OutputSchema extends AnySchema,
   Name extends string = string,
+  Source extends SignalFirstObserverSourceConfig<InferOut<InputSchema>> = SignalFirstObserverSourceConfig<
+    InferOut<InputSchema>
+  >,
 > extends ObserverConfigBase<InputSchema, StateSchema, OutputSchema, Name> {
-  source: SignalFirstObserverSourceConfig<InferOut<InputSchema>>;
+  source: Source;
 }
 
 /**
@@ -286,7 +321,7 @@ export declare function defineObserver<
   StateSchema extends AnySchema,
   OutputSchema extends AnySchema,
   Name extends string,
-  Source extends PollObserverSource<InferOut<InputSchema>, InferIn<StateSchema>>,
+  const Source extends PollObserverSource<InferOut<InputSchema>, InferIn<StateSchema>>,
 >(
   config: PollObserverConfig<InputSchema, StateSchema, OutputSchema, Name, Source>,
 ): ObserverDefinition<InputSchema, StateSchema, OutputSchema, Source, Name>;
@@ -300,13 +335,14 @@ export declare function defineObserver<
   StateSchema extends AnySchema,
   OutputSchema extends AnySchema,
   Name extends string,
+  const Source extends BoundSignalObserverSource<InferOut<InputSchema>>,
 >(
-  config: SignalObserverConfig<InputSchema, StateSchema, OutputSchema, Name>,
+  config: SignalObserverConfig<InputSchema, StateSchema, OutputSchema, Name, Source>,
 ): ObserverDefinition<
   InputSchema,
   StateSchema,
   OutputSchema,
-  BoundSignalObserverSource<InferOut<InputSchema>>,
+  Source,
   Name
 >;
 
@@ -319,13 +355,14 @@ export declare function defineObserver<
   StateSchema extends AnySchema,
   OutputSchema extends AnySchema,
   Name extends string,
+  const Source extends SignalFirstObserverSourceConfig<InferOut<InputSchema>>,
 >(
-  config: SignalFirstObserverConfig<InputSchema, StateSchema, OutputSchema, Name>,
+  config: SignalFirstObserverConfig<InputSchema, StateSchema, OutputSchema, Name, Source>,
 ): ObserverDefinition<
   InputSchema,
   StateSchema,
   OutputSchema,
-  SignalFirstObserverSource<InferOut<InputSchema>>,
+  SignalFirstObserverSource<InferOut<InputSchema>, Source>,
   Name
 >;
 
@@ -373,6 +410,47 @@ export type ObserverSourceOf<Definition> =
   >
     ? Source
     : never;
+
+/** Trust policy retained by one exact observer endpoint. */
+type ObserverEndpointTrustPolicy<Endpoint> =
+  Endpoint extends { readonly trust: infer Trust extends ObserverTrustPolicy }
+    ? Trust
+    : Endpoint extends { readonly trust?: infer Trust }
+      ? Extract<Trust, ObserverTrustPolicy>
+      : never;
+
+/** Trust-policy union reachable from an observer source. */
+type ObserverTrustPoliciesOfSource<Source> =
+  Source extends {
+    readonly kind: "signal-first";
+    readonly signal: infer Signal;
+    readonly fallback: infer Fallback;
+  }
+    ? ObserverEndpointTrustPolicy<Signal> | ObserverEndpointTrustPolicy<Fallback>
+    : Source extends { readonly kind: "signal" }
+      ? ObserverEndpointTrustPolicy<Source>
+      : Source extends { readonly kind: "poll" }
+        ? ObserverEndpointTrustPolicy<Source>
+        : never;
+
+/** Whether any reachable observer completion endpoint may omit attested trust. */
+type ObserverSourceMayLackTrust<Source> =
+  Source extends { readonly kind: "signal-first"; readonly fallback: infer Fallback }
+    ? Fallback extends { readonly trust: ObserverTrustPolicy } ? false : true
+    : Source extends { readonly kind: "signal" }
+      ? false
+      : Source extends { readonly kind: "poll" }
+        ? Source extends { readonly trust: ObserverTrustPolicy } ? false : true
+        : true;
+
+/** Trust metadata and presence derived from an exact observer source. */
+type ObserverTrustMetadataOfSource<Source> =
+  | ObserverTrustMetadataOfPolicy<ObserverTrustPoliciesOfSource<Source>>
+  | (ObserverSourceMayLackTrust<Source> extends true ? undefined : never);
+
+/** Exact trust metadata reachable from one observer definition's retained source policy. */
+export type ObserverTrustMetadataOf<Definition> =
+  ObserverTrustMetadataOfSource<ObserverSourceOf<Definition>>;
 
 /**
  * Why: Recovers an observer definition's literal name for nominal subjects and provenance.
@@ -441,7 +519,7 @@ export type ObserverInvocationOptions =
  * Use: Keep signal-only, polling, and signal-first overrides mutually exclusive at call sites.
  */
 export type ObserverInvocationOptionsOf<Definition> =
-  ObserverSourceOf<Definition> extends SignalFirstObserverSource<infer _ParsedInput>
+  ObserverSourceOf<Definition> extends { readonly kind: "signal-first" }
     ? SignalFirstObserverInvocationOptions
     : ObserverSourceOf<Definition> extends PollObserverSource<infer _ParsedInput, infer _RawState>
       ? PollObserverInvocationOptions
@@ -462,6 +540,46 @@ export type ObserverStrategy = "poll" | "signal" | "signal-first";
  * Use: Pair it with `binding` and trust metadata in detailed provenance.
  */
 export type ObserverEndpointKind = "signal" | "poll" | "implemented-poll";
+
+/**
+ * Why: Maps one retained observer source branch to the strategy the engine must record.
+ * Use: It is the source-level implementation behind `ObserverStrategyOf`.
+ */
+type ObserverStrategyOfSource<Source> =
+  Source extends { readonly kind: "signal-first" }
+    ? "signal-first"
+    : Source extends { readonly kind: "signal" }
+      ? "signal"
+      : Source extends { readonly kind: "poll" }
+        ? "poll"
+        : ObserverStrategy;
+
+/**
+ * Why: Maps one retained observer source branch to only the endpoints capable of completing it.
+ * Use: It is the source-level implementation behind `ObserverEndpointOf`.
+ */
+type ObserverEndpointOfSource<Source> =
+  Source extends { readonly kind: "signal-first" }
+    ? "signal" | "poll"
+    : Source extends { readonly kind: "signal" }
+      ? "signal"
+      : Source extends ImplementedPollObserverSource<infer _ParsedInput, infer _RawState>
+        ? "implemented-poll"
+        : Source extends BoundPollObserverSource
+          ? "poll"
+          : ObserverEndpointKind;
+
+/**
+ * Why: Retains the exact strategy guaranteed by an observer definition instead of widening detailed provenance.
+ * Use: Apply it to a concrete `defineObserver` result or consume it through `DetailedObserverResult`.
+ */
+export type ObserverStrategyOf<Definition> = ObserverStrategyOfSource<ObserverSourceOf<Definition>>;
+
+/**
+ * Why: Retains only the completion endpoints reachable from an observer definition's exact source branch.
+ * Use: Apply it to a concrete `defineObserver` result or consume it through `DetailedObserverResult`.
+ */
+export type ObserverEndpointOf<Definition> = ObserverEndpointOfSource<ObserverSourceOf<Definition>>;
 
 /**
  * Why: Captures the identity values the engine accepted after schema validation and replay checks.
@@ -492,18 +610,38 @@ declare const observerProvenanceBrand: unique symbol;
  * Why: Records the one terminal winner, host adapter, established trust, accepted identity, and fallback path.
  * Use: Preserve it beside detailed output and evidence rather than trusting payload-shaped provenance fields.
  */
-export interface ObserverProvenance<Name extends string = string> {
+interface ObserverProvenanceBase<
+  Name extends string = string,
+  Strategy extends ObserverStrategy = ObserverStrategy,
+  Endpoint extends ObserverEndpointKind = ObserverEndpointKind,
+> extends NominalValue<readonly ["observer-provenance", Name, Strategy, Endpoint]> {
   readonly observer: Name;
-  readonly strategy: ObserverStrategy;
-  readonly endpoint: ObserverEndpointKind;
+  readonly strategy: Strategy;
+  readonly endpoint: Endpoint;
   readonly binding?: HostBinding;
-  readonly trust?: Readonly<ObserverTrustMetadata>;
   readonly identity?: Readonly<ObserverObservedIdentity>;
   readonly fallback?: Readonly<ObserverFallbackProvenance>;
   readonly startedAt: string;
   readonly completedAt: string;
   readonly [observerProvenanceBrand]: Name;
 }
+
+/** Required, optional, or absent provenance trust selected from the source. */
+type ObserverProvenanceTrustField<
+  Trust extends ObserverTrustMetadata | undefined,
+> = [Trust] extends [undefined]
+  ? { readonly trust?: never }
+  : undefined extends Trust
+    ? { readonly trust?: Readonly<Exclude<Trust, undefined>> }
+    : { readonly trust: Readonly<Trust> };
+
+/** Detailed observer provenance with source-derived trust presence and literals. */
+export type ObserverProvenance<
+  Name extends string = string,
+  Strategy extends ObserverStrategy = ObserverStrategy,
+  Endpoint extends ObserverEndpointKind = ObserverEndpointKind,
+  Trust extends ObserverTrustMetadata | undefined = ObserverTrustMetadata | undefined,
+> = ObserverProvenanceBase<Name, Strategy, Endpoint> & ObserverProvenanceTrustField<Trust>;
 
 /**
  * Why: Prevents copied observer names, inputs, and correlation strings from masquerading as an observed subject.
@@ -515,7 +653,8 @@ declare const observerSubjectBrand: unique symbol;
  * Why: Identifies one exact observer definition and validated input, plus correlation when identity is configured.
  * Use: Treat it as the subject of the detailed result's nominal evidence reference.
  */
-export interface ObserverSubject<Name extends string = string> {
+export interface ObserverSubject<Name extends string = string>
+  extends NominalValue<readonly ["observer-subject", Name]> {
   readonly observer: Name;
   readonly definitionDigest: string;
   readonly inputDigest: string;
@@ -533,10 +672,16 @@ declare const detailedObserverResultBrand: unique symbol;
  * Why: Returns validated output together with its exact observer subject, provenance, and digest-addressed evidence.
  * Use: Prefer it when observation results support promotion, compliance, or other consequential claims.
  */
-export interface DetailedObserverResult<Definition extends WorkflowNode<"weft.observer">> {
+export interface DetailedObserverResult<Definition extends WorkflowNode<"weft.observer">>
+  extends NominalValue<readonly ["observer-result", Definition]> {
   readonly output: ObserverOutputOf<Definition>;
   readonly subject: ObserverSubject<ObserverNameOf<Definition>>;
-  readonly provenance: ObserverProvenance<ObserverNameOf<Definition>>;
+  readonly provenance: ObserverProvenance<
+    ObserverNameOf<Definition>,
+    ObserverStrategyOf<Definition>,
+    ObserverEndpointOf<Definition>,
+    ObserverTrustMetadataOf<Definition>
+  >;
   readonly evidence: EvidenceRef<
     "observer",
     ObserverOutputOf<Definition>,

@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type Ctx,
   defineArtifact,
@@ -5,8 +7,7 @@ import {
   defineOperation,
   defineWorkflow,
   type WorkflowNode,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes the final definition contract visible without runtime test behavior. Use: Assert workflow inference. */
 declare function expectType<Type>(value: Type): void;
@@ -845,7 +846,7 @@ const compensatedReleaseWorkflow = defineWorkflow(
         : manualIntervention.length === 0
           ? ("compensated" as const)
           : ("compensation-failed" as const);
-    const recordedAt = await ctx.now();
+    const recordedAt = await ctx.now({ key: "release-recovery-evidence-recorded-at" });
     const evidence = await ctx.artifact(
       releaseEvidence,
       {

@@ -68,20 +68,11 @@ const DeliveryOutput = z.object({
 defineWorkflow(
   { id: "operation-observer-artifact", input: DeliveryInput, output: DeliveryOutput },
   async (ctx, input) => {
-    const candidate = await ctx.operation.prepare(openPullRequest, input, {
-      key: "prepare-pull-request",
-      label: "Freeze pull request input",
+    const pullRequest = await ctx.operation.run(openPullRequest, input, {
+      key: "open-pull-request",
+      label: "Open pull request",
+      authorization: { detail: `Open ${input.title} from ${input.branch}` },
     });
-    const authorization = await ctx.operation.authorize(openPullRequest, candidate, {
-      key: "authorize-pull-request",
-      label: "Authorize pull request creation",
-      detail: `Open ${input.title} from ${input.branch}`,
-    });
-    const pullRequest = await ctx.operation.execute(
-      openPullRequest,
-      { candidate, authorization },
-      { key: "open-pull-request", label: "Open pull request" },
-    );
 
     const ci = await ctx.observe(waitForCi, { pullRequest: pullRequest.number }, { key: "wait-for-ci" });
 

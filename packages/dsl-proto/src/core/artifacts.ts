@@ -2,12 +2,14 @@
 
 import type {
   AnySchema,
+  DefinitionTypeCarrier,
   EvidenceRef,
   InferIn,
   InferOut,
+  NominalValue,
   SubjectAttestation,
   WorkflowNode,
-  WorkspaceSubject,
+  WorkspaceSnapshotRef,
 } from "./shared.ts";
 
 // ---------------------------------------------------------------------------
@@ -137,20 +139,20 @@ declare const artifactRefBrand: unique symbol;
  */
 export interface ArtifactRefBase<
   Content,
-  Subject extends WorkspaceSubject | undefined = WorkspaceSubject | undefined,
+  Candidate extends WorkspaceSnapshotRef | undefined = WorkspaceSnapshotRef | undefined,
   Name extends string = string,
-> {
+> extends DefinitionTypeCarrier<{ content: Content }>,
+    NominalValue<readonly ["artifact", Name, Content, Candidate]> {
   readonly ref: string;
   readonly name: Name;
   readonly sha256: string;
   readonly size: number;
   readonly mediaType: string;
-  readonly subject: Subject;
+  readonly candidate: Candidate;
   readonly sources: readonly EvidenceRef[];
-  readonly attestation: Subject extends WorkspaceSubject
-    ? SubjectAttestation<"artifact", Content, Subject>
+  readonly attestation: Candidate extends WorkspaceSnapshotRef
+    ? SubjectAttestation<"artifact", Content, Candidate>
     : undefined;
-  readonly __content?: Content;
   readonly [artifactRefBrand]: Name;
 }
 
@@ -160,9 +162,9 @@ export interface ArtifactRefBase<
  */
 export interface ContentOnlyArtifactRef<
   Content,
-  Subject extends WorkspaceSubject | undefined = WorkspaceSubject | undefined,
+  Candidate extends WorkspaceSnapshotRef | undefined = WorkspaceSnapshotRef | undefined,
   Name extends string = string,
-> extends ArtifactRefBase<Content, Subject, Name> {
+> extends ArtifactRefBase<Content, Candidate, Name> {
   metadata?: never;
 }
 
@@ -173,9 +175,9 @@ export interface ContentOnlyArtifactRef<
 export interface MetadataArtifactRef<
   Content,
   Metadata,
-  Subject extends WorkspaceSubject | undefined = WorkspaceSubject | undefined,
+  Candidate extends WorkspaceSnapshotRef | undefined = WorkspaceSnapshotRef | undefined,
   Name extends string = string,
-> extends ArtifactRefBase<Content, Subject, Name> {
+> extends ArtifactRefBase<Content, Candidate, Name> {
   metadata: Metadata;
 }
 
@@ -185,16 +187,16 @@ export interface MetadataArtifactRef<
  */
 export type ArtifactRefOf<
   Definition,
-  Subject extends WorkspaceSubject | undefined = WorkspaceSubject | undefined,
+  Candidate extends WorkspaceSnapshotRef | undefined = WorkspaceSnapshotRef | undefined,
 > =
   Definition extends ArtifactDefinition<infer ContentSchema, infer MetadataSchema, infer Name>
     ? MetadataSchema extends AnySchema
-      ? MetadataArtifactRef<InferOut<ContentSchema>, InferOut<MetadataSchema>, Subject, Name>
-      : ContentOnlyArtifactRef<InferOut<ContentSchema>, Subject, Name>
+      ? MetadataArtifactRef<InferOut<ContentSchema>, InferOut<MetadataSchema>, Candidate, Name>
+      : ContentOnlyArtifactRef<InferOut<ContentSchema>, Candidate, Name>
     : never;
 
 /**
- * Why: Holds capture fields that do not depend on whether the artifact is bound to a workspace subject.
+ * Why: Holds capture fields that do not depend on whether the artifact is bound to a workspace candidate.
  * Use: Extend it through the bound or unbound capture-options branch.
  */
 export interface ArtifactCaptureOptionsBase {
@@ -204,39 +206,39 @@ export interface ArtifactCaptureOptionsBase {
 }
 
 /**
- * Why: Makes an exact workspace subject mandatory when capture should mint subject-bound artifact evidence.
- * Use: Pass the current nominal workspace subject; the returned reference retains it exactly.
+ * Why: Makes an exact workspace candidate mandatory when capture should mint candidate-bound artifact evidence.
+ * Use: Pass the current nominal workspace candidate; the host rejects drift before minting the bound reference.
  */
-export interface SubjectArtifactCaptureOptions<Subject extends WorkspaceSubject>
+export interface CandidateArtifactCaptureOptions<Candidate extends WorkspaceSnapshotRef>
   extends ArtifactCaptureOptionsBase {
-  subject: Subject;
+  candidate: Candidate;
 }
 
 /**
  * Why: Makes the absence of workspace authority explicit for artifacts such as global reports or logs.
- * Use: Omit `subject`; the returned reference has `subject` and `attestation` fixed to `undefined`.
+ * Use: Omit `candidate`; the returned reference has `candidate` and `attestation` fixed to `undefined`.
  */
 export interface UnboundArtifactCaptureOptions extends ArtifactCaptureOptionsBase {
-  subject?: undefined;
+  candidate?: undefined;
 }
 
 /**
- * Why: Selects the exact capture-options branch from the subject carried by an internal or generic invocation.
- * Use: Parameterize it with a nominal subject for bound capture or `undefined` for unbound capture.
+ * Why: Selects the exact capture-options branch from the candidate carried by an internal or generic invocation.
+ * Use: Parameterize it with a nominal candidate for bound capture or `undefined` for unbound capture.
  */
-export type ArtifactCaptureOptionsFor<Subject extends WorkspaceSubject | undefined> =
-  Subject extends WorkspaceSubject ? SubjectArtifactCaptureOptions<Subject> : UnboundArtifactCaptureOptions;
+export type ArtifactCaptureOptionsFor<Candidate extends WorkspaceSnapshotRef | undefined> =
+  Candidate extends WorkspaceSnapshotRef ? CandidateArtifactCaptureOptions<Candidate> : UnboundArtifactCaptureOptions;
 
 /**
- * Why: Exposes typed artifact capture while correlating an exact optional subject with the returned reference.
- * Use: Supply a subject for attested workspace evidence, or omit it for an explicitly unbound artifact.
+ * Why: Exposes typed artifact capture while correlating an exact optional candidate with the returned reference.
+ * Use: Supply a candidate for attested workspace evidence, or omit it for an explicitly unbound artifact.
  */
 export interface ArtifactFn {
-  <Definition extends WorkflowNode<"weft.artifact">, Subject extends WorkspaceSubject>(
+  <Definition extends WorkflowNode<"weft.artifact">, Candidate extends WorkspaceSnapshotRef>(
     definition: Definition,
     input: ArtifactCaptureInputOf<Definition>,
-    options: SubjectArtifactCaptureOptions<Subject>,
-  ): Promise<ArtifactRefOf<Definition, Subject>>;
+    options: CandidateArtifactCaptureOptions<Candidate>,
+  ): Promise<ArtifactRefOf<Definition, Candidate>>;
   <Definition extends WorkflowNode<"weft.artifact">>(
     definition: Definition,
     input: ArtifactCaptureInputOf<Definition>,

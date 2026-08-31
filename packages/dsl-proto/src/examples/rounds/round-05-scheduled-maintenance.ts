@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   defineAgent,
   defineCheck,
@@ -14,8 +16,7 @@ import {
   type TriggerOutputOf,
   type TriggerRunProvenance,
   type WorkflowNode,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes compile-time workflow assertions readable without adding runtime behavior. Use: Pass inferred DSL values to it in this typechecked example. */
 declare function expectType<Type>(value: Type): void;
@@ -346,13 +347,11 @@ const MaintenanceTaskExtension = z.object({
   candidatePatchRef: z.string().min(1).nullable(),
 });
 
-/** Why: Gives cross-run dedupe records a versioned domain payload without turning the task store into a scheduler lease. Use: Upsert by the host-attested dedupe key. */
+/** Why: Gives cross-run dedupe records a validated domain payload without turning the task store into a scheduler lease. Use: Upsert by the host-attested dedupe key. */
 type MaintenanceTaskExtensionValue = z.infer<typeof MaintenanceTaskExtension>;
 
 const maintenanceTasks = defineTaskContract({
   schema: MaintenanceTaskExtension,
-  revision: "scheduled-maintenance-v1",
-  version: 1,
   agentAccess: false,
 });
 
@@ -495,7 +494,6 @@ const scheduledMaintenanceWorkflow = defineWorkflow(
         candidatePatchRef: null,
       };
       await ctx.tasks.upsert({
-        key: "record-maintenance-dedupe",
         dedupeKey: launch.dispatch.dedupeKey,
         set: {
           title: `Scheduled maintenance: ${launch.request.repository}`,
@@ -508,7 +506,7 @@ const scheduledMaintenanceWorkflow = defineWorkflow(
           extensions: taskExtension,
         },
         note: `Coalesced ${launch.coalescedScheduledFor.length} scheduled occurrence(s).`,
-      });
+      }, { key: "record-maintenance-dedupe" });
     }
 
     const claimed = await ctx.tasks.observe(
@@ -523,39 +521,34 @@ const scheduledMaintenanceWorkflow = defineWorkflow(
       throw new Error("Durable maintenance task is not owned by this scheduler dispatch");
     }
 
-    const edits = ctx.all(
-      await ctx.parallel(
-        launch.request.targets,
-        async (target) => {
-          const writeScope = await ctx.paths.resolve(
-            maintenanceWritePolicy,
-            { proposedPaths: [`${target.packagePath}/**`] },
-            {
-              key: `resolve-write:${target.packageName}`,
-              label: `Resolve maintenance paths for ${target.packageName}`,
-            },
-          );
-          return ctx.agent({
-            key: `maintain:${target.packageName}`,
-            label: `Maintain ${target.packageName}`,
-            agent: packageMaintainer,
-            input: {
-              repository: launch.request.repository,
-              baseRef: launch.request.baseRef,
-              windowKey: launch.request.windowKey,
-              target,
-            },
-            write: writeScope,
-            context: [launchSnapshot],
-          });
-        },
-        {
-          key: "maintain-packages",
-          keyOf: (target) => target.packageName,
-          concurrency: launch.policy.targetConcurrency,
-          errors: "throw",
-        },
-      ),
+    const edits = await ctx.parallel.all(
+      launch.request.targets,
+      async (target, lane) => {
+        const writeScope = await lane.ctx.paths.resolve(
+          maintenanceWritePolicy,
+          { proposedPaths: [`${target.packagePath}/**`] },
+          {
+            key: `resolve-write:${target.packageName}`,
+            label: `Resolve maintenance paths for ${target.packageName}`,
+          },
+        );
+        return lane.ctx.agent(packageMaintainer, {
+          repository: launch.request.repository,
+          baseRef: launch.request.baseRef,
+          windowKey: launch.request.windowKey,
+          target,
+        }, {
+          key: `maintain:${target.packageName}`,
+          label: `Maintain ${target.packageName}`,
+          write: writeScope,
+          context: [launchSnapshot],
+        });
+      },
+      {
+        key: "maintain-packages",
+        keyOf: (target) => target.packageName,
+        concurrency: launch.policy.targetConcurrency,
+      },
     );
     expectType<Array<PatchAgentResult<MaintenanceEditValue>>>(edits);
     edits.forEach((edit, index) => {
@@ -600,42 +593,42 @@ const scheduledMaintenanceWorkflow = defineWorkflow(
       async (candidateCtx): Promise<VerifiedMaintenanceCandidate> => {
         await candidateCtx.apply(
           edits.map(({ patch }) => patch),
-          { order: "sequential", onConflict: "fail" },
+          { key: "apply-maintenance-edits", order: "sequential", onConflict: "fail" },
         );
 
-        const verification = ctx.all(
-          await candidateCtx.parallel(
-            launch.request.targets,
-            async (target) => {
-              const result = await candidateCtx.check(
-                packageMaintenanceVerification,
-                { packageName: target.packageName, target: target.verification },
-                { key: `verify:${target.packageName}`, policy: "required" },
-              );
-              if (result.status !== "pass") {
-                throw new Error(`Scheduled maintenance verification failed for ${target.packageName}`);
-              }
-              return {
-                packageName: target.packageName,
-                target: target.verification,
-                status: "pass" as const,
-                attestationRef: result.attestation.ref,
-              };
-            },
-            {
-              key: "verify-maintained-packages",
-              keyOf: (target) => target.packageName,
-              concurrency: launch.policy.verificationConcurrency,
-              errors: "throw",
-            },
-          ),
+        const verification = await candidateCtx.parallel.all(
+          launch.request.targets,
+          async (target, lane) => {
+            const result = await lane.ctx.check(
+              packageMaintenanceVerification,
+              { packageName: target.packageName, target: target.verification },
+              { key: `verify:${target.packageName}`, policy: "required" },
+            );
+            if (result.status !== "pass") {
+              throw new Error(`Scheduled maintenance verification failed for ${target.packageName}`);
+            }
+            return {
+              packageName: target.packageName,
+              target: target.verification,
+              status: "pass" as const,
+              attestationRef: result.attestation.ref,
+            };
+          },
+          {
+            key: "verify-maintained-packages",
+            keyOf: (target) => target.packageName,
+            concurrency: launch.policy.verificationConcurrency,
+          },
         );
         const captureScope = await candidateCtx.paths.resolve(
           maintenanceWritePolicy,
           { proposedPaths: changedFiles },
           { key: "resolve-maintenance-capture", label: "Resolve verified maintenance files" },
         );
-        const patch = await candidateCtx.capture({ scope: captureScope });
+        const patch = await candidateCtx.capture({
+          key: "capture-maintenance-candidate",
+          scope: captureScope,
+        });
         return { patch, verification };
       },
     );
@@ -663,6 +656,7 @@ const scheduledMaintenanceWorkflow = defineWorkflow(
     );
 
     await ctx.note({
+      key: "record-maintenance-candidate",
       kind: "claim",
       text: `Scheduled maintenance produced candidate ${candidate.patch.ref}.`,
       evidence: `Scheduler: ${launchSnapshot.evidence.ref}\nTrigger: ${ctx.run.trigger?.admissionRef ?? "direct-authoritative-launch"}\nDispatch: ${launch.dispatch.id}\nDedupe: ${launch.dispatch.dedupeKey}`,
@@ -676,7 +670,7 @@ const scheduledMaintenanceWorkflow = defineWorkflow(
       verification: candidate.verification,
       candidatePatch: {
         ref: candidate.patch.ref,
-        files: candidate.patch.files,
+        files: [...candidate.patch.files],
         baseTree: candidate.patch.baseTree,
       },
     };

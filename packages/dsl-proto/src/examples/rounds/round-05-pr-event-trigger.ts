@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   defineAgent,
   defineCheck,
@@ -14,8 +16,7 @@ import {
   type TriggerOutputOf,
   type WorkflowNode,
   type WorkspaceSnapshotRef,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes the final workflow contract visible to the typechecker without adding runtime behavior. Use: Assert the inferred definition at the end of the example. */
 declare function expectType<Type>(value: Type): void;
@@ -343,7 +344,7 @@ const ReviewFindingSchema = z.object({
   evidence: z.string().min(1),
 });
 
-/** Why: Names one schema-validated review finding for the exact-subject review evaluator. Use: Preserve it through assessment and workflow output. */
+/** Why: Names one schema-validated review finding for the exact-candidate review evaluator. Use: Preserve it through assessment and workflow output. */
 type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
 
 const ReviewReportSchema = z.object({
@@ -384,7 +385,7 @@ const eventReviewer = defineAgent({
   },
 });
 
-/** Why: Assigns explicit dispositions without allowing the model to decide acceptance policy. Use: Return it from the reusable exact-subject review definition. */
+/** Why: Assigns explicit dispositions without allowing the model to decide acceptance policy. Use: Return it from the reusable exact-candidate review definition. */
 function toReviewEvaluation(report: ReviewReport): ReviewEvaluation<ReviewFinding> {
   return {
     summary: report.summary,
@@ -403,20 +404,20 @@ const exactEventReview = defineReview({
   input: ReviewTargetSchema,
   finding: ReviewFindingSchema,
   evaluate: async (ctx, input) => {
-    const report = await ctx.agent({ key: "review", agent: eventReviewer, input });
+    const report = await ctx.agent(eventReviewer, input, { key: "review" });
     return toReviewEvaluation(report.value);
   },
   accept: ({ assessments }) => assessments.every(({ disposition }) => disposition !== "blocking"),
 });
 
-const WorkspaceSubjectSchema = z.object({
+const WorkspaceSnapshotSchema = z.object({
   workspaceId: z.string().min(1),
   generation: z.number().int().nonnegative(),
   treeHash: z.string().min(1),
 });
 
-/** Why: Names the serializable projection of nominal workspace identity. Use: Return it for diagnostics without reconstructing authority from it. */
-type WorkspaceSubject = z.infer<typeof WorkspaceSubjectSchema>;
+/** Why: Names the serializable projection of an engine-minted workspace snapshot. Use: Return it for diagnostics without reconstructing authority from it. */
+type WorkspaceSnapshotValue = z.infer<typeof WorkspaceSnapshotSchema>;
 
 const CodingOutcomeSchema = z.object({
   status: z.enum(["accepted", "rework"]),
@@ -428,7 +429,7 @@ const CodingOutcomeSchema = z.object({
   checksPassed: z.literal(true),
   reviewEvidence: z.string().min(1),
   findings: z.array(ReviewFindingSchema),
-  subject: WorkspaceSubjectSchema,
+  snapshot: WorkspaceSnapshotSchema,
 });
 
 /** Why: Names the validated child result stored in the delivery ledger and returned by intake. Use: Preserve it across the parent workflow boundary. */
@@ -443,27 +444,12 @@ function branchSegment(value: string): string {
   return normalized || "event";
 }
 
-/** Why: Compares nominal subjects without projecting them into substitute authority. Use: Reject workspace drift across checks and review. */
-function requireSameSubject(
-  actual: WorkspaceSnapshotRef,
-  expected: WorkspaceSnapshotRef,
-  label: string,
-): void {
-  if (
-    actual.workspaceId !== expected.workspaceId ||
-    actual.generation !== expected.generation ||
-    actual.treeHash !== expected.treeHash
-  ) {
-    throw new Error(`${label} did not preserve the exact workspace subject`);
-  }
-}
-
 /** Why: Makes nominal workspace identity serializable for workflow output only. Use: Never pass the projection back into an authority-consuming API. */
-function projectSubject(subject: WorkspaceSnapshotRef): WorkspaceSubject {
+function projectSnapshot(snapshot: WorkspaceSnapshotRef): WorkspaceSnapshotValue {
   return {
-    workspaceId: subject.workspaceId,
-    generation: subject.generation,
-    treeHash: subject.treeHash,
+    workspaceId: snapshot.workspaceId,
+    generation: snapshot.generation,
+    treeHash: snapshot.treeHash,
   };
 }
 
@@ -495,41 +481,38 @@ const eventCodingWorkflow = defineWorkflow(
         { proposedPaths: input.allowedPaths },
         { key: "resolve-issue-write-scope", label: `Resolve paths for issue #${input.issueNumber}` },
       );
-      const implementation = await ctx.agent({
+      const implementation = await ctx.agent(issueImplementer, {
+        issueNumber: input.issueNumber,
+        title: input.title,
+        body: input.body,
+        allowedPaths: input.allowedPaths,
+        acceptanceCriteria: input.acceptanceCriteria,
+        eventEvidenceRef: input.eventEvidenceRef,
+        policyEvidenceRef: input.policyEvidenceRef,
+      }, {
         key: "implement-issue",
-        agent: issueImplementer,
-        input: {
-          issueNumber: input.issueNumber,
-          title: input.title,
-          body: input.body,
-          allowedPaths: input.allowedPaths,
-          acceptanceCriteria: input.acceptanceCriteria,
-          eventEvidenceRef: input.eventEvidenceRef,
-          policyEvidenceRef: input.policyEvidenceRef,
-        },
         write: writeScope,
       });
       if (implementation.files.length === 0) throw new Error("Issue implementation changed no files");
-      changedFiles = implementation.files;
+      changedFiles = [...implementation.files];
       wroteChanges = true;
     } else {
-      const head = await ctx.git.head();
+      const head = await ctx.git.head({ key: "read-pr-head" });
       if (head.sha !== input.headSha) {
         throw new Error(`Pull request workspace is at ${head.sha}, expected ${input.headSha}`);
       }
-      const changed = await ctx.git.changedSince(input.baseSha);
+      const changed = await ctx.git.changedSince(input.baseSha, { key: "read-pr-changes" });
       if (changed.files.length === 0) throw new Error("Pull request contains no changed files to review");
       changedFiles = changed.files.map(({ path }) => path);
       wroteChanges = false;
     }
 
-    const subject = ctx.workspace.subject;
+    const candidate = ctx.workspace.snapshot;
     const quality = await ctx.check(
       eventQuality,
       { testCommand: input.testCommand, lintCommand: input.lintCommand },
-      { keyPrefix: "event-quality", policy: "required", concurrency: 2 },
+      { key: "event-quality", policy: "required", concurrency: 2 },
     );
-    requireSameSubject(quality.subject, subject, "Quality suite");
     if (!quality.passed) throw new Error("Required event quality checks failed");
 
     const identifier =
@@ -547,10 +530,8 @@ const eventCodingWorkflow = defineWorkflow(
         eventEvidenceRef: input.eventEvidenceRef,
         policyEvidenceRef: input.policyEvidenceRef,
       },
-      { key: "exact-event-review", label: `Review ${identifier}`, subject },
+      { key: "exact-event-review", label: `Review ${identifier}`, candidate },
     );
-    requireSameSubject(review.subject, subject, "Review");
-
     return {
       status: review.status,
       kind: input.kind,
@@ -561,7 +542,7 @@ const eventCodingWorkflow = defineWorkflow(
       checksPassed: true,
       reviewEvidence: review.evidence,
       findings: review.assessments.map(({ finding }) => finding),
-      subject: projectSubject(subject),
+      snapshot: projectSnapshot(candidate),
     };
   },
 );

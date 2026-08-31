@@ -12,7 +12,7 @@ language constructs developers already know:
 - `await` creates a sequential dependency;
 - `if` selects a branch from validated data;
 - bounded loops express rework;
-- `ctx.parallel` and `ctx.pipeline` create controlled fan-out;
+- `ctx.parallel` today—and prototype `.all` / `.settled` and pipelines—create controlled fan-out;
 - schemas define the values crossing every important step;
 - journaled context operations make work replayable and resumable.
 
@@ -38,6 +38,41 @@ Both are design-preview software. The difference is more specific than “stable
 - prototype examples must never be copied into the SDK and assumed to run unchanged.
 
 Every example below is labeled **Runnable SDK**, **DSL prototype**, or **Conceptual model** for that reason.
+
+## Prototype update: one agent call, clearer workspace language
+
+The next Weft DSL prototype revision is now represented in this working tree. It is not a published runtime
+release: the package still emits types only, and the proposed host behavior still needs an implementation.
+
+The headline is “less ceremony, stronger defaults.” Instead of choosing among separate agent methods, authors
+use one function and describe only what changes:
+
+```ts
+const plan = await ctx.agent(planner, issue, { key: "plan" });
+
+const implementation = await ctx.agent(implementer, plan.value, {
+  key: "implement",
+  write: writeScope,
+});
+
+const optionalReview = await ctx.agent(reviewer, implementation.value, {
+  key: "optional-review",
+  failure: "return",
+});
+```
+
+The first call reads and returns a required result. The second adds a write grant. The third asks for failure as
+data, so it returns an `AgentOutcome` that can be narrowed with `ok`. Inputless reusable agents omit the middle
+argument, and a one-off prompt uses `ctx.agent({ prompt, schema }, { key })`.
+
+Workspace language is similarly direct. `ctx.workspace.snapshot` answers “what state exists now?” The value is
+called a `candidate` when checks, review, artifact capture, or delivery act on it. Those operations must reject a
+stale candidate and must reject evidence produced for another candidate as part of their own atomic host
+transition. Ordinary workflows do not need to remember freshness assertion calls.
+
+Two smaller cleanups complete the revision: `ctx.step` is the only durable grouping concept, pipeline side
+effects are named with `.mapEffect(...)`, and short-lived task contracts no longer ask authors to maintain
+versions, contract revisions, or migration chains.
 
 ## When Weft is a good fit
 
@@ -283,9 +318,9 @@ sequential delivery workflows:
 | --- | --- |
 | One isolated worktree per writing agent step | One workflow-owned candidate branch may span several steps |
 | Write scope is declared directly on the call | `definePathPolicy` is resolved into a nominal grant |
-| Agent result carries a patch | Local workspace operations advance a generation subject |
+| Agent result carries a patch | Local workspace operations advance a generation snapshot |
 | `ctx.integrate` explicitly applies selected patches | Checks, review, and artifacts attest the current generation |
-| Remote publication uses today's available effects and workflow policy | `defineDelivery` freezes evidence and authorizes exact-subject promotion |
+| Remote publication uses today's available effects and workflow policy | `defineDelivery` freezes evidence and authorizes exact-candidate promotion |
 
 The workflow-owned branch model is a design direction, not a claim about the currently shipped default.
 A real runtime still has to persist or reconstruct that workspace, invalidate evidence on every mutation,
@@ -303,7 +338,8 @@ It is deliberately declaration-only:
 - importing and calling the Weft declarations at runtime is unsupported;
 - examples are compiler fixtures and design experiments.
 
-The only concrete runtime export is Zod, re-exported so schemas and type inference are realistic.
+The build emits declarations only and package entrypoints expose only TypeScript's `types` condition. The source
+barrel's Zod re-export exists for compiler-fixture ergonomics; it is not a package runtime export.
 
 ### A taxonomy of definitions
 
@@ -314,12 +350,43 @@ The prototype organizes reusable definitions by the engine boundary they describ
 | Authoring | prompt, agent, recipe, goal, workflow | model roles, reusable orchestration, completion goals, workflow I/O |
 | Context and authority | context source, path policy | trusted reads and engine-minted write scope |
 | Verification | check, check suite, review, artifact | deterministic results, semantic assessment, immutable evidence |
-| External lifecycle | operation, delivery, observer, trigger | atomic effects, exact-subject promotion, durable waits, authenticated admission |
+| External lifecycle | operation, delivery, observer, trigger | atomic effects, exact-candidate promotion, durable waits, authenticated admission |
 | Interaction and state | task contract, UI view, result view | durable work records and schema-backed human presentation |
 
 There are 18 public `define*` factories across 17 `WorkflowNodeKind` values. The count difference comes from
 closely related factories sharing a node family. The more important property is that every returned definition
 is a `WorkflowNode` while retaining its exact name, schemas, policy, and other definition-specific types.
+
+### The ordinary authoring facade
+
+The prototype keeps common workflows direct and puts orthogonal agent behavior in one options object:
+
+| Intent | Preferred prototype syntax | Contract made visible |
+| --- | --- | --- |
+| Required read-only model result | `ctx.agent(definition, input, { key })` | Always returns an agent result |
+| Authorized model edit | `ctx.agent(definition, input, { key, write })` | Write authority and patch semantics are explicit |
+| Recoverable model call | `ctx.agent(definition, input, { key, failure: "return" })` | Returns an exhaustive `AgentOutcome` |
+| One-off model result | `ctx.agent({ prompt, schema }, { key })` | Inline and reusable definitions share one call shape |
+| Protected external effect | `ctx.operation.run(...)` | Runs the definition's fixed authorization policy |
+| Recoverable external effect | `ctx.operation.runRecoverable(withRecovery(...), ...)` | Registers cleanup before dispatch and returns an exhaustive commit classification |
+| Verified promotion | `ctx.delivery.run(...)` | Requires positive proof for the same candidate before authorization |
+| Required fan-out | `ctx.parallel.all(items, run, { key, keyOf })` | Fail-fast result collection with stable lane identity |
+| Inspected fan-out | `ctx.parallel.settled(items, run, { key, keyOf })` | Failure remains a value the workflow must inspect |
+
+One-shot operation, recoverable operation, and delivery calls do not erase their internal type-state. They give
+one logical effect a stable parent key; a conforming engine derives prepare, authorize, registration, dispatch,
+and cleanup subkeys as applicable. `withRecovery` is a typed wrapper, not another runtime node: it binds mandatory
+direct cleanup and optional success-only compensation to the existing primary operation. Code that genuinely
+needs nominal candidates, authorizations, attempts, recovery state, or receipts imports the comprehensive
+`defineWorkflow` context and those contracts from `@techery/weft-dsl-proto/advanced`. The package root context
+exposes direct and one-shot protected effects, including declaratively bound recovery, and is curated around ordinary definition builders, result
+types, context views, and inference helpers instead of mirroring the entire core.
+
+Named context views also make authority visible in helper signatures: `WorkflowCtx` has read-only repository
+access, `WorkspaceCtx` has bounded local mutation, and `ReviewCtx` is reduced to observation, read-only agents,
+and diagnostics. Workflow definitions carry their callback relationships in a hidden type bag; use
+`typeof workflow`, `InputOf`, `OutputOf`, `WorkflowInputOf`, `WorkflowOutputOf`, or `WorkflowContract` rather than
+exposing the implementation callback through an annotated definition.
 
 ## Case study: issue to reviewed pull request
 
@@ -402,10 +469,8 @@ const issue = await ctx.context(
   { key: "issue" },
 );
 
-const planResult = await ctx.agent({
+const planResult = await ctx.agent(planner, issue.value, {
   key: "plan",
-  agent: planner,
-  input: issue.value,
   context: [issue],
 });
 const plan = planResult.value;
@@ -416,32 +481,35 @@ const writeScope = await ctx.paths.resolve(
   { key: "write-scope" },
 );
 
-await ctx.agent({
-  key: "implement",
-  agent: implementer,
-  input: { issue: issue.value, plan },
-  context: [issue],
-  write: writeScope,
-});
+await ctx.agent(
+  implementer,
+  { issue: issue.value, plan },
+  {
+    key: "implement",
+    context: [issue],
+    write: writeScope,
+  },
+);
 ```
 
 The issue body can influence planning, but it cannot mint write authority. The path list returned by the
 planner is only a proposal. `ctx.paths.resolve` asks the host to canonicalize it against a revisioned policy
-and returns a nominal `WriteScope` only after approval. Likewise, the context definition's trust setting is a
-required floor, not proof: consequential code must still inspect the trust level and authority the host
-actually established on the returned snapshot.
+and returns a nominal `WriteScope` only after approval. The source's enforced trust floor, accepted authority
+literals, and reject-stale guarantee are retained in the snapshot type. That precision is a runtime
+postcondition: the future host must validate the observation before minting the snapshot; the declaration alone
+does not authenticate data.
 
 ### 3. Verify one exact candidate
 
 **DSL prototype — abridged**
 
 ```ts
-const subject = ctx.workspace.subject;
+const candidate = ctx.workspace.snapshot;
 
 const checks = await ctx.check(quality, {
-  keyPrefix: "quality",
+  key: "quality",
   policy: "required",
-  subject,
+  candidate,
 });
 
 if (!checks.passed) {
@@ -450,7 +518,7 @@ if (!checks.passed) {
 
 const review = await ctx.review(candidateReview, reviewInput, {
   key: "review",
-  subject,
+  candidate,
 });
 
 if (review.status !== "accepted") {
@@ -458,11 +526,12 @@ if (review.status !== "accepted") {
 }
 ```
 
-The `subject` is an engine-minted reference to one workspace generation, including its identity and tree hash.
-Checks and review preserve that subject in their attestations. If another agent or local Git operation mutates
-the workspace, the runtime must treat the new generation as different and reject stale evidence. TypeScript can
-also reject cross-generation mixing when callers preserve distinct refined subject types, but ordinary
-`WorkspaceSnapshotRef` values still require runtime identity comparison.
+The snapshot is an engine-minted reference to one workspace generation, including its identity and tree hash.
+Naming it `candidate` describes the role it now plays: it is the exact state being evaluated. Checks and review
+preserve that candidate in their results and positive proof handles. If another agent or local Git operation
+mutates the workspace, the host must reject the stale candidate atomically. It must also reject proofs minted for
+a different candidate. Advanced lifecycle code can use `sameSnapshot(left, right)` or
+`assertUnchanged(snapshot)` for an explicit diagnostic probe, but ordinary workflows do not need those calls.
 
 ### 4. Capture the dossier and deliver
 
@@ -481,44 +550,31 @@ const dossier = await ctx.artifact(
   },
   {
     key: "delivery-dossier",
-    subject,
+    candidate,
     sources: [issue.evidence, checks.attestation, review.attestation],
   },
 );
 
-const candidate = await ctx.delivery.prepare(
+const receipt = await ctx.delivery.run(
   pullRequestDelivery,
   {
-    subject,
+    key: "deliver",
+    candidate,
     input: pullRequestInput,
-    evidence: [
-      checks.attestation,
-      review.attestation,
-      dossier.attestation,
-    ],
+    proofs: [checks.proof, review.proof],
     artifacts: [dossier],
+    attempts: 2,
+    authorization: {
+      detail: `Publish checked tree ${candidate.treeHash}.`,
+    },
   },
-  { key: "prepare-delivery" },
-);
-
-const authorization = await ctx.delivery.authorize(
-  pullRequestDelivery,
-  candidate,
-  {
-    key: "authorize-delivery",
-    detail: `Publish checked tree ${subject.treeHash}.`,
-  },
-);
-
-const receipt = await ctx.delivery(
-  pullRequestDelivery,
-  { candidate, authorization },
-  { key: "deliver", attempts: 2 },
 );
 ```
 
-Preparation freezes the exact subject, provider input, evidence, and artifacts. Authorization applies to that
-candidate, not to a broad future permission. Execution returns a receipt correlated with the same candidate.
+The positive `proof` handles exist only on passing checks and accepted reviews; a failure, waiver, artifact, or
+arbitrary attestation cannot promote a candidate. The one-shot facade still contracts for an internal freeze,
+candidate-bound authorization, and receipt correlated with the same candidate. Use the `/advanced` lifecycle
+types only when workflow policy needs to interpose between those stages.
 
 This is intentionally more explicit than `git push` followed by an API call. Verification, review,
 authorization, and publication are different trust transitions. Making them visible is what lets a runtime
@@ -534,13 +590,35 @@ The case study follows a useful progression:
 | `ContextSnapshot` | Fresh host-observed value with provenance | Permission to mutate |
 | `WriteScope` | Engine-minted path authority under one policy revision | Proof that an edit is correct |
 | `WorkspaceSnapshotRef` | Identity of one exact workspace generation | Verification or publication authority |
-| Check/review/artifact attestation | Evidence tied to that subject | Approval for a consequential effect |
-| Promotion candidate | Frozen subject, input, evidence, and artifacts | Authorization to execute |
+| Check/review/goal proof | Positive evidence tied to that candidate | Approval for a consequential effect |
+| Artifact or other attestation | Supporting provenance tied to a candidate or other subject | Positive promotion proof |
+| Promotion candidate | Frozen snapshot, input, proofs, and artifacts | Authorization to execute |
 | Authorization reference | Candidate-specific host authority | Proof that execution succeeded |
-| Delivery receipt | Schema-validated execution and subject attestation | Permission to reuse it for another candidate |
+| Delivery receipt | Schema-validated execution and candidate attestation | Permission to reuse it for another candidate |
 
 This ladder prevents a common collapse in agent systems where “the model said it,” “the test passed,” “a
 person clicked approve,” and “the provider performed it” are all represented as similar-looking JSON.
+
+Branch decisions remain deliberately below effect authorization:
+
+```ts
+const policy = await ctx.policy.decide({
+  key: "choose-release-path",
+  action: "Continue with the release workflow",
+  risk: "medium",
+});
+
+const human = await ctx.human.confirm({
+  key: "confirm-release-window",
+  action: "Continue during the current release window",
+});
+```
+
+`policy.outcome` and `human.confirmed` can select ordinary TypeScript branches. Neither value can be passed as
+authorization for a protected operation or delivery; only those effect APIs can mint authority for a frozen
+candidate. `ctx.human.review` separately accepts either a file request or an immutable artifact reference and
+preserves which subject the reviewer actually saw; that attributable answer is still evidence, not effect
+authority.
 
 ## Definitions are not executions
 
@@ -567,10 +645,10 @@ Promise<Output>
 Why not simply call `internalEngine.execute(anyNode)`?
 
 A node alone does not always describe one input/output transformation. A delivery definition participates in
-three different transformations:
+three internal transformations even when ordinary code uses the one-shot facade:
 
 ```text
-prepare:   subject + delivery input + evidence → promotion candidate
+prepare:   snapshot + delivery input + positive proofs → promotion candidate
 authorize: promotion candidate              → authorization reference
 execute:   candidate + authorization         → delivery receipt
 ```
@@ -579,36 +657,30 @@ An observer has output-only and detailed-provenance invocation modes. A child wo
 validated value or a detailed receipt. A UI definition can request input or render output. The input/output
 relationship therefore belongs to the **bound invocation**, not to the inert definition in isolation.
 
-**Conceptual model**
+**DSL prototype — ordinary author syntax**
 
 ```ts
 // Too little information: no mode, input, durable key, or execution context.
 internalEngine.execute(pullRequestDelivery); // rejected
 
-// The public DSL binds three concrete invocations with three concrete outputs.
-const candidate = await ctx.delivery.prepare(
+// One logical call; the engine must bind and journal all three lifecycle stages.
+const receipt = await ctx.delivery.run(
   pullRequestDelivery,
-  preparation,
-  { key: "prepare" },
-);
-
-const authority = await ctx.delivery.authorize(
-  pullRequestDelivery,
-  candidate,
-  { key: "authorize" },
-);
-
-const receipt = await ctx.delivery(
-  pullRequestDelivery,
-  { candidate, authorization: authority },
-  { key: "execute" },
+  {
+    key: "publish",
+    candidate,
+    input: pullRequestInput,
+    proofs: [checks.proof, review.proof],
+    authorization: { detail: "Publish the verified generation." },
+  },
 );
 ```
 
-Internally, the prototype has a closed union of 27 invocation kinds. An implementation can exhaustively switch
-over that union while a generic `execute()` preserves the exact output of the concrete invocation it receives.
-Primitive filesystem, task, human, and local Git effects remain a separate host/journal layer; they are not
-forced into public reusable nodes merely to make the dispatcher look uniform.
+Advanced helpers may instead name the explicit candidate, authorization, and execution stages with contracts
+from `@techery/weft-dsl-proto/advanced`. Internally, the prototype has a closed invocation union. An
+implementation can exhaustively switch over it while a generic `execute()` preserves the exact output of the
+concrete invocation it receives. Primitive filesystem, task, human, and local Git effects remain a separate
+host/journal layer; they are not forced into public reusable nodes merely to make the dispatcher look uniform.
 
 ## Ordinary TypeScript owns orchestration
 
@@ -636,18 +708,20 @@ for (let attempt = 1; attempt <= 3; attempt += 1) {
     { key: `attempt:${attempt}:paths` },
   );
 
-  await ctx.agent({
-    key: `attempt:${attempt}:implement`,
-    agent: implementer,
-    input: { issue: issue.value, plan, attempt, feedback },
-    context: [issue],
-    write,
-  });
+  await ctx.agent(
+    implementer,
+    { issue: issue.value, plan, attempt, feedback },
+    {
+      key: `attempt:${attempt}:implement`,
+      context: [issue],
+      write,
+    },
+  );
 
-  const subject = ctx.workspace.subject;
+  const candidate = ctx.workspace.snapshot;
   const quality = await ctx.check(qualitySuite, {
-    keyPrefix: `attempt:${attempt}:quality`,
-    subject,
+    key: `attempt:${attempt}:quality`,
+    candidate,
   });
 
   if (!quality.passed) {
@@ -660,11 +734,11 @@ for (let attempt = 1; attempt <= 3; attempt += 1) {
 
   const review = await ctx.review(candidateReview, reviewInput, {
     key: `attempt:${attempt}:review`,
-    subject,
+    candidate,
   });
 
   if (review.status === "accepted") {
-    return { status: "ready", subject, quality, review };
+    return { status: "ready", candidate, quality, review };
   }
 
   feedback.push(
@@ -678,8 +752,9 @@ for (let attempt = 1; attempt <= 3; attempt += 1) {
 return { status: "blocked", reason: "rework-exhausted" };
 ```
 
-Every mutation is followed by a fresh subject lookup and fresh evidence. The loop has a visible bound. Expected
-exhaustion becomes a typed domain result instead of being confused with a host crash or invalid adapter output.
+Every mutation is followed by a fresh snapshot lookup and fresh candidate-bound evidence. The loop has a visible
+bound. Expected exhaustion becomes a typed domain result instead of being confused with a host crash or invalid
+adapter output.
 
 ### Parallel discovery
 
@@ -688,26 +763,50 @@ Use parallel work for independent reads and retain the provenance of each result
 **DSL prototype — abridged**
 
 ```ts
-const settled = await ctx.parallel(
-  [
-    () =>
-      ctx.context(repositorySource, repositoryInput, {
-        key: "context:repository",
-      }),
-    () =>
-      ctx.context(releaseSource, releaseInput, {
-        key: "context:release",
-      }),
-  ],
-  { key: "context", concurrency: 2, errors: "throw" },
+const settled = await ctx.parallel.settled(
+  ["repository", "release"] as const,
+  (source, lane) =>
+    source === "repository"
+      ? lane.context(repositorySource, repositoryInput, {
+          key: lane.key("read"),
+        })
+      : lane.context(releaseSource, releaseInput, {
+          key: lane.key("read"),
+        }),
+  {
+    key: "context",
+    keyOf: (source) => source,
+    concurrency: 2,
+  },
 );
 
 const snapshots = ctx.all(settled);
 ```
 
 The [refined dependency migration](./src/examples/refined/dependency-migration.ts) shows the full pattern:
-authoritative parallel discovery, deterministic plan construction, one rework pass, exact-subject checks and
+authoritative parallel discovery, deterministic plan construction, one rework pass, exact-candidate checks and
 review, an attested dossier, and authorized pull-request delivery.
+
+Pipelines make the same distinction between pure data shaping and durable work:
+
+```ts
+const reports = await ctx
+  .pipeline(packages)
+  .map((pkg) => ({ pkg, manifest: normalizeManifest(pkg.manifest) }))
+  .mapEffect("inspect", (prepared, _pkg, lane) =>
+    lane.agent(dependencyInspector, prepared, {
+      key: lane.key("agent"),
+    }),
+  )
+  .all({
+    key: "inspect-packages",
+    keyOf: (pkg) => pkg.name,
+    concurrency: 4,
+  });
+```
+
+`map` and `filter` are synchronous transforms. A side effect belongs in a named `mapEffect`, and the terminal
+`.all` or `.settled` call states whether lane failure aborts the fan-out or remains data for explicit policy.
 
 ## Focused lifecycle patterns
 
@@ -789,6 +888,10 @@ cancels the losing endpoint. Cancelling this wait does not itself cancel the rem
 a separately registered provider cancellation operation. See the complete
 [deployment observation example](./src/examples/rounds/round-05-deployment-observation.ts).
 
+When a context source declares an authority allow-list, its returned trust metadata retains those literal
+authorities instead of widening immediately to `string`. This is again a host-enforced postcondition, not
+evidence manufactured by the declaration.
+
 ### Exact definitions replace string dispatch
 
 **DSL prototype**
@@ -813,7 +916,7 @@ const receipt = await ctx.workflow.detailed(
 ```
 
 A detailed receipt contains the validated value, child run identity, input and output digests, an optional
-workspace subject when the exact child owns a workspace, and nominal workflow-run evidence. The
+workspace snapshot when the exact child owns a workspace, and nominal workflow-run evidence. The
 [typed registry example](./src/examples/rounds/round-07-typed-workflow-registry.ts) shows how an exhaustive
 discriminated union preserves those relationships even under dynamic routing.
 
@@ -835,27 +938,23 @@ const publishRelease = defineOperation({
   },
 });
 
-const candidate = await ctx.operation.prepare(
+const output = await ctx.operation.run(
   publishRelease,
   input,
-  { key: "publish:prepare" },
-);
-
-const authorization = await ctx.operation.authorize(
-  publishRelease,
-  candidate,
-  { key: "publish:authorize" },
-);
-
-const output = await ctx.operation.execute(
-  publishRelease,
-  { candidate, authorization },
-  { key: "publish:execute", attempts: 1 },
+  {
+    key: "publish",
+    attempts: 1,
+    authorization: {
+      detail: "Publish the validated release payload.",
+    },
+  },
 );
 ```
 
 The caller cannot lower `risk` to `"low"` and cannot call a protected definition through the direct overload.
-Candidate and authorization references are nominally paired with each other and with the exact definition.
+The one-shot call contracts for candidate-specific authorization and engine-derived lifecycle subkeys. Advanced
+code can import the explicit candidate and authorization contracts from `/advanced`; those references remain
+nominally paired with each other and with the exact definition.
 
 ### Recoverable operations represent uncertainty
 
@@ -894,8 +993,14 @@ Not every reusable piece needs a new node kind.
 | Child workflow | Work needs its own input/output contract, run identity, budget, task scope, or workspace ownership | Parent invokes an exact definition and may retain a detailed child receipt |
 | New `define*` node | The concept needs reusable identity or a real engine/host boundary | It joins the closed node and invocation algebra |
 
-This rule kept the API concise during the ten rounds. Helpers, loops, factories, registries, and branching
+This rule kept the API concise during the eleven rounds. Helpers, loops, factories, registries, and branching
 remain ordinary TypeScript unless a real trust or execution boundary justifies more machinery.
+
+Durable task state follows the same rule. Task contracts are deliberately small because tasks belong to a running
+workflow, not a permanent public data model: they declare an extension schema and optional agent access. There is
+no author-facing task version, contract revision, or migration chain. An engine-owned row revision still prevents
+stale optimistic updates, and `dedupeKey` still makes a retried upsert converge. If an older run cannot resume
+safely against the exact workflow build that created it, the host should fail closed or restart it.
 
 ## What TypeScript proves—and what it cannot
 
@@ -906,16 +1011,18 @@ The prototype aims for maximum accidental-misuse prevention, not a security proo
 | Schema input/output | Connect exact declared input and output types | Parse and validate actual bytes and adapter values |
 | Definition identity | Preserve literal names, IDs, revisions, and schemas | Resolve the registered definition and its digest |
 | Write authority | Reject ordinary objects and path arrays as `WriteScope` | Canonicalize paths; mint, constrain, expire, and validate the grant |
-| Workspace subject | Preserve exact subject generics through results | Compute workspace identity, generation, head, and tree hash |
-| Evidence | Prevent accidental cross-subject pairing | Execute checks/reviews and mint honest attestations |
+| Workspace candidate | Preserve exact candidate generics through results | Compute workspace identity, generation, head, and tree hash |
+| Evidence | Prevent accidental cross-candidate pairing | Execute checks/reviews and mint honest attestations |
 | Authorization | Prevent candidate/definition swapping | Authenticate policy or approver, enforce expiry, and consume authority |
 | Secrets | Expose an opaque nominal handle rather than a value | Store, scope, redact, rotate, and resolve the secret |
 | Replay | Require explicit keys on consequential APIs | Hash definitions and inputs, journal outcomes, detect divergence, and replay |
 | Recovery | Force code to branch on uncertainty | Probe provider state, perform registered cleanup, and classify commit state |
 | Trigger admission | Preserve exact event and workflow relationships | Authenticate, deduplicate, atomically claim, and launch |
 
-Unsafe casts, `any`, or a dishonest declaration file can bypass TypeScript. Nominal brands make accidental
-construction difficult; the runtime must ensure only the engine can mint values that carry those brands.
+Unsafe casts, `any`, dishonest declaration files, and generic intersection helpers such as a broadly typed
+`Object.assign` wrapper can bypass TypeScript. Private-member nominal identity rejects ordinary construction and
+direct spread rewriting, but the runtime must still ensure only the engine can mint values and must revalidate
+registry identity, digests, subjects, policy, and expiry whenever a nominal value enters a consequential boundary.
 
 ### Compiler rejection: a path list is not authority
 
@@ -941,41 +1048,46 @@ const realScope = await ctx.paths.resolve(
 **DSL prototype**
 
 ```ts
-type CandidateSubject = WorkspaceSnapshotRef & {
+type CandidateSnapshot = WorkspaceSnapshotRef & {
   readonly workspaceId: "candidate-workspace";
   readonly generation: 1;
 };
 
-type LaterSubject = WorkspaceSnapshotRef & {
+type LaterSnapshot = WorkspaceSnapshotRef & {
   readonly workspaceId: "candidate-workspace";
   readonly generation: 2;
 };
 
-declare const candidateSubject: CandidateSubject;
-declare const laterSubject: LaterSubject;
+declare const candidate: CandidateSnapshot;
+declare const laterCandidate: LaterSnapshot;
 
 const checks = await ctx.check(requiredChecks, {
-  keyPrefix: "candidate-checks",
-  subject: candidateSubject,
+  key: "candidate-checks",
+  candidate,
 });
 
-await ctx.delivery.prepare(
+if (!checks.passed) {
+  throw new Error("candidate did not pass required checks");
+}
+
+await ctx.delivery.run(
   pullRequestDelivery,
   {
-    subject: laterSubject,
+    key: "deliver-wrong-generation",
+    candidate: laterCandidate,
     input: pullRequestInput,
-    evidence: [
-      // @ts-expect-error The check attestation belongs to candidateSubject.
-      checks.attestation,
+    proofs: [
+      // @ts-expect-error The positive proof belongs to candidate.
+      checks.proof,
     ],
+    authorization: {},
   },
-  { key: "prepare-wrong-generation" },
 );
 ```
 
-The exactness is strongest when workflow code retains the refined engine-minted subject type. Unbound checks
-remain available, but they intentionally return a broader `WorkspaceSubject` and cannot claim a caller-selected
-generation after the fact.
+The exactness is strongest when workflow code retains the refined engine-minted snapshot type. Unbound checks
+remain available, but they intentionally return a broad `WorkspaceSnapshotRef` and cannot claim a caller-selected
+candidate after the fact.
 
 ### Compiler rejection: protected calls cannot skip type-state
 
@@ -989,21 +1101,39 @@ await ctx.operation(publishRelease, input, {
 ```
 
 These negative examples live as real `@ts-expect-error` fixtures in
-[round 8](./src/examples/rounds/round-08-adversarial-types.ts) and
-[round 10](./src/examples/rounds/round-10-subject-soundness.ts). Type checking fails if an unsafe call starts
-compiling or if an expected-safe call stops compiling.
+[round 8](./src/examples/rounds/round-08-adversarial-types.ts),
+[round 10](./src/examples/rounds/round-10-subject-soundness.ts), and the focused
+[round 11 regressions](./src/examples/rounds/round-11-type-safety-regressions.ts). Type checking fails if an
+unsafe call starts compiling or if an expected-safe call stops compiling.
 
 ## Failure is part of the contract
 
 Different failures should not collapse into one thrown string.
+
+```ts
+const attempt = await ctx.agent(dependencyInspector, input, {
+  key: "optional-analysis",
+  failure: "return",
+});
+
+if (!attempt.ok) {
+  return { status: "blocked", reason: attempt.error.kind };
+}
+
+const analysis = attempt.result.value;
+```
+
+The call stays the same; only the failure policy changes. Provider, validation, budget, timeout, cancellation,
+and goal-exhaustion diagnostics remain available instead of collapsing into `null`.
 
 | Situation | Recommended representation |
 | --- | --- |
 | Expected business outcome, such as no eligible issue or exhausted rework | Typed workflow output such as `{ status: "blocked", reason }` |
 | Invalid schema output or unavailable required host binding | Step or run failure |
 | Caller, parent, deadline, or policy cancellation | Engine-admitted cancellation, not a successful workflow output |
-| Check failure under a non-waivable policy | Failed exact-subject result; block promotion |
-| Eligible check exception | Host-minted, revisioned, expiring waiver tied to the exact failed check and subject |
+| Check failure under a non-waivable policy | Failed exact-candidate result; block promotion |
+| Eligible check exception | Host-minted, revisioned, expiring waiver tied to the exact failed check and candidate |
+| Optional agent call | `ctx.agent(..., { failure: "return" })` result narrowed by `ok` |
 | Remote effect proven not committed | Typed `retryable` or `terminal` result |
 | Remote effect may have committed | Typed `ambiguous` result plus cleanup/reconciliation evidence |
 | Compensation may have committed | Preserve its own ambiguous result; do not report a clean rollback |
@@ -1012,20 +1142,20 @@ Cancellation is cooperative in workflow code through `ctx.cancellation`, but the
 authority. Catching an abort cannot convert a cancelled run into success.
 
 Waivers are default-deny. A check must declare a stable revision and an eligible host policy before
-`ctx.check.authorize` accepts its failure. The resulting waiver remains tied to the exact executed failure and
-workspace subject.
+`ctx.check.authorizeWaiver` accepts its failure. The resulting waiver remains tied to the exact executed failure and
+workspace candidate.
 
-## How ten workflow rounds improved the original prototype
+## How eleven workflow rounds improved the original prototype
 
 The first version was already strict TypeScript. It had schemas, named declarations, JSDoc, and a common
-`WorkflowNode`. The ten-round exercise changed something deeper: what the types *mean*.
+`WorkflowNode`. The eleven-round exercise changed something deeper: what the types *mean*.
 
 ### 1. Structural values became nominal capabilities
 
-Earlier shapes allowed workflow code to construct objects that looked like workspace subjects, write scopes,
+Earlier shapes allowed workflow code to construct objects that looked like workspace snapshots, write scopes,
 patches, or secret handles.
 
-The refined version uses unique-symbol brands for engine-minted subjects, grants, evidence, candidates,
+The refined version uses unique-symbol brands for engine-minted snapshots, grants, evidence, candidates,
 authorizations, waivers, patches, receipts, and secret handles. Matching fields are no longer enough.
 
 ### 2. Verification became generation-bound
@@ -1033,10 +1163,10 @@ authorizations, waivers, patches, receipts, and secret handles. Matching fields 
 An earlier check could be “green” without encoding which tree it checked. Artifact and review results were also
 easy to separate from the workspace state they described.
 
-Checks, suites, reviews, goals, artifacts, waivers, and deliveries now preserve their workspace-subject type.
-When callers retain distinct refined subject types, `NoInfer<Subject>` prevents TypeScript from widening them
-merely to make a delivery call compile. Broad `WorkspaceSnapshotRef` values still require runtime identity
-comparison.
+Checks, suites, reviews, goals, artifacts, waivers, and deliveries now preserve their workspace-candidate type.
+When callers retain distinct refined candidate types, `NoInfer<Candidate>` prevents TypeScript from widening them
+merely to make a delivery call compile. The future host still performs the authoritative freshness and identity
+checks atomically.
 
 ### 3. Definition identity survives inference
 
@@ -1051,15 +1181,17 @@ prototype. Exact definitions, not strings, drive child-workflow calls.
 
 The original operation shape was directly callable, and invocation code could select the risk level.
 
-Risk and authorization now belong to definitions. Protected operations require
-prepare → authorize → execute. Recoverable operations additionally distinguish pre-dispatch registration,
-proven non-commit, ambiguous commit state, conditional cleanup, and receipt-only compensation.
+Risk and authorization now belong to definitions. Ordinary protected calls use `ctx.operation.run`, while the
+advanced contract retains prepare → authorize → execute. Recoverable operations additionally distinguish
+pre-dispatch registration, proven non-commit, ambiguous commit state, conditional cleanup, and receipt-only
+compensation.
 
 ### 5. Context, admission, and observation became separate boundaries
 
 Agent prompts and trigger payloads are not automatically authoritative business data.
 
-`defineContextSource` declares explicit freshness and trust policy and returns host-attested metadata.
+`defineContextSource` declares explicit freshness and trust policy and returns host-attested metadata whose type
+retains the enforced trust floor, accepted authority literals, and freshness postcondition.
 `defineTrigger` describes authenticated and deduplicated workflow admission. `defineObserver` describes a
 durable, identity-aware wait for terminal external state. Keeping them separate prevents a valid ingress event
 from becoming permanent authority or a poll response from becoming unattributed evidence.
@@ -1099,7 +1231,7 @@ They did not add nodes for ordinary branching, loops, catalogs, modules, or prog
 
 ### 10. The examples became executable type-system tests
 
-The final package includes three canonical refined workflows and 30 additional base, round, and internal-engine
+The package includes three canonical refined workflows and more than 30 base, round, and internal-engine
 examples. They cover issue delivery, security remediation, dependency migration, flaky tests, monorepo
 refactors, hotfixes, cross-repository programs, CI repair, event admission, observation, waivers, cancellation,
 recovery, and adversarial type construction.
@@ -1107,9 +1239,22 @@ recovery, and adversarial type construction.
 The examples are not decorative snippets. They are compiled under the package's strict configuration and act
 as regression tests for inference and rejection behavior.
 
+### 11. Orthogonal choices became explicit
+
+The final assessment found six compiler-confirmed holes: independently inferred goal input, `undefined`-based
+input presence, unsafe widened agent options, custom providers overlapping built-ins, arbitrary attestations
+counting as promotion evidence, and nullable agent failure. Round 11 closes each one with a strict negative
+fixture.
+
+The same audit simplified ordinary authoring. Agent read, write, and optional failure use one `ctx.agent`
+function with `write` and `failure` options; operations and deliveries retain one-shot `run`; parallel and
+pipeline terminals choose `all` or `settled`; and pure pipeline `map` is visibly distinct from a named durable
+`mapEffect`. `ctx.step` is the only durable grouping concept. Named context views and hidden definition type bags
+reduce generic noise without exposing executable callbacks.
+
 ## What we deliberately did not add
 
-Ten rounds also removed or rejected tempting abstractions.
+Eleven rounds also removed or rejected tempting abstractions.
 
 There is no `defineModule`, `defineProgram`, catalog node, fixed reviewer hierarchy, automatic rework loop,
 implicit artifact capture, implicit delivery, generic saga node, or workflow-authored error classifier.
@@ -1139,8 +1284,8 @@ The prototype enables the full TypeScript strict family and several additional c
 - no unchecked side-effect imports.
 
 Public signatures prefer named input, option, result, and helper types over anonymous inline shapes. Every
-public type and declaration function includes `Why` and `Use` JSDoc, and a package script verifies that
-documentation contract.
+public type and declaration function has JSDoc, while longer `Why` and `Use` explanations are reserved for
+trust, authority, replay, and proof invariants. A package script verifies that documentation contract.
 
 Strict flags alone do not create a sound DSL. Their value is that they expose places where the semantic model
 is vague: optional subjects, widened identities, structurally forgeable authority, incomplete unions, and
@@ -1161,8 +1306,8 @@ pnpm --filter @techery/weft-dsl-proto pack
 Then:
 
 1. open [the refined issue workflow](./src/examples/refined/issue-to-reviewed-pr.ts);
-2. trace one subject from `ctx.workspace.subject` through checks, review, artifact, and delivery;
-3. open [the adversarial type fixtures](./src/examples/rounds/round-08-adversarial-types.ts);
+2. trace one candidate from `ctx.workspace.snapshot` through checks, review, artifact, and delivery;
+3. open [the focused Round 11 type fixtures](./src/examples/rounds/round-11-type-safety-regressions.ts);
 4. remove one `@ts-expect-error` or try to pass the wrong authorization to a candidate;
 5. run `typecheck` and read the compiler's explanation;
 6. add a small reusable definition at module scope and invoke it through the appropriate `ctx` API.
@@ -1174,7 +1319,7 @@ For a broader tour:
 - [dependency migration](./src/examples/refined/dependency-migration.ts) demonstrates parallel discovery,
   deterministic planning, rework, and delivery;
 - [the prototype contract](./PROTOTYPE.md) explains module boundaries and declaration conventions;
-- [the ten-round design record](./DESIGN-ROUNDS.md) records accepted changes, DX findings, and rejected ideas;
+- [the eleven-round design record](./DESIGN-ROUNDS.md) records accepted changes, DX findings, and rejected ideas;
 - [the current SDK context reference](../../docs/workflow-context-reference.md) documents runnable `ctx`
   behavior.
 
@@ -1185,8 +1330,10 @@ For a broader tour:
 | Definition | Inert reusable contract returned by a `define*` function |
 | `WorkflowNode` | Common nominal base for all public definitions |
 | Invocation | One definition bound to mode, input, key, options, and execution context |
-| Subject | Exact engine-observed thing that evidence describes, often a workspace generation |
-| Attestation | Nominal evidence tied to a subject |
+| Subject | General engine-observed thing that evidence describes, such as a child run or human-reviewed artifact |
+| Workspace snapshot | Engine-minted identity of one exact workspace generation |
+| Attestation | Nominal evidence tied to a subject or candidate; not necessarily positive promotion proof |
+| Promotion proof | Engine-minted passing check, accepted review, or successful goal proof tied to one candidate |
 | Write scope | Engine-minted authority to mutate canonical paths under one policy |
 | Candidate | Frozen proposed consequential effect |
 | Authorization | Host-minted authority for one exact candidate |

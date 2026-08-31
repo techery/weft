@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type CheckExecutionResult,
   type CheckSuiteResult,
@@ -15,8 +17,7 @@ import {
   type PatchRef,
   prompt,
   type WorkflowNode,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes compile-time assertions visible in the example without adding runtime behavior. Use: Pass an inferred DSL value to verify its exact public type. */
 declare function expectType<T>(value: T): void;
@@ -264,20 +265,22 @@ const issueToPatchWorkflow = defineWorkflow(
     output: IssuePatchOutput,
   },
   async (ctx, issue) => {
-    const implementation = await ctx.phase("Implement", async (phase) => {
-      const writeScope = await phase.paths.resolve(
+    const implementation = await ctx.step("implement", async (step) => {
+      const writeScope = await step.paths.resolve(
         issuePatchPaths,
         { proposedPaths: issue.allowedPaths },
         { key: "issue-write-scope", label: `Resolve paths for ${issue.id}` },
       );
-      return phase.agent({
-        key: "issue-developer",
-        label: `Fix ${issue.id}`,
-        agent: issueDeveloper,
-        input: { issue },
-        write: writeScope,
-        goal: { definition: issueCompletion, input: { issue }, attempts: 3 },
-      });
+      return step.agent(
+        issueDeveloper,
+        { issue },
+        {
+          key: "issue-developer",
+          label: `Fix ${issue.id}`,
+          write: writeScope,
+          goal: { definition: issueCompletion, input: { issue }, attempts: 3 },
+        },
+      );
     });
 
     expectType<PatchAgentResult<ImplementationResultValue, typeof implementation.goal>>(implementation);
@@ -310,6 +313,7 @@ const issueToPatchWorkflow = defineWorkflow(
     expectType<MetadataArtifactRef<string, EvidenceMetadataValue>>(evidence);
 
     await ctx.note({
+      key: "record-reviewed-patch",
       kind: "claim",
       text: `${issue.id} has a reviewed patch awaiting an explicit integration decision.`,
       evidence: `${implementation.goal.evidence}\nArtifact: ${evidence.ref}`,
@@ -319,11 +323,11 @@ const issueToPatchWorkflow = defineWorkflow(
       issueId: issue.id,
       summary: implementation.value.summary,
       rootCause: implementation.value.rootCause,
-      changedFiles: implementation.patch.files,
+      changedFiles: [...implementation.patch.files],
       patch: {
         ref: implementation.patch.ref,
         key: implementation.patch.key,
-        files: implementation.patch.files,
+        files: [...implementation.patch.files],
         baseTree: implementation.patch.baseTree,
       },
       evidence: { ref: evidence.ref, sha256: evidence.sha256 },

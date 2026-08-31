@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type CheckResultOf,
   defineAgent,
@@ -13,8 +15,7 @@ import {
   type PatchAgentResult,
   type PatchRef,
   type WorkflowNode,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /**
  * Why: Makes compile-time assertions readable without adding runtime behavior to the declaration prototype.
@@ -142,7 +143,7 @@ type ApiDiscoveryOutput = OperationOutputOf<typeof discoverApiGraph>;
 
 /**
  * Why: Names the schema-validated domain output inside each writer's operational patch envelope.
- * Use: Assert exact `ctx.parallel` and `ctx.all` inference for detached package edits.
+ * Use: Assert exact `ctx.parallel.all` inference for detached package edits.
  */
 type PackageEditOutput = z.infer<typeof PackageEditOutputSchema>;
 
@@ -363,51 +364,43 @@ const monorepoApiRefactorWorkflow = defineWorkflow(
     expectType<ApiDiscoveryOutput>(discovery);
     assertTopologicalTargets(discovery);
 
-    const workItems = ctx.all(
-      await ctx
-        .pipeline(discovery.targets)
-        .filter((target) => shouldRefactorTarget(target, input))
-        .map((target): PackageWorkItem => toPackageWorkItem(target, input, discovery))
-        .step((workItem): PackageWorkItem => {
-          if (workItem.writePaths.length === 0) throw new Error("A writer lane has no proposed paths");
-          return workItem;
-        })
-        .run({
-          key: "prepare-package-work",
-          keyOf: (target) => target.packageName,
-          concurrency: 8,
-          errors: "throw",
-        }),
-    );
+    const workItems = await ctx
+      .pipeline(discovery.targets)
+      .filter((target) => shouldRefactorTarget(target, input))
+      .map((target): PackageWorkItem => toPackageWorkItem(target, input, discovery))
+      .mapEffect("require-write-paths", (workItem): PackageWorkItem => {
+        if (workItem.writePaths.length === 0) throw new Error("A writer lane has no proposed paths");
+        return workItem;
+      })
+      .all({
+        key: "prepare-package-work",
+        keyOf: (target) => target.packageName,
+        concurrency: 8,
+      });
     expectType<PackageWorkItem[]>(workItems);
 
-    const edits = ctx.all(
-      await ctx.parallel(
-        workItems,
-        async (workItem) => {
-          const writeScope = await ctx.paths.resolve(
-            monorepoRefactorWritePolicy,
-            { proposedPaths: workItem.writePaths },
-            {
-              key: `resolve-write:${workItem.target.packageName}`,
-              label: `Resolve ${workItem.target.packageName} write paths`,
-            },
-          );
-          return ctx.agent({
-            key: `edit:${workItem.target.packageName}`,
-            label: `Refactor ${workItem.target.packageName}`,
-            agent: packageRefactorAgent,
-            input: workItem.input,
-            write: writeScope,
-          });
-        },
-        {
-          key: "package-edits",
-          keyOf: (workItem) => workItem.target.packageName,
-          concurrency: 6,
-          errors: "throw",
-        },
-      ),
+    const edits = await ctx.parallel.all(
+      workItems,
+      async (workItem) => {
+        const writeScope = await ctx.paths.resolve(
+          monorepoRefactorWritePolicy,
+          { proposedPaths: workItem.writePaths },
+          {
+            key: `resolve-write:${workItem.target.packageName}`,
+            label: `Resolve ${workItem.target.packageName} write paths`,
+          },
+        );
+        return ctx.agent(packageRefactorAgent, workItem.input, {
+          key: `edit:${workItem.target.packageName}`,
+          label: `Refactor ${workItem.target.packageName}`,
+          write: writeScope,
+        });
+      },
+      {
+        key: "package-edits",
+        keyOf: (workItem) => workItem.target.packageName,
+        concurrency: 6,
+      },
     );
     expectType<PatchAgentResult<PackageEditOutput>[]>(edits);
 
@@ -422,7 +415,7 @@ const monorepoApiRefactorWorkflow = defineWorkflow(
       async (candidateCtx): Promise<CandidateResult> => {
         await candidateCtx.apply(
           edits.map((edit) => edit.patch),
-          { order: "sequential", onConflict: "fail" },
+          { key: "apply-package-edits", order: "sequential", onConflict: "fail" },
         );
 
         const verification = await candidateCtx.sequence(
@@ -430,7 +423,7 @@ const monorepoApiRefactorWorkflow = defineWorkflow(
           {
             key: "verify-packages",
             keyOf: (workItem) => workItem.target.packageName,
-            phase: (workItem) => `dependency-level-${workItem.target.dependencyLevel}`,
+            labelOf: (workItem) => `dependency-level-${workItem.target.dependencyLevel}`,
           },
           async (workItem, scope): Promise<PackageVerificationOutput> => {
             const quality = await scope.ctx.check(
@@ -439,7 +432,7 @@ const monorepoApiRefactorWorkflow = defineWorkflow(
                 packageName: workItem.target.packageName,
                 verificationCommand: workItem.target.verificationCommand,
               },
-              { keyPrefix: scope.key("quality"), concurrency: 2 },
+              { key: scope.key("quality"), concurrency: 2 },
             );
             if (!quality.passed) {
               throw new Error(`Candidate verification failed for ${workItem.target.packageName}`);
@@ -467,12 +460,13 @@ const monorepoApiRefactorWorkflow = defineWorkflow(
           { proposedPaths: [...new Set(workItems.flatMap((workItem) => workItem.writePaths))] },
           { key: "resolve-candidate-capture", label: "Resolve composed candidate paths" },
         );
-        const patch = await candidateCtx.capture({ scope: captureScope });
+        const patch = await candidateCtx.capture({ key: "capture-composed-candidate", scope: captureScope });
         return { patch, verification, contract };
       },
     );
 
     const integration = await ctx.integrate([candidate.patch], {
+      key: "integrate-composed-candidate",
       order: "sequential",
       onConflict: "fail",
     });
@@ -485,7 +479,7 @@ const monorepoApiRefactorWorkflow = defineWorkflow(
       candidatePatch: {
         ref: candidate.patch.ref,
         key: candidate.patch.key,
-        files: candidate.patch.files,
+        files: [...candidate.patch.files],
         baseTree: candidate.patch.baseTree,
       },
       verification: candidate.verification,

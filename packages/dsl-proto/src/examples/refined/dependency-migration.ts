@@ -1,7 +1,6 @@
 import {
   type CheckCommand,
   type ContextSnapshotOf,
-  type Ctx,
   defineAgent,
   defineArtifact,
   defineCheck,
@@ -12,7 +11,8 @@ import {
   definePrompt,
   defineReview,
   defineWorkflow,
-  type WorkspaceSnapshotRef,
+  type ReviewCtx,
+  type WorkspaceCtx,
   z,
 } from "../../index.ts";
 
@@ -137,7 +137,7 @@ type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
 /** Why: Names input bound to one committed candidate. Use: Rebuild it after rework changes the head. */
 type ReviewInput = z.infer<typeof ReviewInputSchema>;
 /** Why: Restricts writer helpers to the workflow-owned isolated tree. Use: Do not pass a plain run context. */
-type MigrationWorkspace = Ctx<unknown, unknown, true>;
+type MigrationWorkspace = WorkspaceCtx;
 const repositorySource = defineContextSource({
   name: "refined-dependency-repository",
   input: z.object({ repository: z.string(), dependency: z.string() }),
@@ -170,30 +170,38 @@ function requireAuthority(snapshot: DiscoverySnapshot, authority: string): void 
 }
 /** Why: Resolves independent repository and registry facts in bounded parallel lanes. Use: Run before planning and review. */
 async function discoverContext(
-  ctx: Ctx<any, any, any>,
+  ctx: Pick<ReviewCtx, "context" | "parallel">,
   request: MigrationRequest,
   key: string,
 ): Promise<DiscoveryBundle> {
-  const settled = await ctx.parallel<DiscoverySnapshot>(
-    [
-      () =>
+  const queries: ReadonlyArray<{ key: string; run: () => Promise<DiscoverySnapshot> }> = [
+    {
+      key: "repository",
+      run: () =>
         ctx.context(
           repositorySource,
           { repository: request.repository, dependency: request.dependency },
           { key: `${key}:repository` },
         ),
-      () =>
+    },
+    {
+      key: "release",
+      run: () =>
         ctx.context(
           releaseSource,
           { dependency: request.dependency, version: request.targetVersion },
           { key: `${key}:release` },
         ),
-    ],
-    { key, concurrency: 2, errors: "throw" },
+    },
+  ];
+  const snapshots = await ctx.parallel.all(
+    queries,
+    (query) => query.run(),
+    { key, keyOf: (query) => query.key, concurrency: 2 },
   );
   let repository: DiscoveryBundle["repository"] | undefined;
   let release: DiscoveryBundle["release"] | undefined;
-  for (const snapshot of ctx.all(settled)) {
+  for (const snapshot of snapshots) {
     if (snapshot.source === repositorySource.name) repository = snapshot;
     else release = snapshot;
   }
@@ -244,16 +252,6 @@ function proposedPaths(packages: readonly RepositoryPackage[]): string[] {
     "pnpm-lock.yaml",
     ...packages.flatMap((item) => (item.path === "." ? [] : [`${item.path}/**`])),
   ];
-}
-/** Why: Compares complete nominal generation projections between verification stages. Use: Reject candidate drift. */
-function requireSameSubject(actual: WorkspaceSnapshotRef, expected: WorkspaceSnapshotRef): void {
-  if (
-    actual.workspaceId !== expected.workspaceId ||
-    actual.generation !== expected.generation ||
-    actual.treeHash !== expected.treeHash
-  ) {
-    throw new Error("Candidate workspace changed after verification");
-  }
 }
 const writePolicy = definePathPolicy({
   name: "refined-dependency-writes",
@@ -319,10 +317,8 @@ const review = defineReview({
   evaluate: async (ctx, input) => {
     const current = await discoverContext(ctx, input.request, "review-context");
     if (current.repository.value.headSha !== input.baseHead) throw new Error("Base advanced before review");
-    const result = await ctx.agent({
+    const result = await ctx.agent(reviewer, input, {
       key: "review-agent",
-      agent: reviewer,
-      input,
       context: [current.repository, current.release],
     });
     return {
@@ -348,23 +344,22 @@ async function writeAndCommit(
     { proposedPaths: proposedPaths(packages) },
     { key: `${key}:paths` },
   );
-  const result = await ctx.agent({
+  const result = await ctx.agent(implementer, {
+    request,
+    repository: discovery.repository.value,
+    release: discovery.release.value,
+    plan,
+    blockingFindings: [...findings],
+  }, {
     key,
-    agent: implementer,
-    input: {
-      request,
-      repository: discovery.repository.value,
-      release: discovery.release.value,
-      plan,
-      blockingFindings: [...findings],
-    },
     context: [discovery.repository, discovery.release],
     write: scope,
   });
   const paths = [...new Set(result.files)];
   if (paths.length === 0) throw new Error("Writer produced no changes");
-  await ctx.git.add({ paths });
+  await ctx.git.add({ key: `${key}:git-add`, paths });
   const commit = await ctx.git.commit({
+    key: `${key}:git-commit`,
     message: `${key === "implement" ? "chore" : "fix"}(deps): ${request.dependency} ${request.targetVersion}`,
     paths,
   });
@@ -372,15 +367,15 @@ async function writeAndCommit(
 }
 /** Why: Binds required checks and review to one candidate generation. Use: Repeat after rework creates a new generation. */
 async function verifyCandidate(ctx: MigrationWorkspace, input: ReviewInput, key: string) {
-  const subject = ctx.workspace.subject;
+  const snapshot = ctx.workspace.snapshot;
   const quality = await ctx.check(checks, {
-    keyPrefix: `${key}:checks`,
+    key: `${key}:checks`,
     policy: "required",
-    subject,
+    candidate: snapshot,
   });
   if (!quality.passed) throw new Error("Required checks failed");
-  const assessment = await ctx.review(review, input, { key: `${key}:review`, subject });
-  return { subject, quality, assessment };
+  const assessment = await ctx.review(review, input, { key: `${key}:review`, candidate: snapshot });
+  return { snapshot, quality, assessment };
 }
 const dossierDefinition = defineArtifact({
   name: "refined-dependency-dossier",
@@ -409,7 +404,7 @@ function segment(value: string): string {
       .replaceAll(/^-|-$/g, "") || "unknown"
   );
 }
-/** Why: Demonstrates the shortest sound path from authoritative discovery to exact-subject delivery. Use: Launch one exact package migration. */
+/** Why: Demonstrates the shortest sound path from authoritative discovery to exact-candidate delivery. Use: Launch one exact package migration. */
 const dependencyMigrationWorkflow = defineWorkflow(
   {
     id: "refined-dependency-migration",
@@ -427,7 +422,9 @@ const dependencyMigrationWorkflow = defineWorkflow(
     const eligible = eligiblePackages(input, discovery.repository.value.packages);
     const plan = buildPlan(input, discovery.release.value, eligible);
     let head = await writeAndCommit(ctx, input, discovery, plan, eligible, [], "implement");
-    let changed = await ctx.git.changedSince(discovery.repository.value.headSha);
+    let changed = await ctx.git.changedSince(discovery.repository.value.headSha, {
+      key: "initial-changed-since-base",
+    });
     let reviewInput: ReviewInput = {
       request: input,
       baseHead: discovery.repository.value.headSha,
@@ -448,7 +445,9 @@ const dependencyMigrationWorkflow = defineWorkflow(
         "rework",
       );
       head = repaired;
-      changed = await ctx.git.changedSince(discovery.repository.value.headSha);
+      changed = await ctx.git.changedSince(discovery.repository.value.headSha, {
+        key: "rework-changed-since-base",
+      });
       reviewInput = {
         ...reviewInput,
         candidateHead: head,
@@ -457,9 +456,7 @@ const dependencyMigrationWorkflow = defineWorkflow(
       candidate = await verifyCandidate(ctx, reviewInput, "rework");
     }
     if (candidate.assessment.status !== "accepted") throw new Error("Review still requires rework");
-    requireSameSubject(ctx.workspace.subject, candidate.subject);
-
-    const status = await ctx.git.status();
+    const status = await ctx.git.status({ key: "delivery-git-status" });
     if (!status.clean || status.branch !== ctx.workspace.branch || changed.files.length === 0) {
       throw new Error("Delivery requires a clean, non-empty workflow branch");
     }
@@ -478,7 +475,7 @@ const dependencyMigrationWorkflow = defineWorkflow(
       },
       {
         key: "dossier",
-        subject: candidate.subject,
+        candidate: candidate.snapshot,
         sources: [
           discovery.repository.evidence,
           discovery.release.evidence,
@@ -490,33 +487,23 @@ const dependencyMigrationWorkflow = defineWorkflow(
     );
 
     ctx.cancellation.throwIfRequested();
-    const promotion = await ctx.delivery.prepare(
-      pullRequest,
-      {
-        subject: candidate.subject,
-        input: {
-          repository: input.repository,
-          baseBranch: discovery.repository.value.defaultBranch,
-          expectedBaseHead: discovery.repository.value.headSha,
-          branch: ctx.workspace.branch,
-          head,
-          dossierRef: dossier.ref,
-          dossierSha256: dossier.sha256,
-        },
-        evidence: [candidate.quality.attestation, candidate.assessment.attestation, dossier.attestation],
-        artifacts: [dossier],
+    const delivered = await ctx.delivery.run(pullRequest, {
+      key: "publish-pull-request",
+      candidate: candidate.snapshot,
+      input: {
+        repository: input.repository,
+        baseBranch: discovery.repository.value.defaultBranch,
+        expectedBaseHead: discovery.repository.value.headSha,
+        branch: ctx.workspace.branch,
+        head,
+        dossierRef: dossier.ref,
+        dossierSha256: dossier.sha256,
       },
-      { key: "prepare-delivery" },
-    );
-    const authorization = await ctx.delivery.authorize(pullRequest, promotion, {
-      key: "authorize-delivery",
-      detail: `Publish checked and reviewed commit ${head}.`,
+      proofs: [candidate.quality.proof, candidate.assessment.proof],
+      artifacts: [dossier],
+      authorization: { detail: `Publish checked and reviewed commit ${head}.` },
+      attempts: 2,
     });
-    const delivered = await ctx.delivery(
-      pullRequest,
-      { candidate: promotion, authorization },
-      { key: "deliver", attempts: 2 },
-    );
     if (delivered.value.head !== head) throw new Error("Delivery returned a different head");
     return {
       branch: ctx.workspace.branch,
@@ -530,5 +517,4 @@ const dependencyMigrationWorkflow = defineWorkflow(
 
 void dependencyMigrationWorkflow;
 
-// DX gap: the authoritative trust floor is intentionally host-observed and therefore broad in the snapshot type; the
-// workflow keeps the small runtime `requireAuthority` guard before relying on either source.
+// Runtime identity checks still defend external values even though source policy literals are preserved statically.

@@ -8,10 +8,12 @@ import type {
   HostBinding,
   InferIn,
   InferOut,
+  NominalValue,
+  PromotionProof,
   Risk,
   SubjectAttestation,
   WorkflowNode,
-  WorkspaceSubject,
+  WorkspaceSnapshotRef,
 } from "./shared.ts";
 
 // ---------------------------------------------------------------------------
@@ -23,9 +25,9 @@ import type {
  * Use: Declare the action and risk on `defineDelivery`; host policy may approve, deny, or ask a person.
  */
 export interface DeliveryAuthorizationPolicy {
-  action: string;
-  risk: Risk;
-  timeout?: Duration;
+  readonly action: string;
+  readonly risk: Risk;
+  readonly timeout?: Duration;
 }
 
 /**
@@ -33,9 +35,9 @@ export interface DeliveryAuthorizationPolicy {
  * Use: Set it on a delivery definition and tighten execution limits at an individual invocation.
  */
 export interface DeliveryDefaults {
-  timeout?: Duration;
-  attempts?: number;
-  authorization: DeliveryAuthorizationPolicy;
+  readonly timeout?: Duration;
+  readonly attempts?: number;
+  readonly authorization: Readonly<DeliveryAuthorizationPolicy>;
 }
 
 /**
@@ -106,25 +108,32 @@ export type DeliveryOutputOf<Definition> =
     : never;
 
 /**
- * Why: Requires at least one engine-minted, subject-bound proof before a promotion candidate can be prepared.
- * Use: Provide check, goal, or review attestations that all name the same candidate subject.
+ * Why: Requires at least one engine-minted proof before a workspace candidate can be prepared.
+ * Use: Provide check, goal, or review proofs that all name the same candidate snapshot.
  */
-export type PromotionEvidence<Subject extends WorkspaceSubject = WorkspaceSubject> = readonly [
-  SubjectAttestation<string, unknown, Subject>,
-  ...additional: SubjectAttestation<string, unknown, Subject>[],
+export type PromotionProofs<Snapshot extends WorkspaceSnapshotRef = WorkspaceSnapshotRef> = readonly [
+  PromotionProof<"check" | "review" | "goal", Snapshot>,
+  ...additional: PromotionProof<"check" | "review" | "goal", Snapshot>[],
 ];
 
 /**
- * Why: Collects the exact generation, frozen delivery input, proof, and immutable supporting artifacts atomically.
- * Use: Pass it to `ctx.delivery.prepare`; the engine rejects mixed or stale subjects before minting a candidate.
+ * Why: Preserves a migration name while preventing arbitrary attestations from satisfying promotion policy.
+ * Use: Prefer `PromotionProofs`; this alias now accepts only positive proof handles.
+ */
+export type PromotionEvidence<Snapshot extends WorkspaceSnapshotRef = WorkspaceSnapshotRef> =
+  PromotionProofs<Snapshot>;
+
+/**
+ * Why: Collects the exact snapshot, frozen delivery input, proofs, and immutable supporting artifacts atomically.
+ * Use: Pass it to `ctx.delivery.prepare`; the host rejects mixed or stale snapshots before minting a candidate.
  */
 export interface PromotionCandidateInput<
   Definition extends DeliveryDefinition<any, any>,
-  Subject extends WorkspaceSubject = WorkspaceSubject,
+  Snapshot extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
 > {
-  subject: Subject;
+  snapshot: Snapshot;
   input: DeliveryInputOf<Definition>;
-  evidence: PromotionEvidence<NoInfer<Subject>>;
+  proofs: PromotionProofs<NoInfer<Snapshot>>;
   artifacts?: readonly ArtifactRefBase<unknown>[];
   rollback?: ArtifactRefBase<unknown>;
 }
@@ -141,18 +150,32 @@ declare const promotionCandidateBrand: unique symbol;
  */
 export interface PromotionCandidateRef<
   Definition extends DeliveryDefinition<any, any>,
-  Subject extends WorkspaceSubject = WorkspaceSubject,
-> {
+  Snapshot extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
+> extends NominalValue<readonly ["promotion-candidate", Definition, Snapshot]> {
   readonly ref: string;
   readonly delivery: Definition["name"];
-  readonly subject: Subject;
+  readonly snapshot: Snapshot;
   readonly inputDigest: string;
-  readonly evidence: PromotionEvidence<Subject>;
+  readonly proofs: PromotionProofs<Snapshot>;
   readonly artifacts: readonly ArtifactRefBase<unknown>[];
   readonly rollback?: ArtifactRefBase<unknown>;
   readonly preparedAt: string;
   readonly [promotionCandidateBrand]: Definition;
 }
+
+/**
+ * Why: Recovers the delivery definition already carried nominally by an engine-minted promotion candidate.
+ * Use: Build advanced lifecycle helpers without asking authors to repeat the delivery definition.
+ */
+export type PromotionCandidateDefinitionOf<Candidate> =
+  Candidate extends PromotionCandidateRef<infer Definition, any> ? Definition : never;
+
+/**
+ * Why: Recovers the exact workspace snapshot already frozen into a promotion candidate.
+ * Use: Preserve snapshot correlation when later delivery stages infer their definition from the candidate.
+ */
+export type PromotionCandidateSnapshotOf<Candidate> =
+  Candidate extends PromotionCandidateRef<any, infer Snapshot> ? Snapshot : never;
 
 /**
  * Why: Prevents a general gate answer or approval for another candidate from authorizing delivery.
@@ -166,17 +189,31 @@ declare const deliveryAuthorizationBrand: unique symbol;
  */
 export interface DeliveryAuthorizationRef<
   Definition extends DeliveryDefinition<any, any>,
-  Candidate extends PromotionCandidateRef<Definition, WorkspaceSubject>,
-> {
+  Candidate extends PromotionCandidateRef<Definition, WorkspaceSnapshotRef>,
+> extends NominalValue<readonly ["delivery-authorization", Definition, Candidate]> {
   readonly ref: string;
   readonly candidateRef: Candidate["ref"];
-  readonly subject: Candidate["subject"];
+  readonly snapshot: Candidate["snapshot"];
   readonly action: string;
   readonly risk: Risk;
   readonly approvedBy: "human" | "policy";
   readonly approvedAt: string;
   readonly [deliveryAuthorizationBrand]: Definition;
 }
+
+/**
+ * Why: Recovers the delivery definition already bound into candidate-specific delivery authority.
+ * Use: Infer receipt output when advanced execution starts from the authorization reference.
+ */
+export type DeliveryAuthorizationDefinitionOf<Authorization> =
+  Authorization extends DeliveryAuthorizationRef<infer Definition, any> ? Definition : never;
+
+/**
+ * Why: Recovers the exact promotion candidate already bound into delivery authority.
+ * Use: Preserve its snapshot and proof relationships in an authorization-only execution result.
+ */
+export type DeliveryAuthorizationCandidateOf<Authorization> =
+  Authorization extends DeliveryAuthorizationRef<any, infer Candidate> ? Candidate : never;
 
 /**
  * Why: Supplies durable identity and labels while the engine validates and freezes a promotion candidate.
@@ -199,12 +236,18 @@ export interface DeliveryAuthorizeOptions {
 }
 
 /**
+ * Why: Lets advanced delivery authorization inherit its durable key from the prepared promotion candidate.
+ * Use: Pass it to the candidate-only `authorize` overload; the engine derives the authorization subkey.
+ */
+export type AdvancedDeliveryAuthorizeOptions = Omit<DeliveryAuthorizeOptions, "key">;
+
+/**
  * Why: Pairs exactly one promotion candidate with the authorization minted for that candidate.
  * Use: Construct it only from the two results returned by `prepare` and `authorize` for the same definition.
  */
 export interface DeliveryRunRequest<
   Definition extends DeliveryDefinition<any, any>,
-  Candidate extends PromotionCandidateRef<Definition, WorkspaceSubject>,
+  Candidate extends PromotionCandidateRef<Definition, WorkspaceSnapshotRef>,
 > {
   candidate: Candidate;
   authorization: DeliveryAuthorizationRef<Definition, Candidate>;
@@ -222,43 +265,99 @@ export interface DeliveryInvocationOptions {
 }
 
 /**
+ * Why: Lets advanced delivery execution inherit durable identity from candidate-bound authorization.
+ * Use: Pass it to `ctx.delivery.execute` after candidate-only authorization.
+ */
+export type AdvancedDeliveryInvocationOptions = Omit<DeliveryInvocationOptions, "key">;
+
+/**
+ * Why: Carries candidate-specific approval presentation inside one author-facing delivery call.
+ * Use: Supply optional detail or a tighter approval timeout without changing declared action or risk.
+ */
+export interface DeliveryRunAuthorizationOptions {
+  detail?: string;
+  timeout?: Duration;
+  readonly action?: never;
+  readonly risk?: never;
+}
+
+/**
+ * Why: Gives ordinary authors one durable delivery key while retaining the exact candidate and its proofs.
+ * Use: Pass it to `ctx.delivery.run`; the host atomically rejects stale candidates or mismatched proofs.
+ */
+export interface DeliveryOneShotRequest<
+  Definition extends DeliveryDefinition<any, any>,
+  Snapshot extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
+> {
+  key: string;
+  label?: string;
+  candidate: Snapshot;
+  input: DeliveryInputOf<Definition>;
+  proofs: PromotionProofs<NoInfer<Snapshot>>;
+  artifacts?: readonly ArtifactRefBase<unknown>[];
+  rollback?: ArtifactRefBase<unknown>;
+  timeout?: Duration;
+  attempts?: number;
+  authorization: DeliveryRunAuthorizationOptions;
+}
+
+/**
  * Why: Returns host-validated output and an attested link to the exact candidate that was delivered.
  * Use: Read `value` for provider data and retain `attestation` for later CI observation or audit.
  */
 export interface DeliveryReceipt<
   Definition extends DeliveryDefinition<any, any>,
-  Candidate extends PromotionCandidateRef<Definition, WorkspaceSubject>,
+  Candidate extends PromotionCandidateRef<Definition, WorkspaceSnapshotRef>,
 > {
   readonly value: DeliveryOutputOf<Definition>;
   readonly candidate: Candidate;
-  readonly subject: Candidate["subject"];
+  readonly snapshot: Candidate["snapshot"];
   readonly binding: Definition["binding"];
   readonly idempotencyKey: string;
   readonly deliveredAt: string;
-  readonly attestation: SubjectAttestation<"delivery", DeliveryOutputOf<Definition>, Candidate["subject"]>;
+  readonly attestation: SubjectAttestation<"delivery", DeliveryOutputOf<Definition>, Candidate["snapshot"]>;
+}
+
+/** Ordinary one-shot verified delivery calls. */
+export interface DeliveryApi {
+  run<Definition extends DeliveryDefinition<any, any>, Snapshot extends WorkspaceSnapshotRef>(
+    definition: Definition,
+    request: DeliveryOneShotRequest<Definition, Snapshot>,
+  ): Promise<DeliveryReceipt<Definition, PromotionCandidateRef<Definition, Snapshot>>>;
 }
 
 /**
- * Why: Models verified promotion as three explicit type-state transitions rather than a stringly operation call.
- * Use: Prepare proof, authorize the frozen candidate, then call the function to execute the atomic host delivery.
+ * Why: Adds the explicit candidate and authorization lifecycle to the ordinary delivery facade.
+ * Use: Import its contracts from `/advanced`; ordinary workflow contexts expose only `DeliveryApi`.
  */
-export interface DeliveryFn {
-  prepare<Definition extends DeliveryDefinition<any, any>, Subject extends WorkspaceSubject>(
+export interface DeliveryFn extends DeliveryApi {
+  prepare<Definition extends DeliveryDefinition<any, any>, Snapshot extends WorkspaceSnapshotRef>(
     definition: Definition,
-    input: PromotionCandidateInput<Definition, Subject>,
+    input: PromotionCandidateInput<Definition, Snapshot>,
     options: DeliveryPrepareOptions,
-  ): Promise<PromotionCandidateRef<Definition, Subject>>;
+  ): Promise<PromotionCandidateRef<Definition, Snapshot>>;
+  authorize<Definition extends DeliveryDefinition<any, any>, Snapshot extends WorkspaceSnapshotRef>(
+    candidate: PromotionCandidateRef<Definition, Snapshot>,
+    options: AdvancedDeliveryAuthorizeOptions,
+  ): Promise<DeliveryAuthorizationRef<Definition, PromotionCandidateRef<Definition, Snapshot>>>;
   authorize<
     Definition extends DeliveryDefinition<any, any>,
-    Candidate extends PromotionCandidateRef<Definition, WorkspaceSubject>,
+    Candidate extends PromotionCandidateRef<Definition, WorkspaceSnapshotRef>,
   >(
     definition: Definition,
     candidate: Candidate,
     options: DeliveryAuthorizeOptions,
   ): Promise<DeliveryAuthorizationRef<Definition, Candidate>>;
+  execute<
+    Definition extends DeliveryDefinition<any, any>,
+    Candidate extends PromotionCandidateRef<Definition, WorkspaceSnapshotRef>,
+  >(
+    authorization: DeliveryAuthorizationRef<Definition, Candidate>,
+    options: AdvancedDeliveryInvocationOptions,
+  ): Promise<DeliveryReceipt<Definition, Candidate>>;
   <
     Definition extends DeliveryDefinition<any, any>,
-    Candidate extends PromotionCandidateRef<Definition, WorkspaceSubject>,
+    Candidate extends PromotionCandidateRef<Definition, WorkspaceSnapshotRef>,
   >(
     definition: Definition,
     request: DeliveryRunRequest<Definition, Candidate>,

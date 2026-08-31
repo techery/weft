@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type ArtifactInvocation,
   type CheckInvocation,
@@ -34,6 +36,7 @@ import {
   type WorkflowRunInvocation,
 } from "../core/internal-engine.ts";
 import {
+  type AgentOutcome,
   type AgentResult,
   type AnyDefinedAgentCall,
   type CheckResultOf,
@@ -76,11 +79,10 @@ import {
   type ReviewResult,
   type TriggerAdmissionResult,
   type WorkflowRunReceipt,
-  type WorkspaceSubject,
+  type WorkspaceSnapshotRef,
   type WorkspaceWriteAgentResult,
   type WriteScope,
-  z,
-} from "../index.ts";
+} from "../core/index.ts";
 
 declare function expectType<T>(value: T): void;
 
@@ -161,7 +163,6 @@ const resultViewNode = defineResultView({
 
 const taskContractNode = defineTaskContract({
   schema: ExampleExtensions,
-  revision: "internal-v1",
 });
 
 const artifactNode = defineArtifact({
@@ -285,7 +286,7 @@ interface ExampleAgentCall extends AnyDefinedAgentCall {
   agent: typeof agentNode;
   input: ExampleInputValue;
   write: WriteScope<typeof pathPolicyNode>;
-  onError: "null";
+  failure: "return";
 }
 
 interface ExampleGoalAgentCall extends AnyDefinedAgentCall {
@@ -308,10 +309,10 @@ declare const workspaceAgentInvocation: DefinedAgentInvocation<ExampleGoalAgentC
 declare const inlineAgentInvocation: InlineAgentInvocation<ExampleInlineAgentCall, false>;
 declare const recipeInvocation: RecipeInvocation<typeof recipeNode>;
 declare const checkInvocation: CheckInvocation<typeof checkNode>;
-declare const checkFailure: FailedCheckResultOf<typeof checkNode, WorkspaceSubject>;
+declare const checkFailure: FailedCheckResultOf<typeof checkNode, WorkspaceSnapshotRef>;
 declare const checkWaiverInvocation: CheckWaiverAuthorizationInvocation<
   typeof checkNode,
-  typeof checkFailure.subject
+  typeof checkFailure.candidate
 >;
 declare const suiteInvocation: CheckSuiteInvocation<typeof suiteNode>;
 declare const goalInvocation: GoalEvaluationInvocation<typeof goalNode>;
@@ -376,14 +377,16 @@ type ExampleSuiteResult = CheckSuiteResult<CheckSuiteDefinitionMembers<typeof su
 type ExampleGoalResult = GoalResult<GoalDefinitionResults<typeof goalNode>>;
 
 expectType<Promise<string>>(internalEngine.execute(promptInvocation));
-expectType<Promise<PatchAgentResult<ExampleOutputValue> | null>>(internalEngine.execute(agentInvocation));
+expectType<Promise<AgentOutcome<ExampleOutputValue, undefined, PatchAgentResult<ExampleOutputValue>>>>(
+  internalEngine.execute(agentInvocation),
+);
 expectType<Promise<WorkspaceWriteAgentResult<ExampleOutputValue, ExampleGoalResult>>>(
   internalEngine.execute(workspaceAgentInvocation),
 );
 expectType<Promise<AgentResult<ExampleOutputValue>>>(internalEngine.execute(inlineAgentInvocation));
 expectType<Promise<ExampleOutputValue>>(internalEngine.execute(recipeInvocation));
 expectType<Promise<CheckResultOf<typeof checkNode>>>(internalEngine.execute(checkInvocation));
-expectType<Promise<CheckWaiverRef<typeof checkNode, WorkspaceSubject>>>(
+expectType<Promise<CheckWaiverRef<typeof checkNode, WorkspaceSnapshotRef>>>(
   internalEngine.execute(checkWaiverInvocation),
 );
 expectType<Promise<ExampleSuiteResult>>(internalEngine.execute(suiteInvocation));

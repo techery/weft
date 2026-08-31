@@ -1,7 +1,7 @@
 /** Declaration-only effects surface for the Weft DSL prototype. */
-import type { AgentDefinition } from "./agent.ts";
+import type { AnyAgentDefinition } from "./agent.ts";
 import type { CommandResult } from "./checks.ts";
-import type { AnySchema, Duration, InferIn, InferOut } from "./shared.ts";
+import type { AnySchema, Duration, InferIn, InferOut, NominalValue } from "./shared.ts";
 
 // ---------------------------------------------------------------------------
 // Repository, process, network, wait, and Git effects
@@ -17,24 +17,18 @@ declare const secretHandleBrand: unique symbol;
  * Why: Prevents workflow-authored objects from masquerading as opaque secret capabilities minted by the host.
  * Use: Obtain one with `ctx.secret`; its value is never structurally constructible or readable by workflow code.
  */
-export interface SecretHandle {
+export interface SecretHandle extends NominalValue<"secret-handle"> {
   readonly [secretHandleBrand]: true;
 }
 
-/**
- * Why: Gives the effects DSL an explicit fs read result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Fs read result. */
 export interface FsReadResult {
   content: string;
   sha256: string;
   size: number;
 }
 
-/**
- * Why: Gives the effects DSL an explicit fs stat result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Fs stat result. */
 export interface FsStatResult {
   exists: boolean;
   size?: number;
@@ -43,20 +37,19 @@ export interface FsStatResult {
   isDirectory?: boolean;
 }
 
-/**
- * Why: Gives the effects DSL an explicit fs glob options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
-export interface FsGlobOptions {
+/** Stable author key shared by primitive journaled effects. */
+export interface DurableEffectOptions {
+  key: string;
+}
+
+/** Fs glob options. */
+export interface FsGlobOptions extends DurableEffectOptions {
   cwd?: string;
 }
 
-/**
- * Why: Gives the effects DSL an explicit fs glob result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Fs glob result. */
 export interface FsGlobResult {
-  paths: string[];
+  readonly paths: readonly string[];
 }
 
 /**
@@ -64,42 +57,30 @@ export interface FsGlobResult {
  * Use: Use `ctx.fs.read`, `glob`, and `stat` for workflow decisions.
  */
 export interface FsApi {
-  read(path: string): Promise<FsReadResult>;
-  glob(patterns: string | string[], opts?: FsGlobOptions): Promise<FsGlobResult>;
-  stat(path: string): Promise<FsStatResult>;
+  read(path: string, opts: DurableEffectOptions): Promise<FsReadResult>;
+  glob(patterns: string | string[], opts: FsGlobOptions): Promise<FsGlobResult>;
+  stat(path: string, opts: DurableEffectOptions): Promise<FsStatResult>;
 }
 
-/**
- * Why: Gives the effects DSL an explicit exec options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Exec options. */
 export interface ExecOptions {
-  key?: string;
+  key: string;
   cwd?: string;
   timeout?: Duration;
   env?: Record<string, string | SecretHandle>;
 }
 
-/**
- * Why: Gives the effects DSL an explicit unparsed exec options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Unparsed exec options. */
 export interface UnparsedExecOptions extends ExecOptions {
   schema?: undefined;
 }
 
-/**
- * Why: Gives the effects DSL an explicit parsed exec options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Parsed exec options. */
 export interface ParsedExecOptions<S extends AnySchema> extends ExecOptions {
   schema: S;
 }
 
-/**
- * Why: Gives the effects DSL an explicit exec result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Exec result. */
 export interface ExecResult extends CommandResult {}
 
 /**
@@ -107,7 +88,7 @@ export interface ExecResult extends CommandResult {}
  * Use: Use `ctx.exec(program, args, options)` when shell grammar is unnecessary.
  */
 export interface ExecFn {
-  (file: string, args?: string[], opts?: UnparsedExecOptions): Promise<ExecResult>;
+  (file: string, args: string[], opts: UnparsedExecOptions): Promise<ExecResult>;
   <S extends AnySchema>(file: string, args: string[], opts: ParsedExecOptions<S>): Promise<InferOut<S>>;
 }
 
@@ -116,41 +97,29 @@ export interface ExecFn {
  * Use: Use `ctx.bash(command, options)` instead of ambient process execution.
  */
 export interface BashFn {
-  (command: string, opts?: UnparsedExecOptions): Promise<ExecResult>;
+  (command: string, opts: UnparsedExecOptions): Promise<ExecResult>;
   <S extends AnySchema>(command: string, opts: ParsedExecOptions<S>): Promise<InferOut<S>>;
 }
 
-/**
- * Why: Gives the effects DSL an explicit fetch options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Fetch options. */
 export interface FetchOptions {
-  key?: string;
+  key: string;
   method?: "GET" | "HEAD";
   headers?: Record<string, string | SecretHandle>;
   timeout?: Duration;
 }
 
-/**
- * Why: Gives the effects DSL an explicit unparsed fetch options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Unparsed fetch options. */
 export interface UnparsedFetchOptions extends FetchOptions {
   schema?: undefined;
 }
 
-/**
- * Why: Gives the effects DSL an explicit parsed fetch options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Parsed fetch options. */
 export interface ParsedFetchOptions<S extends AnySchema> extends FetchOptions {
   schema: S;
 }
 
-/**
- * Why: Gives the effects DSL an explicit fetch result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Fetch result. */
 export interface FetchResult {
   status: number;
   headers: Record<string, string>;
@@ -162,39 +131,27 @@ export interface FetchResult {
  * Use: Use `ctx.fetch(url, options)` for network data that influences workflow decisions.
  */
 export interface FetchFn {
-  (url: string, init?: UnparsedFetchOptions): Promise<FetchResult>;
+  (url: string, init: UnparsedFetchOptions): Promise<FetchResult>;
   <S extends AnySchema>(url: string, init: ParsedFetchOptions<S>): Promise<InferOut<S>>;
 }
 
-/**
- * Why: Gives the effects DSL an explicit env api contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Env api. */
 export interface EnvApi {
-  get(name: string): Promise<string | undefined>;
+  get(name: string, opts: DurableEffectOptions): Promise<string | undefined>;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git file status contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git file status. */
 export type GitFileStatus = "A" | "M" | "D" | "R";
 
-/**
- * Why: Gives the effects DSL an explicit git conflict resolver contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git conflict resolver. */
 export interface GitConflictResolver<Context = unknown> {
-  resolver: AgentDefinition<any, AnySchema, any>;
+  resolver: AnyAgentDefinition;
   context: Context;
   attempts: number;
   fallback: "ask" | "fail";
 }
 
-/**
- * Why: Gives the effects DSL an explicit git status result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git status result. */
 export interface GitStatusResult {
   branch: string;
   clean: boolean;
@@ -203,82 +160,58 @@ export interface GitStatusResult {
   untracked: string[];
 }
 
-/**
- * Why: Gives the effects DSL an explicit git sha result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git sha result. */
 export interface GitShaResult {
   sha: string;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git branches result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git branches result. */
 export interface GitBranchesResult {
   current: string;
   all: string[];
 }
 
-/**
- * Why: Gives the effects DSL an explicit git changed file contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git changed file. */
 export interface GitChangedFile {
   path: string;
   status: GitFileStatus;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git changed files result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git changed files result. */
 export interface GitChangedFilesResult {
   files: GitChangedFile[];
 }
 
-/**
- * Why: Gives the effects DSL an explicit git range contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git range. */
 export interface GitRange {
   from?: string;
   to?: string;
   paths?: string[];
 }
 
-/**
- * Why: Gives the effects DSL an explicit git diff stats contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git diff stats. */
 export interface GitDiffStats {
   files: number;
   insertions: number;
   deletions: number;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git diff result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git diff result. */
 export interface GitDiffResult {
   patch: string;
   stats: GitDiffStats;
   ref?: string;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git log options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
-export interface GitLogOptions extends GitRange {
+/** Git log options. */
+export interface GitLogOptions extends GitRange, DurableEffectOptions {
   max?: number;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git commit info contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git diff options. */
+export interface GitDiffOptions extends GitRange, DurableEffectOptions {}
+
+/** Git commit info. */
 export interface GitCommitInfo {
   sha: string;
   author: string;
@@ -287,34 +220,23 @@ export interface GitCommitInfo {
   body: string;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git log result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git log result. */
 export interface GitLogResult {
   commits: GitCommitInfo[];
 }
 
-/**
- * Why: Gives the effects DSL an explicit git content result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git content result. */
 export interface GitContentResult {
   content: string;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git blame options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git blame options. */
 export interface GitBlameOptions {
+  key: string;
   lines?: [number, number];
 }
 
-/**
- * Why: Gives the effects DSL an explicit git blame line contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git blame line. */
 export interface GitBlameLine {
   line: number;
   sha: string;
@@ -322,35 +244,24 @@ export interface GitBlameLine {
   content: string;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git blame result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git blame result. */
 export interface GitBlameResult {
   lines: GitBlameLine[];
 }
 
-/**
- * Why: Gives the effects DSL an explicit git ref result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git ref result. */
 export interface GitRefResult {
   ref: string;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git compare options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git compare options. */
 export interface GitCompareOptions {
+  key: string;
   branch: string;
   upstream: string;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git compare result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git compare result. */
 export interface GitCompareResult {
   branch: string;
   head: string;
@@ -361,96 +272,73 @@ export interface GitCompareResult {
   behind: number;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git add options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git add options. */
 export interface GitAddOptions {
-  paths: string[];
+  key: string;
+  paths: readonly string[];
 }
 
-/**
- * Why: Gives the effects DSL an explicit git commit options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git commit options. */
 export interface GitCommitOptions {
+  key: string;
   message: string;
-  paths?: string[];
+  paths?: readonly string[];
 }
 
-/**
- * Why: Gives the effects DSL an explicit git checkout options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git checkout options. */
 export interface GitCheckoutOptions {
+  key: string;
   discard?: boolean;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git fetch options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git fetch options. */
 export interface GitFetchOptions {
+  key: string;
   remote?: string;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git rebase options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git rebase options. */
 export interface GitRebaseOptions<Context> {
+  key: string;
   onto: string;
   onConflict: GitConflictResolver<Context>;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git head result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git head result. */
 export interface GitHeadResult {
   head: string;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git reset options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git reset options. */
 export interface GitResetOptions {
+  key: string;
   to: string;
   mode?: "soft" | "mixed" | "hard";
 }
 
-/**
- * Why: Gives the effects DSL an explicit git apply options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git apply options. */
 export interface GitApplyOptions {
+  key: string;
   patch: string;
   threeWay?: boolean;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git branch create options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git branch create options. */
 export interface GitBranchCreateOptions {
+  key: string;
   from?: string;
   checkout?: boolean;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git branch delete options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git branch delete options. */
 export interface GitBranchDeleteOptions {
+  key: string;
   force?: boolean;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git stash push options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git stash push options. */
 export interface GitStashPushOptions {
+  key: string;
   message?: string;
 }
 
@@ -459,26 +347,21 @@ export interface GitStashPushOptions {
  * Use: Pass it only through the workspace-capable Git API when untracked files may be removed.
  */
 export interface GitCleanOptions {
+  key: string;
   force?: boolean;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git branch api contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git branch api. */
 export interface GitBranchApi {
-  create(name: string, opts?: GitBranchCreateOptions): Promise<void>;
-  delete(name: string, opts?: GitBranchDeleteOptions): Promise<void>;
+  create(name: string, opts: GitBranchCreateOptions): Promise<void>;
+  delete(name: string, opts: GitBranchDeleteOptions): Promise<void>;
 }
 
-/**
- * Why: Gives the effects DSL an explicit git stash api contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding effects API.
- */
+/** Git stash api. */
 export interface GitStashApi {
-  push(opts?: GitStashPushOptions): Promise<void>;
-  pop(): Promise<void>;
-  drop(): Promise<void>;
+  push(opts: GitStashPushOptions): Promise<void>;
+  pop(opts: DurableEffectOptions): Promise<void>;
+  drop(opts: DurableEffectOptions): Promise<void>;
 }
 
 /**
@@ -486,19 +369,19 @@ export interface GitStashApi {
  * Use: Plain workflows receive this surface; fetched refs remain a read-only remote interaction governed by the host.
  */
 export interface GitReadApi {
-  status(): Promise<GitStatusResult>;
-  head(): Promise<GitShaResult>;
-  branches(): Promise<GitBranchesResult>;
-  mergeBase(a: string, b: string): Promise<GitShaResult>;
-  changedSince(ref: string): Promise<GitChangedFilesResult>;
-  diff(range?: GitRange): Promise<GitDiffResult>;
-  log(opts?: GitLogOptions): Promise<GitLogResult>;
-  show(ref: string): Promise<GitContentResult>;
-  blame(path: string, opts?: GitBlameOptions): Promise<GitBlameResult>;
-  fileAt(ref: string, path: string): Promise<GitContentResult>;
-  snapshot(): Promise<GitRefResult>;
+  status(opts: DurableEffectOptions): Promise<GitStatusResult>;
+  head(opts: DurableEffectOptions): Promise<GitShaResult>;
+  branches(opts: DurableEffectOptions): Promise<GitBranchesResult>;
+  mergeBase(a: string, b: string, opts: DurableEffectOptions): Promise<GitShaResult>;
+  changedSince(ref: string, opts: DurableEffectOptions): Promise<GitChangedFilesResult>;
+  diff(opts: GitDiffOptions): Promise<GitDiffResult>;
+  log(opts: GitLogOptions): Promise<GitLogResult>;
+  show(ref: string, opts: DurableEffectOptions): Promise<GitContentResult>;
+  blame(path: string, opts: GitBlameOptions): Promise<GitBlameResult>;
+  fileAt(ref: string, path: string, opts: DurableEffectOptions): Promise<GitContentResult>;
+  snapshot(opts: DurableEffectOptions): Promise<GitRefResult>;
   compare(opts: GitCompareOptions): Promise<GitCompareResult>;
-  fetch(opts?: GitFetchOptions): Promise<void>;
+  fetch(opts: GitFetchOptions): Promise<void>;
 }
 
 /**
@@ -508,13 +391,13 @@ export interface GitReadApi {
 export interface WorkspaceGitMutationApi {
   add(opts: GitAddOptions): Promise<void>;
   commit(opts: GitCommitOptions): Promise<GitShaResult>;
-  checkout(ref: string, opts?: GitCheckoutOptions): Promise<void>;
+  checkout(ref: string, opts: GitCheckoutOptions): Promise<void>;
   rebase<Context = unknown>(opts: GitRebaseOptions<Context>): Promise<GitHeadResult>;
   reset(opts: GitResetOptions): Promise<void>;
   apply(opts: GitApplyOptions): Promise<void>;
   branch: GitBranchApi;
   stash: GitStashApi;
-  clean(opts?: GitCleanOptions): Promise<void>;
+  clean(opts: GitCleanOptions): Promise<void>;
 }
 
 /**

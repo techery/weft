@@ -1,7 +1,7 @@
 /** Declaration-only authenticated external-trigger surface for the Weft DSL prototype. */
 
-import type { AnySchema, HostBinding, InferIn, InferOut, WorkflowNode } from "./shared.ts";
-import type { InferWorkflowInput, WorkflowDefinition } from "./workflow.ts";
+import type { AnySchema, HostBinding, InferIn, InferOut, NominalValue, WorkflowNode } from "./shared.ts";
+import type { AnyWorkflowDefinition, InferWorkflowInput } from "./workflow.ts";
 
 // ---------------------------------------------------------------------------
 // Authenticated sources and pure event routing
@@ -37,7 +37,7 @@ export type TriggerDedupeIdentity<Event> = (event: Event) => string;
  * Why: Couples pure event normalization directly to the raw input accepted by one specific workflow.
  * Use: Return only data derived from the validated event; the engine validates the result before claiming a run.
  */
-export type TriggerEventMapper<Event, Workflow extends WorkflowDefinition<any, any, any, any, any>> = (
+export type TriggerEventMapper<Event, Workflow extends AnyWorkflowDefinition> = (
   event: Event,
 ) => InferWorkflowInput<Workflow>;
 
@@ -63,7 +63,7 @@ export interface TriggerDefinition<
   Name extends string = string,
   Revision extends string = string,
   EventSchema extends AnySchema = AnySchema,
-  Workflow extends WorkflowDefinition<any, any, any, any, any> = WorkflowDefinition<any, any, any, any, any>,
+  Workflow extends AnyWorkflowDefinition = AnyWorkflowDefinition,
 > extends WorkflowNode<"weft.trigger"> {
   readonly kind: "weft.trigger";
   readonly name: Name;
@@ -72,10 +72,6 @@ export interface TriggerDefinition<
   readonly source: Readonly<AuthenticatedTriggerSource>;
   readonly event: EventSchema;
   readonly workflow: Workflow;
-  readonly filter?: TriggerEventFilter<InferOut<EventSchema>>;
-  readonly eventId: TriggerEventIdentity<InferOut<EventSchema>>;
-  readonly dedupeKey: TriggerDedupeIdentity<InferOut<EventSchema>>;
-  readonly map: TriggerEventMapper<InferOut<EventSchema>, Workflow>;
   readonly admission: Readonly<TriggerAdmissionSemantics>;
 }
 
@@ -87,7 +83,7 @@ export interface TriggerConfig<
   Name extends string,
   Revision extends string,
   EventSchema extends AnySchema,
-  Workflow extends WorkflowDefinition<any, any, any, any, any>,
+  Workflow extends AnyWorkflowDefinition,
 > {
   name: Name;
   revision: Revision;
@@ -110,7 +106,7 @@ export declare function defineTrigger<
   const Name extends string,
   const Revision extends string,
   EventSchema extends AnySchema,
-  Workflow extends WorkflowDefinition<any, any, any, any, any>,
+  Workflow extends AnyWorkflowDefinition,
 >(
   config: TriggerConfig<Name, Revision, EventSchema, Workflow>,
 ): TriggerDefinition<Name, Revision, EventSchema, Workflow>;
@@ -165,7 +161,7 @@ declare const triggerRunProvenanceBrand: unique symbol;
  */
 export interface TriggerRunProvenance<
   Definition extends TriggerDefinition<any, any, any, any> = TriggerDefinition<any, any, any, any>,
-> {
+> extends NominalValue<readonly ["trigger-run-provenance", Definition]> {
   readonly admissionRef: string;
   readonly transactionRef: string;
   readonly provenance: Readonly<TriggerEventProvenance<Definition>>;
@@ -190,7 +186,7 @@ export interface AdmittedWorkflowRun {
  */
 export interface WorkflowAdmission<
   Definition extends TriggerDefinition<any, any, any, any> = TriggerDefinition<any, any, any, any>,
-> {
+> extends NominalValue<readonly ["workflow-admission", Definition]> {
   readonly status: "accepted";
   readonly ref: string;
   readonly transactionRef: string;

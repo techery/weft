@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type ArtifactRefOf,
   defineAgent,
@@ -13,8 +15,7 @@ import {
   type GateResult,
   type HumanReviewResult,
   type WorkflowNode,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes compile-time contract assertions visible without adding a test-only runtime helper. Use: Pass inferred DSL values to it in this typechecked example. */
 declare function expectType<T>(value: T): void;
@@ -311,7 +312,7 @@ const CandidateScanHandle = CandidateScanRequest.extend({
 
 const startCandidateScan = defineOperation({
   name: "start-candidate-security-scan",
-  description: "Submits the exact locally verified workspace subject to the authorized scanner.",
+  description: "Submits the exact locally verified workspace candidate to the authorized scanner.",
   input: CandidateScanRequest,
   output: CandidateScanHandle,
   binding: "security.scan.start",
@@ -395,7 +396,7 @@ const awaitCandidateScan = defineObserver({
   },
 });
 
-const WorkspaceSubject = z.object({
+const WorkspaceSnapshot = z.object({
   workspaceId: z.string(),
   generation: z.number().int().nonnegative(),
   treeHash: z.string(),
@@ -406,7 +407,7 @@ const RemediationDossierContent = z.object({
   plan: ArtifactPointer,
   approval: ApprovedPlanReview,
   implementation: ImplementationReport,
-  localVerification: z.object({ evidence: z.string(), subject: WorkspaceSubject }),
+  localVerification: z.object({ evidence: z.string(), candidate: WorkspaceSnapshot }),
   candidateScan: CandidateScanResult,
 });
 
@@ -524,11 +525,13 @@ const securityRemediationWorkflow = defineWorkflow(
 
     expectType<SecurityCaseValue>(securityCase);
 
-    const assessment = await ctx.agent({
-      key: "assess-remediation",
-      agent: remediationAnalyst,
-      input: { securityCase },
-    });
+    const assessment = await ctx.agent(
+      remediationAnalyst,
+      { securityCase },
+      {
+        key: "assess-remediation",
+      },
+    );
 
     expectType<RemediationAssessmentValue>(assessment.value);
     // @ts-expect-error Agent-derived advice cannot be passed where this workflow requires host-attested evidence.
@@ -577,29 +580,31 @@ const securityRemediationWorkflow = defineWorkflow(
       { proposedPaths: securityCase.authorization.editablePaths },
       { key: "resolve-remediation-write-paths", label: "Resolve authorized remediation paths" },
     );
-    const implementation = await ctx.agent({
-      key: "implement-remediation",
-      agent: remediationDeveloper,
-      input: { securityCase, approvedAssessment: assessment.value, approval: approvedPlan },
-      write: writeScope,
-      goal: { definition: remediationGoal, input: verificationInput, attempts: 3 },
-    });
+    const implementation = await ctx.agent(
+      remediationDeveloper,
+      { securityCase, approvedAssessment: assessment.value, approval: approvedPlan },
+      {
+        key: "implement-remediation",
+        write: writeScope,
+        goal: { definition: remediationGoal, input: verificationInput, attempts: 3 },
+      },
+    );
 
-    const head = await ctx.git.head();
+    const head = await ctx.git.head({ key: "read-remediated-head" });
     const scanCandidate = await ctx.operation.prepare(
       startCandidateScan,
       {
         caseId: securityCase.caseId,
         head: head.sha,
-        workspaceId: implementation.goal.subject.workspaceId,
-        generation: implementation.goal.subject.generation,
-        treeHash: implementation.goal.subject.treeHash,
+        workspaceId: implementation.goal.candidate.workspaceId,
+        generation: implementation.goal.candidate.generation,
+        treeHash: implementation.goal.candidate.treeHash,
       },
       { key: "prepare-candidate-scan", label: "Freeze exact security scan request" },
     );
     const scanAuthorization = await ctx.operation.authorize(startCandidateScan, scanCandidate, {
       key: "authorize-candidate-scan",
-      detail: `Submit ${head.sha} from workspace generation ${implementation.goal.subject.generation}.`,
+      detail: `Submit ${head.sha} from workspace generation ${implementation.goal.candidate.generation}.`,
     });
     const scanHandle = await ctx.operation.execute(
       startCandidateScan,
@@ -630,7 +635,7 @@ const securityRemediationWorkflow = defineWorkflow(
           implementation: implementation.value,
           localVerification: {
             evidence: implementation.goal.evidence,
-            subject: implementation.goal.subject,
+            candidate: implementation.goal.candidate,
           },
           candidateScan: scan,
         },
@@ -641,7 +646,7 @@ const securityRemediationWorkflow = defineWorkflow(
           generation: ctx.workspace.generation,
         },
       },
-      { key: "remediation-dossier" },
+      { key: "remediation-dossier", candidate: implementation.goal.candidate },
     );
 
     const publicationGate = await ctx.gate({

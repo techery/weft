@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type ArtifactRefOf,
   type CheckResult,
@@ -14,9 +16,8 @@ import {
   type GateResult,
   type HumanReviewResult,
   type WorkflowNode,
-  type WorkspaceSubject,
-  z,
-} from "../../index.ts";
+  type WorkspaceSnapshotRef,
+} from "../../core/index.ts";
 
 /** Why: Makes compile-time contract assertions visible without adding a runtime test helper. Use: Pass inferred DSL values to it in this typechecked example. */
 declare function expectType<T>(value: T): void;
@@ -26,7 +27,7 @@ const ArtifactPointer = z.object({
   sha256: z.string().min(1),
 });
 
-const WorkspaceSubjectSchema = z.object({
+const WorkspaceSnapshotSchema = z.object({
   workspaceId: z.string().min(1),
   generation: z.number().int().nonnegative(),
   treeHash: z.string().min(1),
@@ -35,7 +36,7 @@ const WorkspaceSubjectSchema = z.object({
 const ExactCandidate = z.object({
   branch: z.string().min(1),
   head: z.string().min(1),
-  subject: WorkspaceSubjectSchema,
+  snapshot: WorkspaceSnapshotSchema,
 });
 
 /** Why: Names the exact branch, commit, and workspace generation that every proof must describe. Use: Carry it unchanged from final verification through review and production delivery. */
@@ -238,10 +239,10 @@ const SerializableCheckResult = z.object({
   disposition: z.enum(["executed", "trusted", "waived"]),
   summary: z.string().optional(),
   evidence: z.string().optional(),
-  subject: WorkspaceSubjectSchema,
+  candidate: WorkspaceSnapshotSchema,
 });
 
-/** Why: Names the persisted subset of a check result without pretending its nominal subject can be reconstructed. Use: Store it inside immutable review and delivery artifacts. */
+/** Why: Names the persisted subset of a check result without pretending its nominal candidate can be reconstructed. Use: Store it inside immutable review and delivery artifacts. */
 type SerializableCheckResultValue = z.input<typeof SerializableCheckResult>;
 
 /** Why: Converts an engine check result into schema-safe evidence while preserving exact optional properties. Use: Call it only when crossing an artifact boundary. */
@@ -249,7 +250,7 @@ function serializeCheckResult(result: CheckResult): SerializableCheckResultValue
   return {
     status: result.status,
     disposition: result.disposition,
-    subject: result.subject,
+    candidate: result.candidate,
     ...(result.summary === undefined ? {} : { summary: result.summary }),
     ...(result.evidence === undefined ? {} : { evidence: result.evidence }),
   };
@@ -257,7 +258,7 @@ function serializeCheckResult(result: CheckResult): SerializableCheckResultValue
 
 const RequiredVerification = z.object({
   passed: z.literal(true),
-  subject: WorkspaceSubjectSchema,
+  candidate: WorkspaceSnapshotSchema,
   implementationGoalEvidence: z.string().min(1),
   results: z.object({
     authorizedDiff: SerializableCheckResult,
@@ -284,7 +285,7 @@ const RollbackRehearsal = z.object({
   environment: z.literal("production"),
   candidateHead: z.string().min(1),
   restoreHead: z.string().min(1),
-  source: WorkspaceSubjectSchema,
+  snapshot: WorkspaceSnapshotSchema,
   dryRun: z.object({
     status: z.literal("passed"),
     runRef: z.string().min(1),
@@ -431,7 +432,7 @@ const ChangeWindowWaiverEvidence = z.object({
   action: z.literal(CHANGE_WINDOW_WAIVER_ACTION),
   risk: z.literal("high"),
   maxTtl: z.literal(CHANGE_WINDOW_WAIVER_MAX_TTL),
-  subject: WorkspaceSubjectSchema,
+  candidate: WorkspaceSnapshotSchema,
   failureAttestationRef: z.string().min(1),
   reason: z.string().min(1),
   issue: z.string().min(1).optional(),
@@ -463,7 +464,7 @@ function serializeChangeWindowWaiver(
     action: waiver.action,
     risk: waiver.risk,
     maxTtl: waiver.maxTtl,
-    subject: waiver.subject,
+    candidate: waiver.candidate,
     failureAttestationRef: waiver.failure.ref,
     reason: waiver.reason,
     ...(waiver.issue === undefined ? {} : { issue: waiver.issue }),
@@ -555,7 +556,7 @@ const ProductionDeliveryResult = z.object({
   deploymentId: z.string().min(1),
   environment: z.literal("production"),
   deployedHead: z.string().min(1),
-  source: WorkspaceSubjectSchema,
+  snapshot: WorkspaceSnapshotSchema,
   rollbackId: z.string().min(1),
   attestation: z.string().min(1),
   url: z.string().url(),
@@ -614,8 +615,8 @@ const HotfixWorkflowOutput = z.discriminatedUnion("status", [
 /** Why: Keeps every review, policy, authorization, and delivery branch inside the declared output union. Use: Annotate the workflow callback so terminal status literals cannot widen. */
 type HotfixWorkflowOutputValue = z.input<typeof HotfixWorkflowOutput>;
 
-/** Why: Compares two engine-issued workspace subjects without erasing their nominal provenance. Use: Reject stale verification, waiver, rollback, or delivery evidence. */
-function sameWorkspaceSubject(left: WorkspaceSubject, right: WorkspaceSubject): boolean {
+/** Why: Compares two engine-issued workspace snapshots without erasing their nominal provenance. Use: Reject stale verification, waiver, rollback, or delivery evidence. */
+function sameWorkspaceSnapshot(left: WorkspaceSnapshotRef, right: WorkspaceSnapshotRef): boolean {
   return (
     left.workspaceId === right.workspaceId &&
     left.generation === right.generation &&
@@ -623,13 +624,13 @@ function sameWorkspaceSubject(left: WorkspaceSubject, right: WorkspaceSubject): 
   );
 }
 
-/** Why: Fails closed when an effect or proof refers to a different workspace generation. Use: Call at every transition whose current API cannot encode subject equality in its types. */
-function requireWorkspaceSubject(
-  expected: WorkspaceSubject,
-  actual: WorkspaceSubject,
+/** Why: Fails closed when an effect or proof refers to a different workspace generation. Use: Call at every transition whose current API cannot encode snapshot equality in its types. */
+function requireWorkspaceSnapshot(
+  expected: WorkspaceSnapshotRef,
+  actual: WorkspaceSnapshotRef,
   evidenceName: string,
 ): void {
-  if (!sameWorkspaceSubject(expected, actual)) {
+  if (!sameWorkspaceSnapshot(expected, actual)) {
     throw new Error(`${evidenceName} does not describe the exact hotfix candidate generation`);
   }
 }
@@ -643,7 +644,10 @@ function requireExactDelivery(
   if (
     delivery.deployedHead !== candidate.head ||
     delivery.rollbackId !== rollback.rollbackId ||
-    !sameWorkspaceSubject(delivery.source as WorkspaceSubject, candidate.subject as WorkspaceSubject)
+    !sameWorkspaceSnapshot(
+      delivery.snapshot as WorkspaceSnapshotRef,
+      candidate.snapshot as WorkspaceSnapshotRef,
+    )
   ) {
     throw new Error("The production result does not attest the requested candidate and rollback");
   }
@@ -682,39 +686,43 @@ const emergencyHotfixWorkflow = defineWorkflow(
       { proposedPaths: hotfixCase.authorization.editablePaths },
       { key: "resolve-hotfix-write-paths", label: "Resolve emergency edit paths" },
     );
-    const implementation = await ctx.agent({
-      key: "implement-hotfix",
-      agent: hotfixDeveloper,
-      input: { hotfixCase },
-      write: writeScope,
-      goal: { definition: hotfixImplementationGoal, input: verificationInput, attempts: 3 },
-    });
+    const implementation = await ctx.agent(
+      hotfixDeveloper,
+      { hotfixCase },
+      {
+        key: "implement-hotfix",
+        write: writeScope,
+        goal: { definition: hotfixImplementationGoal, input: verificationInput, attempts: 3 },
+      },
+    );
 
     expectType<HotfixImplementationValue>(implementation.value);
     if (implementation.files.length === 0) throw new Error("The hotfix produced no changed files");
 
-    await ctx.git.add({ paths: implementation.files });
+    await ctx.git.add({ key: "stage-hotfix", paths: implementation.files });
     const commit = await ctx.git.commit({
+      key: "commit-hotfix",
       message: `fix: emergency hotfix for ${hotfixCase.incidentId}`,
       paths: implementation.files,
     });
 
+    const candidateSnapshot = ctx.workspace.snapshot;
     const finalChecks = await ctx.check(requiredHotfixChecks, verificationInput, {
-      keyPrefix: "final-required",
+      key: "final-required",
       policy: "required",
       concurrency: 3,
+      candidate: candidateSnapshot,
     });
     if (!finalChecks.passed) throw new Error("An unwaivable hotfix check failed");
 
-    requireWorkspaceSubject(finalChecks.subject, ctx.workspace.subject, "Final required checks");
     const candidate: ExactCandidateValue = {
       branch: ctx.workspace.branch,
       head: commit.sha,
-      subject: finalChecks.subject,
+      snapshot: candidateSnapshot,
     };
     const requiredVerification: RequiredVerificationValue = {
       passed: true,
-      subject: finalChecks.subject,
+      candidate: candidateSnapshot,
       implementationGoalEvidence: implementation.goal.evidence,
       results: {
         authorizedDiff: serializeCheckResult(finalChecks.results.authorizedDiff),
@@ -743,9 +751,9 @@ const emergencyHotfixWorkflow = defineWorkflow(
       { candidate: rollbackCandidate, authorization: rollbackAuthorization },
       { key: "prepare-rollback", attempts: 1 },
     );
-    requireWorkspaceSubject(
-      candidate.subject as WorkspaceSubject,
-      rollback.source as WorkspaceSubject,
+    requireWorkspaceSnapshot(
+      candidateSnapshot,
+      rollback.snapshot as WorkspaceSnapshotRef,
       "Rollback",
     );
     if (rollback.candidateHead !== candidate.head || rollback.restoreHead !== hotfixCase.productionHead) {
@@ -758,7 +766,11 @@ const emergencyHotfixWorkflow = defineWorkflow(
         content: rollback,
         metadata: { workflowRunId: ctx.run.id, incidentId: hotfixCase.incidentId, candidate },
       },
-      { key: "rollback-evidence", label: "Attested rollback rehearsal" },
+      {
+        key: "rollback-evidence",
+        label: "Attested rollback rehearsal",
+        candidate: candidateSnapshot,
+      },
     );
     expectType<RollbackArtifactRef>(rollbackArtifact);
 
@@ -770,12 +782,8 @@ const emergencyHotfixWorkflow = defineWorkflow(
     const initialWindow = await ctx.check(productionChangeWindow, changeWindowInput, {
       key: "production-change-window",
       policy: "required",
+      candidate: candidateSnapshot,
     });
-    requireWorkspaceSubject(
-      candidate.subject as WorkspaceSubject,
-      initialWindow.subject,
-      "Change-window check",
-    );
 
     const reviewArtifact = await ctx.artifact(
       hotfixReviewDossier,
@@ -791,7 +799,11 @@ const emergencyHotfixWorkflow = defineWorkflow(
         },
         metadata: { workflowRunId: ctx.run.id, incidentId: hotfixCase.incidentId, candidate },
       },
-      { key: "hotfix-review-dossier", label: `Hotfix ${hotfixCase.incidentId} at ${candidate.head}` },
+      {
+        key: "hotfix-review-dossier",
+        label: `Hotfix ${hotfixCase.incidentId} at ${candidate.head}`,
+        candidate: candidateSnapshot,
+      },
     );
 
     const review = await ctx.human.review({
@@ -861,7 +873,7 @@ const emergencyHotfixWorkflow = defineWorkflow(
       }
 
       const requestedExpiresAtMs = Date.parse(approvedReview.waiverRequest.expiresAt);
-      const requestedAtMs = await ctx.now();
+      const requestedAtMs = await ctx.now({ key: "change-window-waiver-requested-at" });
       const requestedTtlMs = Math.floor(requestedExpiresAtMs - requestedAtMs);
       if (
         !Number.isFinite(requestedExpiresAtMs) ||
@@ -877,19 +889,14 @@ const emergencyHotfixWorkflow = defineWorkflow(
         };
       }
 
-      const waiver = await ctx.check.authorize(productionChangeWindow, initialWindow, {
+      const waiver = await ctx.check.authorizeWaiver(productionChangeWindow, initialWindow, {
         key: "authorize-change-window-waiver",
         reason: approvedReview.waiverRequest.reason,
         issue: hotfixCase.incidentId,
         ttl: requestedTtlMs,
         detail: `Reviewer ${approvedReview.reviewerId} requested ${CHANGE_WINDOW_CHECK_REVISION} for exact candidate ${candidate.head} and dossier ${approvedReview.reviewedSha256}.`,
       });
-      requireWorkspaceSubject(
-        candidate.subject as WorkspaceSubject,
-        waiver.subject as WorkspaceSubject,
-        "Waiver",
-      );
-      const waiverObservedAtMs = await ctx.now();
+      const waiverObservedAtMs = await ctx.now({ key: "change-window-waiver-observed-at" });
       if (
         waiver.failure.ref !== initialWindow.attestation.ref ||
         waiver.reason !== approvedReview.waiverRequest.reason ||
@@ -906,7 +913,6 @@ const emergencyHotfixWorkflow = defineWorkflow(
         policy: "required",
         waive: waiver,
       });
-      requireWorkspaceSubject(candidate.subject as WorkspaceSubject, waivedWindow.subject, "Waived check");
       if (waivedWindow.disposition !== "waived") {
         throw new Error("The change-window check was not recorded as waived");
       }
@@ -935,7 +941,11 @@ const emergencyHotfixWorkflow = defineWorkflow(
         },
         metadata: { workflowRunId: ctx.run.id, incidentId: hotfixCase.incidentId, candidate },
       },
-      { key: "delivery-dossier", label: `Authorized delivery dossier for ${candidate.head}` },
+      {
+        key: "delivery-dossier",
+        label: `Authorized delivery dossier for ${candidate.head}`,
+        candidate: candidateSnapshot,
+      },
     );
     expectType<DeliveryDossierRef>(deliveryDossier);
 
@@ -943,7 +953,7 @@ const emergencyHotfixWorkflow = defineWorkflow(
       key: "authorize-production-hotfix",
       action: `Deploy ${candidate.head} to production for ${hotfixCase.incidentId}`,
       risk: "irreversible",
-      detail: `Exact workspace ${candidate.subject.workspaceId}:${candidate.subject.generation}:${candidate.subject.treeHash}; dossier ${deliveryDossier.ref} (${deliveryDossier.sha256}); rollback ${rollback.rollbackId}.`,
+      detail: `Exact workspace ${candidate.snapshot.workspaceId}:${candidate.snapshot.generation}:${candidate.snapshot.treeHash}; dossier ${deliveryDossier.ref} (${deliveryDossier.sha256}); rollback ${rollback.rollbackId}.`,
     });
 
     if (!deliveryGate.approved || deliveryGate.answeredBy === "timeout") {
@@ -956,12 +966,12 @@ const emergencyHotfixWorkflow = defineWorkflow(
       };
     }
 
-    requireWorkspaceSubject(
-      candidate.subject as WorkspaceSubject,
-      ctx.workspace.subject,
+    requireWorkspaceSnapshot(
+      candidateSnapshot,
+      ctx.workspace.snapshot,
       "Current workspace",
     );
-    const currentHead = await ctx.git.head();
+    const currentHead = await ctx.git.head({ key: "revalidate-hotfix-head" });
     if (currentHead.sha !== candidate.head)
       throw new Error("The reviewed candidate head changed before delivery");
 
@@ -994,6 +1004,7 @@ const emergencyHotfixWorkflow = defineWorkflow(
     requireExactDelivery(delivery, candidate, rollback);
 
     await ctx.note({
+      key: "record-emergency-hotfix-delivery",
       kind: "claim",
       text: `Delivered ${candidate.head} to production with rollback ${rollback.rollbackId}.`,
       evidence: deliveryDossier.ref,
@@ -1027,6 +1038,6 @@ expectType<ApprovedDeliveryGateValue>(unboundGate);
 // proof, rollback contracts, and outcome checks remain domain schemas; the three explicit transition calls are sound but
 // make a compact delivery flow noticeably more verbose when a separate business gate must also remain inspectable.
 //
-// Round 6 reimplementation: waiver eligibility, host policy, maximum TTL, exact failed subject, and authorization
-// now remain nominal from `ctx.check.authorize` through the waived result. Only the serializable evidence projection
+// Round 6 reimplementation: waiver eligibility, host policy, maximum TTL, exact failed candidate, and authorization
+// now remain nominal from `ctx.check.authorizeWaiver` through the waived result. Only the serializable evidence projection
 // is structural, and it is never accepted back as executable waiver authority.

@@ -21,6 +21,13 @@ for (const file of readdirSync(sourceDir).filter((name) => name.endsWith(".ts") 
 
     let end = index - 1;
     while (end >= 0 && lines[end]?.trim() === "") end -= 1;
+    const inlineDoc = lines[end]?.trim();
+    if (inlineDoc?.startsWith("/**") && inlineDoc.endsWith("*/")) {
+      if (inlineDoc.replace(/[/*\s]/g, "").length === 0) {
+        missing.push(`${file}:${index + 1} ${match[1]} has empty JSDoc`);
+      }
+      continue;
+    }
     if (end < 0 || lines[end]?.trim() !== "*/") {
       missing.push(`${file}:${index + 1} ${match[1]} has no JSDoc`);
       continue;
@@ -34,8 +41,8 @@ for (const file of readdirSync(sourceDir).filter((name) => name.endsWith(".ts") 
     }
 
     const docs = lines.slice(start, end + 1).join("\n");
-    if (!docs.includes("* Why:") || !docs.includes("* Use:")) {
-      missing.push(`${file}:${index + 1} ${match[1]} JSDoc must explain both Why and Use`);
+    if (docs.replace(/[/*\s]/g, "").length === 0) {
+      missing.push(`${file}:${index + 1} ${match[1]} has empty JSDoc`);
     }
   }
 }

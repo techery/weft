@@ -1,6 +1,6 @@
 # DSL workflow design rounds
 
-This log records ten compile-time authoring rounds against the declaration-only DSL. Each round uses
+This log records eleven compile-time authoring rounds against the declaration-only DSL. Each round uses
 concrete coding workflows, an adversarial type/DX review, and an API-minimization pass. A proposed feature
 is accepted only when it makes a safety boundary expressible or removes repeated accidental complexity; a
 helper that merely shortens ordinary TypeScript is rejected.
@@ -14,7 +14,7 @@ What held up:
 - schema inference survived agents, goals, checks, workspaces, artifacts, operations, and observers;
 - `WorkflowNode` remained useful as shared definition identity without pretending definitions had one
   context-free input/output pair;
-- ordinary TypeScript was sufficient for bounded rework and phase-specific policy.
+- ordinary TypeScript was sufficient for bounded rework and step-specific policy.
 
 Friction found:
 
@@ -48,9 +48,9 @@ Changes accepted:
 
 - `SequenceFn` now preserves the enclosing workspace mode, so an item scope inside a candidate or durable
   workspace cannot silently fall back to detached-patch semantics;
-- engine-observed generations are nominal `WorkspaceSnapshotRef` values, executed check/suite results always
-  carry their subject, active workspaces expose the current subject, and `PatchRef` is nominal and names its
-  base snapshot.
+- engine-observed generations are nominal `WorkspaceSnapshotRef` values, active workspaces expose the current
+  `snapshot`, check and suite calls bind it as their `candidate`, and `PatchRef` is nominal and names its base
+  snapshot.
 
 Rejected: universal public `WorkflowNodeInputOf` / `WorkflowNodeOutputOf` helpers. Several definitions have
 different results when bound to different invocation modes, so only `WorkflowInvocationInput` and
@@ -65,11 +65,11 @@ Workflows: adversarial multi-lens review, exact-head pull-request delivery, and 
 
 Changes accepted:
 
-- `defineReview` is a subject-bound specialization of transparent orchestration. Its evaluator may use any
+- `defineReview` is a candidate-bound specialization of transparent orchestration. Its evaluator may use any
   reviewer topology, but the engine guards one unchanged `WorkspaceSnapshotRef`, validates findings, applies
   pure acceptance policy, and returns a typed attestation. Rework remains explicit workflow code;
 - `defineDelivery` is not an alias for `defineOperation`. `ctx.delivery.prepare` atomically validates
-  same-subject attestations and freezes delivery input, `ctx.delivery.authorize` mints candidate-specific
+  same-candidate evidence and freezes delivery input, `ctx.delivery.authorize` mints candidate-specific
   authority, and callable `ctx.delivery` performs the host-bound effect and returns an attested receipt;
 - checks, suites, goals, and review results expose nominal `SubjectAttestation` values; artifacts are nominal,
   record provenance sources, and can be passed directly to `ctx.human.review` without losing their exact type.
@@ -92,7 +92,7 @@ Changes accepted:
 - `defineContextSource` is strictly read-only and host-bound, returning a nominal `ContextSnapshot` with
   freshness, trust, and general `EvidenceRef` provenance;
 - `definePathPolicy` separates fixed roots and denials from proposed paths; only `ctx.paths.resolve` can mint
-  an expiring, exact-subject `WriteScope`;
+  an expiring `WriteScope` bound to the current workspace snapshot;
 - operations declare either no authorization or a required authorization policy. Unprotected operations are
   directly callable, while protected effects use the explicit prepare → authorize → execute transition.
 
@@ -141,7 +141,7 @@ Changes accepted:
 - successful receipts alone unlock explicit protected compensation. Reverse ordering, continued recovery, and
   manual intervention remain visible ordinary workflow code;
 - check definitions default to `waiver: { mode: "never" }`. Eligible revisioned checks use a fixed host policy,
-  authorize only an executed exact-subject failure, and return a nominal expiring `CheckWaiverRef` retained on
+  authorize only an executed exact-candidate failure, and return a nominal expiring `CheckWaiverRef` retained on
   the waived result.
 
 Rejected: a generic saga/recovery node, `ctx.defer(callback)`, workflow-authored error classifiers, and task
@@ -181,7 +181,7 @@ What held up:
 - cross-repository orchestration remains ordinary parent workflow code, with each child owning its own bound
   workspace and budget.
 
-Deferred: exact revision and definition-name literals, subject-correlated promotion evidence, and provenance
+Deferred: exact revision and definition-name literals, candidate-correlated promotion evidence, and provenance
 literal preservation move to the adversarial inference round.
 
 ## Round 8 — adversarial type safety and inference
@@ -201,8 +201,8 @@ What held up:
 
 Changes accepted:
 
-- `PromotionEvidence<Subject>` now requires every attestation to name the candidate subject, and
-  `NoInfer<Subject>` prevents conflicting evidence from widening that subject during preparation;
+- promotion evidence now preserves the exact candidate, and `NoInfer<Candidate>` prevents conflicting evidence
+  from widening it during preparation. Round 11 later restricts promotion to positive proof handles;
 - eligible checks retain an exact revision literal through a trailing compatible generic, so waiver authority
   carries the definition's name and revision without a wrapper or assertion;
 - operation, review, and delivery definitions retain exact names. This strengthens effect identity and keeps
@@ -214,12 +214,13 @@ Rejected: a universal public node-to-input/output helper and an implicitly dynam
 node kinds have multiple invocation modes, and a generic indexed registry cannot preserve key, input, and result
 correlation without an explicit discriminant or exhaustive narrowing.
 
-Kept intentionally broad: host-observed trust authorities and observer completion endpoints. A declaration states
-minimum policy and possible strategy; evidence must report what the host actually established rather than copy a
-narrower author claim.
+Kept intentionally broad in this round: host-observed trust authorities and observer completion endpoints.
+Round 11 later preserves the declared allow-list and enforced trust floor as precise result postconditions while
+still requiring the host to establish and mint the evidence.
 
 Deferred: a compact public derivation helper for exported recoverable-operation wrappers. Inline use is already
-well inferred, so the helper needs repeated demand before expanding the surface.
+well inferred, so the helper needs repeated demand before expanding the surface. Round 11 later adds the smaller
+`withRecovery` and `runRecoverable` façade while retaining this explicit lifecycle in `/advanced`.
 
 ## Round 9 — canonical workflow reimplementation
 
@@ -228,7 +229,7 @@ Workflows: issue-to-reviewed-pull-request, security remediation, and dependency 
 What held up:
 
 - each workflow uses one host-verified workspace target, fresh authoritative context, nominal write scope,
-  bounded agents, required verification, exact-subject review, an immutable dossier, and authorized delivery;
+  bounded agents, required verification, exact-candidate review, an immutable dossier, and authorized delivery;
 - rework remains a small ordinary loop that captures a new workspace generation and reruns checks and review;
 - triggers stay outside workflows as admission definitions, while observers appear only when a workflow truly
   waits for changing external state. None of the three canonical workflows needed either merely for ceremony;
@@ -237,32 +238,32 @@ What held up:
 
 Changes accepted:
 
-- check-suite results and member results now retain an invocation's exact workspace subject. Passing
-  `subject` in suite options produces a promotion-compatible exact-subject attestation;
+- check-suite results and member results now retain an invocation's exact workspace candidate. Passing
+  `candidate` in suite options produces a promotion-compatible exact-candidate attestation;
 - `ReviewResult` retains the optional evaluator summary, avoiding a parallel summary channel in rework and
   evidence dossiers;
-- subject-bound artifact capture now returns a required exact subject and artifact attestation. Explicitly
+- candidate-bound artifact capture now returns the required exact candidate and artifact attestation. Explicitly
   unbound capture returns `undefined`, while broad storage/tooling types can still represent either branch.
 
 Rejected: automatic rework, implicit artifact capture, implicit delivery after passing checks, and adding triggers
 or observers to the canonical examples. Each would hide a policy or engine boundary that the workflow author
 must be able to see.
 
-Remaining tradeoff: context trust metadata stays host-observed and therefore broad. A workflow making a
-consequential decision performs a small runtime guard for the accepted authority and freshness instead of
-treating the declaration's minimum policy as proof of what the host actually observed.
+Remaining tradeoff at this round: context trust metadata stayed host-observed and broad. Round 11 replaces that
+widening with definition-derived postcondition types; a future host still has to reject observations that do not
+satisfy the declared floor and authority allow-list.
 
-## Round 10 — CI failure repair and final API audit
+## Round 10 — CI failure repair and integrated API audit
 
 Workflow: authenticated failed-CI admission, bounded repair, independent review, exact repair delivery, and
 authoritative replacement-run observation. Separate adversarial fixtures exercised every definition family,
-subject correlation, erased unions, and public versus internal execution boundaries.
+candidate correlation, erased unions, and public versus internal execution boundaries.
 
 What held up:
 
 - trigger admission, canonical context resolution, workspace targeting, path authority, and delivery each own
   a distinct trust transition; none became redundant when combined in one workflow;
-- an exact workspace subject flows through the verification suite, adversarial review, promotion candidate,
+- an exact workspace candidate flows through the verification suite, adversarial review, promotion candidate,
   delivery receipt, and observed CI result without reducing authority to copied hashes;
 - the public DSL stays small when ordinary TypeScript owns loops, rework, factories, and exhaustive registries.
 
@@ -270,13 +271,13 @@ Changes accepted:
 
 - all reusable definition families now retain identity literals that affect correlation, including prompt,
   agent, recipe, artifact, suite, goal, UI, task-contract, and workflow identity; workflows require a stable ID;
-- exact check subjects must be supplied as nominal input. Unbound calls remain intentionally broad, while
-  suite members, results, attestations, artifacts, reviews, and deliveries preserve an explicitly bound subject;
+- exact check candidates must be supplied as nominal input. Unbound calls remain intentionally broad, while
+  suite members, results, attestations, artifacts, reviews, and deliveries preserve an explicitly bound candidate;
 - inline agents receive an internal normalized node and invocation, closing the node-backed executor without
   adding a public inline definition factory;
 - plain contexts expose read-only Git, workspace contexts add local mutations, fetch is read-only, secret
   handles are nominal, and callers cannot declare effect risk. Generic remote effects require a protected
-  operation; promotion of workspace state requires an exact-subject delivery;
+  operation; promotion of workspace state requires an exact-candidate delivery;
 - dynamic string workflow dispatch was removed. Exact definition calls and exhaustive narrowing preserve the
   input/output relationship that an unvalidated name cannot;
 - package docs and the clean `prepack` build now keep the published declaration surface aligned with source.
@@ -288,9 +289,74 @@ definition boundary.
 
 Deferred: a public `OperationAttemptFor` convenience helper and a separate exhaustive primitive-effect algebra.
 The recoverable-operation transitions are verbose but honest, while primitive effects are already typed on the
-host context and need a real engine implementation before another public abstraction is justified.
+host context and need a real engine implementation before another public abstraction is justified. Round 11
+addresses the ordinary call site with a declarative recovery wrapper rather than exposing another attempt helper.
 
-Final boundary: local workspace generations may advance provisionally. External promotion can advance only by
-freezing one exact current generation, collecting same-subject nominal evidence, obtaining candidate-specific
+Boundary retained: local workspace generations may advance provisionally. External promotion can advance only
+by freezing one exact current generation, collecting same-candidate positive proof, obtaining candidate-specific
 authority, and executing the corresponding delivery. This keeps the authoring API concise without letting type
 convenience invent runtime trust.
+
+## Round 11 — assessment response and public-surface tightening
+
+Pressure test: seven compiler-confirmed unsoundness cases plus an authoring-surface audit. The negative fixture is
+[`src/examples/rounds/round-11-type-safety-regressions.ts`](./src/examples/rounds/round-11-type-safety-regressions.ts).
+
+Strict regressions closed:
+
+1. an agent goal is one `GoalBinding`, so its definition and input cannot be inferred independently;
+2. required input presence comes from the definition form (`"none"` or `"required"`), so a schema whose value
+   includes `undefined` still requires an explicit `input` property;
+3. widened agent options return every possible envelope, while one `ctx.agent(definition, input, options)` call
+   keeps read, write, and recoverable-failure policy orthogonal and type-safe;
+4. custom providers use a discriminated `dynamic` form and cannot overlap the built-in provider union;
+5. delivery preparation accepts only engine-minted positive check, review, or goal proofs. A failure, waiver,
+   artifact, arbitrary attestation, or copied snapshot is not promotion proof;
+6. `failure: "return"` returns an exhaustive `AgentOutcome` with diagnostic failure data; omitting it keeps
+   required completion and throwing failure semantics;
+7. engine-minted definitions, observations, artifacts, grants, proofs, waivers, protected candidates,
+   authorizations, attempts, and recoverable receipts carry private-member nominal identity, so object spread
+   cannot directly retain authority while rewriting visible fields. Generic intersection helpers and unsafe casts
+   remain TypeScript escape hatches, so a future host must still validate registry identity, digests, candidate,
+   policy, and expiry at every consequential boundary.
+
+Authoring changes accepted:
+
+- one callable `ctx.agent` now covers reusable definitions, inputless definitions, and one-off `{ prompt,
+  schema }` definitions. The final options object carries `key`, optional `write`, and optional
+  `failure: "return"`; there are no separate read, write, or try methods;
+- ordinary protected operations and verified deliveries have one-shot `.run` facades. `withRecovery` binds
+  guaranteed direct cleanup and optional compensation once, and `.runRecoverable` returns the exhaustive commit
+  classification without public attempt generics. Their single durable key names the logical effect; a conforming
+  engine derives stable lifecycle subkeys. Explicit prepare, authorize, execute, recovery, candidate, and receipt
+  contracts remain available from the `/advanced` subpath;
+- parallel work chooses `.all` or `.settled` at the method boundary, starts work only through an item callback,
+  rejects already-started promise items, and requires `keyOf`. Pipelines reject async `map`, distinguish pure
+  `map`/`filter` from named durable `mapEffect` calls, and terminate with the same all-or-settled choice;
+- `ctx.step` is the single durable grouping primitive. It namespaces child keys without introducing a second
+  grouping abstraction;
+- `WorkflowCtx`, `WorkspaceCtx`, and authority-reduced `ReviewCtx` make callback capabilities legible. Public
+  workflow, recipe, and review definitions retain hidden type bags but no longer expose their implementation
+  callbacks or positional phantom fields; `typeof` and named extractors recover the contract;
+- source trust and freshness results retain the definition's enforced floor, authority literals, and reject-stale
+  guarantee. Ordinary code reads `ctx.workspace.snapshot` and passes it as `candidate`; checks, reviews,
+  artifacts, and deliveries must atomically reject a stale candidate or evidence from another candidate.
+  `/advanced` exposes `sameSnapshot` and `assertUnchanged` only for code that genuinely needs explicit probes;
+- `ctx.policy.decide` and `ctx.human.confirm` are branch decisions, never reusable effect authority. Operations
+  and deliveries alone mint authorization bound to frozen candidates; `ctx.check.authorizeWaiver` names its
+  narrower exact-failure exception explicitly;
+- checks and primitive journaled filesystem, Git, process, network, signal, clock, randomness, environment,
+  note, and integration effects require one stable author key. Scoped contexts may namespace that key without
+  changing the semantic identity rule;
+- task operations consistently keep durable options last, while task contracts retain only an extension schema
+  and agent-access policy. They expose no author-facing contract version, revision, or migration surface because
+  tasks are short-lived. Engine-owned per-task numeric revisions still protect optimistic updates, and dedupe
+  keys still make retried upserts converge. Human review accepts immutable
+  artifact references as a first-class subject, and engine-minted result fields are read-only;
+- the package root uses a curated context with one-shot protected effects; `/advanced` exposes the comprehensive
+  lifecycle context. `/testing` is a type-only harness contract, and the build emits declarations with no runtime
+  export condition.
+
+Proof boundary: this package still contains declarations and compile-time fixtures, not the engine behavior
+implied by journaling, key derivation, host validation, freezing, freshness checks, authorization consumption,
+or task persistence. Round 11 makes those runtime obligations more precise; it does not claim they ship here.

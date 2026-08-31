@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type AnySchema,
   type Ctx,
@@ -8,8 +10,7 @@ import {
   type WorkflowInputSchemaOf,
   type WorkflowNode,
   type WorkflowOutputSchemaOf,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes compile-time contract assertions visible without adding runtime behavior. Use: Pass inferred registry values to it in this typechecked example. */
 declare function expectType<Type>(value: Type): void;
@@ -58,7 +59,7 @@ const testRepairV1Workflow = defineWorkflow(
     return {
       kind: "test-repair",
       revision: "v1",
-      repairId: await ctx.uuid(),
+      repairId: await ctx.uuid({ key: "repair-id" }),
       testFile: input.testFile,
       verificationTarget: `${input.testFile}#${input.testName}`,
     };
@@ -106,7 +107,7 @@ const dependencyUpgradeV1Workflow = defineWorkflow(
     return {
       kind: "dependency-upgrade",
       revision: "v1",
-      changeId: await ctx.uuid(),
+      changeId: await ctx.uuid({ key: "change-id" }),
       manifestPath: input.manifestPath,
       dependency: input.dependency,
       targetVersion: input.targetVersion,
@@ -160,7 +161,7 @@ const dependencyUpgradeV2Workflow = defineWorkflow(
     return {
       kind: "dependency-upgrade",
       revision: "v2",
-      changeId: await ctx.uuid(),
+      changeId: await ctx.uuid({ key: "change-id" }),
       workspaceRoot: input.workspaceRoot,
       dependency: input.dependency,
       targetRange: input.targetRange,
@@ -211,7 +212,7 @@ const documentationSyncV1Workflow = defineWorkflow(
     return {
       kind: "documentation-sync",
       revision: "v1",
-      syncId: await ctx.uuid(),
+      syncId: await ctx.uuid({ key: "sync-id" }),
       documentationRoot: input.documentationRoot,
       sourceCount: input.sourcePaths.length,
       audience: input.audience,

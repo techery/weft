@@ -5,31 +5,19 @@ import type { AnySchema, WorkflowNode } from "./shared.ts";
 // Durable tasks
 // ---------------------------------------------------------------------------
 
-/**
- * Why: Gives the tasks DSL an explicit workflow task status contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding tasks API.
- */
+/** Workflow task status. */
 export type WorkflowTaskStatus = "todo" | "in_progress" | "blocked" | "done" | "cancelled";
-/**
- * Why: Gives the tasks DSL an explicit workflow task priority contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding tasks API.
- */
+/** Workflow task priority. */
 export type WorkflowTaskPriority = "low" | "medium" | "high" | "critical";
 
-/**
- * Why: Gives the tasks DSL an explicit workflow task criterion contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding tasks API.
- */
+/** Workflow task criterion. */
 export interface WorkflowTaskCriterion {
   id: string;
   text: string;
   met: boolean;
 }
 
-/**
- * Why: Gives the tasks DSL an explicit workflow task note contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding tasks API.
- */
+/** Workflow task note. */
 export interface WorkflowTaskNote {
   text: string;
   at: number;
@@ -43,7 +31,6 @@ export interface WorkflowTaskNote {
 export interface WorkflowTaskSummary<Extensions = unknown> {
   id: string;
   revision: number;
-  extensionSchemaVersion: number;
   dedupeKey?: string;
   title: string;
   description: string;
@@ -58,10 +45,7 @@ export interface WorkflowTaskSummary<Extensions = unknown> {
   updatedAt: number;
 }
 
-/**
- * Why: Gives the tasks DSL an explicit workflow task selector contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding tasks API.
- */
+/** Workflow task selector. */
 export interface WorkflowTaskSelector {
   ids?: string[];
   dedupeKeys?: string[];
@@ -71,28 +55,19 @@ export interface WorkflowTaskSelector {
   limit?: number;
 }
 
-/**
- * Why: Gives the tasks DSL an explicit agent task access contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding tasks API.
- */
+/** Agent task access. */
 export interface AgentTaskAccess extends WorkflowTaskSelector {
   mode: "read" | "write";
 }
 
-/**
- * Why: Gives the tasks DSL an explicit workflow task snapshot contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding tasks API.
- */
+/** Workflow task snapshot. */
 export interface WorkflowTaskSnapshot<Extensions = unknown> {
   total: number;
   truncated: boolean;
   tasks: WorkflowTaskSummary<Extensions>[];
 }
 
-/**
- * Why: Gives the tasks DSL an explicit workflow task create input contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding tasks API.
- */
+/** Workflow task create input. */
 export interface WorkflowTaskCreateInput<Extensions = unknown> {
   title: string;
   description: string;
@@ -105,10 +80,7 @@ export interface WorkflowTaskCreateInput<Extensions = unknown> {
   extensions?: Extensions;
 }
 
-/**
- * Why: Gives the tasks DSL an explicit workflow task update input contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding tasks API.
- */
+/** Workflow task update input. */
 export interface WorkflowTaskUpdateInput<Extensions = unknown> {
   title?: string;
   description?: string;
@@ -123,27 +95,18 @@ export interface WorkflowTaskUpdateInput<Extensions = unknown> {
   ifRevision?: number;
 }
 
-/**
- * Why: Gives the tasks DSL an explicit workflow task step options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding tasks API.
- */
+/** Workflow task step options. */
 export interface WorkflowTaskStepOptions {
   key: string;
 }
 
-/**
- * Why: Gives the tasks DSL an explicit workflow task mutation options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding tasks API.
- */
+/** Workflow task mutation options. */
 export interface WorkflowTaskMutationOptions extends WorkflowTaskStepOptions {
   ifRevision?: number;
 }
 
-/**
- * Why: Gives the tasks DSL an explicit workflow task upsert input contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding tasks API.
- */
-export interface WorkflowTaskUpsertInput<Extensions = unknown> extends WorkflowTaskStepOptions {
+/** Workflow task upsert input. */
+export interface WorkflowTaskUpsertInput<Extensions = unknown> {
   dedupeKey: string;
   set: WorkflowTaskCreateInput<Extensions>;
   note?: string;
@@ -158,7 +121,10 @@ export interface WorkflowTasksApi<ExtensionInput = unknown, Extensions = Extensi
     selector: WorkflowTaskSelector,
     opts: WorkflowTaskStepOptions,
   ): Promise<WorkflowTaskSnapshot<Extensions>>;
-  upsert(input: WorkflowTaskUpsertInput<ExtensionInput>): Promise<void>;
+  upsert(
+    input: WorkflowTaskUpsertInput<ExtensionInput>,
+    opts: WorkflowTaskStepOptions,
+  ): Promise<void>;
   update(
     id: string,
     input: WorkflowTaskUpdateInput<ExtensionInput>,
@@ -174,44 +140,28 @@ export interface WorkflowTasksApi<ExtensionInput = unknown, Extensions = Extensi
 }
 
 /**
- * Why: Pins workflow-specific task extensions to a schema and semantic revision.
+ * Why: Pins short-lived workflow task extensions to one validation schema.
  * Use: Create one with `defineTaskContract` and attach it to workflow metadata.
  */
-export interface TaskContract<
-  S extends AnySchema,
-  Revision extends string = string,
-  Version extends number = number,
-> extends WorkflowNode<"weft.task-contract"> {
+export interface TaskContract<S extends AnySchema> extends WorkflowNode<"weft.task-contract"> {
   readonly kind: "weft.task-contract";
   readonly schema: S;
-  readonly revision: Revision;
-  readonly version: Version;
   readonly agentAccess?: false | "read" | "write";
-  readonly migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
 }
 
 /**
- * Why: Declares typed durable task extensions and their evolution policy.
+ * Why: Declares typed extensions and optional agent access for short-lived workflow tasks.
  * Use: Use it at module scope, then pass the returned contract as `defineWorkflow` metadata `tasks`.
  */
-export interface TaskContractConfig<
-  S extends AnySchema,
-  Revision extends string = string,
-  Version extends number = number,
-> {
+export interface TaskContractConfig<S extends AnySchema> {
   schema: S;
-  revision: Revision;
-  version?: Version;
   agentAccess?: false | "read" | "write";
-  migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
 }
 
 /**
- * Why: Declares typed durable task extensions and their evolution policy.
+ * Why: Declares typed extensions and optional agent access for short-lived workflow tasks.
  * Use: Use it at module scope, then pass the returned contract as `defineWorkflow` metadata `tasks`.
  */
-export declare function defineTaskContract<
-  S extends AnySchema,
-  const Revision extends string = string,
-  const Version extends number = number,
->(config: TaskContractConfig<S, Revision, Version>): TaskContract<S, Revision, Version>;
+export declare function defineTaskContract<S extends AnySchema>(
+  config: TaskContractConfig<S>,
+): TaskContract<S>;

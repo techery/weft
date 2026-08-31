@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type ContextSnapshotOf,
   defineAgent,
@@ -13,10 +15,8 @@ import {
   defineWorkflow,
   type ObserverInvocationOptionsOf,
   type WorkflowNode,
-  type WorkspaceSnapshotRef,
   type WriteScope,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 declare function expectType<Type>(value: Type): void;
 const FailureHint = z.object({
@@ -162,13 +162,14 @@ const adversarialRepairReview = defineReview({
       throw new Error("Canonical CI failure changed after repair");
     }
     const report = await ctx.agent({
-      key: "review:adversarial-agent",
       prompt: [
         `Try to disprove repair ${failure.caseId} on tree ${input.candidateTree}.`,
         `Changed files: ${input.changedFiles.join(", ")}. Claim: ${input.repairSummary}.`,
         "Inspect the diff for symptom masking, scope drift, regressions, and missing tests. Do not write or use network.",
       ],
       schema: ReviewReport,
+    }, {
+      key: "review:adversarial-agent",
       provider: { id: "codex", effort: "high", options: { sandboxMode: "read-only", networkAccess: false } },
       context: [snapshot],
       maxTurns: 14,
@@ -271,19 +272,6 @@ const RepairOutcome = z.object({
   observation: z.object({ ref: z.string().min(1), sha256: z.string().min(1) }),
 });
 type RepairOutcomeValue = z.input<typeof RepairOutcome>;
-function requireSameSubject(
-  actual: WorkspaceSnapshotRef,
-  expected: WorkspaceSnapshotRef,
-  stage: string,
-): void {
-  if (
-    actual.workspaceId !== expected.workspaceId ||
-    actual.generation !== expected.generation ||
-    actual.treeHash !== expected.treeHash
-  ) {
-    throw new Error(`${stage} observed another workspace generation`);
-  }
-}
 
 const ciFailureRepairWorkflow = defineWorkflow(
   {
@@ -310,8 +298,8 @@ const ciFailureRepairWorkflow = defineWorkflow(
     }
     const snapshot = await ctx.context(ciFailureSource, hint, { key: "canonical-failure" });
     const failure = requireCanonicalFailure(snapshot, hint);
-    const head = await ctx.git.head();
-    const status = await ctx.git.status();
+    const head = await ctx.git.head({ key: "failed-ci-git-head" });
+    const status = await ctx.git.status({ key: "failed-ci-git-status" });
     if (head.sha !== failure.failedHead || !status.clean) {
       throw new Error("Repair workspace must start clean at the canonical failed head");
     }
@@ -320,23 +308,23 @@ const ciFailureRepairWorkflow = defineWorkflow(
       { proposedPaths: failure.repairPaths },
       { key: "repair-paths" },
     );
-    requireSameSubject(scope.grant.subject, ctx.workspace.subject, "Write grant");
-    const repair = await ctx.agent({
+    const repair = await ctx.agent(ciRepairAgent, { failure }, {
       key: "repair",
-      agent: ciRepairAgent,
-      input: { failure },
       context: [snapshot],
       write: scope,
     });
     const changedFiles = [...new Set(repair.files)].sort();
     if (changedFiles.length === 0) throw new Error("Repair produced no candidate changes");
-    const subject = ctx.workspace.subject;
+    const candidateSnapshot = ctx.workspace.snapshot;
     const verification = await ctx.check(
       repairVerification,
-      { caseId: failure.caseId, candidateTree: subject.treeHash, pathGrantRef: scope.grant.ref },
-      { keyPrefix: "verification", policy: "required", subject },
+      {
+        caseId: failure.caseId,
+        candidateTree: candidateSnapshot.treeHash,
+        pathGrantRef: scope.grant.ref,
+      },
+      { key: "verification", policy: "required", candidate: candidateSnapshot },
     );
-    requireSameSubject(verification.subject, subject, "Verification");
     if (
       !verification.passed ||
       verification.results.repaired.disposition !== "executed" ||
@@ -349,14 +337,12 @@ const ciFailureRepairWorkflow = defineWorkflow(
       {
         hint,
         failureRevision: failure.revision,
-        candidateTree: subject.treeHash,
+        candidateTree: candidateSnapshot.treeHash,
         changedFiles,
         repairSummary: repair.value.summary,
       },
-      { key: "adversarial-review", subject },
+      { key: "adversarial-review", candidate: candidateSnapshot },
     );
-    requireSameSubject(review.subject, subject, "Review");
-    requireSameSubject(ctx.workspace.subject, subject, "Post-review workspace");
     if (review.status !== "accepted") throw new Error("Adversarial review rejected the repair");
     const rerunInput = {
       caseId: failure.caseId,
@@ -364,43 +350,41 @@ const ciFailureRepairWorkflow = defineWorkflow(
       originalRunId: failure.runId,
       jobId: failure.jobId,
       repairBranch: ctx.workspace.branch,
-      candidateTree: subject.treeHash,
+      candidateTree: candidateSnapshot.treeHash,
       verificationRef: verification.attestation.ref,
       reviewRef: review.evidence,
-      idempotencyKey: `${failure.caseId}:${subject.treeHash}`,
+      idempotencyKey: `${failure.caseId}:${candidateSnapshot.treeHash}`,
     };
     const candidate = await ctx.delivery.prepare(
       submitRepairRerun,
       {
-        subject,
+        snapshot: candidateSnapshot,
         input: rerunInput,
-        evidence: [verification.attestation, review.attestation],
+        proofs: [verification.proof, review.proof],
       },
       { key: "prepare-rerun" },
     );
     const authority = await ctx.delivery.authorize(submitRepairRerun, candidate, {
       key: "authorize-rerun",
-      detail: `Submit verified tree ${subject.treeHash} for ${failure.caseId}.`,
+      detail: `Submit verified tree ${candidateSnapshot.treeHash} for ${failure.caseId}.`,
     });
     const delivery = await ctx.delivery(
       submitRepairRerun,
       { candidate, authorization: authority },
       { key: "submit-rerun", attempts: 1 },
     );
-    requireSameSubject(delivery.subject, subject, "CI submission");
     const rerun = delivery.value;
-    if (rerun.candidateTree !== subject.treeHash || rerun.jobId !== failure.jobId) {
+    if (rerun.candidateTree !== candidateSnapshot.treeHash || rerun.jobId !== failure.jobId) {
       throw new Error("CI submission receipt does not identify the repaired candidate");
     }
     const observed = await ctx.observe.detailed(waitForRepairCi, rerun, {
       key: "wait-for-repair-ci",
       timeout: "1h",
     });
-    requireSameSubject(ctx.workspace.subject, subject, "CI observation");
     if (
       observed.output.rerunId !== rerun.rerunId ||
       observed.output.jobId !== rerun.jobId ||
-      observed.output.candidateTree !== subject.treeHash ||
+      observed.output.candidateTree !== candidateSnapshot.treeHash ||
       observed.output.correlation !== rerun.correlation ||
       observed.provenance.binding !== "ci.run.signal" ||
       observed.provenance.trust?.level !== "authoritative" ||
@@ -411,7 +395,7 @@ const ciFailureRepairWorkflow = defineWorkflow(
     return {
       status: observed.output.conclusion === "success" ? "passed" : "failed",
       caseId: failure.caseId,
-      candidateTree: subject.treeHash,
+      candidateTree: candidateSnapshot.treeHash,
       rerun,
       conclusion: observed.output.conclusion,
       observation: { ref: observed.evidence.ref, sha256: observed.evidence.sha256 },
@@ -454,8 +438,8 @@ expectType<ObserverInvocationOptionsOf<typeof waitForRepairCi>>({
   every: "30s",
 });
 // Round 10 findings (maximum five):
-// 1. RESOLVED: CI submission is a delivery, so its candidate freezes the exact workspace subject together with nominal
+// 1. RESOLVED: CI submission is a delivery, so its candidate freezes the exact workspace snapshot together with nominal
 //    suite and review attestations before authorization; a general operation is intentionally not expanded.
 // 2. RESOLVED: review evaluation and results retain nominal sourceEvidence gathered during independent re-resolution.
 // 3. NOT REDUNDANT: trigger admission authenticates and deduplicates ingress; context re-resolution establishes current
-//    failure truth; the exact-subject delivery starts external work; the observer proves its terminal result.
+//    failure truth; the exact-candidate delivery starts external work; the observer proves its terminal result.

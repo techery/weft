@@ -10,12 +10,10 @@ import {
   definePrompt,
   defineReview,
   defineWorkflow,
-  type WaiverEligibleCheckDefinition,
-  type WorkflowNode,
-  type WorkspaceSnapshotRef,
   type WriteScope,
   z,
 } from "../../index.ts";
+import type { WaiverEligibleCheckDefinition } from "../../advanced.ts";
 
 /** Why: Keeps compile-time security assertions readable without adding runtime behavior. Use: Pass inferred definitions or capabilities to it below. */
 declare function expectType<Type>(value: Type): void;
@@ -213,7 +211,6 @@ const adversarialSecurityReview = defineReview({
     }
 
     const report = await ctx.agent({
-      key: "adversarial-review:agent",
       prompt: [
         `Try to refute case ${current.caseId} on exact tree ${input.candidateTree}.`,
         `Inspect the diff for ${input.changedFiles.join(", ")}.`,
@@ -223,6 +220,8 @@ const adversarialSecurityReview = defineReview({
         "Report concrete findings only. Do not modify files, use the network, or trust the implementation claim.",
       ],
       schema: AdversarialReviewReport,
+    }, {
+      key: "adversarial-review:agent",
       provider: {
         id: "codex",
         effort: "high",
@@ -315,21 +314,6 @@ const SecurityRemediationOutput = z.object({
 /** Why: Keeps the workflow callback's terminal literal and schema boundary precise. Use: Return only after delivery receipt identity has been checked. */
 type SecurityRemediationOutputValue = z.input<typeof SecurityRemediationOutput>;
 
-/** Why: Detects workspace drift between write, verification, review, evidence capture, and delivery. Use: Compare engine-minted subjects after every read-only phase. */
-function requireSameSubject(
-  actual: WorkspaceSnapshotRef,
-  expected: WorkspaceSnapshotRef,
-  stage: string,
-): void {
-  if (
-    actual.workspaceId !== expected.workspaceId ||
-    actual.generation !== expected.generation ||
-    actual.treeHash !== expected.treeHash
-  ) {
-    throw new Error(`${stage} observed a different workspace generation`);
-  }
-}
-
 const securityRemediationWorkflow = defineWorkflow(
   {
     id: "refined-security-remediation",
@@ -355,8 +339,8 @@ const securityRemediationWorkflow = defineWorkflow(
       throw new Error("Workspace routing does not match the authoritative security case");
     }
 
-    const head = await ctx.git.head();
-    const status = await ctx.git.status();
+    const head = await ctx.git.head({ key: "authorized-git-head" });
+    const status = await ctx.git.status({ key: "authorized-git-status" });
     if (
       head.sha !== securityCase.routing.authorizedHead ||
       status.branch !== securityCase.routing.branch ||
@@ -365,42 +349,36 @@ const securityRemediationWorkflow = defineWorkflow(
       throw new Error("Security remediation must start from the authorized clean head");
     }
 
-    const initialSubject = ctx.workspace.subject;
     const writeScope = await ctx.paths.resolve(
       remediationWritePolicy,
       { proposedPaths: securityCase.remediationPaths },
       { key: "remediation-paths", label: `Resolve paths for ${securityCase.caseId}` },
     );
-    requireSameSubject(writeScope.grant.subject, initialSubject, "Write authorization");
-
-    const implementation = await ctx.agent({
+    const implementation = await ctx.agent(remediationDeveloper, {
+      securityCase,
+    }, {
       key: "implement-remediation",
-      agent: remediationDeveloper,
-      input: {
-        securityCase,
-      },
       context: [caseSnapshot],
       write: writeScope,
     });
     const changedFiles = [...new Set(implementation.files)].sort();
     if (changedFiles.length === 0) throw new Error("Remediation agent produced no candidate changes");
-    const candidateSubject = ctx.workspace.subject;
+    const candidate = ctx.workspace.snapshot;
 
     const verification = await ctx.check(
       securityVerification,
       {
         caseId: securityCase.caseId,
         packageFilter: securityCase.packageFilter,
-        candidateTree: candidateSubject.treeHash,
+        candidateTree: candidate.treeHash,
         pathGrantRef: writeScope.grant.ref,
       },
       {
-        keyPrefix: "verify-remediation",
+        key: "verify-remediation",
         policy: "required",
-        subject: candidateSubject,
+        candidate,
       },
     );
-    requireSameSubject(verification.subject, candidateSubject, "Verification");
     if (
       !verification.passed ||
       verification.results.security.status !== "pass" ||
@@ -420,15 +398,13 @@ const securityRemediationWorkflow = defineWorkflow(
         caseToken: input.caseToken,
         caseId: securityCase.caseId,
         caseRevision: securityCase.revision,
-        candidateTree: candidateSubject.treeHash,
+        candidateTree: candidate.treeHash,
         changedFiles,
         implementationSummary: implementation.value.summary,
         verificationRefs,
       },
-      { key: "adversarial-review", subject: candidateSubject },
+      { key: "adversarial-review", candidate },
     );
-    requireSameSubject(review.subject, candidateSubject, "Adversarial review");
-    requireSameSubject(ctx.workspace.subject, candidateSubject, "Post-review workspace");
     if (review.status !== "accepted") {
       throw new Error("Adversarial review found a blocking security issue");
     }
@@ -439,7 +415,7 @@ const securityRemediationWorkflow = defineWorkflow(
         content: {
           caseId: securityCase.caseId,
           caseRevision: securityCase.revision,
-          candidateTree: candidateSubject.treeHash,
+          candidateTree: candidate.treeHash,
           changedFiles,
           implementationSummary: implementation.value.summary,
           verificationRefs: [verification.attestation.ref, securityAttestationRef, integrityAttestationRef],
@@ -449,7 +425,7 @@ const securityRemediationWorkflow = defineWorkflow(
       {
         key: "remediation-evidence",
         label: `Evidence for ${securityCase.caseId}`,
-        subject: candidateSubject,
+        candidate,
         sources: [
           caseSnapshot.evidence,
           ...review.sourceEvidence,
@@ -458,40 +434,30 @@ const securityRemediationWorkflow = defineWorkflow(
         ],
       },
     );
-    requireSameSubject(ctx.workspace.subject, candidateSubject, "Evidence capture");
-
-    const candidate = await ctx.delivery.prepare(
-      publishSecurityRemediation,
-      {
-        subject: candidateSubject,
-        input: {
-          caseId: securityCase.caseId,
-          repository: securityCase.repository,
-          branch: securityCase.routing.branch,
-          baseRef: securityCase.routing.baseRef,
-          candidateTree: candidateSubject.treeHash,
-          changedFiles,
-          evidence: { ref: evidence.ref, sha256: evidence.sha256 },
-        },
-        evidence: [verification.attestation, review.attestation, evidence.attestation],
-        artifacts: [evidence],
+    const delivery = await ctx.delivery.run(publishSecurityRemediation, {
+      key: "publish-remediation",
+      label: `Publish ${securityCase.caseId}`,
+      candidate,
+      input: {
+        caseId: securityCase.caseId,
+        repository: securityCase.repository,
+        branch: securityCase.routing.branch,
+        baseRef: securityCase.routing.baseRef,
+        candidateTree: candidate.treeHash,
+        changedFiles,
+        evidence: { ref: evidence.ref, sha256: evidence.sha256 },
       },
-      { key: "prepare-remediation-delivery", label: `Freeze ${securityCase.caseId}` },
-    );
-    const authorization = await ctx.delivery.authorize(publishSecurityRemediation, candidate, {
-      key: "authorize-remediation-delivery",
-      detail: `Publish ${securityCase.caseId} from exact tree ${candidateSubject.treeHash} with evidence ${evidence.sha256}.`,
+      proofs: [verification.proof, review.proof],
+      artifacts: [evidence],
+      authorization: {
+        detail: `Publish ${securityCase.caseId} from exact tree ${candidate.treeHash} with evidence ${evidence.sha256}.`,
+      },
+      attempts: 1,
     });
-    const delivery = await ctx.delivery(
-      publishSecurityRemediation,
-      { candidate, authorization },
-      { key: "publish-remediation", attempts: 1 },
-    );
-    requireSameSubject(delivery.subject, candidateSubject, "Delivery receipt");
     if (
       delivery.value.caseId !== securityCase.caseId ||
       delivery.value.branch !== securityCase.routing.branch ||
-      delivery.value.candidateTree !== candidateSubject.treeHash
+      delivery.value.candidateTree !== candidate.treeHash
     ) {
       throw new Error("Delivery receipt does not identify the authorized remediation candidate");
     }
@@ -510,4 +476,4 @@ declare const ordinaryPaths: readonly string[];
 expectType<WriteScope<typeof remediationWritePolicy>>(ordinaryPaths);
 // @ts-expect-error A non-waivable security check cannot enter the host waiver-authorization path.
 expectType<WaiverEligibleCheckDefinition>(securityRemediated);
-expectType<WorkflowNode<"weft.workflow">>(securityRemediationWorkflow);
+expectType<"weft.workflow">(securityRemediationWorkflow.kind);

@@ -9,8 +9,7 @@ import {
   definePrompt,
   defineReview,
   defineWorkflow,
-  type WorkflowDefinition,
-  type WorkspaceSnapshotRef,
+  type WorkflowContract,
   z,
 } from "../../index.ts";
 
@@ -202,7 +201,8 @@ const candidateReview = defineReview({
   name: "refined-issue-candidate-review",
   input: ReviewInputSchema,
   finding: FindingSchema,
-  evaluate: async (ctx, input) => (await ctx.agent({ key: "reviewer", agent: reviewer, input })).value,
+  evaluate: async (ctx, input) =>
+    (await ctx.agent(reviewer, input, { key: "reviewer" })).value,
   accept: ({ assessments }) => assessments.every(({ disposition }) => disposition !== "blocking"),
 });
 
@@ -342,14 +342,6 @@ const OutputSchema: z.ZodType<IssueToReviewedPrOutput, IssueToReviewedPrOutput> 
   ],
 );
 
-function sameSubject(left: WorkspaceSnapshotRef, right: WorkspaceSnapshotRef): boolean {
-  return (
-    left.workspaceId === right.workspaceId &&
-    left.generation === right.generation &&
-    left.treeHash === right.treeHash
-  );
-}
-
 function requireIssue(issue: CanonicalIssue, input: IssueToReviewedPrInput): void {
   if (issue.repository !== input.repository || issue.number !== input.issueNumber) {
     throw new Error("The authoritative source returned a different issue");
@@ -379,20 +371,15 @@ function blocked(
   };
 }
 
-/** Why: Exposes exact schemas and workspace ownership for registry and trigger inference. Use: Admit only its validated input. */
-export type IssueToReviewedPrWorkflow = WorkflowDefinition<
+/** Why: Demonstrates candidate-correlated issue-to-reviewed-PR delivery with bounded rework. Use: Prefer it over earlier structural examples. */
+export const issueToReviewedPrWorkflow: WorkflowContract<
   IssueToReviewedPrInput,
   IssueToReviewedPrOutput,
   unknown,
-  IssueToReviewedPrInput,
   unknown,
-  typeof InputSchema,
-  typeof OutputSchema,
-  true
->;
-
-/** Why: Demonstrates subject-correlated issue-to-reviewed-PR delivery with bounded rework. Use: Prefer it over earlier structural examples. */
-export const issueToReviewedPrWorkflow: IssueToReviewedPrWorkflow = defineWorkflow(
+  true,
+  "refined-issue-to-reviewed-pr"
+> = defineWorkflow(
   {
     id: "refined-issue-to-reviewed-pr",
     name: "Issue to reviewed pull request",
@@ -405,11 +392,11 @@ export const issueToReviewedPrWorkflow: IssueToReviewedPrWorkflow = defineWorkfl
     }),
   },
   async (ctx, input): Promise<IssueToReviewedPrOutput> => {
-    const initialStatus = await ctx.git.status();
+    const initialStatus = await ctx.git.status({ key: "initial-git-status" });
     if (!initialStatus.clean || initialStatus.branch !== input.branch) {
       throw new Error("The workflow requires its clean, host-selected branch");
     }
-    const baseHead = (await ctx.git.head()).sha;
+    const baseHead = (await ctx.git.head({ key: "base-git-head" })).sha;
 
     const issueSnapshot = await ctx.context(
       issueSource,
@@ -422,7 +409,7 @@ export const issueToReviewedPrWorkflow: IssueToReviewedPrWorkflow = defineWorkfl
       return blocked(input, "issue-ineligible", 0, null, issueSnapshot.evidence.ref);
     }
 
-    const plan = (await ctx.agent({ key: "plan", agent: planner, input: issue, context: [issueSnapshot] }))
+    const plan = (await ctx.agent(planner, issue, { key: "plan", context: [issueSnapshot] }))
       .value;
     let feedback: z.infer<typeof FeedbackSchema>[] = [];
 
@@ -433,10 +420,8 @@ export const issueToReviewedPrWorkflow: IssueToReviewedPrWorkflow = defineWorkfl
         { proposedPaths: plan.proposedPaths },
         { key: "paths" },
       );
-      const implementation = await attemptCtx.agent({
+      const implementation = await attemptCtx.agent(implementer, { issue, plan, attempt, feedback }, {
         key: "implement",
-        agent: implementer,
-        input: { issue, plan, attempt, feedback },
         context: [issueSnapshot],
         write: scope,
       });
@@ -447,22 +432,25 @@ export const issueToReviewedPrWorkflow: IssueToReviewedPrWorkflow = defineWorkfl
           feedback = [{ source: "implementation", summary: "No files changed", details: [] }];
           continue;
         }
-        const head = (await attemptCtx.git.head()).sha;
+        const head = (await attemptCtx.git.head({ key: "empty-implementation-head" })).sha;
         return blocked(input, "implementation-exhausted", attempt, head, null);
       }
 
-      await attemptCtx.git.add({ paths: changedFiles });
+      await attemptCtx.git.add({ key: "stage-changed-files", paths: changedFiles });
       const committed = await attemptCtx.git.commit({
+        key: "commit-implementation",
         message: `fix: resolve #${issue.number} ${issue.title}`.slice(0, 120),
         paths: changedFiles,
       });
-      const status = await attemptCtx.git.status();
-      const head = (await attemptCtx.git.head()).sha;
+      const status = await attemptCtx.git.status({ key: "committed-git-status" });
+      const head = (await attemptCtx.git.head({ key: "committed-git-head" })).sha;
       if (!status.clean || status.branch !== input.branch || head !== committed.sha) {
         throw new Error("The committed attempt is not the clean workflow branch head");
       }
-      const subject = attemptCtx.workspace.subject;
-      const candidateFiles = (await attemptCtx.git.changedSince(baseHead)).files.map(({ path }) => path);
+      const candidate = attemptCtx.workspace.snapshot;
+      const candidateFiles = (
+        await attemptCtx.git.changedSince(baseHead, { key: "candidate-files-since-base" })
+      ).files.map(({ path }) => path);
       if (candidateFiles.length === 0) {
         if (attempt < 3) {
           feedback = [{ source: "implementation", summary: "Candidate has no net changes", details: [] }];
@@ -474,11 +462,8 @@ export const issueToReviewedPrWorkflow: IssueToReviewedPrWorkflow = defineWorkfl
       const quality = await attemptCtx.check(
         qualitySuite,
         {},
-        { keyPrefix: "quality", policy: "required", concurrency: 3, subject },
+        { key: "quality", policy: "required", concurrency: 3, candidate },
       );
-      if (!sameSubject(subject, quality.subject)) {
-        throw new Error("Required checks observed workspace drift");
-      }
       if (!quality.passed) {
         const details = [quality.results.typecheck, quality.results.tests, quality.results.lint]
           .filter((result) => result.status === "fail")
@@ -493,11 +478,8 @@ export const issueToReviewedPrWorkflow: IssueToReviewedPrWorkflow = defineWorkfl
       const review = await attemptCtx.review(
         candidateReview,
         { issue, plan, head, changedFiles: candidateFiles, checkAttestationRef: quality.attestation.ref },
-        { key: "review", subject },
+        { key: "review", candidate },
       );
-      if (!sameSubject(subject, review.subject)) {
-        throw new Error("Independent review observed workspace drift");
-      }
       if (review.status === "rework") {
         const details = review.blocking.map(({ code, message, path }) =>
           path === null ? `${code}: ${message}` : `${path}: ${code}: ${message}`,
@@ -515,9 +497,6 @@ export const issueToReviewedPrWorkflow: IssueToReviewedPrWorkflow = defineWorkfl
         { key: "refresh-issue", maxAge: "30s" },
       );
       requireIssue(refreshed.value, input);
-      if (!sameSubject(subject, attemptCtx.workspace.subject)) {
-        throw new Error("Issue refresh observed workspace drift");
-      }
       if (refreshed.value.revision !== issue.revision || !eligible(refreshed.value)) {
         return blocked(input, "issue-drift", attempt, head, refreshed.evidence.ref);
       }
@@ -540,44 +519,31 @@ export const issueToReviewedPrWorkflow: IssueToReviewedPrWorkflow = defineWorkfl
         },
         {
           key: "dossier",
-          subject,
+          candidate,
           sources: [issueSnapshot.evidence, refreshed.evidence, quality.attestation, review.attestation],
         },
       );
-      const candidate = await attemptCtx.delivery.prepare(
-        delivery,
-        {
-          subject,
-          input: {
-            idempotencyKey: `${issue.repository}#${issue.number}:${subject.treeHash}`,
-            repository: issue.repository,
-            issueNumber: issue.number,
-            issueUrl: issue.url,
-            base: input.baseRef,
-            branch: input.branch,
-            expectedHead: head,
-            title: issue.title,
-            body: `${plan.summary}\n\nCloses ${issue.url}\n\nEvidence: ${dossier.ref}`,
-            dossierRef: dossier.ref,
-            dossierSha256: dossier.sha256,
-          },
-          evidence: [quality.attestation, review.attestation, dossier.attestation],
-          artifacts: [dossier],
+      const receipt = await attemptCtx.delivery.run(delivery, {
+        key: "publish-pull-request",
+        candidate,
+        input: {
+          idempotencyKey: `${issue.repository}#${issue.number}:${candidate.treeHash}`,
+          repository: issue.repository,
+          issueNumber: issue.number,
+          issueUrl: issue.url,
+          base: input.baseRef,
+          branch: input.branch,
+          expectedHead: head,
+          title: issue.title,
+          body: `${plan.summary}\n\nCloses ${issue.url}\n\nEvidence: ${dossier.ref}`,
+          dossierRef: dossier.ref,
+          dossierSha256: dossier.sha256,
         },
-        { key: "prepare-delivery" },
-      );
-      const authorization = await attemptCtx.delivery.authorize(delivery, candidate, {
-        key: "authorize-delivery",
-        detail: `Push ${input.branch} at ${head} and open its pull request.`,
+        proofs: [quality.proof, review.proof],
+        artifacts: [dossier],
+        authorization: { detail: `Push ${input.branch} at ${head} and open its pull request.` },
+        attempts: 2,
       });
-      const receipt = await attemptCtx.delivery(
-        delivery,
-        { candidate, authorization },
-        { key: "deliver", attempts: 2 },
-      );
-      if (!sameSubject(subject, receipt.subject)) {
-        throw new Error("Delivery observed workspace drift");
-      }
       const value = receipt.value;
       if (
         value.repository !== issue.repository ||
@@ -605,3 +571,6 @@ export const issueToReviewedPrWorkflow: IssueToReviewedPrWorkflow = defineWorkfl
     throw new Error("Unreachable: every bounded attempt returns or continues");
   },
 );
+
+/** Why: Names the exact inferred workflow contract without restating its hidden type state. Use: Reuse it in registries and trigger definitions. */
+export type IssueToReviewedPrWorkflow = typeof issueToReviewedPrWorkflow;

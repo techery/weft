@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type Ctx,
   defineAgent,
@@ -9,8 +11,7 @@ import {
   defineWorkflow,
   type Settled,
   type WorkflowNode,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes the intended inference boundaries visible in this typechecked example. Use: Assert exact workflow-node and workspace-write behavior. */
 declare function expectType<Type>(value: Type): void;
@@ -62,7 +63,7 @@ const EvidenceHandoffSchema = z
   })
   .strict();
 
-/** Why: Serializes only an immutable pointer across a workflow schema boundary. Use: Pass it downstream only after the host resolver revalidates storage, subject, and repository binding. */
+/** Why: Serializes only an immutable pointer across a workflow schema boundary. Use: Pass it downstream only after the host resolver revalidates storage, snapshot, and repository binding. */
 type EvidenceHandoff = z.infer<typeof EvidenceHandoffSchema>;
 
 const ChildReadyOutputSchema = z
@@ -178,7 +179,7 @@ const RepositoryVerificationInputSchema = z.object({ command: VerificationComman
 const repositoryVerification = defineCheck({
   name: "cross-repository-program-verification",
   description:
-    "Runs the repository-specific required verification command on the exact child workspace subject.",
+    "Runs the repository-specific required verification command on the exact child workspace candidate.",
   input: RepositoryVerificationInputSchema,
   command: ({ command }) => command,
   policy: "required",
@@ -244,10 +245,8 @@ async function runRepositoryChild(ctx: Ctx<unknown, unknown, true>, input: Child
     { proposedPaths: input.target.allowedPaths },
     { key: "writer-paths", label: `Resolve ${input.nodeId} writer paths` },
   );
-  const implementation = await ctx.agent({
+  const implementation = await ctx.agent(repositoryWriter, input, {
     key: "implement",
-    agent: repositoryWriter,
-    input,
     write: scope,
   });
   expectType<undefined>(implementation.patch);
@@ -274,20 +273,20 @@ async function runRepositoryChild(ctx: Ctx<unknown, unknown, true>, input: Child
         dependencyEvidenceRefs,
         summary: implementation.value.summary,
         publicContractDigest: implementation.value.publicContractDigest,
-        changedFiles: implementation.files,
+        changedFiles: [...implementation.files],
         checkStatus: verification.status,
         checkDisposition: verification.disposition,
         checkAttestationRef: verification.attestation.ref,
-        workspaceId: verification.subject.workspaceId,
-        generation: verification.subject.generation,
-        treeHash: verification.subject.treeHash,
+        workspaceId: verification.candidate.workspaceId,
+        generation: verification.candidate.generation,
+        treeHash: verification.candidate.treeHash,
         budget,
       },
     },
     {
       key: "evidence",
       label: `Capture ${input.nodeId} evidence`,
-      subject: verification.subject,
+      candidate: verification.candidate,
       sources: [verification.attestation],
     },
   );
@@ -313,15 +312,15 @@ async function runRepositoryChild(ctx: Ctx<unknown, unknown, true>, input: Child
     packageName: input.target.packageName,
     summary: implementation.value.summary,
     publicContractDigest: implementation.value.publicContractDigest,
-    changedFiles: implementation.files,
+    changedFiles: [...implementation.files],
     handoff: {
       programId: input.programId,
       nodeId: input.nodeId,
       repository: input.target.repository,
       packageName: input.target.packageName,
-      workspaceId: verification.subject.workspaceId,
-      generation: verification.subject.generation,
-      treeHash: verification.subject.treeHash,
+      workspaceId: verification.candidate.workspaceId,
+      generation: verification.candidate.generation,
+      treeHash: verification.candidate.treeHash,
       evidenceRef: evidence.ref,
       evidenceSha256: evidence.sha256,
       checkAttestationRef: verification.attestation.ref,
@@ -459,7 +458,7 @@ const ResolveEvidenceOutputSchema = z
 const resolveProgramEvidence = defineOperation({
   name: "resolve-cross-repository-program-evidence",
   description:
-    "Re-resolves artifact digests, exact workspace subjects, required checks, dependency refs, and definition-to-repository host bindings.",
+    "Re-resolves artifact digests, exact workspace snapshots, required checks, dependency refs, and definition-to-repository host bindings.",
   input: ResolveEvidenceInputSchema,
   output: ResolveEvidenceOutputSchema,
   binding: "program.evidence-resolver",
@@ -831,10 +830,14 @@ const crossRepositoryProgramWorkflow = defineWorkflow(
         },
       );
     } else {
-      const parallelChildren = await ctx.parallel(
-        [
-          () =>
-            ctx.workflow(
+      const childRuns: ReadonlyArray<{
+        key: "api" | "sdk";
+        run: (childCtx: typeof ctx) => Promise<ChildOutput>;
+      }> = [
+        {
+          key: "api",
+          run: (childCtx) =>
+            childCtx.workflow(
               apiRepositoryWorkflow,
               {
                 programId: input.programId,
@@ -846,8 +849,11 @@ const crossRepositoryProgramWorkflow = defineWorkflow(
               },
               { key: "api", label: "Implement API", budget: { tokens: input.budget.apiTokens } },
             ),
-          () =>
-            ctx.workflow(
+        },
+        {
+          key: "sdk",
+          run: (childCtx) =>
+            childCtx.workflow(
               sdkRepositoryWorkflow,
               {
                 programId: input.programId,
@@ -859,8 +865,12 @@ const crossRepositoryProgramWorkflow = defineWorkflow(
               },
               { key: "sdk", label: "Implement SDK", budget: { tokens: input.budget.sdkTokens } },
             ),
-        ],
-        { key: "api-sdk", concurrency: 2, errors: "settle" },
+        },
+      ];
+      const parallelChildren = await ctx.parallel.settled(
+        childRuns,
+        (child, lane) => child.run(lane.ctx),
+        { key: "api-sdk", keyOf: (child) => child.key, concurrency: 2 },
       );
       const apiOutput = settledChild(parallelChildren[0], "api", input.programId, input.api, failures);
       const sdkOutput = settledChild(parallelChildren[1], "sdk", input.programId, input.sdk, failures);
@@ -958,18 +968,18 @@ const crossRepositoryProgramWorkflow = defineWorkflow(
       failures,
     };
     const reviewScope = ctx.scope({ budget: { tokens: input.budget.reviewTokens } });
-    const reviewed = await reviewScope.agent({
+    const reviewed = await reviewScope.agent(aggregateReviewer, reviewInput, {
       key: "aggregate-review",
-      agent: aggregateReviewer,
-      input: reviewInput,
-      onError: "null",
+      failure: "return",
     });
-    const review: AggregateReviewOutput = reviewed?.value ?? {
-      decision: "blocked",
-      summary: "Aggregate reviewer did not return a schema-valid result",
-      findings: ["Manual aggregate compatibility review is required"],
-      releaseOrder: [],
-    };
+    const review: AggregateReviewOutput = reviewed.ok
+      ? reviewed.result.value
+      : {
+          decision: "blocked",
+          summary: "Aggregate reviewer did not return a schema-valid result",
+          findings: ["Manual aggregate compatibility review is required"],
+          releaseOrder: [],
+        };
     const releaseReady =
       failures.length === 0 &&
       verifiedEvidence.length === programNodeOrder.length &&
@@ -1032,7 +1042,7 @@ expectType<WorkflowNode<"weft.workflow">>(programCatalog.contracts.definition);
 
 // DX findings (maximum three):
 // 1. Soundness: nominal check/artifact evidence cannot cross a generic Zod workflow output. Structural handoffs need
-//    a host operation to re-resolve their digests and exact workspace subjects before each dependent child launches.
+//    a host operation to re-resolve their digests and exact workspace snapshots before each dependent child launches.
 // 2. Convenience: a typed `defineProgram`/module catalog could retain exact heterogeneous child types while declaring
 //    host project bindings, dependency edges, budgets, and evidence handoffs; ordinary TypeScript retains types only
 //    while callers dispatch each concrete definition explicitly.

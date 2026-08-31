@@ -1,15 +1,19 @@
-/** Declaration-only exact-subject review surface for the Weft DSL prototype. */
+/** Declaration-only exact-candidate review surface for the Weft DSL prototype. */
 
 import type {
   AnySchema,
+  DefinitionTypeCarrier,
   EvidenceRef,
   InferIn,
   InferOut,
+  InputOf,
+  OutputOf,
+  PromotionProof,
   SubjectAttestation,
   WorkflowNode,
-  WorkspaceSubject,
+  WorkspaceSnapshotRef,
 } from "./shared.ts";
-import type { Ctx } from "./workflow.ts";
+import type { ReviewCtx } from "./workflow.ts";
 
 // ---------------------------------------------------------------------------
 // Reusable review policies
@@ -42,30 +46,34 @@ export interface ReviewEvaluation<Finding> {
   sourceEvidence?: readonly EvidenceRef[];
 }
 
+/** Hidden type relationships carried by one reusable review definition. */
+export interface ReviewTypes {
+  readonly input: unknown;
+  readonly parsedInput: unknown;
+  readonly output: unknown;
+  readonly rawOutput: unknown;
+  readonly result: ReviewResult<unknown>;
+}
+
 /**
- * Why: Represents a reusable review strategy whose engine binding guarantees one unchanged workspace subject.
- * Use: Create it with `defineReview`, then invoke it through `ctx.review` with an exact subject.
+ * Why: Represents a reusable review strategy whose engine binding guarantees one unchanged workspace candidate.
+ * Use: Create it with `defineReview`, then invoke it through `ctx.review` with an exact candidate.
  */
 export interface ReviewDefinition<
-  Input = unknown,
-  Finding = unknown,
-  ParsedInput = Input,
-  RawFinding = Finding,
+  Types extends ReviewTypes = ReviewTypes,
   Name extends string = string,
-> extends WorkflowNode<"weft.review"> {
+> extends WorkflowNode<"weft.review">,
+    DefinitionTypeCarrier<Types> {
   readonly kind: "weft.review";
   readonly name: Name;
   readonly description?: string;
   readonly input: AnySchema;
   readonly finding: AnySchema;
-  readonly evaluate: (
-    ctx: Ctx<any, any, any>,
-    input: ParsedInput,
-  ) => Promise<ReviewEvaluation<RawFinding>> | ReviewEvaluation<RawFinding>;
-  readonly accept: (evaluation: ReviewEvaluation<Finding>) => boolean;
-  readonly __input?: Input;
-  readonly __finding?: Finding;
 }
+
+/** Exact hidden type relationships carried by one reusable review definition. */
+export type ReviewTypesOf<Definition> =
+  Definition extends ReviewDefinition<infer Types, any> ? Types : never;
 
 /**
  * Why: Declares schemas, orchestration, and pure acceptance policy without freezing one reviewer topology.
@@ -81,7 +89,7 @@ export interface ReviewConfig<
   input: InputSchema;
   finding: FindingSchema;
   evaluate: (
-    ctx: Ctx<any, any, any>,
+    ctx: ReviewCtx,
     input: InferOut<InputSchema>,
   ) => Promise<ReviewEvaluation<InferIn<FindingSchema>>> | ReviewEvaluation<InferIn<FindingSchema>>;
   accept: (evaluation: ReviewEvaluation<InferOut<FindingSchema>>) => boolean;
@@ -89,7 +97,7 @@ export interface ReviewConfig<
 
 /**
  * Why: Declares one reusable review operation while leaving reviewer implementation inside ordinary typed orchestration.
- * Use: Define it at module scope and call it through `ctx.review(definition, input, { key, subject })`.
+ * Use: Define it at module scope and call it through `ctx.review(definition, input, { key, candidate })`.
  */
 export declare function defineReview<
   InputSchema extends AnySchema,
@@ -98,10 +106,13 @@ export declare function defineReview<
 >(
   config: ReviewConfig<InputSchema, FindingSchema, Name>,
 ): ReviewDefinition<
-  InferIn<InputSchema>,
-  InferOut<FindingSchema>,
-  InferOut<InputSchema>,
-  InferIn<FindingSchema>,
+  {
+    input: InferIn<InputSchema>;
+    parsedInput: InferOut<InputSchema>;
+    output: InferOut<FindingSchema>;
+    rawOutput: InferIn<FindingSchema>;
+    result: ReviewResult<InferOut<FindingSchema>>;
+  },
   Name
 >;
 
@@ -110,58 +121,85 @@ export declare function defineReview<
  * Use: It supplies the input side of `ctx.review` and its internal invocation.
  */
 export type ReviewInputOf<Definition> =
-  Definition extends ReviewDefinition<infer Input, any, any, any, any> ? Input : never;
+  Definition extends ReviewDefinition<any, any> ? InputOf<Definition> : never;
 
 /**
  * Why: Recovers the validated finding carried by a review definition.
  * Use: It supplies the exact assessment and result types returned from `ctx.review`.
  */
 export type ReviewFindingOf<Definition> =
-  Definition extends ReviewDefinition<any, infer Finding, any, any, any> ? Finding : never;
+  Definition extends ReviewDefinition<any, any> ? OutputOf<Definition> : never;
 
 /**
  * Why: Recovers the exact definition-time review name for heterogeneous registries and audit projections.
  * Use: Apply it to a concrete `defineReview` result; broad legacy definitions continue to produce `string`.
  */
 export type ReviewNameOf<Definition> =
-  Definition extends ReviewDefinition<any, any, any, any, infer Name> ? Name : never;
+  Definition extends ReviewDefinition<any, infer Name> ? Name : never;
 
 /**
  * Why: Binds review execution to a durable key and one engine-minted workspace generation.
- * Use: Pass the current workspace, check, goal, or candidate subject; the engine rejects drift during evaluation.
+ * Use: Pass the candidate being reviewed; the host verifies it before and after evaluation and rejects drift.
  */
-export interface ReviewInvocationOptions<Subject extends WorkspaceSubject = WorkspaceSubject> {
+export interface ReviewInvocationOptions<Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef> {
   key: string;
   label?: string;
-  subject: Subject;
+  candidate: Candidate;
 }
 
 /**
- * Why: Returns a typed review verdict whose evidence cannot be detached from the generation that was reviewed.
- * Use: Branch on `status`, feed `blocking` findings into rework, and pass `attestation` into promotion preparation.
+ * Why: Carries exact-candidate findings and evidence shared by accepted and rework review branches.
+ * Use: Narrow `ReviewResult.status` before accessing its promotion proof or remediation findings.
  */
-export interface ReviewResult<Finding, Subject extends WorkspaceSubject = WorkspaceSubject> {
-  status: "accepted" | "rework";
-  subject: Subject;
-  summary?: string;
-  sourceEvidence: readonly EvidenceRef[];
-  assessments: readonly ReviewAssessment<Finding>[];
-  blocking: readonly Finding[];
-  advisory: readonly Finding[];
-  refuted: readonly Finding[];
-  evidence: string;
-  attestation: SubjectAttestation<"review", ReviewEvaluation<Finding>, Subject>;
+export interface ReviewResultBase<Finding, Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef> {
+  readonly candidate: Candidate;
+  readonly summary?: string;
+  readonly sourceEvidence: readonly EvidenceRef[];
+  readonly assessments: readonly ReviewAssessment<Finding>[];
+  readonly blocking: readonly Finding[];
+  readonly advisory: readonly Finding[];
+  readonly refuted: readonly Finding[];
+  readonly evidence: string;
+  readonly attestation: SubjectAttestation<"review", ReviewEvaluation<Finding>, Candidate>;
 }
 
 /**
- * Why: Exposes exact-subject reusable review without making rework or delivery implicit.
+ * Why: Mints positive promotion proof only after the review's acceptance policy succeeds for one exact candidate.
+ * Use: Narrow `status === "accepted"`, then pass `proof` to verified delivery.
+ */
+export interface AcceptedReviewResult<Finding, Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef>
+  extends ReviewResultBase<Finding, Candidate> {
+  readonly status: "accepted";
+  readonly proof: PromotionProof<"review", Candidate>;
+}
+
+/**
+ * Why: Retains rework findings as evidence without allowing a negative verdict to authorize promotion.
+ * Use: Narrow `status === "rework"`, feed `blocking` findings into remediation, and review a new generation.
+ */
+export interface ReworkReviewResult<Finding, Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef>
+  extends ReviewResultBase<Finding, Candidate> {
+  readonly status: "rework";
+  readonly proof?: never;
+}
+
+/**
+ * Why: Returns an exhaustive review verdict whose positive proof exists only on the accepted branch.
+ * Use: Receive it from `ctx.review` and narrow on `status` before promotion or rework.
+ */
+export type ReviewResult<Finding, Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef> =
+  | AcceptedReviewResult<Finding, Candidate>
+  | ReworkReviewResult<Finding, Candidate>;
+
+/**
+ * Why: Exposes exact-candidate reusable review without making rework or delivery implicit.
  * Use: Call it once per candidate generation and explicitly decide whether and how to rework the result.
  */
 export type ReviewFn = <
-  Definition extends ReviewDefinition<any, any, any, any, any>,
-  Subject extends WorkspaceSubject,
+  Definition extends ReviewDefinition<any, any>,
+  Candidate extends WorkspaceSnapshotRef,
 >(
   definition: Definition,
   input: ReviewInputOf<Definition>,
-  options: ReviewInvocationOptions<Subject>,
-) => Promise<ReviewResult<ReviewFindingOf<Definition>, Subject>>;
+  options: ReviewInvocationOptions<Candidate>,
+) => Promise<ReviewResult<ReviewFindingOf<Definition>, Candidate>>;

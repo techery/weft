@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import type {
   DefinedAgentInvocation,
   PromptRenderInvocation,
@@ -10,8 +12,8 @@ import {
   defineRecipe,
   type PromptDefinition,
   type RecipeDefinition,
-  z,
-} from "../../index.ts";
+  type WorkflowCtx,
+} from "../../core/index.ts";
 
 /** Why: Makes exact-name compatibility and rejection visible without runtime behavior. Use: Compile this fixture with the package. */
 declare function expectType<Type>(value: Type): void;
@@ -87,8 +89,42 @@ expectType<"round-10-primary-agent">(primaryAgentInvocation.node.name);
 expectType<"round-10-primary-recipe">(primaryRecipeInvocation.node.name);
 
 expectType<PromptDefinition<IdentityInput, IdentityInputValue>>(primaryPrompt);
-expectType<AgentDefinition<IdentityInput, typeof IdentityOutputSchema, IdentityInputValue>>(primaryAgent);
-expectType<RecipeDefinition<IdentityInput, IdentityOutputValue, IdentityInputValue>>(primaryRecipe);
+expectType<
+  AgentDefinition<{
+    input: IdentityInput;
+    parsedInput: IdentityInputValue;
+    output: IdentityOutputValue;
+    rawOutput: z.input<typeof IdentityOutputSchema>;
+    inputMode: "required";
+    outputSchema: typeof IdentityOutputSchema;
+  }>
+>(primaryAgent);
+expectType<
+  RecipeDefinition<{
+    input: IdentityInput;
+    parsedInput: IdentityInputValue;
+    output: IdentityOutputValue;
+    rawOutput: z.input<typeof IdentityOutputSchema>;
+    inputSchema: typeof IdentityInputSchema;
+    outputSchema: typeof IdentityOutputSchema;
+  }>
+>(primaryRecipe);
+
+/** Why: Exercises exact hidden-bag inference through ordinary context calls. Use: Keep agent and recipe outputs precise without positional annotations. */
+async function verifyDefinitionCallInference(ctx: WorkflowCtx): Promise<void> {
+  const agentResult = await ctx.agent(primaryAgent, { task: "verify agent inference" }, {
+    key: "round-10-agent-inference",
+  });
+  expectType<IdentityOutputValue>(agentResult.value);
+
+  const recipeResult = await ctx.recipe(
+    primaryRecipe,
+    { task: "verify recipe inference" },
+  );
+  expectType<IdentityOutputValue>(recipeResult);
+}
+
+void verifyDefinitionCallInference;
 
 // @ts-expect-error Exact prompt names prevent a different nominal definition from entering this slot.
 expectType<typeof primaryPrompt>(alternatePrompt);

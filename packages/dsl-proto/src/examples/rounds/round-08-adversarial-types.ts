@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type CheckInvocationOptions,
   type CheckWaiverRef,
@@ -17,6 +19,7 @@ import {
   defineUiView,
   defineWorkflow,
   type FailedCheckResultOf,
+  type HumanReviewArtifactSubject,
   type InferWorkflowInput,
   type InferWorkflowOutput,
   type ObserverInputOf,
@@ -43,8 +46,7 @@ import {
   type WorkflowOutputSchemaOf,
   type WorkspaceSnapshotRef,
   type WriteScope,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes positive and negative compile-time assertions visible without adding runtime behavior. Use: Exercise exact inferred DSL contracts. */
 declare function expectType<Type>(value: Type): void;
@@ -191,15 +193,28 @@ const workflowResultView = defineResultView({
   component: ({ props }) => props.status,
 });
 
+const WorkflowTaskExtensions = z.object({ owner: z.string().min(1) }).strict();
+
 const workflowTaskContract = defineTaskContract({
-  schema: z.object({ owner: z.string().min(1) }).strict(),
-  revision: "tasks-v3",
-  version: 3,
+  schema: WorkflowTaskExtensions,
 });
 
-const defaultVersionTaskContract = defineTaskContract({
-  schema: z.object({ queue: z.string().min(1) }).strict(),
-  revision: "tasks-v4",
+defineTaskContract({
+  schema: WorkflowTaskExtensions,
+  // @ts-expect-error Run-scoped task contracts intentionally have no migration or schema-version chain.
+  migrations: {},
+});
+
+defineTaskContract({
+  schema: WorkflowTaskExtensions,
+  // @ts-expect-error Task-contract identity does not carry an author-maintained contract revision.
+  revision: "tasks-v1",
+});
+
+defineTaskContract({
+  schema: WorkflowTaskExtensions,
+  // @ts-expect-error Short-lived task contracts do not expose a schema version.
+  version: 2,
 });
 
 expectType<"round-08-workflow-approval">(workflowApprovalView.id);
@@ -208,20 +223,21 @@ expectType<"approval-v2">(workflowApprovalView.revision);
 expectType<typeof workflowApprovalView.revision>("approval-v2");
 expectType<"round-08-workflow-result">(workflowResultView.id);
 expectType<string>(workflowResultView.revision);
-expectType<"tasks-v3">(workflowTaskContract.revision);
-expectType<typeof workflowTaskContract.revision>("tasks-v3");
-expectType<3>(workflowTaskContract.version);
-expectType<typeof workflowTaskContract.version>(3);
-expectType<"tasks-v4">(defaultVersionTaskContract.revision);
-expectType<number>(defaultVersionTaskContract.version);
+expectType<typeof WorkflowTaskExtensions>(workflowTaskContract.schema);
 // @ts-expect-error A different view ID cannot satisfy the exact input-view identity.
 expectType<typeof workflowApprovalView.id>("round-08-other-view");
 // @ts-expect-error A different supplied revision cannot satisfy the exact view revision.
 expectType<typeof workflowApprovalView.revision>("approval-v3");
-// @ts-expect-error A different task revision cannot satisfy the exact contract revision.
-expectType<typeof workflowTaskContract.revision>("tasks-v4");
-// @ts-expect-error A different supplied task version cannot satisfy the exact contract version.
-expectType<typeof workflowTaskContract.version>(4);
+expectType<HumanReviewArtifactSubject>({ kind: "artifact", content: "Review this inline artifact" });
+expectType<HumanReviewArtifactSubject>({ kind: "artifact", path: "artifacts/review.json" });
+expectType<HumanReviewArtifactSubject>(
+  // @ts-expect-error Artifact review subjects require content or a path.
+  { kind: "artifact" },
+);
+expectType<HumanReviewArtifactSubject>(
+  // @ts-expect-error Artifact review subjects select exactly one material source.
+  { kind: "artifact", content: "inline", path: "artifacts/review.json" },
+);
 
 const fakeTriggerProvenance = {
   admissionRef: "admission",
@@ -268,8 +284,13 @@ declare const policySnapshot: ContextSnapshotOf<typeof repositoryPolicySource>;
 expectType<z.infer<typeof RepositoryPolicy>>(policySnapshot.value);
 expectType<"round-08-repository-policy">(policySnapshot.source);
 expectType<"untrusted" | "authenticated" | "authoritative">(policySnapshot.trust.level);
-// @ts-expect-error The authoritative definition floor is currently widened on returned snapshot metadata.
 expectType<"authoritative">(policySnapshot.trust.level);
+expectType<"github">(policySnapshot.trust.authority);
+expectType<"fresh">(policySnapshot.freshness.status);
+expectType<"authoritative">(repositoryPolicySource.trust.minimum);
+expectType<"github">(repositoryPolicySource.trust.authorities[0]);
+expectType<"5m">(repositoryPolicySource.freshness.maxAge);
+expectType<"reject">(repositoryPolicySource.freshness.stale);
 
 const fakeContextSnapshot = {
   source: repositoryPolicySource.name,
@@ -497,11 +518,11 @@ expectType<ObserverOutputOf<typeof deploymentObserver>>(detailedDeployment.outpu
 expectType<"round-08-deployment">(detailedDeployment.subject.observer);
 expectType<"round-08-deployment">(detailedDeployment.provenance.observer);
 expectType<"poll" | "signal" | "signal-first">(detailedDeployment.provenance.strategy);
-// @ts-expect-error Detailed provenance does not currently retain the definition's static signal-first strategy.
 expectType<"signal-first">(detailedDeployment.provenance.strategy);
 expectType<"signal" | "poll" | "implemented-poll">(detailedDeployment.provenance.endpoint);
-// @ts-expect-error A bound signal-first definition cannot complete through a locally implemented polling endpoint.
 expectType<"signal" | "poll">(detailedDeployment.provenance.endpoint);
+expectType<"authoritative">(detailedDeployment.provenance.trust.level);
+expectType<"deployment-control-plane">(detailedDeployment.provenance.trust.authority);
 
 expectType<ObserverInvocationOptionsOf<typeof deploymentObserver>>({
   key: "wait-for-deployment",
@@ -527,7 +548,7 @@ const fakeDetailedObservation = {
 expectType<DetailedObserverResult<typeof deploymentObserver>>(fakeDetailedObservation);
 
 // ---------------------------------------------------------------------------
-// Review, delivery, and exact workspace subjects
+// Review, delivery, and exact workspace candidates
 // ---------------------------------------------------------------------------
 
 const candidateReview = defineReview({
@@ -562,76 +583,79 @@ const publishDelivery = defineDelivery({
 });
 expectType<"round-08-publish-delivery">(publishDelivery.name);
 
-/** Why: Refines one engine subject so compile-time generation mismatch tests remain distinguishable. Use: Test generic identity propagation only. */
-type CandidateSubject = WorkspaceSnapshotRef & {
+/** Why: Refines one candidate snapshot so compile-time generation mismatch tests remain distinguishable. Use: Test generic identity propagation only. */
+type CandidateSnapshot = WorkspaceSnapshotRef & {
   readonly workspaceId: "candidate-workspace";
   readonly generation: 8;
 };
 
-/** Why: Refines a different engine subject for adversarial cross-generation assertions. Use: It must never satisfy `CandidateSubject`. */
-type OtherSubject = WorkspaceSnapshotRef & {
+/** Why: Refines a different snapshot for adversarial cross-generation assertions. Use: It must never satisfy `CandidateSnapshot`. */
+type OtherSnapshot = WorkspaceSnapshotRef & {
   readonly workspaceId: "other-workspace";
   readonly generation: 9;
 };
 
-/** Why: Exercises review subject retention and delivery candidate/authorization pairing. Use: Also records the evidence-subject inference hole that still compiles. */
-async function exerciseSubjectTypes(
+/** Why: Exercises review candidate retention and delivery candidate/authorization pairing. Use: Also records exact-snapshot proof inference. */
+async function exerciseCandidateTypes(
   ctx: Ctx,
-  candidateSubject: CandidateSubject,
-  otherSubject: OtherSubject,
+  candidateSnapshot: CandidateSnapshot,
+  otherSnapshot: OtherSnapshot,
 ) {
   const reviewInput: ReviewInputOf<typeof candidateReview> = { objective: "Ship Round 8" };
   const candidateResult = await ctx.review(candidateReview, reviewInput, {
     key: "review-candidate",
-    subject: candidateSubject,
+    candidate: candidateSnapshot,
   });
   const otherResult = await ctx.review(candidateReview, reviewInput, {
     key: "review-other",
-    subject: otherSubject,
+    candidate: otherSnapshot,
   });
-  expectType<CandidateSubject>(candidateResult.subject);
+  if (candidateResult.status !== "accepted" || otherResult.status !== "accepted") {
+    return;
+  }
+  expectType<CandidateSnapshot>(candidateResult.candidate);
   const firstAssessment = candidateResult.assessments[0];
   if (firstAssessment === undefined) {
     throw new Error("Review fixture must retain its assessment");
   }
   expectType<ReviewFindingOf<typeof candidateReview>>(firstAssessment.finding);
   // @ts-expect-error A review of generation 8 cannot be treated as a review of generation 9.
-  expectType<OtherSubject>(candidateResult.subject);
+  expectType<OtherSnapshot>(candidateResult.candidate);
 
-  const mixedSubjectEvidence: PromotionCandidateInput<typeof publishDelivery, CandidateSubject> = {
-    subject: candidateSubject,
-    input: { branch: "round-8", expectedHead: candidateSubject.treeHash },
-    // @ts-expect-error Promotion evidence must name the candidate's exact subject.
-    evidence: [otherResult.attestation],
+  const mixedCandidateEvidence: PromotionCandidateInput<typeof publishDelivery, CandidateSnapshot> = {
+    snapshot: candidateSnapshot,
+    input: { branch: "round-8", expectedHead: candidateSnapshot.treeHash },
+    // @ts-expect-error Promotion proof must name the exact candidate snapshot.
+    proofs: [otherResult.proof],
   };
-  expectType<PromotionCandidateInput<typeof publishDelivery, CandidateSubject>>(mixedSubjectEvidence);
+  expectType<PromotionCandidateInput<typeof publishDelivery, CandidateSnapshot>>(mixedCandidateEvidence);
 
   await ctx.delivery.prepare(
     publishDelivery,
     {
-      subject: candidateSubject,
-      input: { branch: "round-8", expectedHead: candidateSubject.treeHash },
-      // @ts-expect-error Evidence cannot widen the subject inferred from the explicit candidate subject.
-      evidence: [otherResult.attestation],
+      snapshot: candidateSnapshot,
+      input: { branch: "round-8", expectedHead: candidateSnapshot.treeHash },
+      // @ts-expect-error Proof cannot widen the snapshot inferred from the explicit candidate snapshot.
+      proofs: [otherResult.proof],
     },
-    { key: "prepare-with-mixed-subject-evidence" },
+    { key: "prepare-with-mixed-candidate-evidence" },
   );
 
   const candidate = await ctx.delivery.prepare(
     publishDelivery,
     {
-      subject: candidateSubject,
-      input: { branch: "round-8", expectedHead: candidateSubject.treeHash },
-      evidence: [candidateResult.attestation],
+      snapshot: candidateSnapshot,
+      input: { branch: "round-8", expectedHead: candidateSnapshot.treeHash },
+      proofs: [candidateResult.proof],
     },
     { key: "prepare-candidate-delivery" },
   );
   const otherCandidate = await ctx.delivery.prepare(
     publishDelivery,
     {
-      subject: otherSubject,
-      input: { branch: "other", expectedHead: otherSubject.treeHash },
-      evidence: [otherResult.attestation],
+      snapshot: otherSnapshot,
+      input: { branch: "other", expectedHead: otherSnapshot.treeHash },
+      proofs: [otherResult.proof],
     },
     { key: "prepare-other-delivery" },
   );
@@ -646,24 +670,24 @@ async function exerciseSubjectTypes(
     { candidate, authorization },
     { key: "publish-candidate" },
   );
-  expectType<CandidateSubject>(receipt.subject);
+  expectType<CandidateSnapshot>(receipt.snapshot);
 
   await ctx.delivery(
     publishDelivery,
     {
       candidate,
-      // @ts-expect-error Authorization is nominally tied to the other exact candidate and subject.
+      // @ts-expect-error Authorization is nominally tied to the other exact candidate snapshot.
       authorization: otherAuthorization,
     },
     { key: "publish-with-wrong-authority" },
   );
 }
-expectType<(ctx: Ctx, candidateSubject: CandidateSubject, otherSubject: OtherSubject) => Promise<void>>(
-  exerciseSubjectTypes,
+expectType<(ctx: Ctx, candidateSnapshot: CandidateSnapshot, otherSnapshot: OtherSnapshot) => Promise<void>>(
+  exerciseCandidateTypes,
 );
 
 // ---------------------------------------------------------------------------
-// Waiver definition, revision, and subject matching
+// Waiver definition, revision, and candidate matching
 // ---------------------------------------------------------------------------
 
 const eligibleFreezeCheck = defineCheck({
@@ -704,32 +728,42 @@ const unwaivableIntegrityCheck = defineCheck({
   run: () => true,
 });
 
-/** Why: Exercises exact failed-result authorization and definition/subject-matched invocation. Use: Typecheck nominal waiver safety only. */
+/** Why: Exercises exact failed-result authorization and definition/candidate-matched invocation. Use: Typecheck nominal waiver safety only. */
 async function exerciseWaiverTypes(
   ctx: Ctx,
-  freezeFailure: FailedCheckResultOf<typeof eligibleFreezeCheck, CandidateSubject>,
-  licenseFailure: FailedCheckResultOf<typeof eligibleLicenseCheck, CandidateSubject>,
+  freezeFailure: FailedCheckResultOf<typeof eligibleFreezeCheck, CandidateSnapshot>,
+  licenseFailure: FailedCheckResultOf<typeof eligibleLicenseCheck, CandidateSnapshot>,
 ): Promise<void> {
-  const waiver = await ctx.check.authorize(eligibleFreezeCheck, freezeFailure, {
+  const waiver = await ctx.check.authorizeWaiver(eligibleFreezeCheck, freezeFailure, {
     key: "authorize-freeze-waiver",
     reason: "Emergency production repair approved for this exact failed check.",
     ttl: "15m",
   });
-  expectType<CheckWaiverRef<typeof eligibleFreezeCheck, CandidateSubject>>(waiver);
+  expectType<CheckWaiverRef<typeof eligibleFreezeCheck, CandidateSnapshot>>(waiver);
   expectType<"freeze-v8">(waiver.revision);
 
-  expectType<CheckInvocationOptions<typeof eligibleFreezeCheck, CandidateSubject>>({ waive: waiver });
-  // @ts-expect-error A freeze waiver cannot satisfy another eligible check definition.
-  expectType<CheckInvocationOptions<typeof eligibleLicenseCheck, CandidateSubject>>({ waive: waiver });
-  // @ts-expect-error A generation-8 waiver cannot satisfy a generation-9 invocation contract.
-  expectType<CheckInvocationOptions<typeof eligibleFreezeCheck, OtherSubject>>({ waive: waiver });
-  expectType<CheckInvocationOptions<typeof unwaivableIntegrityCheck, CandidateSubject>>({
+  expectType<CheckInvocationOptions<typeof eligibleFreezeCheck, CandidateSnapshot>>({
+    key: "use-freeze-waiver",
+    waive: waiver,
+  });
+  expectType<CheckInvocationOptions<typeof eligibleLicenseCheck, CandidateSnapshot>>({
+    key: "wrong-check-waiver",
+    // @ts-expect-error A freeze waiver cannot satisfy another eligible check definition.
+    waive: waiver,
+  });
+  expectType<CheckInvocationOptions<typeof eligibleFreezeCheck, OtherSnapshot>>({
+    key: "wrong-candidate-waiver",
+    // @ts-expect-error A generation-8 waiver cannot satisfy a generation-9 invocation contract.
+    waive: waiver,
+  });
+  expectType<CheckInvocationOptions<typeof unwaivableIntegrityCheck, CandidateSnapshot>>({
+    key: "unwaivable-check",
     // @ts-expect-error An unwaivable definition has no invocation branch accepting nominal waiver authority.
     waive: waiver,
   });
 
   // @ts-expect-error Authorization requires a failure branded for this exact check definition.
-  await ctx.check.authorize(eligibleFreezeCheck, licenseFailure, {
+  await ctx.check.authorizeWaiver(eligibleFreezeCheck, licenseFailure, {
     key: "authorize-mismatched-failure",
     reason: "This failure belongs to another check.",
     ttl: "5m",
@@ -738,8 +772,8 @@ async function exerciseWaiverTypes(
 expectType<
   (
     ctx: Ctx,
-    freezeFailure: FailedCheckResultOf<typeof eligibleFreezeCheck, CandidateSubject>,
-    licenseFailure: FailedCheckResultOf<typeof eligibleLicenseCheck, CandidateSubject>,
+    freezeFailure: FailedCheckResultOf<typeof eligibleFreezeCheck, CandidateSnapshot>,
+    licenseFailure: FailedCheckResultOf<typeof eligibleLicenseCheck, CandidateSnapshot>,
   ) => Promise<void>
 >(exerciseWaiverTypes);
 
@@ -811,13 +845,13 @@ const structuralWorkflowNode = { kind: "weft.workflow" as const };
 expectType<WorkflowNode<"weft.workflow">>(structuralWorkflowNode);
 
 // Round 8 ranked findings (maximum five):
-// 1. Workflow IDs, UI IDs/revisions, and task revisions/supplied versions now remain exact; requiring every workflow ID
-//    closes anonymous definition identity while omitted UI revisions and task versions stay intentionally broad.
-// 2. Static trust/strategy facts widen in returned evidence: an authoritative context source returns broad trust metadata,
-//    and a signal-first observer returns broad strategy/endpoint provenance even though the definition fixes both.
+// 1. Workflow IDs and UI IDs/revisions now remain exact; requiring every workflow ID closes anonymous definition
+//    identity while task contracts deliberately retain only their schema and agent-access policy.
+// 2. Enforced trust/freshness and observer strategy/endpoint literals now survive into returned evidence, so callers
+//    guard only policy branches that the definition genuinely leaves open.
 // 3. Eligible check revisions remain exact through `CheckDefinition` and `CheckWaiverRef`, completing static definition,
-//    revision, and subject matching without a serializable-projection workaround.
+//    revision, and candidate matching without a serializable-projection workaround.
 // 4. Appended defaulted name generics retain operation and review literals without breaking older explicit arities;
 //    the heterogeneous registry's name union remains closed across all represented definition families.
-// 5. Subject generics reject cross-generation values only when callers carry explicit refined `WorkspaceSnapshotRef`
-//    subtypes; ordinary engine subjects share one type, making exact static tests verbose while runtime brands do the work.
+// 5. Candidate generics reject cross-generation values only when callers carry explicit refined `WorkspaceSnapshotRef`
+//    subtypes; ordinary engine snapshots share one type, making exact static tests verbose while runtime brands do the work.

@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type ArtifactRefOf,
   defineAgent,
@@ -12,8 +14,7 @@ import {
   type OperationInputOf,
   type WorkflowNode,
   type WriteScope,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes compile-time authority assertions visible in this typechecked example. Use: Pass inferred values to it without adding a runtime test helper. */
 declare function expectType<T>(value: T): void;
@@ -27,7 +28,7 @@ const ArtifactPointer = z.object({
   sha256: z.string().min(1),
 });
 
-const WorkspaceSubject = z.object({
+const WorkspaceSnapshot = z.object({
   workspaceId: z.string().min(1),
   generation: z.number().int().nonnegative(),
   treeHash: z.string().min(1),
@@ -208,7 +209,7 @@ const PublishSchemaInput = z.object({
   schemaSha256: z.string().min(1),
   proposal: ArtifactPointer,
   review: ApprovedProposalReview,
-  subject: WorkspaceSubject,
+  snapshot: WorkspaceSnapshot,
   changedFiles: z.array(z.string().min(1)).min(1),
 });
 
@@ -273,7 +274,7 @@ const authorityBoundariesWorkflow = defineWorkflow(
     if (request.policyRef !== reviewedChangePaths.revision) {
       throw new Error("Change request does not target the workflow's fixed path-policy revision");
     }
-    const planned = await ctx.agent({ key: "propose-change", agent: changePlanner, input: { request } });
+    const planned = await ctx.agent(changePlanner, { request }, { key: "propose-change" });
     if (!planned.value.proposedPaths.includes(planned.value.externalOperation.schemaPath)) {
       throw new Error("The schema selected for publication must be part of the reviewed path proposal");
     }
@@ -314,18 +315,18 @@ const authorityBoundariesWorkflow = defineWorkflow(
       throw new Error("Canonical write scope does not include the reviewed schema path");
     }
 
-    const implementation = await ctx.agent({
-      key: "implement-authorized-plan",
-      agent: changeImplementer,
-      input: { request, proposal: planned.value, authorizedPaths: [...writeScope.paths] },
-      write: writeScope,
+    const implementation = await ctx.agent(
+      changeImplementer,
+      { request, proposal: planned.value, authorizedPaths: [...writeScope.paths] },
+      {
+        key: "implement-authorized-plan",
+        write: writeScope,
+      },
+    );
+    const schemaFile = await ctx.fs.read(planned.value.externalOperation.schemaPath, {
+      key: "read-approved-api-schema",
     });
-    const schemaFile = await ctx.fs.read(planned.value.externalOperation.schemaPath);
-    const subject = {
-      workspaceId: ctx.workspace.id,
-      generation: ctx.workspace.generation,
-      treeHash: ctx.workspace.tree,
-    };
+    const snapshot = ctx.workspace.snapshot;
     const publicationCandidate = await ctx.operation.prepare(
       publishApiSchema,
       {
@@ -333,8 +334,8 @@ const authorityBoundariesWorkflow = defineWorkflow(
         schemaSha256: schemaFile.sha256,
         proposal: { ref: proposal.ref, sha256: proposal.sha256 },
         review: approvedReview,
-        subject,
-        changedFiles: implementation.files,
+        snapshot,
+        changedFiles: [...implementation.files],
       },
       {
         key: "prepare-api-schema-publication",
@@ -344,7 +345,7 @@ const authorityBoundariesWorkflow = defineWorkflow(
     const publicationAuthorization = await ctx.operation.authorize(publishApiSchema, publicationCandidate, {
       key: "authorize-api-schema-publication",
       label: `Authorize ${planned.value.externalOperation.subject}`,
-      detail: `Publish ${planned.value.externalOperation.subject} from ${planned.value.externalOperation.schemaPath} at ${subject.treeHash}.`,
+      detail: `Publish ${planned.value.externalOperation.subject} from ${planned.value.externalOperation.schemaPath} at ${snapshot.treeHash}.`,
       timeout: "24h",
     });
     const publication = await ctx.operation.execute(
@@ -363,7 +364,7 @@ const authorityBoundariesWorkflow = defineWorkflow(
       status: "executed",
       requestId: request.requestId,
       proposal: { ref: proposal.ref, sha256: proposal.sha256 },
-      changedFiles: implementation.files,
+      changedFiles: [...implementation.files],
       publication,
     };
   },

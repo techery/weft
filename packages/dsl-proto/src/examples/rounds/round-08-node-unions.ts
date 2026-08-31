@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import type {
   AnyWorkflowInvocation,
   ArtifactInvocation,
@@ -28,6 +30,7 @@ import {
   type CheckResultOf,
   type ContextSnapshotOf,
   type ContextSourceInputOf,
+  type DetailedObserverResult,
   type DeliveryInputOf,
   defineAgent,
   defineArtifact,
@@ -61,8 +64,7 @@ import {
   type WorkflowNode,
   type WorkflowNodeKind,
   type WorkflowOutputSchemaOf,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes bidirectional type assertions visible without runtime behavior. Use: Pass exact nodes, invocations, schemas, and results to it. */
 declare function expectType<Type>(value: Type): void;
@@ -209,7 +211,6 @@ const reviewNode = defineReview({
 
 const taskContractNode = defineTaskContract({
   schema: ExampleExtensions,
-  revision: "tasks-v1",
 });
 
 const inputViewNode = defineUiView({
@@ -373,7 +374,6 @@ expectType<
 interface RegistryAgentCall extends AnyDefinedAgentCall {
   agent: typeof agentNode;
   input: ExampleInputValue;
-  onError: "null";
 }
 
 /** Why: Selects one representative invocation for each public node kind. Use: Extract exact primary input/output while acknowledging multi-operation node kinds separately. */
@@ -444,6 +444,9 @@ expectType<OperationOutputOf<typeof operationNode>>(operationOutput);
 expectType<ObserverInputOf<typeof observerNode>>({ task: "observe" });
 declare const observerOutput: PrimaryInvocationOutput<"weft.observer">;
 expectType<ObserverOutputOf<typeof observerNode>>(observerOutput);
+declare const detailedSignalObservation: DetailedObserverResult<typeof observerNode>;
+expectType<"authenticated" | "authoritative">(detailedSignalObservation.provenance.trust.level);
+expectType<"repository-host">(detailedSignalObservation.provenance.trust.authority);
 expectType<ReviewInputOf<typeof reviewNode>>({ task: "review" });
 
 /** Why: Extracts one exact finding from the representative review result without indexing a possibly empty array value. Use: Prove review output helper correlation. */

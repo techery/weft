@@ -1,8 +1,9 @@
+import { z } from "zod";
+
 import {
   type AgentDefinition,
   type CheckCommand,
   type CheckDefinition,
-  type CheckExecutionResult,
   type CheckSuiteDefinition,
   type Duration,
   defineAgent,
@@ -13,20 +14,19 @@ import {
   defineReview,
   defineTaskContract,
   defineWorkflow,
-  type NeverCheckWaiverPolicy,
   type PathPolicyDefinition,
   type PromptDefinition,
   type Provider,
   type ReviewDefinition,
   type ReviewEvaluation,
+  type ReviewResult,
   type TaskContract,
-  type WorkflowDefinition,
+  type WorkflowContract,
   type WorkflowNode,
   type WorkflowTaskSnapshot,
   type WorkflowTaskSummary,
   type WorkspaceSnapshotRef,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes compile-time contract assertions readable without introducing runtime behavior. Use: Pass exported module members to it at the end of this example. */
 declare function expectType<Type>(value: Type): void;
@@ -199,7 +199,7 @@ const ReviewFindingSchema: z.ZodType<ReviewFindingValue, ReviewFindingValue> = z
   sources: z.array(z.string().min(1)).min(1),
 });
 
-/** Why: Names one model-proposed review finding before deterministic policy assigns its disposition. Use: Preserve source evidence through exact-subject review. */
+/** Why: Names one model-proposed review finding before deterministic policy assigns its disposition. Use: Preserve source evidence through exact-candidate review. */
 interface ReviewFindingValue {
   path: string;
   line?: number | undefined;
@@ -241,14 +241,14 @@ interface CandidateReviewInputValue {
   keyNamespace: string;
 }
 
-const WorkspaceProjectionSchema = z.object({
+const WorkspaceSnapshotSchema = z.object({
   workspaceId: z.string().min(1),
   generation: z.number().int().nonnegative(),
   treeHash: z.string().min(1),
 });
 
-/** Why: Names a serializable diagnostic projection of nominal workspace identity. Use: Return it across child schemas without ever passing it back into an authority-consuming API. */
-interface WorkspaceProjectionValue {
+/** Why: Names a serializable diagnostic projection of an engine-minted workspace snapshot. Use: Return it across child schemas without ever passing it back into an authority-consuming API. */
+interface WorkspaceSnapshotValue {
   workspaceId: string;
   generation: number;
   treeHash: string;
@@ -280,7 +280,7 @@ const ImplementationChildOutputSchema: z.ZodType<
   branch: z.string().min(1),
   head: z.string().min(1),
   changedFiles: z.array(z.string().min(1)).min(1),
-  subject: WorkspaceProjectionSchema,
+  snapshot: WorkspaceSnapshotSchema,
   checks: z.object({
     passed: z.literal(true),
     attestationRef: z.string().min(1),
@@ -311,7 +311,7 @@ interface ImplementationChildOutputValue {
   branch: string;
   head: string;
   changedFiles: string[];
-  subject: WorkspaceProjectionValue;
+  snapshot: WorkspaceSnapshotValue;
   checks: {
     passed: true;
     attestationRef: string;
@@ -362,7 +362,7 @@ const PlatformTaskExtensionSchema: z.ZodType<PlatformTaskExtensionValue, Platfor
     parentRunId: z.string().min(1).nullable(),
     stage: PlatformTaskStageSchema,
     childRunIds: z.array(z.string().min(1)),
-    workspace: WorkspaceProjectionSchema.nullable(),
+    snapshot: WorkspaceSnapshotSchema.nullable(),
     evidenceRefs: z.array(z.string().min(1)),
   });
 
@@ -374,7 +374,7 @@ interface PlatformTaskExtensionValue {
   parentRunId: string | null;
   stage: "orchestrating" | "planning" | "planned" | "implementing" | "reviewed" | "complete";
   childRunIds: string[];
-  workspace: WorkspaceProjectionValue | null;
+  snapshot: WorkspaceSnapshotValue | null;
   evidenceRefs: string[];
 }
 
@@ -412,82 +412,87 @@ export interface CodingPlatformModule<Namespace extends string = string, Revisio
     review: PromptDefinition<CandidateReviewInputValue, CandidateReviewInputValue>;
   }>;
   readonly agents: Readonly<{
-    planner: AgentDefinition<PlanningAgentInputValue, typeof PlatformPlanSchema, PlanningAgentInputValue>;
+    planner: AgentDefinition<{
+      input: PlanningAgentInputValue;
+      parsedInput: PlanningAgentInputValue;
+      output: PlatformPlanValue;
+      rawOutput: PlatformPlanValue;
+      inputMode: "required";
+      outputSchema: typeof PlatformPlanSchema;
+    }>;
     implementer: AgentDefinition<
-      ImplementationAgentInputValue,
-      typeof ImplementationReportSchema,
-      ImplementationAgentInputValue
+      {
+        input: ImplementationAgentInputValue;
+        parsedInput: ImplementationAgentInputValue;
+        output: ImplementationReportValue;
+        rawOutput: ImplementationReportValue;
+        inputMode: "required";
+        outputSchema: typeof ImplementationReportSchema;
+      }
     >;
     reviewer: AgentDefinition<
-      CandidateReviewInputValue,
-      typeof ReviewReportSchema,
-      CandidateReviewInputValue
+      {
+        input: CandidateReviewInputValue;
+        parsedInput: CandidateReviewInputValue;
+        output: ReviewReportValue;
+        rawOutput: ReviewReportValue;
+        inputMode: "required";
+        outputSchema: typeof ReviewReportSchema;
+      }
     >;
   }>;
   readonly checks: Readonly<{
-    typecheck: CheckDefinition<void, string, void, CheckExecutionResult, NeverCheckWaiverPolicy>;
-    tests: CheckDefinition<void, string, void, CheckExecutionResult, NeverCheckWaiverPolicy>;
-    quality: CheckSuiteDefinition<void>;
+    typecheck: CheckDefinition;
+    tests: CheckDefinition;
+    quality: CheckSuiteDefinition;
   }>;
   readonly paths: Readonly<{
     writes: PathPolicyDefinition<string, string>;
   }>;
   readonly reviews: Readonly<{
     candidate: ReviewDefinition<
-      CandidateReviewInputValue,
-      ReviewFindingValue,
-      CandidateReviewInputValue,
-      ReviewFindingValue
+      {
+        input: CandidateReviewInputValue;
+        parsedInput: CandidateReviewInputValue;
+        output: ReviewFindingValue;
+        rawOutput: ReviewFindingValue;
+        result: ReviewResult<ReviewFindingValue>;
+      }
     >;
   }>;
   readonly tasks: TaskContract<typeof PlatformTaskExtensionSchema>;
   readonly workflows: Readonly<{
-    planning: WorkflowDefinition<
+    planning: WorkflowContract<
       PlanningChildInputValue,
       PlanningChildOutputValue,
       PlatformTaskExtensionValue,
-      PlanningChildInputValue,
-      PlatformTaskExtensionValue
+      PlatformTaskExtensionValue,
+      false
     >;
-    implementation: WorkflowDefinition<
+    implementation: WorkflowContract<
       ImplementationChildInputValue,
       ImplementationChildOutputValue,
       PlatformTaskExtensionValue,
-      ImplementationChildInputValue,
-      PlatformTaskExtensionValue
+      PlatformTaskExtensionValue,
+      true
     >;
-    parent: WorkflowDefinition<
+    parent: WorkflowContract<
       PlatformChangeRequestValue,
       PlatformParentOutputValue,
       PlatformTaskExtensionValue,
-      PlatformChangeRequestValue,
-      PlatformTaskExtensionValue
+      PlatformTaskExtensionValue,
+      false
     >;
   }>;
 }
 
 /** Why: Projects nominal identity only for schema output and diagnostics. Use: Never pass the returned object where WorkspaceSnapshotRef authority is required. */
-function projectWorkspace(subject: WorkspaceSnapshotRef): WorkspaceProjectionValue {
+function projectSnapshot(snapshot: WorkspaceSnapshotRef): WorkspaceSnapshotValue {
   return {
-    workspaceId: subject.workspaceId,
-    generation: subject.generation,
-    treeHash: subject.treeHash,
+    workspaceId: snapshot.workspaceId,
+    generation: snapshot.generation,
+    treeHash: snapshot.treeHash,
   };
-}
-
-/** Why: Fails closed if verification or review drifted from the candidate generation. Use: Call after every exact-subject boundary in the implementation child. */
-function requireSameWorkspace(
-  actual: WorkspaceSnapshotRef,
-  expected: WorkspaceSnapshotRef,
-  label: string,
-): void {
-  if (
-    actual.workspaceId !== expected.workspaceId ||
-    actual.generation !== expected.generation ||
-    actual.treeHash !== expected.treeHash
-  ) {
-    throw new Error(`${label} does not describe the implementation workspace generation`);
-  }
 }
 
 /** Why: Rejects cross-specialization child input before it can influence tasks, paths, or agents. Use: Compare every child input identity with the definitions captured by its factory instance. */
@@ -523,7 +528,7 @@ function requireChildCorrelation(
   }
 }
 
-/** Why: Finds the one optimistic task projection created for a phase. Use: Update it only after checking dedupe identity and truncation. */
+/** Why: Finds the one optimistic task projection created for a workflow step. Use: Update it only after checking dedupe identity and truncation. */
 function requireSingleTask(
   snapshot: WorkflowTaskSnapshot<PlatformTaskExtensionValue>,
   dedupeKey: string,
@@ -587,14 +592,14 @@ export function createCodingPlatformModule<const Namespace extends string, const
   /** Why: Qualifies definition identities by immutable specialization. Use: Keep separately instantiated module graphs distinct in registries and inspection output. */
   const definitionName = (local: string): string => `${identity.namespace}.${identity.revision}.${local}`;
 
-  /** Why: Creates deterministic replay keys without mutable counters. Use: Qualify every effect by module, phase, request, and local action. */
-  const stepKey = (phase: string, requestId: string, local: string): string =>
-    [identity.namespace, identity.revision, phase, requestId, local]
+  /** Why: Creates deterministic replay keys without mutable counters. Use: Qualify every effect by module, workflow step, request, and local action. */
+  const stepKey = (stepName: string, requestId: string, local: string): string =>
+    [identity.namespace, identity.revision, stepName, requestId, local]
       .map((segment) => encodeURIComponent(segment))
       .join(":");
 
-  /** Why: Separates task deduplication from journal step identity while retaining the same namespace. Use: Create one stable domain task per run-local phase. */
-  const taskKey = (phase: string, requestId: string): string => stepKey(phase, requestId, "task");
+  /** Why: Separates task deduplication from journal step identity while retaining the same namespace. Use: Create one stable domain task per run-local workflow step. */
+  const taskKey = (stepName: string, requestId: string): string => stepKey(stepName, requestId, "task");
 
   /** Why: Builds typed task checkpoints without leaking workspace brands through task storage. Use: Record only diagnostic projections and evidence references. */
   const taskExtension = (
@@ -603,7 +608,7 @@ export function createCodingPlatformModule<const Namespace extends string, const
     parentRunId: string | null,
     stage: PlatformTaskExtensionValue["stage"],
     childRunIds: readonly string[] = [],
-    workspace: WorkspaceProjectionValue | null = null,
+    snapshot: WorkspaceSnapshotValue | null = null,
     evidenceRefs: readonly string[] = [],
   ): PlatformTaskExtensionValue => ({
     module: identity,
@@ -612,7 +617,7 @@ export function createCodingPlatformModule<const Namespace extends string, const
     parentRunId,
     stage,
     childRunIds: [...childRunIds],
-    workspace,
+    snapshot,
     evidenceRefs: [...evidenceRefs],
   });
 
@@ -717,7 +722,7 @@ export function createCodingPlatformModule<const Namespace extends string, const
 
   const quality = defineCheckSuite({
     name: definitionName("checks.required-quality"),
-    description: `Preserves both required ${identity.displayName} check results on one exact subject.`,
+    description: `Preserves both required ${identity.displayName} check results on one exact candidate.`,
     checks: [typecheck, tests] as const,
     concurrency: 2,
   });
@@ -738,10 +743,8 @@ export function createCodingPlatformModule<const Namespace extends string, const
     finding: ReviewFindingSchema,
     evaluate: async (ctx, input) => {
       requireModuleIdentity(input.module, identity);
-      const report = await ctx.agent({
+      const report = await ctx.agent(reviewer, input, {
         key: `${input.keyNamespace}:reviewer`,
-        agent: reviewer,
-        input,
       });
       return evaluateReview(report.value);
     },
@@ -750,8 +753,6 @@ export function createCodingPlatformModule<const Namespace extends string, const
 
   const tasks = defineTaskContract({
     schema: PlatformTaskExtensionSchema,
-    revision: definitionName("tasks.v1"),
-    version: 1,
     agentAccess: "read",
   });
 
@@ -769,7 +770,6 @@ export function createCodingPlatformModule<const Namespace extends string, const
       requireModuleIdentity(input.module, identity);
       const dedupeKey = taskKey("planning", input.request.requestId);
       await ctx.tasks.upsert({
-        key: stepKey("planning", input.request.requestId, "register-task"),
         dedupeKey,
         set: {
           title: `Plan ${input.request.title}`,
@@ -781,12 +781,10 @@ export function createCodingPlatformModule<const Namespace extends string, const
           acceptanceCriteria: input.request.acceptanceCriteria,
           extensions: taskExtension(input.request.requestId, ctx.run.id, input.parentRunId, "planning"),
         },
-      });
+      }, { key: stepKey("planning", input.request.requestId, "register-task") });
 
-      const result = await ctx.agent({
+      const result = await ctx.agent(planner, { module: identity, request: input.request }, {
         key: stepKey("planning", input.request.requestId, "planner"),
-        agent: planner,
-        input: { module: identity, request: input.request },
         tasks: { mode: "read", dedupeKeys: [dedupeKey] },
       });
       requireBoundedPlan(result.value, input.request);
@@ -831,7 +829,7 @@ export function createCodingPlatformModule<const Namespace extends string, const
       id: implementationWorkflowId,
       name: `Implement and review a ${identity.displayName} change`,
       description:
-        "Owns the candidate workspace, resolves strict write authority, verifies it, and completes exact-subject review.",
+        "Owns the candidate workspace, resolves strict write authority, verifies it, and completes exact-candidate review.",
       input: ImplementationChildInputSchema,
       output: ImplementationChildOutputSchema,
       tasks,
@@ -844,7 +842,6 @@ export function createCodingPlatformModule<const Namespace extends string, const
 
       const dedupeKey = taskKey("implementation", input.request.requestId);
       await ctx.tasks.upsert({
-        key: stepKey("implementation", input.request.requestId, "register-task"),
         dedupeKey,
         set: {
           title: `Implement ${input.request.title}`,
@@ -860,10 +857,10 @@ export function createCodingPlatformModule<const Namespace extends string, const
             input.parentRunId,
             "implementing",
             [input.planning.provenance.runId],
-            projectWorkspace(ctx.workspace.subject),
+            projectSnapshot(ctx.workspace.snapshot),
           ),
         },
-      });
+      }, { key: stepKey("implementation", input.request.requestId, "register-task") });
 
       const writeScope = await ctx.paths.resolve(
         writes,
@@ -873,26 +870,23 @@ export function createCodingPlatformModule<const Namespace extends string, const
           label: `Resolve ${identity.displayName} writer paths`,
         },
       );
-      const implementation = await ctx.agent({
+      const implementation = await ctx.agent(implementer, {
+        module: identity,
+        request: input.request,
+        plan: input.planning.plan,
+        planningRunId: input.planning.provenance.runId,
+      }, {
         key: stepKey("implementation", input.request.requestId, "implementer"),
-        agent: implementer,
-        input: {
-          module: identity,
-          request: input.request,
-          plan: input.planning.plan,
-          planningRunId: input.planning.provenance.runId,
-        },
         write: writeScope,
         tasks: { mode: "read", dedupeKeys: [dedupeKey] },
       });
       const changedFiles = requireExactChangedFiles(implementation.files, implementation.value.changedFiles);
-      const candidateSubject = ctx.workspace.subject;
+      const candidate = ctx.workspace.snapshot;
 
       const checkResults = await ctx.check(quality, {
-        keyPrefix: stepKey("implementation", input.request.requestId, "quality"),
+        key: stepKey("implementation", input.request.requestId, "quality"),
         policy: "required",
       });
-      requireSameWorkspace(checkResults.subject, candidateSubject, "Required checks");
       if (!checkResults.passed) throw new Error("Required specialized checks failed");
 
       const review = await ctx.review(
@@ -909,11 +903,9 @@ export function createCodingPlatformModule<const Namespace extends string, const
         {
           key: stepKey("implementation", input.request.requestId, "review"),
           label: `Review ${input.request.requestId}`,
-          subject: candidateSubject,
+          candidate,
         },
       );
-      requireSameWorkspace(review.subject, candidateSubject, "Candidate review");
-      requireSameWorkspace(ctx.workspace.subject, candidateSubject, "Post-review workspace");
       if (review.status !== "accepted") throw new Error("Candidate requires rework");
 
       const snapshot = await ctx.tasks.observe(
@@ -932,20 +924,22 @@ export function createCodingPlatformModule<const Namespace extends string, const
             input.parentRunId,
             "reviewed",
             [input.planning.provenance.runId],
-            projectWorkspace(candidateSubject),
+            projectSnapshot(candidate),
             [checkResults.attestation.ref, review.evidence],
           ),
         },
         { key: stepKey("implementation", input.request.requestId, "complete-task") },
       );
 
-      const head = await ctx.git.head();
+      const head = await ctx.git.head({
+        key: stepKey("implementation", input.request.requestId, "read-head"),
+      });
       return {
         status: "accepted",
         branch: ctx.workspace.branch,
         head: head.sha,
         changedFiles,
-        subject: projectWorkspace(candidateSubject),
+        snapshot: projectSnapshot(candidate),
         checks: { passed: true, attestationRef: checkResults.attestation.ref },
         review: {
           evidence: review.evidence,
@@ -986,7 +980,6 @@ export function createCodingPlatformModule<const Namespace extends string, const
     async (ctx, request): Promise<PlatformParentOutputValue> => {
       const dedupeKey = taskKey("parent", request.requestId);
       await ctx.tasks.upsert({
-        key: stepKey("parent", request.requestId, "register-task"),
         dedupeKey,
         set: {
           title: request.title,
@@ -998,7 +991,7 @@ export function createCodingPlatformModule<const Namespace extends string, const
           acceptanceCriteria: request.acceptanceCriteria,
           extensions: taskExtension(request.requestId, ctx.run.id, null, "orchestrating"),
         },
-      });
+      }, { key: stepKey("parent", request.requestId, "register-task") });
 
       const planning = await ctx.workflow(
         planningWorkflow,
@@ -1041,7 +1034,7 @@ export function createCodingPlatformModule<const Namespace extends string, const
             null,
             "complete",
             [planning.provenance.runId, implementation.provenance.runId],
-            implementation.subject,
+            implementation.snapshot,
             [implementation.checks.attestationRef, implementation.review.evidence],
           ),
         },
@@ -1152,7 +1145,7 @@ expectType<WorkflowNode<"weft.workflow">>(round07ParentWorkflow);
 // 1. Solved: a pure typed factory plus ordinary exports provides reusable specialization, graph identity, and zero
 //    mutable global state; `defineModule` is not warranted unless registry tooling later needs an inspectable manifest.
 // 2. Soundness gap: `ctx.workflow` returns only schema output, so echoed parent IDs and projected child workspace
-//    subjects are correlation, not engine proof. A `.detailed()` child result should mint invocation provenance and
-//    retain the nominal child subject when a parent must authorize downstream work from it.
+//    snapshots are correlation, not engine proof. A `.detailed()` child result should mint invocation provenance and
+//    retain the nominal child candidate when a parent must authorize downstream work from it.
 // 3. Ergonomic gap: definition factories and nested review evaluators must hand-thread key prefixes. A typed
 //    `ctx.scope({ keyPrefix })` would remove repetitive string plumbing while preserving explicit child-run keys.

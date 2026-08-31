@@ -27,8 +27,13 @@
   },
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "types": "./src/index.ts"
+    },
+    "./advanced": {
+      "types": "./src/advanced.ts"
+    },
+    "./testing": {
+      "types": "./src/testing.ts"
     }
   },
   "files": [
@@ -42,12 +47,16 @@
   ],
   "publishConfig": {
     "access": "public",
-    "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "exports": {
       ".": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
+        "types": "./dist/index.d.ts"
+      },
+      "./advanced": {
+        "types": "./dist/advanced.d.ts"
+      },
+      "./testing": {
+        "types": "./dist/testing.d.ts"
       }
     }
   },

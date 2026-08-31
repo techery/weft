@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   defineAgent,
   defineArtifact,
@@ -10,8 +12,7 @@ import {
   definePrompt,
   defineWorkflow,
   type Provider,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 // This example intentionally uses only public DSL declarations. The callbacks on operations and
 // observers stand in for host-provided adapters; importing this declaration-only package does not
@@ -410,89 +411,89 @@ defineWorkflow(
     let acceptedHead = "";
 
     for (let round = 1; round <= 3; round += 1) {
-      const implementation = await ctx.phase(`Implementation round ${round}`, async (implementationCtx) => {
+      const implementation = await ctx.step(`implementation:${round}`, async (implementationCtx) => {
         const writeScope = await implementationCtx.paths.resolve(
           reviewedImplementationPaths,
           { proposedPaths: input.allowedPaths },
           { key: "implementation-write-scope", label: `Resolve paths for round ${round}` },
         );
-        return implementationCtx.agent({
-          key: "implement",
-          label: round === 1 ? `Implement ${input.ticket}` : `Resolve review round ${round - 1}`,
-          agent: implementationAgent,
-          input: {
+        return implementationCtx.agent(
+          implementationAgent,
+          {
             ticket: input.ticket,
             title: input.title,
             acceptanceCriteria: input.acceptanceCriteria,
             allowedPaths: input.allowedPaths,
             priorFindings: pendingFindings,
           },
-          write: writeScope,
-          goal: {
-            definition: implementationGoal,
-            input: { packageFilter: input.packageFilter },
-            attempts: 3,
+          {
+            key: "implement",
+            label: round === 1 ? `Implement ${input.ticket}` : `Resolve review round ${round - 1}`,
+            write: writeScope,
+            goal: {
+              definition: implementationGoal,
+              input: { packageFilter: input.packageFilter },
+              attempts: 3,
+            },
           },
-        });
+        );
       });
 
       changedFiles = [...new Set([...changedFiles, ...implementation.files])];
-      const commit = await ctx.phase(`Commit round ${round}`, async (commitCtx) => {
-        await commitCtx.git.add({ paths: implementation.files });
+      const commit = await ctx.step(`commit:${round}`, async (commitCtx) => {
+        await commitCtx.git.add({
+          key: `stage-review-round-${round}`,
+          paths: implementation.files,
+        });
         return commitCtx.git.commit({
+          key: `commit-review-round-${round}`,
           message: round === 1 ? `feat: ${input.title}` : `fix: address review round ${round - 1}`,
           paths: implementation.files,
         });
       });
 
-      const roundReview = await ctx.phase(
-        `Review round ${round}`,
+      const roundReview = await ctx.step(
+        `review:${round}`,
         async (reviewCtx): Promise<RoundReviewOutcome> => {
-          const reviews = reviewCtx.all(
-            await reviewCtx.parallel(
-              reviewLanes,
-              (lane) =>
-                reviewCtx.agent({
+          const reviews = await reviewCtx.parallel.all(
+            reviewLanes,
+            (lane) =>
+              reviewCtx.agent(
+                codeReviewer,
+                {
+                  head: commit.sha,
+                  lens: lane.lens,
+                  acceptanceCriteria: input.acceptanceCriteria,
+                },
+                {
                   key: `review:${lane.key}`,
-                  agent: codeReviewer,
-                  input: {
-                    head: commit.sha,
-                    lens: lane.lens,
-                    acceptanceCriteria: input.acceptanceCriteria,
-                  },
                   provider: lane.provider,
                   providerRequirements: { structured: "native" },
-                }),
-              {
-                key: "independent-reviews",
-                keyOf: (lane) => lane.key,
-                concurrency: 2,
-                errors: "throw",
-              },
-            ),
+                },
+              ),
+            {
+              key: "independent-reviews",
+              keyOf: (lane) => lane.key,
+              concurrency: 2,
+            },
           );
 
           const reviewValues: ReviewResultValue[] = reviews.map((review) => review.value);
           const candidates = reviewValues.flatMap((review) => review.findings);
-          const refutations = reviewCtx.all(
-            await reviewCtx.parallel(
-              candidates,
-              async (finding): Promise<RefutationRecord> => {
-                const verdict = await reviewCtx.agent({
-                  key: `refute:${finding.id}`,
-                  agent: findingRefuter,
-                  input: finding,
-                  providerRequirements: { structured: "native" },
-                });
-                return { finding, verdict: verdict.value };
-              },
-              {
-                key: "independent-refutations",
-                keyOf: (finding) => finding.id,
-                concurrency: 4,
-                errors: "throw",
-              },
-            ),
+          const refutations = await reviewCtx.parallel.all(
+            candidates,
+            async (finding): Promise<RefutationRecord> => {
+              const verdict = await reviewCtx.agent(findingRefuter, finding, {
+                key: `refute:${finding.id}`,
+                providerRequirements: { structured: "native" },
+              });
+              return { finding, verdict: verdict.value };
+            },
+            {
+              key: "independent-refutations",
+              keyOf: (finding) => finding.id,
+              concurrency: 4,
+            },
           );
 
           const confirmed = refutations
@@ -533,6 +534,7 @@ defineWorkflow(
 
     if (pendingFindings.length > 0) {
       await ctx.note({
+        key: "record-review-exhaustion",
         kind: "risk",
         text: "Release stopped after three review and rework rounds.",
         evidence: JSON.stringify(pendingFindings),
@@ -544,8 +546,8 @@ defineWorkflow(
       throw new Error("The workflow produced no releasable commit");
     }
 
-    const finalChecks = await ctx.phase("Final verification", (verificationCtx) =>
-      verificationCtx.check(deliveryChecks, { packageFilter: input.packageFilter }, { keyPrefix: "release" }),
+    const finalChecks = await ctx.step("final-verification", (verificationCtx) =>
+      verificationCtx.check(deliveryChecks, { packageFilter: input.packageFilter }, { key: "release" }),
     );
     if (!finalChecks.passed) {
       throw new Error("Final checks failed; the reviewed branch was not published");
@@ -600,7 +602,7 @@ defineWorkflow(
       throw new Error(`CI did not pass for reviewed commit ${acceptedHead}`);
     }
 
-    const recordedAt = await ctx.now();
+    const recordedAt = await ctx.now({ key: "release-evidence-recorded-at" });
     const releaseEvidence = await ctx.artifact(
       releaseEvidenceArtifact,
       {
@@ -623,6 +625,7 @@ defineWorkflow(
     );
 
     await ctx.note({
+      key: "record-reviewed-release",
       kind: "claim",
       text: `Pull request ${pullRequest.url} passed CI for reviewed commit ${acceptedHead}.`,
       evidence: releaseEvidence.ref,

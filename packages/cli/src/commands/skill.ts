@@ -81,6 +81,248 @@ Keep claims proportional to evidence:
 - Claim provider, daemon, browser, or custom-view behavior only after exercising that path.
 - Keep roadmap/design claims labelled as such; never present them as current runtime behavior.
 
+## Choose the authoring surface
+
+Weft has two related TypeScript surfaces. Identify which package the task targets before
+copying syntax:
+
+| Surface | Status | Use it for |
+| --- | --- | --- |
+| \`@techery/weft-sdk\` | Runnable in the current engine | Authoring workflows that \`weft check\`, \`weft run\`, tests, and the Workflow Manager execute |
+| \`@techery/weft-dsl-proto\` | Declaration-only prototype in this checkout | Compile-time API design, type fixtures, and future-host contracts; it has no workflow engine or runtime exports |
+
+The rest of this skill describes the runnable SDK unless a section is explicitly labelled
+**DSL prototype**. Never copy prototype syntax into an SDK workflow and claim it runs. Never
+rewrite SDK examples merely because the prototype has a smaller proposed API.
+
+<!-- weft-dsl-proto-reference:start -->
+### DSL prototype complete reference
+
+The root package exports these authoring values. Builders declare inert reusable definitions;
+the host starts durable work only when a workflow invokes the matching \`ctx\` call.
+
+| Family | Public values | Consumed by |
+| --- | --- | --- |
+| Workflows | \`defineWorkflow\` | host entrypoint, \`ctx.workflow\`, or \`ctx.workflow.detailed\` |
+| Recipes | \`defineRecipe\` | \`ctx.recipe\` or the recipe form of \`ctx.sequence\` |
+| Agents | \`defineAgent\` | \`ctx.agent\` or the agent form of \`ctx.sequence\` |
+| Prompt definitions | \`definePrompt\` | the typed \`prompt\` field of \`defineAgent\` |
+| Prompt helpers | \`prompt\`, \`prompt.section\`, \`prompt.json\`, \`renderPrompt\`, \`renderPromptDefinition\` | compose prompt parts or preview a prompt without starting durable work |
+| Goals | \`defineGoal\`, \`bindGoal\` | the \`goal\` option of \`ctx.agent\` |
+| Artifacts | \`defineArtifact\` | \`ctx.artifact\` |
+| Checks | \`defineCheck\`, \`defineCheckSuite\` | \`ctx.check\` |
+| Context sources | \`defineContextSource\` | \`ctx.context\` |
+| Observers | \`defineObserver\` | \`ctx.observe\` or \`ctx.observe.detailed\` |
+| Reviews | \`defineReview\` | \`ctx.review\` |
+| Operations | \`defineOperation\`, \`withRecovery\` | \`ctx.operation\`, \`ctx.operation.run\`, or \`ctx.operation.runRecoverable\` |
+| Deliveries | \`defineDelivery\` | \`ctx.delivery.run\`; the advanced surface also has the explicit \`ctx.delivery\` lifecycle |
+| Path policies | \`definePathPolicy\` | \`ctx.paths.resolve\` |
+| Human UI | \`defineUiView\`, \`defineResultView\` | \`ctx.human.ask\`, \`ctx.human.review\`, and \`ctx.ui.render\` |
+| Task state | \`defineTaskContract\` | the workflow's \`tasks\` metadata and \`ctx.tasks\` API |
+| Admission | \`defineTrigger\` | host registration; admitted provenance is readable at \`ctx.run.trigger\` |
+
+\`z\` is the package schema helper. \`@techery/weft-dsl-proto/testing\` separately exports
+\`testWorkflow\`; \`@techery/weft-dsl-proto/advanced\` opts into the explicit lifecycle
+context described below.
+
+Define reusable agents at module scope, then execute them through the single \`ctx.agent\`
+function:
+
+\`\`\`ts
+import { defineAgent, definePathPolicy, definePrompt, z } from "@techery/weft-dsl-proto";
+
+const Issue = z.object({ title: z.string() });
+const Plan = z.object({ summary: z.string(), paths: z.array(z.string()) });
+
+const planner = defineAgent({
+  name: "planner",
+  prompt: definePrompt({
+    name: "plan-issue",
+    input: Issue,
+    render: ({ title }) => \`Plan a minimal fix for: \${title}\`,
+  }),
+  schema: Plan,
+});
+
+const writePolicy = definePathPolicy({
+  name: "source-writes",
+  revision: "v1",
+  roots: ["src"],
+  grantTtl: "15m",
+});
+\`\`\`
+
+The prototype uses one agent function. The options say what changes: \`write\` grants a bounded
+edit, and \`failure: "return"\` makes failure a typed \`AgentOutcome\` instead of an exception.
+
+\`\`\`ts
+const plan = await ctx.agent(planner, issue, { key: "plan" });
+
+const writeScope = await ctx.paths.resolve(
+  writePolicy,
+  { proposedPaths: plan.value.paths },
+  { key: "write-paths" },
+);
+
+const implementation = await ctx.agent(
+  {
+    prompt: \`Implement: \${plan.value.summary}\`,
+    schema: z.object({ summary: z.string() }),
+  },
+  { key: "implement", write: writeScope },
+);
+
+const optionalReview = await ctx.agent(
+  {
+    prompt: \`Review: \${implementation.value.summary}\`,
+    schema: z.object({ approved: z.boolean() }),
+  },
+  { key: "optional-review", failure: "return" },
+);
+\`\`\`
+
+Inputless definitions omit the input argument. One-off calls put \`{ prompt, schema }\` in the
+definition position. There are no separate prototype \`agent.run\`, \`agent.write\`, or
+\`agent.try\` methods.
+
+The prototype also has one durable grouping concept: \`ctx.step("name", callback)\` namespaces
+arbitrary child effects. Inside a lane pipeline, \`.mapEffect("name", callback)\` is the
+effectful per-item transform; plain \`.map\` and \`.filter\` stay synchronous.
+This is different from the runnable SDK's \`ctx.phase("name")\`: a phase labels effects for
+presentation, while a prototype step owns a callback and gives its child effects a stable key
+namespace. The prototype therefore needs no separate \`.stage(...)\` layer.
+
+Workspace language follows the value's role:
+
+\`\`\`ts
+const candidate = ctx.workspace.snapshot;
+
+const checks = await ctx.check(quality, {
+  key: "quality",
+  candidate,
+});
+
+const review = await ctx.review(candidateReview, reviewInput, {
+  key: "review",
+  candidate,
+});
+\`\`\`
+
+\`snapshot\` means the current engine-minted workspace generation. \`candidate\` means that
+exact snapshot is being checked, reviewed, captured, or delivered. Candidate-bound host
+operations must atomically reject stale candidates and evidence from another candidate, so
+ordinary prototype workflows do not call manual sameness or freshness assertions.
+\`sameSnapshot\` and \`assertUnchanged\` exist only on the prototype's advanced surface for
+explicit diagnostics. A \`subject\` is simply the thing a human decision, observation, or
+generic evidence record is about. That word remains useful for those APIs, but it is not the
+ordinary workspace API name.
+
+Prototype task contracts are intentionally run-scoped and small:
+
+\`\`\`ts
+const tasks = defineTaskContract({
+  schema: TaskExtensions,
+  agentAccess: "read",
+});
+\`\`\`
+
+They expose no author-maintained task-contract version, revision, or migration chain. A task
+row still has an engine-owned numeric revision for optimistic updates, and \`dedupeKey\` still
+makes retried upserts converge. If an old run cannot resume with the exact workflow build that
+created it, the future host must fail closed or restart it.
+
+#### Complete ordinary \`ctx\` surface
+
+These are all root-package calls and readable context properties. Every independently replayable
+effect takes a stable \`key\`, including filesystem, process, network, wait, and randomness calls.
+
+| Area | Complete surface | Meaning |
+| --- | --- | --- |
+| Definitions and children | \`ctx.agent\`, \`ctx.artifact\`, \`ctx.context\`, \`ctx.recipe\`, \`ctx.workflow\`, \`ctx.workflow.detailed\` | Run reusable definitions; \`detailed\` retains nominal child-run evidence |
+| Fan-out and order | \`ctx.parallel.all\`, \`ctx.parallel.settled\`, \`ctx.sequence\` | Required fan-out, inspected failures, or ordered keyed traversal |
+| Pipelines | \`ctx.pipeline\`, \`ctx.pipeline.mapEffect\`, \`ctx.pipeline.filter\`, \`ctx.pipeline.map\`, \`ctx.pipeline.all\`, \`ctx.pipeline.settled\` | Named durable effects, synchronous transforms, then explicit settlement |
+| Settlement and scopes | \`ctx.successes\`, \`ctx.all\`, \`ctx.scope\`, \`ctx.step\` | Unwrap settled values or create inherited/keyed scopes |
+| Lane/item context | \`lane.itemKey\`, \`lane.key\`, \`scope.itemKey\`, \`scope.key\` | Stable per-item identity; the lane or sequence scope is itself the scoped \`ctx\` |
+| Decisions and people | \`ctx.policy.decide\`, \`ctx.human.ask\`, \`ctx.human.confirm\`, \`ctx.human.review\`, \`ctx.human.editFile\` | Branching answers and human-authored input; none grants effect authority |
+| Deprecated branching aliases | \`ctx.human.approve\` | Compatibility only; prefer \`ctx.human.confirm\` |
+| Observation | \`ctx.observe\`, \`ctx.observe.detailed\` | Wait for an observer definition, optionally retaining provenance |
+| Checks and reviews | \`ctx.check\`, \`ctx.check.authorizeWaiver\`, \`ctx.review\` | Run checks/reviews and mint an exact failed-check waiver |
+| Deprecated check alias | \`ctx.check.authorize\` | Compatibility only; prefer \`ctx.check.authorizeWaiver\` |
+| Protected effects | \`ctx.operation\`, \`ctx.operation.run\`, \`ctx.operation.runRecoverable\`, \`ctx.delivery.run\`, \`ctx.paths.resolve\` | Direct calls, one-shot protected lifecycles, recoverable calls, verified delivery, and write-scope resolution |
+| Custom UI | \`ctx.ui.render\` | Render a result view; human input views attach to human calls |
+| Filesystem | \`ctx.fs.read\`, \`ctx.fs.glob\`, \`ctx.fs.stat\` | Journaled repository reads |
+| Process and network | \`ctx.exec\`, \`ctx.bash\`, \`ctx.fetch\`, \`ctx.env.get\`, \`ctx.secret\` | Journaled process/network/config effects; secrets remain opaque handles |
+| Git reads | \`ctx.git.status\`, \`ctx.git.head\`, \`ctx.git.branches\`, \`ctx.git.mergeBase\`, \`ctx.git.changedSince\`, \`ctx.git.diff\`, \`ctx.git.log\`, \`ctx.git.show\`, \`ctx.git.blame\`, \`ctx.git.fileAt\`, \`ctx.git.snapshot\`, \`ctx.git.compare\`, \`ctx.git.fetch\` | Available in read-only and writable workflow contexts |
+| Git writes | \`ctx.git.add\`, \`ctx.git.commit\`, \`ctx.git.checkout\`, \`ctx.git.rebase\`, \`ctx.git.reset\`, \`ctx.git.apply\`, \`ctx.git.branch.create\`, \`ctx.git.branch.delete\`, \`ctx.git.stash.push\`, \`ctx.git.stash.pop\`, \`ctx.git.stash.drop\`, \`ctx.git.clean\` | Available only in \`WorkspaceCtx\` and candidate workspaces |
+| Patch and report state | \`ctx.integrate\`, \`ctx.discard\`, \`ctx.note\` | Land/discard patch refs or retain durable evidence notes |
+| Tasks | \`ctx.tasks.observe\`, \`ctx.tasks.upsert\`, \`ctx.tasks.update\`, \`ctx.tasks.note\`, \`ctx.tasks.setCriterion\` | Workflow-owned short-lived task context |
+| Nested workspaces | \`ctx.workspace.with\`, \`ctx.workspace.lease\` | Disposable candidate tree or exceptional durable checkout lease |
+| Active workspace identity | \`ctx.workspace.snapshot\`, \`ctx.workspace.id\`, \`ctx.workspace.path\`, \`ctx.workspace.branch\`, \`ctx.workspace.head\`, \`ctx.workspace.tree\`, \`ctx.workspace.generation\` | Present on \`WorkspaceCtx\`; read-only workflows expose only nested-workspace creation |
+| Candidate callback | \`candidate.apply\`, \`candidate.capture\` | Compose patches in a candidate workspace and capture the result |
+| Waiting | \`ctx.poll\`, \`ctx.signal\`, \`ctx.sleep\` | Durable local polling, external signals, and timers |
+| Cancellation | \`ctx.cancellation.signal\`, \`ctx.cancellation.reason\`, \`ctx.cancellation.throwIfRequested\` | Cooperate with, inspect, or throw the engine-owned cancellation decision |
+| Journaled values | \`ctx.now\`, \`ctx.random\`, \`ctx.uuid\` | Replay-stable clock, random, and UUID values |
+| Diagnostics | \`ctx.log\`, \`ctx.budget\`, \`ctx.run\` | Narration, budget view, and run/provenance metadata |
+
+\`WorkflowCtx\` has read-only Git plus nested workspaces. \`WorkspaceCtx\` adds direct Git
+mutation and active workspace identity. A candidate callback has the full \`WorkspaceCtx\`
+surface plus \`candidate.apply\` and \`candidate.capture\`.
+
+#### Restricted review context
+
+A \`defineReview\` evaluator receives \`ReviewCtx\`, not full workflow authority:
+
+| Area | Complete surface |
+| --- | --- |
+| Agent/context | \`reviewCtx.agent\`, \`reviewCtx.context\`, \`reviewCtx.observe\`, \`reviewCtx.observe.detailed\` |
+| Fan-out | \`reviewCtx.parallel.all\`, \`reviewCtx.parallel.settled\` |
+| Files | \`reviewCtx.fs.read\`, \`reviewCtx.fs.glob\`, \`reviewCtx.fs.stat\` |
+| Git reads | \`reviewCtx.git.status\`, \`reviewCtx.git.head\`, \`reviewCtx.git.branches\`, \`reviewCtx.git.mergeBase\`, \`reviewCtx.git.changedSince\`, \`reviewCtx.git.diff\`, \`reviewCtx.git.log\`, \`reviewCtx.git.show\`, \`reviewCtx.git.blame\`, \`reviewCtx.git.fileAt\`, \`reviewCtx.git.snapshot\`, \`reviewCtx.git.compare\`, \`reviewCtx.git.fetch\` |
+| Cancellation | \`reviewCtx.cancellation.signal\`, \`reviewCtx.cancellation.reason\`, \`reviewCtx.cancellation.throwIfRequested\` |
+| Diagnostics | \`reviewCtx.log\`, \`reviewCtx.budget\`, \`reviewCtx.run\` |
+
+It cannot mutate files, deliver, authorize operations, or write task state.
+
+#### Complete callback contexts
+
+A review fan-out callback receives a \`reviewLane\`. It has the same restricted capabilities
+as \`reviewCtx\`, plus stable per-item identity:
+
+| Area | Complete review-lane surface |
+| --- | --- |
+| Agent/context | \`reviewLane.agent\`, \`reviewLane.context\`, \`reviewLane.observe\`, \`reviewLane.observe.detailed\` |
+| Nested fan-out | \`reviewLane.parallel.all\`, \`reviewLane.parallel.settled\` |
+| Files | \`reviewLane.fs.read\`, \`reviewLane.fs.glob\`, \`reviewLane.fs.stat\` |
+| Git reads | \`reviewLane.git.status\`, \`reviewLane.git.head\`, \`reviewLane.git.branches\`, \`reviewLane.git.mergeBase\`, \`reviewLane.git.changedSince\`, \`reviewLane.git.diff\`, \`reviewLane.git.log\`, \`reviewLane.git.show\`, \`reviewLane.git.blame\`, \`reviewLane.git.fileAt\`, \`reviewLane.git.snapshot\`, \`reviewLane.git.compare\`, \`reviewLane.git.fetch\` |
+| Cancellation | \`reviewLane.cancellation.signal\`, \`reviewLane.cancellation.reason\`, \`reviewLane.cancellation.throwIfRequested\` |
+| Identity and diagnostics | \`reviewLane.itemKey\`, \`reviewLane.key\`, \`reviewLane.log\`, \`reviewLane.budget\`, \`reviewLane.run\` |
+
+Three builder callbacks receive deliberately tiny execution contexts rather than a workflow
+\`ctx\`: an implemented operation gets \`operationCtx.signal\` and \`operationCtx.attempt\`;
+an implemented polling observer gets \`observerCtx.signal\` and \`observerCtx.attempt\`; and a
+function-backed check gets \`checkCtx.signal\`. They support cancellation and bounded-attempt
+reporting, but cannot start nested effects.
+
+#### Advanced-only \`ctx\` additions
+
+Import the full context types from \`@techery/weft-dsl-proto/advanced\` only when implementing
+an explicit lifecycle. It adds these root members and callback shapes to the ordinary surface:
+
+| Area | Complete advanced-only surface |
+| --- | --- |
+| Deprecated gate | \`ctx.gate\` — compatibility only; prefer \`ctx.policy.decide\` for branching |
+| Operations | \`ctx.operation.prepare\`, \`ctx.operation.authorize\`, \`ctx.operation.execute\`, \`ctx.operation.recoverable\`, \`ctx.operation.executeRecoverable\`, \`ctx.operation.prepareRecovery\`, \`ctx.operation.recover\` |
+| Deliveries | callable \`ctx.delivery\`, plus \`ctx.delivery.prepare\`, \`ctx.delivery.authorize\`, \`ctx.delivery.execute\` |
+| Workspace diagnostics | \`ctx.workspace.sameSnapshot\`, \`ctx.workspace.assertUnchanged\` |
+| Composition callbacks | deprecated \`lane.ctx\` aliases the advanced parallel lane itself; advanced sequence callbacks use \`scope.ctx\` for effects and \`scope.itemKey\` / \`scope.key\` for identity |
+
+The ordinary facade intentionally hides those lifecycle transitions. Its one-shot operation and
+delivery calls make the future host validate and journal the same candidate/authorization steps
+internally. Unlike the advanced sequence callback, an ordinary root-package \`scope\` is itself
+the scoped context; do not copy \`scope.ctx\` between the two surfaces.
+
+<!-- weft-dsl-proto-reference:end -->
+
 ## Layout
 
 \`\`\`text
@@ -215,6 +457,34 @@ export default defineWorkflow(
 model output is repaired in the same session with the validation errors fed back, not
 thrown away. Zod is the default; any Standard Schema V1 library works.
 
+### Reusable SDK agents
+
+The runnable SDK also exports \`defineAgent\`. It is a top-level builder, not a \`ctx\` method:
+\`defineAgent\` declares a reusable role and \`ctx.agent\` runs it. Unlike the prototype, the
+SDK builder requires a prompt created with \`definePrompt\`, and a normal call returns the
+validated value directly.
+
+\`\`\`ts
+import { defineAgent, definePrompt, z } from "@techery/weft-sdk";
+
+const Issue = z.object({ title: z.string() });
+const Plan = z.object({ summary: z.string() });
+
+const planner = defineAgent({
+  name: "planner",
+  prompt: definePrompt({
+    name: "plan-issue",
+    input: Issue,
+    render: ({ title }) => \`Plan a minimal fix for: \${title}\`,
+  }),
+  schema: Plan,
+  defaults: { effort: "high" },
+});
+
+const plan = await ctx.agent(planner, { title: "Login fails" }, { key: "plan" });
+// plan.summary is available directly. Use ctx.agent.detailed(...) for usage or patch metadata.
+\`\`\`
+
 ## Determinism
 
 Workflow code must be side-effect free on its own: every clock read, random draw, timer,
@@ -281,7 +551,9 @@ Durations are \`"250ms"\`, \`"90s"\`, \`"10m"\`, \`"2h"\`, \`"7d"\`, or a number
 | Call | Returns |
 | --- | --- |
 | \`ctx.agent(prompt, { schema, key, label, provider, providerOptions, providerRequirements, model, effort, isolation, write, maxTurns, timeout, retry, repair, onMaxTurns, onError })\` | the validated value |
+| \`ctx.agent(definition, input, { key, ...overrides })\` | the reusable \`defineAgent\` role's validated value |
 | \`ctx.agent.detailed(prompt, opts)\` | \`{ value, usage, files, patch, attempts, sessionId }\` |
+| \`ctx.agent.detailed(definition, input, opts)\` | the same detailed envelope for a reusable role |
 | \`ctx.sequence(items, { key, keyOf, phase? }, run)\` | sequential results with one globally namespaced keyed scope per item |
 | \`ctx.parallel(tasks, { errors })\` | eager/mixed tasks as \`Settled<T>[]\`; no concurrency cap |
 | \`ctx.parallel(thunks, { concurrency, errors })\` | bounded thunk fan-out as \`Settled<T>[]\` |

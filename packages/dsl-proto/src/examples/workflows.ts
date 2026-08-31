@@ -1,5 +1,4 @@
 import {
-  type AgentResult,
   defineAgent,
   defineCheck,
   defineCheckSuite,
@@ -13,7 +12,6 @@ import {
   defineWorkflow,
   type HumanReviewResult,
   type PatchRef,
-  type WorkflowNode,
   z,
 } from "../index.ts";
 
@@ -105,10 +103,8 @@ const patchBugWorkflow = defineWorkflow(
       { proposedPaths: input.allowedPaths },
       { key: "developer-write-scope", label: "Resolve bug-fix paths" },
     );
-    const built = await ctx.agent({
+    const built = await ctx.agent(developer, { ticket: input }, {
       key: "developer",
-      agent: developer,
-      input: { ticket: input },
       write: writeScope,
       goal: { definition: goal, input: { testCommand: input.testCommand } },
     });
@@ -116,11 +112,10 @@ const patchBugWorkflow = defineWorkflow(
     expectType<PatchRef>(built.patch);
     expectType<"met">(built.goal.status);
     expectType<string>(built.value.summary);
-    await ctx.integrate([built.patch]);
+    await ctx.integrate([built.patch], { key: "integrate-bug-patch" });
 
-    const summary = await ctx.agent({
+    const summary = await ctx.agent(summarizer, {
       key: "summary",
-      agent: summarizer,
       goal: { definition: staticGoal },
     });
     expectType<string>(summary.value.summary);
@@ -155,16 +150,14 @@ const branchDeliveryWorkflow = defineWorkflow(
     workspace: ({ input }) => ({ branch: `feature/${input.ticket}`, from: "main" }),
   },
   async (ctx, input) => {
-    const built = await ctx.phase("Build", async (phase) => {
-      const writeScope = await phase.paths.resolve(
+    const built = await ctx.step("build", async (step) => {
+      const writeScope = await step.paths.resolve(
         bugWriterPaths,
         { proposedPaths: input.allowedPaths },
         { key: "developer-write-scope", label: "Resolve branch bug-fix paths" },
       );
-      return phase.agent({
+      return step.agent(developer, { ticket: input }, {
         key: "developer",
-        agent: developer,
-        input: { ticket: input },
         write: writeScope,
       });
     });
@@ -197,20 +190,17 @@ const recipe = defineRecipe({
 const compositionWorkflow = defineWorkflow(
   { id: "composition", input: z.array(z.object({ ticket: z.string() })), output: z.array(z.string()) },
   async (ctx, input) => {
-    const settled = await ctx.parallel(input, recipe, {
+    const results = await ctx.parallel.all(input, (item, lane) => lane.recipe(recipe, item), {
       key: "inspect",
       keyOf: (item) => item.ticket,
       concurrency: 2,
-      errors: "throw",
     });
-    return ctx.all(settled).map((item) => item.ticket);
+    return results.map((item) => item.ticket);
   },
 );
 
 const Tasks = defineTaskContract({
   schema: z.object({ ticket: z.string(), branch: z.string().nullable() }),
-  revision: "delivery-v1",
-  version: 1,
   agentAccess: "write",
 });
 
@@ -218,37 +208,34 @@ const taskWorkflow = defineWorkflow(
   { id: "task-workflow", input: BugInput, output: BuildResult, tasks: Tasks },
   async (ctx, input) => {
     await ctx.tasks.upsert({
-      key: "task:intake",
       dedupeKey: input.ticket,
       set: {
         title: input.ticket,
         description: "Bug",
         extensions: { ticket: input.ticket, branch: null },
       },
-    });
-    const result = await ctx.agent({
+    }, { key: "task:intake" });
+    const result = await ctx.agent({ prompt: "Summarize", schema: BuildResult }, {
       key: "read",
-      prompt: "Summarize",
-      schema: BuildResult,
+      failure: "return",
       tasks: { mode: "read", dedupeKeys: [input.ticket] },
-      onError: "null",
     });
-    expectType<AgentResult<{ summary: string; redEvidence: string }> | null>(result);
-    return result?.value ?? { summary: "unavailable", redEvidence: "unavailable" };
+    if (!result.ok) return { summary: "unavailable", redEvidence: "unavailable" };
+    return result.result.value;
   },
 );
 
 // Every `define*` result shares one nominal base type while retaining its precise inferred contract.
-expectType<WorkflowNode>(bugPrompt);
-expectType<WorkflowNode>(developer);
-expectType<WorkflowNode>(regression);
-expectType<WorkflowNode>(quality);
-expectType<WorkflowNode>(goal);
-expectType<WorkflowNode>(reviewView);
-expectType<WorkflowNode>(resultView);
-expectType<WorkflowNode>(recipe);
-expectType<WorkflowNode>(Tasks);
-expectType<WorkflowNode>(patchBugWorkflow);
-expectType<WorkflowNode>(branchDeliveryWorkflow);
-expectType<WorkflowNode>(compositionWorkflow);
-expectType<WorkflowNode>(taskWorkflow);
+expectType<"weft.prompt">(bugPrompt.kind);
+expectType<"weft.agent">(developer.kind);
+expectType<"weft.check">(regression.kind);
+expectType<"weft.check-suite">(quality.kind);
+expectType<"weft.goal">(goal.kind);
+expectType<"weft.ui-view">(reviewView.kind);
+expectType<"weft.ui-view">(resultView.kind);
+expectType<"weft.recipe">(recipe.kind);
+expectType<"weft.task-contract">(Tasks.kind);
+expectType<"weft.workflow">(patchBugWorkflow.kind);
+expectType<"weft.workflow">(branchDeliveryWorkflow.kind);
+expectType<"weft.workflow">(compositionWorkflow.kind);
+expectType<"weft.workflow">(taskWorkflow.kind);

@@ -1,7 +1,8 @@
 /** Declaration-only internal execution model for the Weft DSL prototype. */
 
 import type {
-  AgentDefinition,
+  AgentOutcome,
+  AgentOutputOf,
   AgentResult,
   AnyAgentCall,
   AnyDefinedAgentCall,
@@ -14,11 +15,12 @@ import type {
 import type { ArtifactCaptureInputOf, ArtifactCaptureOptionsFor, ArtifactRefOf } from "./artifacts.ts";
 import type {
   AnyCheckDefinition,
-  CheckDefinition,
+  CheckInputOf,
   CheckInvocationOptions,
   CheckResultOf,
-  CheckSuiteDefinition,
+  CheckSuiteInputOf,
   CheckSuiteInvocationOptions,
+  CheckSuiteMembersOf,
   CheckSuiteResult,
   CheckWaiverAuthorizeOptions,
   CheckWaiverRef,
@@ -42,7 +44,7 @@ import type {
   PromotionCandidateInput,
   PromotionCandidateRef,
 } from "./deliveries.ts";
-import type { GoalDefinition, GoalResult } from "./goals.ts";
+import type { GoalDefinition, GoalResult, GoalResultsOf } from "./goals.ts";
 import type { UiViewRef } from "./human.ts";
 import type {
   DetailedObserverResult,
@@ -81,7 +83,14 @@ import type {
   WriteScope,
 } from "./path-policies.ts";
 import type { ReviewFindingOf, ReviewInputOf, ReviewInvocationOptions, ReviewResult } from "./reviews.ts";
-import type { AnySchema, InferOut, PromptDefinition, WorkflowNode, WorkspaceSubject } from "./shared.ts";
+import type {
+  AnySchema,
+  InferOut,
+  InputOf,
+  PromptDefinition,
+  WorkflowNode,
+  WorkspaceSnapshotRef,
+} from "./shared.ts";
 import type { TaskContract } from "./tasks.ts";
 import type { TriggerInputOf, TriggerOutputOf } from "./triggers.ts";
 import type {
@@ -136,7 +145,7 @@ export interface WorkflowExecutionContext {
   runId: string;
   parentStepKey?: string;
   signal: AbortSignal;
-  subject?: WorkspaceSubject;
+  snapshot?: WorkspaceSnapshotRef;
 }
 
 /**
@@ -240,18 +249,14 @@ export type PromptRenderInvocation<Node extends WorkflowNode<"weft.prompt">> = W
  * Use: It supplies the input side of `RecipeInvocation` without widening the recipe result.
  */
 export type RecipeDefinitionInput<Node> =
-  Node extends RecipeDefinition<infer Input, infer _Output, infer _ParsedInput, infer _RawOutput>
-    ? Input
-    : never;
+  Node extends RecipeDefinition<infer Types, any> ? Types["input"] : never;
 
 /**
  * Why: Recovers the validated output carried by a schema-backed recipe definition.
  * Use: It supplies the output side of `RecipeInvocation` after the recipe's output boundary validates.
  */
 export type RecipeDefinitionOutput<Node> =
-  Node extends RecipeDefinition<infer _Input, infer Output, infer _ParsedInput, infer _RawOutput>
-    ? Output
-    : never;
+  Node extends RecipeDefinition<infer Types, any> ? Types["output"] : never;
 
 /**
  * Why: Models transparent recipe composition as a typed input-to-output operation in the current run.
@@ -269,7 +274,7 @@ export type RecipeInvocation<Node extends WorkflowNode<"weft.recipe">> = Workflo
  * Use: It supplies the input side of `CheckInvocation`, including `void` for static checks.
  */
 export type CheckDefinitionInput<Node> =
-  Node extends CheckDefinition<infer Input, infer _Name, infer _ParsedInput, infer _Result> ? Input : never;
+  CheckInputOf<Node>;
 
 /**
  * Why: Adds check-specific policy overrides to the generic bound invocation without changing its domain input.
@@ -277,9 +282,9 @@ export type CheckDefinitionInput<Node> =
  */
 export interface CheckInvocationState<
   Node extends AnyCheckDefinition = AnyCheckDefinition,
-  Subject extends WorkspaceSubject = WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
 > {
-  readonly options?: CheckInvocationOptions<Node, Subject>;
+  readonly options?: CheckInvocationOptions<Node, Candidate>;
 }
 
 /**
@@ -288,34 +293,34 @@ export interface CheckInvocationState<
  */
 export type CheckInvocation<
   Node extends AnyCheckDefinition,
-  Subject extends WorkspaceSubject = WorkspaceSubject,
-> = WorkflowInvocation<"check.run", Node, CheckDefinitionInput<Node>, CheckResultOf<Node, Subject>> &
-  CheckInvocationState<Node, Subject>;
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
+> = WorkflowInvocation<"check.run", Node, CheckDefinitionInput<Node>, CheckResultOf<Node, Candidate>> &
+  CheckInvocationState<Node, Candidate>;
 
 /**
  * Why: Carries the exact executed failure and bounded request used to authorize one eligible check exception.
- * Use: Bind it behind `ctx.check.authorize`; the host derives policy fields from the definition, not this request.
+ * Use: Bind it behind `ctx.check.authorizeWaiver`; the host derives policy fields from the definition, not this request.
  */
 export interface CheckWaiverAuthorizationInput<
   Node extends WaiverEligibleCheckDefinition,
-  Subject extends WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef,
 > {
-  readonly failure: FailedCheckResultOf<Node, Subject>;
+  readonly failure: FailedCheckResultOf<Node, Candidate>;
   readonly options: CheckWaiverAuthorizeOptions;
 }
 
 /**
  * Why: Models waiver authorization as exact failed evidence translated into a nominal definition-bound capability.
- * Use: Execute it behind `ctx.check.authorize` before invoking the matching eligible check with `waive`.
+ * Use: Execute it behind `ctx.check.authorizeWaiver` before invoking the matching eligible check with `waive`.
  */
 export type CheckWaiverAuthorizationInvocation<
   Node extends WaiverEligibleCheckDefinition,
-  Subject extends WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef,
 > = WorkflowInvocation<
   "check.authorize",
   Node,
-  CheckWaiverAuthorizationInput<Node, Subject>,
-  CheckWaiverRef<Node, Subject>
+  CheckWaiverAuthorizationInput<Node, Candidate>,
+  CheckWaiverRef<Node, Candidate>
 >;
 
 /**
@@ -323,21 +328,21 @@ export type CheckWaiverAuthorizationInvocation<
  * Use: It supplies the input side of `CheckSuiteInvocation`, including `void` for a static suite.
  */
 export type CheckSuiteDefinitionInput<Node> =
-  Node extends CheckSuiteDefinition<infer Input, infer _Members, infer _ParsedInput> ? Input : never;
+  CheckSuiteInputOf<Node>;
 
 /**
  * Why: Recovers the member map whose names and result types must remain visible after suite execution.
  * Use: It supplies the result side of `CheckSuiteInvocation`.
  */
 export type CheckSuiteDefinitionMembers<Node> =
-  Node extends CheckSuiteDefinition<infer _Input, infer Members, infer _ParsedInput> ? Members : never;
+  CheckSuiteMembersOf<Node>;
 
 /**
  * Why: Adds suite concurrency and policy overrides to its bound invocation.
  * Use: The suite binder copies `ctx.check` options here before the engine expands member checks.
  */
-export interface CheckSuiteInvocationState<Subject extends WorkspaceSubject = WorkspaceSubject> {
-  readonly options?: CheckSuiteInvocationOptions<Subject>;
+export interface CheckSuiteInvocationState<Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef> {
+  readonly options?: CheckSuiteInvocationOptions<Candidate>;
 }
 
 /**
@@ -346,14 +351,14 @@ export interface CheckSuiteInvocationState<Subject extends WorkspaceSubject = Wo
  */
 export type CheckSuiteInvocation<
   Node extends WorkflowNode<"weft.check-suite">,
-  Subject extends WorkspaceSubject = WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
 > = WorkflowInvocation<
   "check-suite.run",
   Node,
   CheckSuiteDefinitionInput<Node>,
-  CheckSuiteResult<CheckSuiteDefinitionMembers<Node>, Subject>
+  CheckSuiteResult<CheckSuiteDefinitionMembers<Node>, Candidate>
 > &
-  CheckSuiteInvocationState<Subject>;
+  CheckSuiteInvocationState<Candidate>;
 
 // ---------------------------------------------------------------------------
 // Artifact, context, path-policy, operation, and observer invocations
@@ -364,9 +369,9 @@ export type CheckSuiteInvocation<
  * Use: The artifact handler reads it when storing content and producing the immutable reference.
  */
 export interface ArtifactInvocationState<
-  Subject extends WorkspaceSubject | undefined = WorkspaceSubject | undefined,
+  Candidate extends WorkspaceSnapshotRef | undefined = WorkspaceSnapshotRef | undefined,
 > {
-  readonly options: ArtifactCaptureOptionsFor<Subject>;
+  readonly options: ArtifactCaptureOptionsFor<Candidate>;
 }
 
 /**
@@ -375,9 +380,9 @@ export interface ArtifactInvocationState<
  */
 export type ArtifactInvocation<
   Node extends WorkflowNode<"weft.artifact">,
-  Subject extends WorkspaceSubject | undefined = WorkspaceSubject | undefined,
-> = WorkflowInvocation<"artifact.capture", Node, ArtifactCaptureInputOf<Node>, ArtifactRefOf<Node, Subject>> &
-  ArtifactInvocationState<Subject>;
+  Candidate extends WorkspaceSnapshotRef | undefined = WorkspaceSnapshotRef | undefined,
+> = WorkflowInvocation<"artifact.capture", Node, ArtifactCaptureInputOf<Node>, ArtifactRefOf<Node, Candidate>> &
+  ArtifactInvocationState<Candidate>;
 
 /**
  * Why: Carries freshness overrides beside a context source's schema-derived lookup input.
@@ -397,7 +402,7 @@ export type ContextSourceInvocation<Node extends ContextSourceDefinition<AnySche
 
 /**
  * Why: Carries durable resolution identity beside one untrusted path proposal.
- * Use: The path handler uses it while canonicalizing paths and minting an exact-subject grant.
+ * Use: The path handler uses it while canonicalizing paths and minting a snapshot-bound grant.
  */
 export interface PathPolicyInvocationState {
   readonly options: PathPolicyResolveOptions;
@@ -606,27 +611,27 @@ export type DetailedObserverInvocation<Node extends WorkflowNode<"weft.observer"
 // ---------------------------------------------------------------------------
 
 /**
- * Why: Carries the exact subject and durable identity used to guard one reusable review evaluation.
- * Use: The review handler verifies the subject before and after nested evaluator effects.
+ * Why: Carries the exact candidate and durable identity used to guard one reusable review evaluation.
+ * Use: The review handler verifies the candidate before and after nested evaluator effects.
  */
-export interface ReviewInvocationState<Subject extends WorkspaceSubject = WorkspaceSubject> {
-  readonly options: ReviewInvocationOptions<Subject>;
+export interface ReviewInvocationState<Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef> {
+  readonly options: ReviewInvocationOptions<Candidate>;
 }
 
 /**
- * Why: Models review as typed input translated into a subject-bound verdict and nominal attestation.
+ * Why: Models review as typed input translated into a candidate-bound verdict and nominal attestation.
  * Use: Create it behind `ctx.review` while keeping any later rework in ordinary workflow code.
  */
 export type ReviewInvocation<
   Node extends WorkflowNode<"weft.review">,
-  Subject extends WorkspaceSubject = WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
 > = WorkflowInvocation<
   "review.run",
   Node,
   ReviewInputOf<Node>,
-  ReviewResult<ReviewFindingOf<Node>, Subject>
+  ReviewResult<ReviewFindingOf<Node>, Candidate>
 > &
-  ReviewInvocationState<Subject>;
+  ReviewInvocationState<Candidate>;
 
 /**
  * Why: Carries the stable key used while validating evidence and freezing delivery input.
@@ -642,12 +647,12 @@ export interface DeliveryPrepareInvocationState {
  */
 export type DeliveryPrepareInvocation<
   Node extends DeliveryDefinition<any, any>,
-  Subject extends WorkspaceSubject = WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
 > = WorkflowInvocation<
   "delivery.prepare",
   Node,
-  PromotionCandidateInput<Node, Subject>,
-  PromotionCandidateRef<Node, Subject>
+  PromotionCandidateInput<Node, Candidate>,
+  PromotionCandidateRef<Node, Candidate>
 > &
   DeliveryPrepareInvocationState;
 
@@ -665,7 +670,7 @@ export interface DeliveryAuthorizeInvocationState {
  */
 export type DeliveryAuthorizeInvocation<
   Node extends DeliveryDefinition<any, any>,
-  Candidate extends PromotionCandidateRef<Node, WorkspaceSubject>,
+  Candidate extends PromotionCandidateRef<Node, WorkspaceSnapshotRef>,
 > = WorkflowInvocation<"delivery.authorize", Node, Candidate, DeliveryAuthorizationRef<Node, Candidate>> &
   DeliveryAuthorizeInvocationState;
 
@@ -683,7 +688,7 @@ export interface DeliveryRunInvocationState {
  */
 export type DeliveryRunInvocation<
   Node extends DeliveryDefinition<any, any>,
-  Candidate extends PromotionCandidateRef<Node, WorkspaceSubject>,
+  Candidate extends PromotionCandidateRef<Node, WorkspaceSnapshotRef>,
 > = WorkflowInvocation<
   "delivery.run",
   Node,
@@ -710,16 +715,14 @@ export type AgentValueOf<Call extends AnyAgentCall> =
   Call extends InlineAgentCall<infer Schema>
     ? InferOut<Schema>
     : Call extends AnyDefinedAgentCall
-      ? Call["agent"] extends AgentDefinition<infer _Input, infer Schema, infer _ParsedInput>
-        ? InferOut<Schema>
-        : never
+      ? AgentOutputOf<Call["agent"]>
       : never;
 
 /**
  * Why: Names the structural carrier used to detect a goal attached to an agent invocation.
  * Use: It lets `AgentGoalOf` infer accepted goal evidence without using an inline object type.
  */
-interface AgentGoalCarrier<Definition extends GoalDefinition<unknown, unknown, unknown>> {
+interface AgentGoalCarrier<Definition extends GoalDefinition<any, any>> {
   goal: GoalInvocationBase<Definition>;
 }
 
@@ -729,8 +732,8 @@ interface AgentGoalCarrier<Definition extends GoalDefinition<unknown, unknown, u
  */
 export type AgentGoalOf<Call extends AnyAgentCall> =
   Call extends AgentGoalCarrier<infer Definition>
-    ? Definition extends GoalDefinition<unknown, infer Results, unknown>
-      ? GoalResult<Results>
+    ? Definition extends GoalDefinition<any, any>
+      ? GoalResult<GoalResultsOf<Definition>>
       : undefined
     : undefined;
 
@@ -743,16 +746,16 @@ interface AgentWriteCarrier {
 }
 
 /**
- * Why: Names the structural carrier used to detect deliberately nullable agent failure policy.
- * Use: It lets the result type add `null` only when the concrete call requests `onError: "null"`.
+ * Why: Names the structural carrier used to detect explicitly returned agent failure.
+ * Use: It lets the result type return an exhaustive outcome only when the concrete call requests `failure: "return"`.
  */
-interface NullableAgentCarrier {
-  onError: "null";
+interface ReturnedAgentFailureCarrier {
+  failure: "return";
 }
 
 /**
  * Why: Selects the correct patch semantics from the concrete agent call and its bound workspace mode.
- * Use: It forms the non-null result side of `AgentInvocationOutput`.
+ * Use: It forms the successful result side of `AgentInvocationOutput`.
  */
 export type AgentInvocationEnvelope<
   Call extends AnyAgentCall,
@@ -764,14 +767,18 @@ export type AgentInvocationEnvelope<
   : AgentResult<AgentValueOf<Call>, AgentGoalOf<Call>>;
 
 /**
- * Why: Preserves nullable failure behavior as part of the invocation's exact output rather than the reusable agent node.
+ * Why: Preserves returned-failure behavior as part of the invocation's exact output rather than the reusable agent node.
  * Use: It is the output extracted when `InternalEngine.execute` receives a defined or inline agent invocation.
  */
 export type AgentInvocationOutput<
   Call extends AnyAgentCall,
   Workspace extends boolean,
-> = Call extends NullableAgentCarrier
-  ? AgentInvocationEnvelope<Call, Workspace> | null
+> = Call extends ReturnedAgentFailureCarrier
+  ? AgentOutcome<
+      AgentValueOf<Call>,
+      AgentGoalOf<Call>,
+      AgentInvocationEnvelope<Call, Workspace>
+    >
   : AgentInvocationEnvelope<Call, Workspace>;
 
 /**
@@ -834,7 +841,7 @@ export interface GoalOwnerSession {
  */
 export interface GoalEvaluationInput<Input> {
   value: Input;
-  subject: WorkspaceSubject;
+  candidate: WorkspaceSnapshotRef;
   owner: GoalOwnerSession;
 }
 
@@ -843,14 +850,14 @@ export interface GoalEvaluationInput<Input> {
  * Use: It specializes `GoalEvaluationInput` for the selected goal node.
  */
 export type GoalDefinitionInput<Node> =
-  Node extends GoalDefinition<infer Input, infer _Results, infer _ParsedInput> ? Input : never;
+  Node extends GoalDefinition<any, any> ? InputOf<Node> : never;
 
 /**
  * Why: Recovers the accepted component result map produced by a named goal definition.
  * Use: It specializes the final `GoalResult` returned by goal execution.
  */
 export type GoalDefinitionResults<Node> =
-  Node extends GoalDefinition<infer _Input, infer Results, infer _ParsedInput> ? Results : never;
+  Node extends GoalDefinition<any, any> ? GoalResultsOf<Node> : never;
 
 /**
  * Why: Models bounded goal evaluation as a candidate-bound input translated into accepted, generation-scoped evidence.
@@ -908,12 +915,11 @@ export type UiRenderInvocation<Node extends WorkflowNode<"weft.ui-view">> = Work
 >;
 
 /**
- * Why: Names the raw extension payload and optional source version needed to validate or migrate a task contract.
- * Use: Bind it when a workflow reads or writes durable task extensions across a contract version boundary.
+ * Why: Names the raw extension payload that must be validated by a task contract.
+ * Use: Bind it when a workflow reads or writes task extensions at the host boundary.
  */
 export interface TaskContractInvocationInput {
   extensions: unknown;
-  fromVersion?: number;
 }
 
 /**
@@ -924,7 +930,7 @@ export type TaskContractOutput<Node> =
   Node extends TaskContract<infer Schema extends AnySchema> ? InferOut<Schema> : never;
 
 /**
- * Why: Models a task contract as raw/versioned extensions translated into their current validated representation.
+ * Why: Models a task contract as raw extensions translated into their validated representation.
  * Use: Create it inside task observation and mutation boundaries rather than treating the contract as a journaled task itself.
  */
 export type TaskContractInvocation<Node extends WorkflowNode<"weft.task-contract">> = WorkflowInvocation<
@@ -959,7 +965,7 @@ export interface WorkflowRunInvocationState<Mode extends "output" | "detailed" =
  * Why: Models a workflow as validated launch input translated into its validated durable run output.
  * Use: Create it at the host entrypoint or behind `ctx.workflow` before generic execution.
  */
-export type WorkflowRunInvocation<Node extends WorkflowDefinition<any, any, any, any, any, any, any>> =
+export type WorkflowRunInvocation<Node extends WorkflowDefinition<any, any>> =
   WorkflowInvocation<"workflow.run", Node, InferWorkflowInput<Node>, InferWorkflowOutput<Node>> &
     WorkflowRunInvocationState<"output">;
 
@@ -968,7 +974,7 @@ export type WorkflowRunInvocation<Node extends WorkflowDefinition<any, any, any,
  * Use: Create it behind `ctx.workflow.detailed`; root launches remain host-owned entrypoint invocations.
  */
 export type DetailedWorkflowRunInvocation<
-  Node extends WorkflowDefinition<any, any, any, any, any, any, any>,
+  Node extends WorkflowDefinition<any, any>,
 > = WorkflowInvocation<"workflow.run", Node, InferWorkflowInput<Node>, WorkflowRunReceipt<Node>> &
   WorkflowRunInvocationState<"detailed">;
 
@@ -1117,7 +1123,7 @@ type AnyObserverInvocation = WorkflowInvocation<
   ObserverInvocationState;
 
 /**
- * Why: Gives the dispatcher an erased review member with exact-subject guard options visible.
+ * Why: Gives the dispatcher an erased review member with exact-candidate guard options visible.
  * Use: It participates in the closed `AnyWorkflowInvocation` union used by the internal executor.
  */
 type AnyReviewInvocation = WorkflowInvocation<"review.run", WorkflowNode<"weft.review">, unknown, unknown> &
@@ -1173,7 +1179,7 @@ type AnyCheckInvocation = WorkflowInvocation<"check.run", WorkflowNode<"weft.che
   CheckInvocationState;
 
 /**
- * Why: Gives the dispatcher an erased waiver-authorization member while exact callers retain definition and subject.
+ * Why: Gives the dispatcher an erased waiver-authorization member while exact callers retain definition and candidate.
  * Use: It participates in the closed internal invocation union beside ordinary check execution.
  */
 type AnyCheckWaiverAuthorizationInvocation = WorkflowInvocation<

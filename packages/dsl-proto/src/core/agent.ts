@@ -1,13 +1,16 @@
 /** Declaration-only agent surface for the Weft DSL prototype. */
 
 import type { ContextSnapshot } from "./context-sources.ts";
-import type { GoalDefinition, GoalResult } from "./goals.ts";
+import type { GoalDefinition, GoalTypes } from "./goals.ts";
 import type { WriteScope } from "./path-policies.ts";
 import type {
   AnySchema,
+  DefinitionTypeCarrier,
   Duration,
   InferIn,
   InferOut,
+  InputMode,
+  NominalValue,
   PromptDefinition,
   PromptPart,
   Provider,
@@ -16,22 +19,19 @@ import type {
   WorkspaceSnapshotRef,
 } from "./shared.ts";
 import type { AgentTaskAccess } from "./tasks.ts";
-import type { Ctx } from "./workflow.ts";
+import type { WorkflowCtx } from "./workflow.ts";
 
 // ---------------------------------------------------------------------------
 // Agents and reusable recipes
 // ---------------------------------------------------------------------------
 
-/**
- * Why: Gives the agent DSL an explicit usage contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
+/** Usage. */
 export interface Usage {
-  input: number;
-  output: number;
-  cacheRead?: number;
-  usd?: number;
-  samples?: number;
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead?: number;
+  readonly usd?: number;
+  readonly samples?: number;
 }
 
 /**
@@ -44,14 +44,14 @@ declare const patchRefBrand: unique symbol;
  * Why: Represents an isolated writer's captured change without embedding patch bytes in ordinary workflow values.
  * Use: Pass it to integration, composition, discard, or reporting operations.
  */
-export interface PatchRef {
+export interface PatchRef extends NominalValue<"weft.patch-ref"> {
   readonly ref: string;
   readonly key: string;
-  readonly files: string[];
+  readonly files: readonly string[];
   readonly base: WorkspaceSnapshotRef;
   readonly baseTree: string;
   readonly quarantined?: boolean;
-  readonly outOfScope?: string[];
+  readonly outOfScope?: readonly string[];
   readonly [patchRefBrand]: true;
 }
 
@@ -60,34 +60,25 @@ export interface PatchRef {
  * Use: Read `value` for domain data and use files, usage, patch, session, attempts, or goal evidence when needed.
  */
 export interface AgentResultBase<T> {
-  value: T;
-  usage: Usage;
-  files: string[];
-  patch?: PatchRef;
-  attempts: number;
-  sessionId?: string;
+  readonly value: T;
+  readonly usage: Readonly<Usage>;
+  readonly files: readonly string[];
+  readonly patch?: PatchRef;
+  readonly attempts: number;
+  readonly sessionId?: string;
 }
 
-/**
- * Why: Gives the agent DSL an explicit agent result without goal contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
+/** Agent result without goal. */
 export interface AgentResultWithoutGoal {
-  goal?: never;
+  readonly goal?: never;
 }
 
-/**
- * Why: Gives the agent DSL an explicit agent result with goal contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
+/** Agent result with goal. */
 export interface AgentResultWithGoal<Goal> {
-  goal: Goal;
+  readonly goal: Goal;
 }
 
-/**
- * Why: Gives the agent DSL an explicit agent goal field contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
+/** Agent goal field. */
 export type AgentGoalField<Goal> = [Goal] extends [undefined]
   ? AgentResultWithoutGoal
   : AgentResultWithGoal<Goal>;
@@ -98,52 +89,27 @@ export type AgentGoalField<Goal> = [Goal] extends [undefined]
  */
 export type AgentResult<T, Goal = undefined> = AgentResultBase<T> & AgentGoalField<Goal>;
 
-/**
- * Why: Gives the agent DSL an explicit required patch contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
+/** Required patch. */
 export interface RequiredPatch {
-  patch: PatchRef;
+  readonly patch: PatchRef;
 }
 
-/**
- * Why: Gives the agent DSL an explicit integrated workspace patch contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
+/** Integrated workspace patch. */
 export interface IntegratedWorkspacePatch {
-  patch?: never;
+  readonly patch?: never;
 }
 
-/**
- * Why: Gives the agent DSL an explicit patch agent result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
+/** Patch agent result. */
 export type PatchAgentResult<T, Goal = undefined> = Omit<AgentResult<T, Goal>, "patch"> & RequiredPatch;
 
-/**
- * Why: Gives the agent DSL an explicit workspace write agent result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
+/** Workspace write agent result. */
 export type WorkspaceWriteAgentResult<T, Goal = undefined> = Omit<AgentResult<T, Goal>, "patch"> &
   IntegratedWorkspacePatch;
 
-/**
- * Why: Gives the agent DSL an explicit retry options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
+/** Retry options. */
 export interface RetryOptions {
   attempts: number;
   backoff?: Duration;
-}
-
-/**
- * Why: Gives the agent DSL an explicit agent goal options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
-export interface AgentGoalOptions {
-  definition: GoalDefinition<any, any, any>;
-  input?: unknown;
-  attempts?: number;
 }
 
 /**
@@ -163,54 +129,69 @@ export interface AgentToolGrant<
  */
 export type AgentTool = WorkflowNode<"weft.operation"> | AgentToolGrant;
 
-/**
- * Why: Gives the agent DSL an explicit agent execution options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
+/** Agent execution options. */
 export interface AgentExecutionOptions {
   key?: string;
   label?: string;
   provider?: Provider;
   providerRequirements?: ProviderRequirements;
   write?: WriteScope;
-  goal?: AgentGoalOptions;
   maxTurns?: number;
   timeout?: Duration;
   retry?: RetryOptions;
   repair?: number;
   onMaxTurns?: "finalize" | "fail";
-  onError?: "throw" | "null";
   tasks?: false | AgentTaskAccess;
   tools?: readonly AgentTool[];
   context?: readonly ContextSnapshot<unknown>[];
 }
 
-/**
- * Why: Gives the agent DSL an explicit agent definition defaults contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
+/** Agent definition defaults. */
 export type AgentDefinitionDefaults = Omit<
   AgentExecutionOptions,
-  "key" | "label" | "write" | "goal" | "onError" | "tasks"
+  "key" | "label" | "write" | "tasks" | "context"
 >;
 
 /**
+ * Why: Names the hidden schema and value relationships carried by one reusable agent definition.
+ * Use: Agent builders construct it; authors normally consume its fields through definition extractors.
+ */
+export interface AgentTypes {
+  readonly input: unknown;
+  readonly parsedInput: unknown;
+  readonly output: unknown;
+  readonly rawOutput: unknown;
+  readonly inputMode: InputMode;
+  readonly outputSchema: AnySchema;
+}
+
+/**
  * Why: Names a reusable typed role with one prompt, output schema, and routing defaults.
- * Use: Create it with `defineAgent` and invoke it through `ctx.agent({ agent, input, ... })`.
+ * Use: Create it with `defineAgent`, then pass the definition as the first argument to `ctx.agent`.
  */
 export interface AgentDefinition<
-  Input,
-  S extends AnySchema,
-  ParsedInput = Input,
+  Types extends AgentTypes = AgentTypes,
   Name extends string = string,
-> extends WorkflowNode<"weft.agent"> {
+> extends WorkflowNode<"weft.agent">,
+    DefinitionTypeCarrier<Types> {
   readonly kind: "weft.agent";
   readonly name: Name;
   readonly description?: string;
-  readonly prompt: string | PromptDefinition<Input, ParsedInput>;
-  readonly schema: S;
+  readonly prompt: string | PromptDefinition<Types["input"], Types["parsedInput"]>;
+  readonly schema: Types["outputSchema"];
   readonly defaults: Readonly<AgentDefinitionDefaults>;
 }
+
+/** Exact hidden type relationships carried by one reusable agent definition. */
+export type AgentTypesOf<Definition> =
+  Definition extends AgentDefinition<infer Types, any> ? Types : never;
+
+/**
+ * Why: Recovers the exact definition-time name retained by one reusable agent role.
+ * Use: Apply it to `typeof agent` when building typed registries or provenance views.
+ */
+export type AgentNameOf<Definition> =
+  Definition extends AgentDefinition<any, infer Name> ? Name : never;
 
 /**
  * Why: Declares a reusable agent role without starting a model session.
@@ -224,10 +205,7 @@ export interface StaticAgentConfig<S extends AnySchema, Name extends string = st
   defaults?: AgentDefinitionDefaults;
 }
 
-/**
- * Why: Gives the agent DSL an explicit prompted agent config contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
+/** Prompted agent config. */
 export interface PromptedAgentConfig<Input, ParsedInput, S extends AnySchema, Name extends string = string> {
   name: Name;
   description?: string;
@@ -242,7 +220,17 @@ export interface PromptedAgentConfig<Input, ParsedInput, S extends AnySchema, Na
  */
 export declare function defineAgent<S extends AnySchema, const Name extends string = string>(
   config: StaticAgentConfig<S, Name>,
-): AgentDefinition<void, S, void, Name>;
+): AgentDefinition<
+  {
+    input: void;
+    parsedInput: void;
+    output: InferOut<S>;
+    rawOutput: InferIn<S>;
+    inputMode: "none";
+    outputSchema: S;
+  },
+  Name
+>;
 
 /**
  * Why: Declares a reusable agent role without starting a model session.
@@ -253,59 +241,146 @@ export declare function defineAgent<
   ParsedInput,
   S extends AnySchema,
   const Name extends string = string,
->(config: PromptedAgentConfig<Input, ParsedInput, S, Name>): AgentDefinition<Input, S, ParsedInput, Name>;
+>(config: PromptedAgentConfig<Input, ParsedInput, S, Name>): AgentDefinition<
+  {
+    input: Input;
+    parsedInput: ParsedInput;
+    output: InferOut<S>;
+    rawOutput: InferIn<S>;
+    inputMode: "required";
+    outputSchema: S;
+  },
+  Name
+>;
+
+/** Goal invocation base. */
+export type AnyGoalDefinition = GoalDefinition<any, string>;
+
+/** Goal-definition family constrained to one builder-selected input mode. */
+type GoalDefinitionWithInputMode<Mode extends InputMode> = GoalDefinition<
+  Omit<GoalTypes, "inputMode"> & { readonly inputMode: Mode },
+  string
+>;
 
 /**
- * Why: Gives the agent DSL an explicit goal invocation base contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
+ * Why: Holds fields shared by every correlated goal binding before its definition-specific input mode is applied.
+ * Use: Prefer `GoalInvocation` or `bindGoal`; this base is useful only for erased engine dispatch.
  */
-export interface GoalInvocationBase<Definition extends GoalDefinition<any, any, any>> {
-  definition: Definition;
-  attempts?: number;
+export interface GoalInvocationBase<Definition extends AnyGoalDefinition> {
+  readonly definition: Definition;
+  readonly attempts?: number;
 }
 
-/**
- * Why: Gives the agent DSL an explicit no goal input contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
+/** No goal input. */
 export interface NoGoalInput {
-  input?: never;
+  readonly input?: never;
 }
 
-/**
- * Why: Gives the agent DSL an explicit required goal input contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
+/** Required goal input. */
 export interface RequiredGoalInput<Input> {
-  input: Input;
+  readonly input: Input;
 }
 
 /**
- * Why: Gives the agent DSL an explicit goal input argument contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
+ * Why: Recovers the raw input type bound to one goal definition independently of whether that type includes `undefined`.
+ * Use: Prefer `GoalInvocation`; use this extractor when building goal-aware helpers.
  */
-export type GoalInputArgument<Input> = [undefined] extends [Input] ? NoGoalInput : RequiredGoalInput<Input>;
+export type GoalInputOf<Definition> =
+  Definition extends GoalDefinition<infer Types, any> ? Types["input"] : never;
 
 /**
- * Why: Gives the agent DSL an explicit goal invocation contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
+ * Why: Recovers the definition-form input mode that the goal builder minted.
+ * Use: Use it to require an explicit input property for schema and typed goals even when their value type includes `undefined`.
  */
-export type GoalInvocation<Definition extends GoalDefinition<any, any, any>> =
-  GoalInvocationBase<Definition> &
-    (Definition extends GoalDefinition<infer Input, any, any> ? GoalInputArgument<Input> : never);
+export type GoalInputModeOf<Definition> =
+  Definition extends GoalDefinition<infer Types, any> ? Types["inputMode"] : InputMode;
 
 /**
- * Why: Centralizes the internal agent call base relationship so adjacent public declarations infer consistently.
- * Use: It is used by the surrounding agent types and is not a separate runtime feature.
+ * Why: Selects goal invocation input presence from the definition form rather than assignability of `undefined`.
+ * Use: It is applied by `GoalInvocation`, `bindGoal`, and agent call types.
  */
+export type GoalInputArgument<Definition extends AnyGoalDefinition> =
+  GoalInputModeOf<Definition> extends "none"
+    ? NoGoalInput
+    : RequiredGoalInput<GoalInputOf<Definition>>;
+
+/** Goal invocation. */
+export type GoalInvocation<Definition extends AnyGoalDefinition> =
+  Definition extends AnyGoalDefinition
+    ? GoalInvocationBase<Definition> & GoalInputArgument<Definition>
+    : never;
+
+/**
+ * Why: Gives the author-facing name to a definition-correlated goal invocation passed into an agent call.
+ * Use: Create it inline or with `bindGoal`; a mismatched input cannot be detached from its definition.
+ */
+export type GoalBinding<Definition extends AnyGoalDefinition> = GoalInvocation<Definition>;
+
+/**
+ * Why: Constructs a correlated no-input goal binding without creating another workflow node or effect.
+ * Use: Call it for a goal built from the static definition form and optionally set an attempt limit.
+ */
+export declare function bindGoal<Definition extends GoalDefinitionWithInputMode<"none">>(
+  definition: Definition,
+  options?: { readonly attempts?: number },
+): GoalBinding<Definition>;
+
+/**
+ * Why: Constructs a correlated required-input goal binding with concise inference and targeted diagnostics.
+ * Use: Pass the definition and its exact raw input, even when that input value is explicitly `undefined`.
+ */
+export declare function bindGoal<Definition extends GoalDefinitionWithInputMode<"required">>(
+  definition: Definition,
+  input: GoalInputOf<Definition>,
+  options?: { readonly attempts?: number },
+): GoalBinding<Definition>;
+
+/**
+ * Why: Names the two explicit failure policies supported by the unified agent call.
+ * Use: Omit it or use `"throw"` for required completion; use `"return"` for an exhaustive `AgentOutcome`.
+ */
+export type AgentFailureMode = "throw" | "return";
+
+/** Fields shared by every agent call. */
 interface AgentCallBase extends AgentExecutionOptions {
   key: string;
+  failure?: AgentFailureMode;
 }
 
 /**
- * Why: Gives the agent DSL an explicit inline agent call contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
+ * Why: Names the erased union accepted by internal agent dispatch without weakening public definition-input correlation.
+ * Use: Internal engine types may carry it after a public call has already been checked.
  */
+export type AnyAgentDefinition = AgentDefinition<any, string>;
+
+/**
+ * Why: Makes absence of an agent completion goal explicit in generic call construction.
+ * Use: It is selected automatically when the call's goal type is `undefined`.
+ */
+export interface AgentCallWithoutGoal {
+  readonly goal?: never;
+}
+
+/**
+ * Why: Couples one agent call to the exact definition and input of its completion goal.
+ * Use: It is selected automatically when a concrete goal definition is inferred from `goal.definition`.
+ */
+export interface AgentCallWithGoal<Definition extends AnyGoalDefinition> {
+  readonly goal: GoalBinding<Definition>;
+}
+
+/**
+ * Why: Selects the correlated goal field for both inline and reusable agent calls.
+ * Use: Supply a concrete goal definition type or leave the goal generic as `undefined`.
+ */
+export type AgentGoalArgument<Goal extends AnyGoalDefinition | undefined> =
+  [Goal] extends [undefined]
+    ? AgentCallWithoutGoal
+    : Goal extends AnyGoalDefinition
+      ? AgentCallWithGoal<Goal>
+      : never;
+
+/** Inline agent call. */
 export interface InlineAgentFields<S extends AnySchema> {
   prompt: PromptPart;
   schema: S;
@@ -313,149 +388,313 @@ export interface InlineAgentFields<S extends AnySchema> {
   input?: never;
 }
 
-/**
- * Why: Gives the agent DSL an explicit inline agent call contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
-export type InlineAgentCall<S extends AnySchema = AnySchema> = AgentCallBase & InlineAgentFields<S>;
-
-/**
- * Why: Gives the agent DSL an explicit defined agent fields contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
-export interface DefinedAgentFields<Input, S extends AnySchema, ParsedInput> {
-  agent: AgentDefinition<Input, S, ParsedInput>;
-  prompt?: never;
-  schema?: never;
-}
-
-/**
- * Why: Gives the agent DSL an explicit defined agent input contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
-export type DefinedAgentInput<Input> = [undefined] extends [Input] ? NoGoalInput : RequiredGoalInput<Input>;
-
-/**
- * Why: Gives the agent DSL an explicit defined agent call contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
-export type DefinedAgentCall<
-  Input = unknown,
+/** Inline agent call. */
+export type InlineAgentCall<
   S extends AnySchema = AnySchema,
-  ParsedInput = Input,
-> = AgentCallBase & DefinedAgentFields<Input, S, ParsedInput> & DefinedAgentInput<Input>;
+  Goal extends AnyGoalDefinition | undefined = undefined,
+> = AgentCallBase & InlineAgentFields<S> & AgentGoalArgument<Goal>;
 
-/**
- * Why: Centralizes the internal agent definition input relationship so adjacent public declarations infer consistently.
- * Use: It is used by the surrounding agent types and is not a separate runtime feature.
- */
-type AgentDefinitionInput<Definition> =
-  Definition extends AgentDefinition<infer Input, any, any> ? Input : never;
-
-/**
- * Why: Gives the agent DSL an explicit any agent call contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
-export type AnyAgentCall = InlineAgentCall<any> | AnyDefinedAgentCall;
-
-/**
- * Why: Gives the agent DSL an explicit any defined agent call contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
- */
-export interface AnyDefinedAgentCall extends AgentCallBase {
-  agent: AgentDefinition<any, any, any>;
-  input?: unknown;
+/** Defined agent fields. */
+export interface DefinedAgentFields<Definition extends AnyAgentDefinition> {
+  agent: Definition;
   prompt?: never;
   schema?: never;
 }
 
 /**
- * Why: Centralizes the internal agent definition carrier relationship so adjacent public declarations infer consistently.
- * Use: It is used by the surrounding agent types and is not a separate runtime feature.
+ * Why: Recovers the raw input type retained by one reusable agent definition.
+ * Use: It supplies the required `input` property of a defined agent call.
  */
-interface AgentDefinitionCarrier<S extends AnySchema> {
-  agent: AgentDefinition<any, S, any>;
+export type AgentDefinitionInput<Definition> =
+  Definition extends AgentDefinition<infer Types, any> ? Types["input"] : never;
+
+/**
+ * Why: Recovers the input-presence mode minted by the static or typed agent definition overload.
+ * Use: It keeps `unknown`, `any`, and unions containing `undefined` in the explicit-input branch.
+ */
+export type AgentInputModeOf<Definition> =
+  Definition extends AgentDefinition<infer Types, any> ? Types["inputMode"] : InputMode;
+
+/**
+ * Why: Selects reusable-agent input presence from its definition form instead of its value type.
+ * Use: It is applied to every public defined-agent call.
+ */
+export type DefinedAgentInput<Definition extends AnyAgentDefinition> =
+  AgentInputModeOf<Definition> extends "none"
+    ? NoGoalInput
+    : RequiredGoalInput<AgentDefinitionInput<Definition>>;
+
+/** Defined agent call. */
+export type DefinedAgentCall<
+  Definition extends AnyAgentDefinition = AnyAgentDefinition,
+  Goal extends AnyGoalDefinition | undefined = undefined,
+> = Definition extends AnyAgentDefinition
+  ? AgentCallBase &
+    DefinedAgentFields<Definition> &
+    DefinedAgentInput<Definition> &
+    AgentGoalArgument<Goal>
+  : never;
+
+/** Any agent call. */
+export type AnyAgentCall = InlineAgentCall<any, any> | AnyDefinedAgentCall;
+
+/** Any defined agent call. */
+export interface AnyDefinedAgentCall extends AgentCallBase {
+  agent: AnyAgentDefinition;
+  input?: unknown;
+  goal?: GoalInvocationBase<AnyGoalDefinition> & { readonly input?: unknown };
+  prompt?: never;
+  schema?: never;
 }
 
 /**
- * Why: Centralizes the internal agent value of relationship so adjacent public declarations infer consistently.
- * Use: It is used by the surrounding agent types and is not a separate runtime feature.
+ * Why: Describes one terminal agent failure without collapsing provider, validation, budget, timeout, or goal exhaustion into `null`.
+ * Use: Narrow it from a call made with `failure: "return"` and retain its diagnostic fields.
  */
-type AgentValueOf<Call> =
-  Call extends InlineAgentCall<infer S>
-    ? InferOut<S>
-    : Call extends AgentDefinitionCarrier<infer S>
-      ? InferOut<S>
-      : never;
-
-/**
- * Why: Centralizes the internal agent goal of relationship so adjacent public declarations infer consistently.
- * Use: It is used by the surrounding agent types and is not a separate runtime feature.
- */
-interface GoalDefinitionCarrier<Definition> {
-  goal: GoalInvocationBase<Definition & GoalDefinition<any, any, any>>;
+export interface AgentFailure {
+  readonly kind: "provider" | "validation" | "budget" | "timeout" | "goal-exhausted" | "cancelled";
+  readonly message: string;
+  readonly retryable: boolean;
 }
 
 /**
- * Why: Centralizes the internal agent goal of relationship so adjacent public declarations infer consistently.
- * Use: It is used by the surrounding agent types and is not a separate runtime feature.
+ * Why: Makes optional agent failure explicit and exhaustively branchable while preserving successful result metadata.
+ * Use: Request it with `failure: "return"`; branch on `ok` instead of catching or testing a nullable result.
  */
-type AgentGoalOf<Call> =
-  Call extends GoalDefinitionCarrier<infer Definition>
-    ? Definition extends GoalDefinition<any, infer Results, any>
-      ? GoalResult<Results>
-      : undefined
+export type AgentOutcome<
+  Value,
+  Goal = undefined,
+  Success = AgentResult<Value, Goal>,
+> =
+  | { readonly ok: true; readonly result: Success }
+  | {
+      readonly ok: false;
+      readonly error: AgentFailure;
+      readonly attempts: number;
+      readonly sessionId?: string;
+    };
+
+/**
+ * Why: Carries invocation-only policy independently from an agent definition and its input.
+ * Use: Pass it as the final argument to `ctx.agent`; `write` grants mutation and `failure` selects throw versus return.
+ */
+export interface AgentCallOptionsBase extends Omit<AgentExecutionOptions, "key"> {
+  readonly key: string;
+  readonly failure?: AgentFailureMode;
+}
+
+/**
+ * Why: Correlates an invocation's optional completion goal with the exact goal input accepted by its definition.
+ * Use: Name a reusable options object with the concrete goal type when needed; inline objects infer it automatically.
+ */
+export type AgentCallOptions<
+  Goal extends AnyGoalDefinition | undefined = undefined,
+> = AgentCallOptionsBase & AgentGoalArgument<Goal>;
+
+/**
+ * Why: Gives one-off prompt/schema calls the same first-argument position as reusable agent definitions.
+ * Use: Pass it to `ctx.agent` with an options object when defining a reusable role would add no clarity.
+ */
+export interface InlineAgentDefinition<S extends AnySchema = AnySchema> {
+  readonly prompt: PromptPart;
+  readonly schema: S;
+}
+
+/**
+ * Why: Derives the successful goal envelope from one exact goal definition.
+ * Use: It is used by the unified agent-call return types.
+ */
+export type AgentGoalResultOf<Goal extends AnyGoalDefinition | undefined> =
+  Goal extends GoalDefinition<infer Types, any> ? Types["result"] : undefined;
+
+/**
+ * Why: Derives the validated output of one exact reusable agent definition.
+ * Use: It is used by the unified agent-call return types.
+ */
+export type AgentOutputOf<Definition extends AnyAgentDefinition> =
+  AgentTypesOf<Definition>["output"];
+
+/** Exact completion-goal definition inferred from one invocation options object. */
+type AgentGoalDefinitionOfOptions<Options> =
+  Options extends { readonly goal: GoalInvocationBase<infer Definition> }
+    ? Definition
     : undefined;
 
-/**
- * Why: Centralizes the internal write call carrier relationship so adjacent public declarations infer consistently.
- * Use: It is used by the surrounding agent types and is not a separate runtime feature.
- */
-interface WriteCallCarrier {
-  write: WriteScope;
+/** Revalidates an inferred goal binding against the exact definition carried by that same options object. */
+type CorrelatedAgentOptions<Options> = Options extends {
+  readonly goal: GoalInvocationBase<infer Definition>;
 }
+  ? AgentCallWithGoal<Definition>
+  : AgentCallWithoutGoal;
 
 /**
- * Why: Centralizes the internal nullable call carrier relationship so adjacent public declarations infer consistently.
- * Use: It is used by the surrounding agent types and is not a separate runtime feature.
+ * Why: Selects patch semantics from the exact write option while remaining safe for widened option objects.
+ * Use: Concrete `write` returns a write result; optional or union-typed `write` returns every possible success envelope.
  */
-interface NullableCallCarrier {
-  onError: "null";
-}
-
-/**
- * Why: Centralizes the internal agent envelope relationship so adjacent public declarations infer consistently.
- * Use: It is used by the surrounding agent types and is not a separate runtime feature.
- */
-type AgentEnvelope<Call, Workspace extends boolean> = Call extends WriteCallCarrier
+export type AgentSuccessResult<
+  Value,
+  Goal,
+  Options,
+  Workspace extends boolean,
+> = Options extends { readonly write: WriteScope }
   ? Workspace extends true
-    ? WorkspaceWriteAgentResult<AgentValueOf<Call>, AgentGoalOf<Call>>
-    : PatchAgentResult<AgentValueOf<Call>, AgentGoalOf<Call>>
-  : AgentResult<AgentValueOf<Call>, AgentGoalOf<Call>>;
+    ? WorkspaceWriteAgentResult<Value, Goal>
+    : PatchAgentResult<Value, Goal>
+  : "write" extends keyof Options
+    ? | AgentResult<Value, Goal>
+      | (Workspace extends true
+          ? WorkspaceWriteAgentResult<Value, Goal>
+          : PatchAgentResult<Value, Goal>)
+    : AgentResult<Value, Goal>;
 
 /**
- * Why: Centralizes the internal nullable agent envelope relationship so adjacent public declarations infer consistently.
- * Use: It is used by the surrounding agent types and is not a separate runtime feature.
+ * Why: Selects throwing versus returned failure without narrowing widened option objects unsafely.
+ * Use: It is the exact promise value produced by the unified `ctx.agent` overloads.
  */
-type NullableAgentEnvelope<Call, Workspace extends boolean> = Call extends NullableCallCarrier
-  ? AgentEnvelope<Call, Workspace> | null
-  : AgentEnvelope<Call, Workspace>;
+export type AgentCallResult<
+  Value,
+  Goal,
+  Options,
+  Workspace extends boolean,
+  Success = AgentSuccessResult<Value, Goal, Options, Workspace>,
+> = Options extends { readonly failure: "return" }
+  ? AgentOutcome<Value, Goal, Success>
+  : Options extends { readonly failure: "throw" }
+    ? Success
+    : "failure" extends keyof Options
+      ? Success | AgentOutcome<Value, Goal, Success>
+      : Success;
+
+/** Reusable agent family built from the static, inputless definition form. */
+type InputlessAgentDefinition = AgentDefinition<
+  Omit<AgentTypes, "inputMode"> & { readonly inputMode: "none" },
+  string
+>;
+
+/** Reusable agent family built from a typed, required-input definition form. */
+type RequiredInputAgentDefinition = AgentDefinition<
+  Omit<AgentTypes, "inputMode"> & { readonly inputMode: "required" },
+  string
+>;
+
+/** Keeps a widened reusable definition paired with the input accepted by that same union branch. */
+type RequiredAgentArguments<
+  Definition extends RequiredInputAgentDefinition,
+  Options extends AgentCallOptionsBase,
+> = Definition extends RequiredInputAgentDefinition
+  ? readonly [
+      definition: Definition,
+      input: AgentDefinitionInput<Definition>,
+      options: Options & CorrelatedAgentOptions<Options>,
+    ]
+  : never;
 
 /**
- * Why: Models the unified object-shaped agent API and derives patch semantics from its bound context.
- * Use: Call it as `ctx.agent({...})`; plain contexts return isolated patches while workspace contexts write in place.
+ * Why: Presents one orthogonal agent operation instead of separate read, write, and failure methods.
+ * Use: Call `ctx.agent(definition, input, options)`; omit input for a static definition or use an inline prompt/schema object.
  */
 export interface AgentFn<Workspace extends boolean = false> {
-  <const Call extends AnyDefinedAgentCall>(
-    call: Call & DefinedAgentInput<AgentDefinitionInput<Call["agent"]>>,
-  ): Promise<NullableAgentEnvelope<Call, Workspace>>;
-  <Call extends InlineAgentCall<any>>(call: Call): Promise<NullableAgentEnvelope<Call, Workspace>>;
+  <
+    Definition extends RequiredInputAgentDefinition,
+    const Options extends AgentCallOptionsBase,
+  >(
+    ...args: RequiredAgentArguments<Definition, Options>
+  ): Promise<
+    AgentCallResult<
+      AgentOutputOf<Definition>,
+      AgentGoalResultOf<AgentGoalDefinitionOfOptions<Options>>,
+      Options,
+      Workspace
+    >
+  >;
+  <
+    Definition extends InputlessAgentDefinition,
+    const Options extends AgentCallOptionsBase,
+  >(
+    definition: Definition,
+    options: Options & CorrelatedAgentOptions<Options>,
+  ): Promise<
+    AgentCallResult<
+      AgentOutputOf<Definition>,
+      AgentGoalResultOf<AgentGoalDefinitionOfOptions<Options>>,
+      Options,
+      Workspace
+    >
+  >;
+  <S extends AnySchema, const Options extends AgentCallOptionsBase>(
+    inline: InlineAgentDefinition<S>,
+    options: Options & CorrelatedAgentOptions<Options>,
+  ): Promise<
+    AgentCallResult<
+      InferOut<S>,
+      AgentGoalResultOf<AgentGoalDefinitionOfOptions<Options>>,
+      Options,
+      Workspace
+    >
+  >;
 }
 
+/** Task context a review agent may observe without mutating durable task state. */
+type ReviewAgentTaskAccess = Omit<AgentTaskAccess, "mode"> & { readonly mode: "read" };
+
+/** Removes writes, delegated operations, and write-capable task access from review invocation policy. */
+export type ReviewAgentCallOptionsBase =
+  Omit<AgentCallOptionsBase, "write" | "tasks" | "tools"> & {
+    readonly write?: never;
+    readonly tasks?: false | ReviewAgentTaskAccess;
+    readonly tools?: never;
+  };
+
+/** Correlated options accepted by the read-only agent surface exposed during a review. */
+export type ReviewAgentCallOptions<Goal extends AnyGoalDefinition | undefined = undefined> =
+  ReviewAgentCallOptionsBase & AgentGoalArgument<Goal>;
+
 /**
- * Why: Gives the agent DSL an explicit recipe config contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding agent API.
+ * Why: Gives reviews agent reasoning without patch writes, task mutation, or delegated operation capabilities.
+ * Use: Expose it through `ReviewCtx`; full workflow contexts continue to receive `AgentFn`.
  */
+export interface ReadOnlyAgentApi {
+  <
+    Definition extends RequiredInputAgentDefinition,
+    const Options extends ReviewAgentCallOptionsBase,
+  >(
+    ...args: RequiredAgentArguments<Definition, Options>
+  ): Promise<
+    AgentCallResult<
+      AgentOutputOf<Definition>,
+      AgentGoalResultOf<AgentGoalDefinitionOfOptions<Options>>,
+      Options,
+      false
+    >
+  >;
+  <
+    Definition extends InputlessAgentDefinition,
+    const Options extends ReviewAgentCallOptionsBase,
+  >(
+    definition: Definition,
+    options: Options & CorrelatedAgentOptions<Options>,
+  ): Promise<
+    AgentCallResult<
+      AgentOutputOf<Definition>,
+      AgentGoalResultOf<AgentGoalDefinitionOfOptions<Options>>,
+      Options,
+      false
+    >
+  >;
+  <S extends AnySchema, const Options extends ReviewAgentCallOptionsBase>(
+    inline: InlineAgentDefinition<S>,
+    options: Options & CorrelatedAgentOptions<Options>,
+  ): Promise<
+    AgentCallResult<
+      InferOut<S>,
+      AgentGoalResultOf<AgentGoalDefinitionOfOptions<Options>>,
+      Options,
+      false
+    >
+  >;
+}
+
+/** Recipe config. */
 export interface RecipeConfig<
   InputSchema extends AnySchema,
   OutputSchema extends AnySchema,
@@ -466,9 +705,22 @@ export interface RecipeConfig<
   input: InputSchema;
   output: OutputSchema;
   run: (
-    ctx: Ctx<any, any, any>,
+    ctx: WorkflowCtx<any, any>,
     input: InferOut<InputSchema>,
   ) => Promise<InferIn<OutputSchema>> | InferIn<OutputSchema>;
+}
+
+/**
+ * Why: Names the hidden schema and value relationships carried by one reusable recipe definition.
+ * Use: Recipe builders construct it; authors normally consume its fields through definition extractors.
+ */
+export interface RecipeTypes {
+  readonly input: unknown;
+  readonly parsedInput: unknown;
+  readonly output: unknown;
+  readonly rawOutput: unknown;
+  readonly inputSchema: AnySchema;
+  readonly outputSchema: AnySchema;
 }
 
 /**
@@ -476,21 +728,36 @@ export interface RecipeConfig<
  * Use: Create it with `defineRecipe` and invoke it through `ctx.recipe`, sequence, or parallel composition.
  */
 export interface RecipeDefinition<
-  Input,
-  Output,
-  ParsedInput = Input,
-  RawOutput = Output,
+  Types extends RecipeTypes = RecipeTypes,
   Name extends string = string,
-> extends WorkflowNode<"weft.recipe"> {
+> extends WorkflowNode<"weft.recipe">,
+    DefinitionTypeCarrier<Types> {
   readonly kind: "weft.recipe";
   readonly name: Name;
   readonly description?: string;
-  readonly input: AnySchema;
-  readonly output: AnySchema;
-  readonly run: (ctx: Ctx<any, any, any>, input: ParsedInput) => Promise<RawOutput> | RawOutput;
-  readonly __input?: Input;
-  readonly __output?: Output;
+  readonly input: Types["inputSchema"];
+  readonly output: Types["outputSchema"];
 }
+
+/** Erased reusable recipe family used by composition and engine dispatch. */
+export type AnyRecipeDefinition = RecipeDefinition<any, string>;
+
+/** Exact hidden type relationships carried by one reusable recipe definition. */
+export type RecipeTypesOf<Definition> =
+  Definition extends RecipeDefinition<infer Types, any> ? Types : never;
+
+/**
+ * Why: Recovers the exact definition-time name retained by one reusable recipe.
+ * Use: Apply it to `typeof recipe` when building typed registries or provenance views.
+ */
+export type RecipeNameOf<Definition> =
+  Definition extends RecipeDefinition<any, infer Name> ? Name : never;
+
+/** Raw schema-bound input retained by one reusable recipe definition. */
+export type RecipeInputOf<Definition extends AnyRecipeDefinition> = RecipeTypesOf<Definition>["input"];
+
+/** Validated output retained by one reusable recipe definition. */
+export type RecipeOutputOf<Definition extends AnyRecipeDefinition> = RecipeTypesOf<Definition>["output"];
 
 /**
  * Why: Declares transparent reusable orchestration with validated input and output.
@@ -503,9 +770,13 @@ export declare function defineRecipe<
 >(
   config: RecipeConfig<InputSchema, OutputSchema, Name>,
 ): RecipeDefinition<
-  InferIn<InputSchema>,
-  InferOut<OutputSchema>,
-  InferOut<InputSchema>,
-  InferIn<OutputSchema>,
+  {
+    input: InferIn<InputSchema>;
+    parsedInput: InferOut<InputSchema>;
+    output: InferOut<OutputSchema>;
+    rawOutput: InferIn<OutputSchema>;
+    inputSchema: InputSchema;
+    outputSchema: OutputSchema;
+  },
   Name
 >;

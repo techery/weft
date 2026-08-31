@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type ArtifactRefOf,
   type CheckResult,
@@ -13,8 +15,7 @@ import {
   type GateResult,
   type HumanReviewResult,
   type WorkspaceSnapshotRef,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 const DeliveryRequestSchema = z.object({
   repository: z.string().min(1),
@@ -114,7 +115,7 @@ const lint = defineCheck({
 
 const deliveryChecks = defineCheckSuite({
   name: "delivery-required-checks",
-  description: "Preserves each required local verdict and its engine-minted workspace subject.",
+  description: "Preserves each required local verdict and its engine-minted workspace candidate.",
   input: VerificationInputSchema,
   checks: (input, use) => ({
     typecheck: use(typecheck, input),
@@ -134,7 +135,7 @@ const CheckProofSchema = z.object({
   name: z.string().min(1),
   status: z.literal("pass"),
   disposition: z.literal("executed"),
-  subject: WorkspaceSnapshotSchema,
+  candidate: WorkspaceSnapshotSchema,
 });
 
 const PromotionCandidateSchema = z.object({
@@ -144,7 +145,7 @@ const PromotionCandidateSchema = z.object({
   branch: z.string().min(1),
   remote: z.string().min(1),
   head: z.string().min(1),
-  subject: WorkspaceSnapshotSchema,
+  snapshot: WorkspaceSnapshotSchema,
   changedFiles: z.array(z.string().min(1)).min(1),
   acceptanceCriteria: z.array(z.string().min(1)).min(1),
   checks: z.object({
@@ -214,7 +215,7 @@ const ExecuteDeliveryInputSchema = z.object({
 
 const ExecuteDeliveryResultSchema = z.object({
   candidateArtifact: ArtifactPointerSchema,
-  subject: WorkspaceSnapshotSchema,
+  snapshot: WorkspaceSnapshotSchema,
   pushedHead: z.string().min(1),
   remoteRef: z.string().min(1),
   pullRequest: z.object({
@@ -356,7 +357,7 @@ type CheckProof = z.infer<typeof CheckProofSchema>;
 /** Why: Names the immutable candidate reference that a human review must match byte-for-byte. Use: Pass it to `requireApprovedReview`. */
 type PromotionCandidateRef = ArtifactRefOf<typeof promotionCandidateArtifact>;
 
-/** Why: Names the decision schema returned by review of the immutable promotion candidate. Use: Reject unless its approved subject matches the candidate reference and digest. */
+/** Why: Names the decision schema returned by review of the immutable promotion candidate. Use: Reject unless its approved artifact subject matches the candidate reference and digest. */
 type CandidateReviewDecision = z.infer<typeof CandidateReviewDecisionSchema>;
 
 /** Why: Names the positive, exact-artifact review proof supplied to delivery execution. Use: Derive it only through `requireApprovedReview`. */
@@ -365,17 +366,17 @@ type ReviewProof = z.infer<typeof ReviewProofSchema>;
 /** Why: Names a positive authorization separately from the later delivery execution result. Use: Derive it only through `requireExecutionAuthorization`. */
 type ExecutionAuthorization = z.infer<typeof ExecutionAuthorizationSchema>;
 
-/** Why: Converts nominal engine provenance into a serializable artifact field without pretending the field is engine-minted. Use: Store it beside the immutable candidate and compare live subjects using `requireSameSubject`. */
-function snapshotValue(subject: WorkspaceSnapshotRef): WorkspaceSnapshotValue {
+/** Why: Converts nominal engine provenance into a serializable artifact field without pretending the field is engine-minted. Use: Store it beside the immutable candidate and compare live snapshots using `requireSameSnapshot`. */
+function snapshotValue(snapshot: WorkspaceSnapshotRef): WorkspaceSnapshotValue {
   return {
-    workspaceId: subject.workspaceId,
-    generation: subject.generation,
-    treeHash: subject.treeHash,
+    workspaceId: snapshot.workspaceId,
+    generation: snapshot.generation,
+    treeHash: snapshot.treeHash,
   };
 }
 
 /** Why: Makes stale-evidence handling fail closed across workspace identity, generation, and tree hash. Use: Call after every check or authorization wait and immediately before delivery execution. */
-function requireSameSubject(
+function requireSameSnapshot(
   actual: WorkspaceSnapshotRef,
   expected: WorkspaceSnapshotRef,
   evidence: string,
@@ -389,9 +390,8 @@ function requireSameSubject(
   }
 }
 
-/** Why: Excludes failed, trusted, waived, or stale verdicts from a promotion candidate. Use: Convert every required suite member before requesting review. */
-function requireExecutedCheck(name: string, result: CheckResult, expected: WorkspaceSnapshotRef): CheckProof {
-  requireSameSubject(result.subject, expected, `${name} check`);
+/** Why: Excludes failed, trusted, or waived verdicts from a promotion candidate. Use: Convert every candidate-bound required suite member before requesting review. */
+function requireExecutedCheck(name: string, result: CheckResult): CheckProof {
   if (result.status !== "pass" || result.disposition !== "executed") {
     throw new Error(`${name} must execute and pass for the exact promotion candidate`);
   }
@@ -399,7 +399,7 @@ function requireExecutedCheck(name: string, result: CheckResult, expected: Works
     name,
     status: "pass",
     disposition: "executed",
-    subject: snapshotValue(result.subject),
+    candidate: snapshotValue(result.candidate),
   };
 }
 
@@ -447,54 +447,55 @@ defineWorkflow(
     workspace: ({ input }) => ({ branch: input.branch, from: input.base }),
   },
   async (ctx, input) => {
-    const implementation = await ctx.phase("Build", async (buildCtx) => {
+    const implementation = await ctx.step("build", async (buildCtx) => {
       const writeScope = await buildCtx.paths.resolve(
         pullRequestWritePolicy,
         { proposedPaths: input.allowedPaths },
         { key: "resolve-build-write-paths", label: "Resolve candidate write paths" },
       );
-      return buildCtx.agent({
-        key: "implement",
-        agent: implementationAgent,
-        input: {
+      return buildCtx.agent(
+        implementationAgent,
+        {
           ticket: input.ticket,
           title: input.title,
           allowedPaths: input.allowedPaths,
           acceptanceCriteria: input.acceptanceCriteria,
         },
-        write: writeScope,
-      });
+        {
+          key: "implement",
+          write: writeScope,
+        },
+      );
     });
 
     if (implementation.files.length === 0) {
       throw new Error("Implementation produced no files to commit");
     }
 
-    await ctx.phase("Commit", async (commitCtx) => {
-      await commitCtx.git.add({ paths: implementation.files });
+    await ctx.step("commit", async (commitCtx) => {
+      await commitCtx.git.add({ key: "stage-pull-request-candidate", paths: implementation.files });
       return commitCtx.git.commit({
+        key: "commit-pull-request-candidate",
         message: `feat: ${input.title}`,
         paths: implementation.files,
       });
     });
 
-    const committedHead = await ctx.git.head();
-    const committedStatus = await ctx.git.status();
+    const committedHead = await ctx.git.head({ key: "read-committed-head" });
+    const committedStatus = await ctx.git.status({ key: "read-committed-status" });
     if (!committedStatus.clean || committedStatus.branch !== input.branch) {
       throw new Error("Promotion requires the expected clean workflow-owned branch");
     }
 
-    const candidateSubject = ctx.workspace.subject;
-    const checks = await ctx.phase("Verify exact candidate", (verifyCtx) =>
+    const candidateSnapshot = ctx.workspace.snapshot;
+    const checks = await ctx.step("verify-candidate", (verifyCtx) =>
       verifyCtx.check(
         deliveryChecks,
         { packageFilter: input.packageFilter },
-        { keyPrefix: "candidate", policy: "required" },
+        { key: "candidate", policy: "required", candidate: candidateSnapshot },
       ),
     );
 
-    requireSameSubject(checks.subject, candidateSubject, "Check suite");
-    requireSameSubject(ctx.workspace.subject, candidateSubject, "Workspace after checks");
     if (!checks.passed) throw new Error("Required delivery checks failed");
 
     const candidateContent = {
@@ -504,13 +505,13 @@ defineWorkflow(
       branch: input.branch,
       remote: input.remote,
       head: committedHead.sha,
-      subject: snapshotValue(candidateSubject),
-      changedFiles: implementation.files,
+      snapshot: snapshotValue(candidateSnapshot),
+      changedFiles: [...implementation.files],
       acceptanceCriteria: input.acceptanceCriteria,
       checks: {
-        typecheck: requireExecutedCheck("typecheck", checks.results.typecheck, candidateSubject),
-        tests: requireExecutedCheck("tests", checks.results.tests, candidateSubject),
-        lint: requireExecutedCheck("lint", checks.results.lint, candidateSubject),
+        typecheck: requireExecutedCheck("typecheck", checks.results.typecheck),
+        tests: requireExecutedCheck("tests", checks.results.tests),
+        lint: requireExecutedCheck("lint", checks.results.lint),
       },
       pullRequest: {
         title: input.title,
@@ -526,11 +527,15 @@ defineWorkflow(
           repository: input.repository,
           branch: input.branch,
           head: committedHead.sha,
-          treeHash: candidateSubject.treeHash,
-          generation: candidateSubject.generation,
+          treeHash: candidateSnapshot.treeHash,
+          generation: candidateSnapshot.generation,
         },
       },
-      { key: "promotion-candidate", label: `Candidate ${committedHead.sha}` },
+      {
+        key: "promotion-candidate",
+        label: `Candidate ${committedHead.sha}`,
+        candidate: candidateSnapshot,
+      },
     );
 
     const review = await ctx.human.review({
@@ -547,7 +552,7 @@ defineWorkflow(
       onTimeout: "deny",
     });
     const reviewProof = requireApprovedReview(review, candidate);
-    requireSameSubject(ctx.workspace.subject, candidateSubject, "Review");
+    requireSameSnapshot(ctx.workspace.snapshot, candidateSnapshot, "Review");
 
     const action = `deliver:${input.repository}:${input.branch}:${committedHead.sha}:${candidate.sha256}`;
     const gate = await ctx.gate({
@@ -558,9 +563,9 @@ defineWorkflow(
     });
     const authorization = requireExecutionAuthorization(action, gate);
 
-    requireSameSubject(ctx.workspace.subject, candidateSubject, "Execution authorization");
-    const executionHead = await ctx.git.head();
-    const executionStatus = await ctx.git.status();
+    requireSameSnapshot(ctx.workspace.snapshot, candidateSnapshot, "Execution authorization");
+    const executionHead = await ctx.git.head({ key: "revalidate-delivery-head" });
+    const executionStatus = await ctx.git.status({ key: "revalidate-delivery-status" });
     if (
       executionHead.sha !== committedHead.sha ||
       executionStatus.branch !== input.branch ||
@@ -601,9 +606,9 @@ defineWorkflow(
       execution.pushedHead !== committedHead.sha ||
       execution.pullRequest.head !== committedHead.sha ||
       execution.pullRequest.base !== input.base ||
-      execution.subject.workspaceId !== candidateSubject.workspaceId ||
-      execution.subject.generation !== candidateSubject.generation ||
-      execution.subject.treeHash !== candidateSubject.treeHash
+      execution.snapshot.workspaceId !== candidateSnapshot.workspaceId ||
+      execution.snapshot.generation !== candidateSnapshot.generation ||
+      execution.snapshot.treeHash !== candidateSnapshot.treeHash
     ) {
       throw new Error("Delivery execution did not attest the authorized promotion candidate");
     }
@@ -625,7 +630,7 @@ defineWorkflow(
       throw new Error("CI did not pass for the exact promoted commit");
     }
 
-    const recordedAt = await ctx.now();
+    const recordedAt = await ctx.now({ key: "delivery-evidence-recorded-at" });
     const evidence = await ctx.artifact(
       deliveryEvidenceArtifact,
       {
@@ -644,7 +649,11 @@ defineWorkflow(
           recordedAt,
         },
       },
-      { key: "delivery-evidence", label: "Pull request delivery evidence" },
+      {
+        key: "delivery-evidence",
+        label: "Pull request delivery evidence",
+        candidate: candidateSnapshot,
+      },
     );
 
     return {

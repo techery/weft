@@ -1,70 +1,129 @@
 /** Declaration-only composition surface for the Weft DSL prototype. */
-import type { AgentDefinition, AgentResult, RecipeDefinition } from "./agent.ts";
-import type { AnySchema, InferOut, Settled } from "./shared.ts";
+import type {
+  AgentDefinitionInput,
+  AgentOutputOf,
+  AgentResult,
+  AnyAgentDefinition,
+  AnyRecipeDefinition,
+  RecipeInputOf,
+  RecipeOutputOf,
+} from "./agent.ts";
+import type { Settled } from "./shared.ts";
 import type { Ctx } from "./workflow.ts";
 
 // ---------------------------------------------------------------------------
 // Composition
 // ---------------------------------------------------------------------------
 
-/**
- * Why: Gives the composition DSL an explicit parallel options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding composition API.
- */
+/** Parallel options. */
 export interface ParallelOptions<Item = unknown> {
-  key?: string;
-  keyOf?: (item: Item, index: number) => string;
+  key: string;
+  keyOf: (item: Item, index: number) => string;
   concurrency?: number;
-  errors?: "settle" | "throw";
+}
+
+/** Rejects fan-out inputs containing already-started promises. */
+export type ParallelItems<Items extends ReadonlyArray<unknown>> =
+  Extract<Items[number], PromiseLike<unknown>> extends never ? Items : never;
+
+/**
+ * Why: Gives each parallel item a stable durable-key namespace and the same capability mode as its enclosing context.
+ * Use: Invoke effects directly through the lane; its durable namespace derives from the parent key and `keyOf` result.
+ */
+export interface ParallelLaneContext<
+  TaskInput = unknown,
+  TaskOutput = TaskInput,
+  Workspace extends boolean = false,
+> extends Ctx<TaskInput, TaskOutput, Workspace> {
+  /** @deprecated The lane itself is the scoped context; use `lane.agent`, `lane.context`, and other capabilities directly. */
+  readonly ctx: Ctx<TaskInput, TaskOutput, Workspace>;
+  readonly itemKey: string;
+  key(local: string): string;
 }
 
 /**
- * Why: Defines bounded independent fan-out while settling lanes in deterministic input order.
- * Use: Use `ctx.parallel` with callbacks, agent definitions, recipes, or prebuilt tasks.
+ * Why: Separates fail-fast and settled fan-out at the method boundary and never accepts already-started promises.
+ * Use: Choose `all` for required lanes or `settled` when workflow code will inspect each failure explicitly.
  */
-export interface ParallelFn {
-  <Result>(
-    tasks: ReadonlyArray<Promise<Result> | (() => Promise<Result> | Result)>,
-    opts?: Omit<ParallelOptions, "keyOf">,
+export interface ParallelFn<
+  TaskInput = unknown,
+  TaskOutput = TaskInput,
+  Workspace extends boolean = false,
+> {
+  all<const Items extends ReadonlyArray<unknown>, Result>(
+    items: ParallelItems<Items>,
+    run: (
+      item: Items[number],
+      lane: ParallelLaneContext<TaskInput, TaskOutput, Workspace>,
+      index: number,
+    ) => Promise<Result> | Result,
+    opts: ParallelOptions<Items[number]>,
+  ): Promise<Result[]>;
+  settled<const Items extends ReadonlyArray<unknown>, Result>(
+    items: ParallelItems<Items>,
+    run: (
+      item: Items[number],
+      lane: ParallelLaneContext<TaskInput, TaskOutput, Workspace>,
+      index: number,
+    ) => Promise<Result> | Result,
+    opts: ParallelOptions<Items[number]>,
   ): Promise<Settled<Result>[]>;
-  <Item, Result>(
-    items: ReadonlyArray<Item>,
-    run: (item: Item, index: number) => Promise<Result> | Result,
-    opts?: ParallelOptions<Item>,
-  ): Promise<Settled<Result>[]>;
-  <Input, S extends AnySchema, ParsedInput>(
-    items: ReadonlyArray<Input>,
-    definition: AgentDefinition<Input, S, ParsedInput>,
-    opts?: ParallelOptions<Input>,
-  ): Promise<Settled<AgentResult<InferOut<S>>>[]>;
-  <Input, Output, ParsedInput, RawOutput>(
-    items: ReadonlyArray<Input>,
-    definition: RecipeDefinition<Input, Output, ParsedInput, RawOutput>,
-    opts?: ParallelOptions<Input>,
-  ): Promise<Settled<Output>[]>;
 }
 
-/**
- * Why: Gives the composition DSL an explicit sequence options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding composition API.
- */
+/** Review-lane context without mutation, operation, or delivery authority. */
+export interface ReviewParallelLaneContext {
+  readonly agent: import("./agent.ts").ReadOnlyAgentApi;
+  readonly context: import("./context-sources.ts").ContextFn;
+  readonly parallel: ReviewParallelFn;
+  readonly fs: import("./effects.ts").FsApi;
+  readonly git: import("./effects.ts").GitReadApi;
+  readonly observe: import("./observers.ts").ObserverFn;
+  readonly cancellation: import("./workflow.ts").WorkflowCancellation;
+  readonly log: (message: string) => void;
+  readonly budget: import("./workflow.ts").BudgetView;
+  readonly run: import("./workflow.ts").RunInfo;
+  readonly itemKey: string;
+  key(local: string): string;
+}
+
+/** Read-only parallel fan-out available inside reusable reviews. */
+export interface ReviewParallelFn {
+  all<const Items extends ReadonlyArray<unknown>, Result>(
+    items: ParallelItems<Items>,
+    run: (
+      item: Items[number],
+      lane: ReviewParallelLaneContext,
+      index: number,
+    ) => Promise<Result> | Result,
+    opts: ParallelOptions<Items[number]>,
+  ): Promise<Result[]>;
+  settled<const Items extends ReadonlyArray<unknown>, Result>(
+    items: ParallelItems<Items>,
+    run: (
+      item: Items[number],
+      lane: ReviewParallelLaneContext,
+      index: number,
+    ) => Promise<Result> | Result,
+    opts: ParallelOptions<Items[number]>,
+  ): Promise<Settled<Result>[]>;
+}
+
+/** Ordered traversal options with stable identity and optional presentation labels. */
 export interface SequenceOptions<Item> {
   key: string;
   keyOf: (item: Item, index: number) => string;
-  phase?: (item: Item, index: number) => string;
+  /** Presentation only; durable identity continues to derive from `key` and `keyOf`. */
+  labelOf?: (item: Item, index: number) => string;
 }
 
-/**
- * Why: Gives the composition DSL an explicit sequence item context contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding composition API.
- */
+/** Sequence item context. */
 export interface SequenceItemContext<
   TaskInput = unknown,
   TaskOutput = TaskInput,
   Workspace extends boolean = false,
 > {
-  ctx: Ctx<TaskInput, TaskOutput, Workspace>;
-  itemKey: string;
+  readonly ctx: Ctx<TaskInput, TaskOutput, Workspace>;
+  readonly itemKey: string;
   key(local: string): string;
 }
 
@@ -82,31 +141,54 @@ export interface SequenceFn<TaskInput = unknown, TaskOutput = TaskInput, Workspa
       index: number,
     ) => Promise<Result> | Result,
   ): Promise<Result[]>;
-  <Input, S extends AnySchema, ParsedInput>(
-    items: ReadonlyArray<Input>,
-    opts: SequenceOptions<Input>,
-    definition: AgentDefinition<Input, S, ParsedInput>,
-  ): Promise<AgentResult<InferOut<S>>[]>;
-  <Input, Output, ParsedInput, RawOutput>(
-    items: ReadonlyArray<Input>,
-    opts: SequenceOptions<Input>,
-    definition: RecipeDefinition<Input, Output, ParsedInput, RawOutput>,
-  ): Promise<Output[]>;
+  <Definition extends AnyAgentDefinition>(
+    items: ReadonlyArray<AgentDefinitionInput<Definition>>,
+    opts: SequenceOptions<AgentDefinitionInput<Definition>>,
+    definition: Definition,
+  ): Promise<AgentResult<AgentOutputOf<Definition>>[]>;
+  <Definition extends AnyRecipeDefinition>(
+    items: ReadonlyArray<RecipeInputOf<Definition>>,
+    opts: SequenceOptions<RecipeInputOf<Definition>>,
+    definition: Definition,
+  ): Promise<RecipeOutputOf<Definition>[]>;
 }
 
 /**
- * Why: Keeps multi-stage processing independent per input item while preserving settlement semantics.
- * Use: Build one with `ctx.pipeline(items)`, add steps, filters, or maps, then call `run`.
+ * Why: Keeps multi-step processing independent per input item while preserving settlement semantics.
+ * Use: Build one with `ctx.pipeline(items)`, add named effectful maps and pure filters/maps, then choose `all` or `settled`.
  */
-export interface Pipeline<Item, Previous> {
-  step<Next>(
-    fn: (previous: Previous, item: Item, index: number) => Promise<Next> | Next,
-  ): Pipeline<Item, Next>;
-  filter(
-    fn: (previous: Previous, item: Item, index: number) => Promise<boolean> | boolean,
-  ): Pipeline<Item, Previous>;
-  map<Next>(
-    fn: (previous: Previous, item: Item, index: number) => Promise<Next> | Next,
-  ): Pipeline<Item, Next>;
-  run(opts?: ParallelOptions<Item>): Promise<Settled<Previous>[]>;
+export interface Pipeline<
+  Item,
+  Previous,
+  TaskInput = unknown,
+  TaskOutput = TaskInput,
+  Workspace extends boolean = false,
+> {
+  mapEffect<Next>(
+    key: string,
+    fn: (
+      previous: Previous,
+      item: Item,
+      lane: ParallelLaneContext<TaskInput, TaskOutput, Workspace>,
+      index: number,
+    ) => Promise<Next> | Next,
+  ): Pipeline<Item, Next, TaskInput, TaskOutput, Workspace>;
+  filter(fn: (previous: Previous, item: Item, index: number) => boolean): Pipeline<
+    Item,
+    Previous,
+    TaskInput,
+    TaskOutput,
+    Workspace
+  >;
+  map<const Mapper extends (previous: Previous, item: Item, index: number) => unknown>(
+    fn: Mapper & (Extract<ReturnType<Mapper>, PromiseLike<unknown>> extends never ? unknown : never),
+  ): Pipeline<
+    Item,
+    ReturnType<Mapper>,
+    TaskInput,
+    TaskOutput,
+    Workspace
+  >;
+  all(opts: ParallelOptions<Item>): Promise<Previous[]>;
+  settled(opts: ParallelOptions<Item>): Promise<Settled<Previous>[]>;
 }

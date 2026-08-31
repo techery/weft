@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   defineAgent,
   defineCheck,
@@ -12,8 +14,7 @@ import {
   type WorkflowNode,
   type WorkflowTaskSummary,
   type WorkspaceWriteAgentResult,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes compile-time contract assertions visible without adding runtime behavior. Use: Pass inferred DSL values to it in this typechecked example. */
 declare function expectType<Type>(value: Type): void;
@@ -265,8 +266,6 @@ type MigrationTaskSummary = WorkflowTaskSummary<MigrationTaskExtensionValue>;
 
 const migrationTasks = defineTaskContract({
   schema: MigrationTaskExtension,
-  revision: "cancel-resume-code-migration-v1",
-  version: 1,
   agentAccess: "read",
 });
 
@@ -570,7 +569,6 @@ const cancelResumeMigrationWorkflow = defineWorkflow(
       for (const unit of batch) {
         if (existing.tasks.some((task) => task.dedupeKey === migrationTaskKey(plan, unit))) continue;
         await ctx.tasks.upsert({
-          key: `register-unit:${unit.id}`,
           dedupeKey: migrationTaskKey(plan, unit),
           set: {
             title: `Migrate ${unit.packageName}: ${unit.id}`,
@@ -584,7 +582,7 @@ const cancelResumeMigrationWorkflow = defineWorkflow(
             extensions: plannedTaskExtension(plan, unit, ctx.run.id, batchIndex),
           },
           note: "Registered as a domain checkpoint; same-run execution remains journal-owned.",
-        });
+        }, { key: `register-unit:${unit.id}` });
       }
     }
 
@@ -631,61 +629,59 @@ const cancelResumeMigrationWorkflow = defineWorkflow(
         const checkpoints: BatchCheckpointValue[] = [];
 
         for (const [batchIndex, batch] of batches.entries()) {
-          const batchEdits = ctx.all(
-            await ctx.parallel(
-              batch,
-              async (unit) => {
-                return candidateCtx.workspace.with(
-                  { key: `unit-workspace:${unit.id}` },
-                  async (unitCtx): Promise<CapturedMigrationEdit> => {
-                    const writeScope = await unitCtx.paths.resolve(
-                      migrationWritePolicy,
-                      { proposedPaths: unit.proposedPaths },
-                      {
-                        key: `resolve-write:${unit.id}`,
-                        label: `Resolve write paths for ${unit.id}`,
-                      },
-                    );
-                    const edit = await unitCtx.agent({
-                      key: `edit-unit:${unit.id}`,
-                      label: `Migrate ${unit.packageName}`,
-                      agent: migrationAgent,
-                      input: {
-                        repository: plan.repository,
-                        migrationId: plan.migrationId,
-                        planDigest: plan.planDigest,
-                        baseRef: plan.baseRef,
-                        unit,
-                      },
-                      write: writeScope,
-                      retry: { attempts: 2, backoff: "10s" },
-                      tasks: {
-                        mode: "read",
-                        dedupeKeys: [migrationTaskKey(plan, unit)],
-                        limit: 1,
-                      },
-                    });
-                    requireBoundedEdit(unit, plan.planDigest, edit);
-                    const captureScope = await unitCtx.paths.resolve(
-                      migrationWritePolicy,
-                      { proposedPaths: edit.files },
-                      {
-                        key: `resolve-unit-capture:${unit.id}`,
-                        label: `Resolve captured files for ${unit.id}`,
-                      },
-                    );
-                    const patch = await unitCtx.capture({ scope: captureScope });
-                    return { edit, patch };
-                  },
-                );
-              },
-              {
-                key: `edit-batch:${batchIndex}`,
-                keyOf: (unit) => unit.id,
-                concurrency: input.concurrency,
-                errors: "throw",
-              },
-            ),
+          const batchEdits = await ctx.parallel.all(
+            batch,
+            async (unit) => {
+              return candidateCtx.workspace.with(
+                { key: `unit-workspace:${unit.id}` },
+                async (unitCtx): Promise<CapturedMigrationEdit> => {
+                  const writeScope = await unitCtx.paths.resolve(
+                    migrationWritePolicy,
+                    { proposedPaths: unit.proposedPaths },
+                    {
+                      key: `resolve-write:${unit.id}`,
+                      label: `Resolve write paths for ${unit.id}`,
+                    },
+                  );
+                  const edit = await unitCtx.agent(migrationAgent, {
+                    repository: plan.repository,
+                    migrationId: plan.migrationId,
+                    planDigest: plan.planDigest,
+                    baseRef: plan.baseRef,
+                    unit,
+                  }, {
+                    key: `edit-unit:${unit.id}`,
+                    label: `Migrate ${unit.packageName}`,
+                    write: writeScope,
+                    retry: { attempts: 2, backoff: "10s" },
+                    tasks: {
+                      mode: "read",
+                      dedupeKeys: [migrationTaskKey(plan, unit)],
+                      limit: 1,
+                    },
+                  });
+                  requireBoundedEdit(unit, plan.planDigest, edit);
+                  const captureScope = await unitCtx.paths.resolve(
+                    migrationWritePolicy,
+                    { proposedPaths: edit.files },
+                    {
+                      key: `resolve-unit-capture:${unit.id}`,
+                      label: `Resolve captured files for ${unit.id}`,
+                    },
+                  );
+                  const patch = await unitCtx.capture({
+                    key: `capture-unit:${unit.id}`,
+                    scope: captureScope,
+                  });
+                  return { edit, patch };
+                },
+              );
+            },
+            {
+              key: `edit-batch:${batchIndex}`,
+              keyOf: (unit) => unit.id,
+              concurrency: input.concurrency,
+            },
           );
           expectType<CapturedMigrationEdit[]>(batchEdits);
 
@@ -697,30 +693,27 @@ const cancelResumeMigrationWorkflow = defineWorkflow(
 
           await candidateCtx.apply(
             batchEdits.map(({ patch }) => patch),
-            { order: "sequential", onConflict: "fail" },
+            { key: `apply-batch:${batchIndex}`, order: "sequential", onConflict: "fail" },
           );
 
-          const verification = ctx.all(
-            await candidateCtx.parallel(
-              batch,
-              async (unit) => {
-                const result = await candidateCtx.check(
-                  verifyMigrationUnit,
-                  { unitId: unit.id, verificationCommand: unit.verificationCommand },
-                  { key: `verify-unit:${unit.id}`, policy: "required" },
-                );
-                if (result.status !== "pass") {
-                  throw new Error(`Accumulated candidate verification failed for ${unit.id}`);
-                }
-                return result;
-              },
-              {
-                key: `verify-batch:${batchIndex}`,
-                keyOf: (unit) => unit.id,
-                concurrency: input.concurrency,
-                errors: "throw",
-              },
-            ),
+          const verification = await candidateCtx.parallel.all(
+            batch,
+            async (unit) => {
+              const result = await candidateCtx.check(
+                verifyMigrationUnit,
+                { unitId: unit.id, verificationCommand: unit.verificationCommand },
+                { key: `verify-unit:${unit.id}`, policy: "required" },
+              );
+              if (result.status !== "pass") {
+                throw new Error(`Accumulated candidate verification failed for ${unit.id}`);
+              }
+              return result;
+            },
+            {
+              key: `verify-batch:${batchIndex}`,
+              keyOf: (unit) => unit.id,
+              concurrency: input.concurrency,
+            },
           );
 
           for (const [index, unit] of batch.entries()) {
@@ -757,34 +750,34 @@ const cancelResumeMigrationWorkflow = defineWorkflow(
 
         const changedFiles = [...new Set(sourcePatches.flatMap(({ files }) => files))];
         if (changedFiles.length === 0) throw new Error("Migration candidate contains no changed files");
-        const finalVerification = ctx.all(
-          await candidateCtx.parallel(
-            plan.units,
-            async (unit) => {
-              const result = await candidateCtx.check(
-                verifyMigrationUnit,
-                { unitId: unit.id, verificationCommand: unit.verificationCommand },
-                { key: `final-verify-unit:${unit.id}`, policy: "required" },
-              );
-              if (result.status !== "pass") {
-                throw new Error(`Final accumulated candidate verification failed for ${unit.id}`);
-              }
-              return result;
-            },
-            {
-              key: "verify-final-candidate",
-              keyOf: (unit) => unit.id,
-              concurrency: input.concurrency,
-              errors: "throw",
-            },
-          ),
+        const finalVerification = await candidateCtx.parallel.all(
+          plan.units,
+          async (unit) => {
+            const result = await candidateCtx.check(
+              verifyMigrationUnit,
+              { unitId: unit.id, verificationCommand: unit.verificationCommand },
+              { key: `final-verify-unit:${unit.id}`, policy: "required" },
+            );
+            if (result.status !== "pass") {
+              throw new Error(`Final accumulated candidate verification failed for ${unit.id}`);
+            }
+            return result;
+          },
+          {
+            key: "verify-final-candidate",
+            keyOf: (unit) => unit.id,
+            concurrency: input.concurrency,
+          },
         );
         const captureScope = await candidateCtx.paths.resolve(
           migrationWritePolicy,
           { proposedPaths: changedFiles },
           { key: "resolve-final-capture", label: "Resolve final migration candidate files" },
         );
-        const patch = await candidateCtx.capture({ scope: captureScope });
+        const patch = await candidateCtx.capture({
+          key: "capture-final-migration-candidate",
+          scope: captureScope,
+        });
         return {
           patch,
           sourcePatches,
@@ -800,7 +793,7 @@ const cancelResumeMigrationWorkflow = defineWorkflow(
       candidate: {
         patchRef: candidate.patch.ref,
         baseTree: candidate.patch.baseTree,
-        files: candidate.patch.files,
+        files: [...candidate.patch.files],
         verificationRefs: candidate.finalVerificationRefs,
       },
       idempotencyKey: `${ctx.run.id}:${plan.planDigest}:publish`,
@@ -859,6 +852,7 @@ const cancelResumeMigrationWorkflow = defineWorkflow(
     }
 
     await ctx.note({
+      key: "record-published-migration",
       kind: "claim",
       text: `Migration ${plan.migrationId} published ${plan.units.length} units in ${candidate.batches.length} bounded batches.`,
       evidence: publication.receiptRef,

@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type ContextSnapshotOf,
   defineAgent,
@@ -7,8 +9,7 @@ import {
   defineWorkflow,
   type MetadataArtifactRef,
   type WorkflowNode,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes compile-time contract assertions visible without adding runtime behavior. Use: Pass inferred DSL values to it in this typechecked example. */
 declare function expectType<T>(value: T): void;
@@ -151,7 +152,7 @@ type GroundingRecord =
 type GroundingKind = GroundingRecord["kind"];
 type GroundingRecordOf<Kind extends GroundingKind> = Extract<GroundingRecord, { kind: Kind }>;
 
-/** Why: Restores exact member types after heterogeneous `ctx.parallel` fan-out settles to a union array. Use: Require every expected context source before synthesis. */
+/** Why: Restores exact member types after heterogeneous `ctx.parallel.all` fan-out produces a union array. Use: Require every expected context source before synthesis. */
 function requireGrounding<Kind extends GroundingKind>(
   records: readonly GroundingRecord[],
   kind: Kind,
@@ -276,37 +277,54 @@ const groundedContextWorkflow = defineWorkflow(
     output: GroundedContextOutput,
   },
   async (ctx, input) => {
-    const lanes = await ctx.phase("Resolve context", (phase) =>
-      phase.parallel<GroundingRecord>(
-        [
-          async () => ({
+    const records = await ctx.step("resolve-context", (step) => {
+      const sources: ReadonlyArray<{
+        key: GroundingKind;
+        resolve: (lane: typeof step) => Promise<GroundingRecord>;
+      }> = [
+        {
+          key: "repository",
+          resolve: async (lane) => ({
             kind: "repository" as const,
-            snapshot: await phase.context(repositoryContextSource, input.repository, {
+            snapshot: await lane.context(repositoryContextSource, input.repository, {
               key: "repository-context",
             }),
           }),
-          async () => ({
+        },
+        {
+          key: "issue",
+          resolve: async (lane) => ({
             kind: "issue" as const,
-            snapshot: await phase.context(issueContextSource, input.issue, { key: "issue-context" }),
+            snapshot: await lane.context(issueContextSource, input.issue, { key: "issue-context" }),
           }),
-          async () => ({
+        },
+        {
+          key: "security-advisory",
+          resolve: async (lane) => ({
             kind: "security-advisory" as const,
-            snapshot: await phase.context(securityAdvisorySource, input.advisory, {
+            snapshot: await lane.context(securityAdvisorySource, input.advisory, {
               key: "security-advisory-context",
             }),
           }),
-          async () => ({
+        },
+        {
+          key: "prior-artifact",
+          resolve: async (lane) => ({
             kind: "prior-artifact" as const,
-            snapshot: await phase.context(priorArtifactSource, input.priorArtifact, {
+            snapshot: await lane.context(priorArtifactSource, input.priorArtifact, {
               key: "prior-artifact-context",
             }),
           }),
-        ],
-        { key: "grounding-sources", concurrency: 4, errors: "throw" },
-      ),
-    );
+        },
+      ];
 
-    const records = ctx.all(lanes);
+      return step.parallel.all(sources, (source, lane) => source.resolve(lane.ctx), {
+        key: "grounding-sources",
+        keyOf: (source) => source.key,
+        concurrency: 4,
+      });
+    });
+
     const repository = requireGrounding(records, "repository").snapshot;
     const issue = requireGrounding(records, "issue").snapshot;
     const advisory = requireGrounding(records, "security-advisory").snapshot;
@@ -319,11 +337,9 @@ const groundedContextWorkflow = defineWorkflow(
       priorArtifact: priorArtifact.value,
     };
 
-    const assessment = await ctx.phase("Synthesize", (phase) =>
-      phase.agent({
+    const assessment = await ctx.step("synthesize", (step) =>
+      step.agent(groundedAnalyst, grounding, {
         key: "grounded-analyst",
-        agent: groundedAnalyst,
-        input: grounding,
         context: [repository, issue, advisory, priorArtifact],
       }),
     );
@@ -356,6 +372,7 @@ const groundedContextWorkflow = defineWorkflow(
     expectType<MetadataArtifactRef<unknown, GroundedArtifactMetadataValue>>(artifact);
 
     await ctx.note({
+      key: "record-grounded-context",
       kind: "claim",
       text: `Read-only grounding for ${input.issue.key} was preserved without mutation authority.`,
       evidence: `Artifact: ${artifact.ref}\nSources: ${sources.map((source) => source.receiptRef).join(", ")}`,

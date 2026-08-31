@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type AgentResult,
   defineAgent,
@@ -6,8 +8,7 @@ import {
   defineWorkflow,
   prompt,
   type WorkflowNode,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes compile-time assertions visible without adding a runtime test helper. Use: Pass inferred DSL values to it in this typechecked example. */
 declare function expectType<T>(value: T): void;
@@ -313,62 +314,62 @@ const boundedAgentToolsetWorkflow = defineWorkflow(
       { key: "lookup-pull-request" },
     );
 
-    const plan = await ctx.agent({
-      key: "plan-investigation",
-      agent: investigationPlanner,
-      input: { issue, pullRequest, searchRoots: input.searchRoots, allowedTests: input.allowedTests },
-    });
+    const plan = await ctx.agent(
+      investigationPlanner,
+      { issue, pullRequest, searchRoots: input.searchRoots, allowedTests: input.allowedTests },
+      {
+        key: "plan-investigation",
+      },
+    );
     expectType<AgentResult<z.infer<typeof InvestigationPlan>>>(plan);
 
     const queries = requireUniqueQueries(plan.value.searchQueries);
     const testTargets = requireAllowedTestTargets(plan.value.testTargets, input.allowedTests);
-    const searches = ctx.all(
-      await ctx.parallel(
-        queries,
-        (query, index) =>
-          ctx.operation(
-            searchCode,
-            {
-              repository: input.repository,
-              revision: pullRequest.head,
-              query,
-              roots: input.searchRoots,
-              maxMatches: 20,
-            },
-            { key: `search-${index + 1}` },
-          ),
-        { key: "bounded-code-searches", keyOf: (_query, index) => String(index + 1), concurrency: 3 },
-      ),
+    const searches = await ctx.parallel.all(
+      queries,
+      (query, lane, index) =>
+        lane.ctx.operation(
+          searchCode,
+          {
+            repository: input.repository,
+            revision: pullRequest.head,
+            query,
+            roots: input.searchRoots,
+            maxMatches: 20,
+          },
+          { key: `search-${index + 1}` },
+        ),
+      { key: "bounded-code-searches", keyOf: (_query, index) => String(index + 1), concurrency: 3 },
     );
-    const tests = ctx.all(
-      await ctx.parallel(
-        testTargets,
-        async (target, index) => {
-          const candidate = await ctx.operation.prepare(
-            runFocusedTest,
-            { repository: input.repository, revision: pullRequest.head, target },
-            { key: `test-${index + 1}-prepare`, label: `Prepare registered test ${target}` },
-          );
-          const authorization = await ctx.operation.authorize(runFocusedTest, candidate, {
-            key: `test-${index + 1}-authorize`,
-            label: `Authorize registered test ${target}`,
-            detail: `Run ${target} at exact revision ${pullRequest.head}.`,
-          });
-          return ctx.operation.execute(
-            runFocusedTest,
-            { candidate, authorization },
-            { key: `test-${index + 1}-execute`, attempts: 1 },
-          );
-        },
-        { key: "bounded-focused-tests", keyOf: (target) => target, concurrency: 2 },
-      ),
+    const tests = await ctx.parallel.all(
+      testTargets,
+      async (target, lane, index) => {
+        const candidate = await lane.ctx.operation.prepare(
+          runFocusedTest,
+          { repository: input.repository, revision: pullRequest.head, target },
+          { key: `test-${index + 1}-prepare`, label: `Prepare registered test ${target}` },
+        );
+        const authorization = await lane.ctx.operation.authorize(runFocusedTest, candidate, {
+          key: `test-${index + 1}-authorize`,
+          label: `Authorize registered test ${target}`,
+          detail: `Run ${target} at exact revision ${pullRequest.head}.`,
+        });
+        return lane.ctx.operation.execute(
+          runFocusedTest,
+          { candidate, authorization },
+          { key: `test-${index + 1}-execute`, attempts: 1 },
+        );
+      },
+      { key: "bounded-focused-tests", keyOf: (target) => target, concurrency: 2 },
     );
 
-    const assessment = await ctx.agent({
-      key: "assess-investigation",
-      agent: investigationAssessor,
-      input: { issue, pullRequest, plan: plan.value, searches, tests },
-    });
+    const assessment = await ctx.agent(
+      investigationAssessor,
+      { issue, pullRequest, plan: plan.value, searches, tests },
+      {
+        key: "assess-investigation",
+      },
+    );
     expectType<AgentResult<z.infer<typeof InvestigationAssessment>>>(assessment);
 
     return {

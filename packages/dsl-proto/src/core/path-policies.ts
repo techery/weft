@@ -1,6 +1,6 @@
 /** Declaration-only path authority surface for the Weft DSL prototype. */
 
-import type { Duration, WorkflowNode, WorkspaceSnapshotRef } from "./shared.ts";
+import type { Duration, NominalValue, WorkflowNode, WorkspaceSnapshotRef } from "./shared.ts";
 
 // ---------------------------------------------------------------------------
 // Fixed path policies
@@ -56,12 +56,13 @@ declare const pathGrantRefBrand: unique symbol;
  * Why: Binds canonical allowed paths to one policy revision, request digest, workspace generation, and lifetime.
  * Use: Retain it for audit or pass it through trusted orchestration; use its enclosing `WriteScope` for mutation.
  */
-export interface PathGrantRef<Policy extends PathPolicyDefinition = PathPolicyDefinition> {
+export interface PathGrantRef<Policy extends PathPolicyDefinition = PathPolicyDefinition>
+  extends NominalValue<readonly ["path-grant", Policy]> {
   readonly ref: string;
   readonly policy: Policy["name"];
   readonly revision: Policy["revision"];
   readonly requestDigest: string;
-  readonly subject: WorkspaceSnapshotRef;
+  readonly snapshot: WorkspaceSnapshotRef;
   readonly paths: readonly string[];
   readonly issuedAt: string;
   readonly expiresAt: string;
@@ -78,7 +79,8 @@ declare const writeScopeBrand: unique symbol;
  * Why: Gives writer APIs one strict, engine-verifiable capability instead of ambient or prompt-described path access.
  * Use: Pass the complete value to an agent or workspace mutation API; do not project it back into a path array.
  */
-export interface WriteScope<Policy extends PathPolicyDefinition = PathPolicyDefinition> {
+export interface WriteScope<Policy extends PathPolicyDefinition = PathPolicyDefinition>
+  extends NominalValue<readonly ["write-scope", Policy]> {
   readonly mode: "strict";
   readonly grant: PathGrantRef<Policy>;
   readonly paths: readonly string[];
@@ -108,7 +110,7 @@ export interface PathPolicyResolveOptions {
 
 /**
  * Why: Centralizes canonicalization, traversal and symlink checks, root containment, deny matching, and grant minting.
- * Use: Call `ctx.paths.resolve(policy, request, options)`; consume the returned scope only on the same subject before expiry.
+ * Use: Call `ctx.paths.resolve(policy, request, options)`; consume the returned scope only on the same snapshot before expiry.
  */
 export interface PathPolicyApi {
   resolve<Policy extends PathPolicyDefinition>(

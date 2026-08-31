@@ -7,6 +7,7 @@ import type {
   HostBinding,
   InferIn,
   InferOut,
+  NominalValue,
   WorkflowNode,
 } from "./shared.ts";
 
@@ -33,9 +34,12 @@ export interface ContextTrustPolicy {
  * Why: Records the trust classification the host actually established instead of copying the declaration's requested policy.
  * Use: Preserve it with the snapshot and branch on `level` before using context for consequential decisions.
  */
-export interface ContextTrustMetadata {
-  level: ContextTrustLevel;
-  authority: string;
+export interface ContextTrustMetadata<
+  Level extends ContextTrustLevel = ContextTrustLevel,
+  Authority extends string = string,
+> {
+  level: Level;
+  authority: Authority;
 }
 
 /**
@@ -57,11 +61,40 @@ export type ContextFreshnessStatus = "fresh" | "stale";
  * Why: Captures the host's observation window separately from the source's static freshness policy.
  * Use: Retain these timestamps with derived claims so later consumers can detect expired context.
  */
-export interface ContextFreshnessMetadata {
+export interface ContextFreshnessMetadata<
+  Status extends ContextFreshnessStatus = ContextFreshnessStatus,
+> {
   observedAt: string;
   expiresAt: string;
-  status: ContextFreshnessStatus;
+  status: Status;
 }
+
+/**
+ * Why: Retains the strongest trust level a source policy guarantees after the host rejects weaker observations.
+ * Use: Derive snapshot trust metadata from a context source's declared minimum.
+ */
+export type ContextTrustLevelAtLeast<Level extends ContextTrustLevel> =
+  Level extends "authoritative"
+    ? "authoritative"
+    : Level extends "authenticated"
+      ? "authenticated" | "authoritative"
+      : ContextTrustLevel;
+
+/**
+ * Why: Retains a source's declared authority literals while leaving unrestricted sources open to any host authority.
+ * Use: Derive the `trust.authority` field of a context snapshot.
+ */
+export type ContextTrustAuthorityOf<Policy extends ContextTrustPolicy> =
+  Policy extends { readonly authorities: readonly (infer Authority extends string)[] }
+    ? Authority
+    : string;
+
+/**
+ * Why: Makes a reject-stale policy guarantee a fresh returned snapshot while preserving both states for allow-stale sources.
+ * Use: Derive the `freshness.status` field after host policy enforcement.
+ */
+export type ContextFreshnessStatusOf<Policy extends ContextFreshnessPolicy> =
+  Policy["stale"] extends "reject" ? "fresh" : ContextFreshnessStatus;
 
 /**
  * Why: Names the exact external subject selected by a source without exposing or replaying its potentially sensitive lookup input.
@@ -83,11 +116,16 @@ declare const contextSnapshotBrand: unique symbol;
  * Why: Couples validated context with host-observed freshness, trust, and nominal digest-addressed provenance.
  * Use: Consume `value` for reasoning and preserve `evidence` with any artifact or claim derived from the snapshot.
  */
-export interface ContextSnapshot<Value, SourceName extends string = string> {
+export interface ContextSnapshot<
+  Value,
+  SourceName extends string = string,
+  Freshness extends ContextFreshnessMetadata = ContextFreshnessMetadata,
+  Trust extends ContextTrustMetadata = ContextTrustMetadata,
+> extends NominalValue<readonly ["context-snapshot", SourceName, Value, Freshness, Trust]> {
   readonly source: SourceName;
   readonly value: Value;
-  readonly freshness: Readonly<ContextFreshnessMetadata>;
-  readonly trust: Readonly<ContextTrustMetadata>;
+  readonly freshness: Readonly<Freshness>;
+  readonly trust: Readonly<Trust>;
   readonly evidence: EvidenceRef<"context-snapshot", Value, ContextSourceSubject<SourceName>>;
   readonly [contextSnapshotBrand]: true;
 }
@@ -100,6 +138,8 @@ export interface ContextSourceDefinition<
   InputSchema extends AnySchema,
   OutputSchema extends AnySchema,
   Name extends string = string,
+  Freshness extends ContextFreshnessPolicy = ContextFreshnessPolicy,
+  Trust extends ContextTrustPolicy = ContextTrustPolicy,
 > extends WorkflowNode<"weft.context-source"> {
   readonly kind: "weft.context-source";
   readonly name: Name;
@@ -108,8 +148,8 @@ export interface ContextSourceDefinition<
   readonly output: OutputSchema;
   readonly binding: HostBinding;
   readonly access: "read-only";
-  readonly freshness: Readonly<ContextFreshnessPolicy>;
-  readonly trust: Readonly<ContextTrustPolicy>;
+  readonly freshness: Readonly<Freshness>;
+  readonly trust: Readonly<Trust>;
 }
 
 /**
@@ -120,14 +160,16 @@ export interface ContextSourceConfig<
   InputSchema extends AnySchema,
   OutputSchema extends AnySchema,
   Name extends string = string,
+  Freshness extends ContextFreshnessPolicy = ContextFreshnessPolicy,
+  Trust extends ContextTrustPolicy = ContextTrustPolicy,
 > {
   name: Name;
   description?: string;
   input: InputSchema;
   output: OutputSchema;
   binding: HostBinding;
-  freshness: ContextFreshnessPolicy;
-  trust: ContextTrustPolicy;
+  freshness: Freshness;
+  trust: Trust;
 }
 
 /**
@@ -137,17 +179,25 @@ export interface ContextSourceConfig<
 export declare function defineContextSource<
   InputSchema extends AnySchema,
   OutputSchema extends AnySchema,
-  Name extends string,
+  const Name extends string,
+  const Freshness extends ContextFreshnessPolicy,
+  const Trust extends ContextTrustPolicy,
 >(
-  config: ContextSourceConfig<InputSchema, OutputSchema, Name>,
-): ContextSourceDefinition<InputSchema, OutputSchema, Name>;
+  config: ContextSourceConfig<InputSchema, OutputSchema, Name, Freshness, Trust>,
+): ContextSourceDefinition<InputSchema, OutputSchema, Name, Freshness, Trust>;
 
 /**
  * Why: Recovers the raw lookup value accepted by a context source before schema validation.
  * Use: It supplies the input side of `ContextFn` and internal source invocations.
  */
 export type ContextSourceInputOf<Definition> =
-  Definition extends ContextSourceDefinition<infer InputSchema, infer _OutputSchema, infer _Name>
+  Definition extends ContextSourceDefinition<
+    infer InputSchema,
+    infer _OutputSchema,
+    infer _Name,
+    infer _Freshness,
+    infer _Trust
+  >
     ? InferIn<InputSchema>
     : never;
 
@@ -156,7 +206,13 @@ export type ContextSourceInputOf<Definition> =
  * Use: It supplies the `value` type inside a source's nominal `ContextSnapshot`.
  */
 export type ContextSourceOutputOf<Definition> =
-  Definition extends ContextSourceDefinition<infer _InputSchema, infer OutputSchema, infer _Name>
+  Definition extends ContextSourceDefinition<
+    infer _InputSchema,
+    infer OutputSchema,
+    infer _Name,
+    infer _Freshness,
+    infer _Trust
+  >
     ? InferOut<OutputSchema>
     : never;
 
@@ -165,9 +221,62 @@ export type ContextSourceOutputOf<Definition> =
  * Use: It supplies the `source` and evidence-subject name carried by `ContextSnapshotOf`.
  */
 export type ContextSourceNameOf<Definition> =
-  Definition extends ContextSourceDefinition<infer _InputSchema, infer _OutputSchema, infer Name>
+  Definition extends ContextSourceDefinition<
+    infer _InputSchema,
+    infer _OutputSchema,
+    infer Name,
+    infer _Freshness,
+    infer _Trust
+  >
     ? Name
     : never;
+
+/**
+ * Why: Recovers the exact freshness policy retained by one context source definition.
+ * Use: Derive snapshot freshness without widening a reject-stale source back to `fresh | stale`.
+ */
+export type ContextSourceFreshnessOf<Definition> =
+  Definition extends ContextSourceDefinition<
+    infer _InputSchema,
+    infer _OutputSchema,
+    infer _Name,
+    infer Freshness,
+    infer _Trust
+  >
+    ? Freshness
+    : ContextFreshnessPolicy;
+
+/**
+ * Why: Recovers the exact trust policy retained by one context source definition.
+ * Use: Derive guaranteed trust levels and accepted authority literals on returned snapshots.
+ */
+export type ContextSourceTrustOf<Definition> =
+  Definition extends ContextSourceDefinition<
+    infer _InputSchema,
+    infer _OutputSchema,
+    infer _Name,
+    infer _Freshness,
+    infer Trust
+  >
+    ? Trust
+    : ContextTrustPolicy;
+
+/**
+ * Why: Projects one context source's enforced freshness policy into precise engine-minted metadata.
+ * Use: Supply the freshness field of `ContextSnapshotOf`.
+ */
+export type ContextSourceFreshnessMetadataOf<Definition> = ContextFreshnessMetadata<
+  ContextFreshnessStatusOf<ContextSourceFreshnessOf<Definition>>
+>;
+
+/**
+ * Why: Projects one context source's trust floor and authority allow-list into precise engine-minted metadata.
+ * Use: Supply the trust field of `ContextSnapshotOf`.
+ */
+export type ContextSourceTrustMetadataOf<Definition> = ContextTrustMetadata<
+  ContextTrustLevelAtLeast<ContextSourceTrustOf<Definition>["minimum"]>,
+  ContextTrustAuthorityOf<ContextSourceTrustOf<Definition>>
+>;
 
 /**
  * Why: Derives the exact nominal snapshot returned by one source definition in a reusable named type.
@@ -175,7 +284,9 @@ export type ContextSourceNameOf<Definition> =
  */
 export type ContextSnapshotOf<Definition> = ContextSnapshot<
   ContextSourceOutputOf<Definition>,
-  ContextSourceNameOf<Definition>
+  ContextSourceNameOf<Definition>,
+  ContextSourceFreshnessMetadataOf<Definition>,
+  ContextSourceTrustMetadataOf<Definition>
 >;
 
 /**

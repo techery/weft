@@ -1,6 +1,19 @@
 /** Declaration-only atomic operation surface for the Weft DSL prototype. */
 
-import type { AnySchema, Duration, HostBinding, InferIn, InferOut, Risk, WorkflowNode } from "./shared.ts";
+import type {
+  AnySchema,
+  DefinitionTypeCarrier,
+  Duration,
+  HostBinding,
+  InferIn,
+  InferOut,
+  InputOf,
+  NominalValue,
+  OutputOf,
+  Risk,
+  TypesOf,
+  WorkflowNode,
+} from "./shared.ts";
 
 // ---------------------------------------------------------------------------
 // Typed authorized atomic operations
@@ -85,7 +98,16 @@ export interface OperationDefinitionBase<
   OutputSchema extends AnySchema,
   Authorization extends OperationAuthorizationPolicy = OperationAuthorizationPolicy,
   Name extends string = string,
-> extends WorkflowNode<"weft.operation"> {
+> extends WorkflowNode<"weft.operation">,
+    DefinitionTypeCarrier<{
+      input: InferIn<InputSchema>;
+      parsedInput: InferOut<InputSchema>;
+      rawOutput: InferIn<OutputSchema>;
+      output: InferOut<OutputSchema>;
+      authorization: Authorization;
+      inputSchema: InputSchema;
+      outputSchema: OutputSchema;
+    }> {
   readonly kind: "weft.operation";
   readonly name: Name;
   readonly description?: string;
@@ -107,8 +129,13 @@ export interface BoundOperationDefinition<
   Name extends string = string,
 > extends OperationDefinitionBase<InputSchema, OutputSchema, Authorization, Name> {
   readonly binding: HostBinding;
-  readonly run?: never;
 }
+
+/**
+ * Why: Keeps repository-local adapter code on an engine-only property instead of making definitions directly executable.
+ * Use: `defineOperation` carries it internally; authors execute the returned definition only through `ctx.operation`.
+ */
+declare const operationImplementation: unique symbol;
 
 /**
  * Why: Represents an operation whose adapter is deliberately implemented beside its declaration.
@@ -121,7 +148,7 @@ export interface ImplementedOperationDefinition<
   Name extends string = string,
 > extends OperationDefinitionBase<InputSchema, OutputSchema, Authorization, Name> {
   readonly binding?: never;
-  readonly run: OperationHandler<InputSchema, OutputSchema>;
+  readonly [operationImplementation]: OperationHandler<InputSchema, OutputSchema>;
 }
 
 /**
@@ -142,7 +169,8 @@ export type OperationDefinition<
  * Use: Accept it only in APIs whose direct execution path is intentionally limited to `mode: "none"`.
  */
 export interface DirectOperationDefinition<Name extends string = string>
-  extends WorkflowNode<"weft.operation"> {
+  extends WorkflowNode<"weft.operation">,
+    DefinitionTypeCarrier<{ authorization: NoOperationAuthorizationPolicy }> {
   readonly name: Name;
   readonly authorization: Readonly<NoOperationAuthorizationPolicy>;
 }
@@ -152,7 +180,8 @@ export interface DirectOperationDefinition<Name extends string = string>
  * Use: Accept it in protected operation APIs so direct invocation is unrepresentable.
  */
 export interface ProtectedOperationDefinition<Name extends string = string>
-  extends WorkflowNode<"weft.operation"> {
+  extends WorkflowNode<"weft.operation">,
+    DefinitionTypeCarrier<{ authorization: ProtectedOperationAuthorizationPolicy }> {
   readonly name: Name;
   readonly authorization: Readonly<ProtectedOperationAuthorizationPolicy>;
 }
@@ -247,41 +276,20 @@ export declare function defineOperation<
  * Why: Recovers the raw input accepted by an operation definition before schema validation.
  * Use: It supplies direct invocation and protected candidate preparation inputs.
  */
-export type OperationInputOf<Definition> =
-  Definition extends OperationDefinition<
-    infer InputSchema,
-    infer _OutputSchema,
-    infer _Authorization,
-    infer _Name
-  >
-    ? InferIn<InputSchema>
-    : never;
+export type OperationInputOf<Definition> = InputOf<Definition>;
 
 /**
  * Why: Recovers the validated result produced by an operation definition.
  * Use: It supplies direct and protected execution outputs.
  */
-export type OperationOutputOf<Definition> =
-  Definition extends OperationDefinition<
-    infer _InputSchema,
-    infer OutputSchema,
-    infer _Authorization,
-    infer _Name
-  >
-    ? InferOut<OutputSchema>
-    : never;
+export type OperationOutputOf<Definition> = OutputOf<Definition>;
 
 /**
  * Why: Recovers an operation definition's exact authorization policy branch.
  * Use: Inspect it in helpers that preserve whether direct or protected execution is permitted.
  */
 export type OperationAuthorizationOf<Definition> =
-  Definition extends OperationDefinition<
-    infer _InputSchema,
-    infer _OutputSchema,
-    infer Authorization,
-    infer _Name
-  >
+  TypesOf<Definition> extends { authorization: infer Authorization }
     ? Authorization
     : never;
 
@@ -305,7 +313,7 @@ declare const operationCandidateBrand: unique symbol;
 export interface OperationCandidateRef<
   Definition extends ProtectedOperationDefinition,
   Input extends OperationInputOf<Definition> = OperationInputOf<Definition>,
-> {
+> extends NominalValue<readonly ["operation-candidate", Definition, Input]> {
   readonly ref: string;
   readonly operation: Definition["name"];
   readonly definitionDigest: string;
@@ -313,6 +321,13 @@ export interface OperationCandidateRef<
   readonly preparedAt: string;
   readonly [operationCandidateBrand]: readonly [definition: Definition, input: Input];
 }
+
+/**
+ * Why: Recovers the protected definition already carried nominally by an engine-minted candidate.
+ * Use: Build advanced lifecycle helpers without asking authors to repeat the operation definition.
+ */
+export type OperationCandidateDefinitionOf<Candidate> =
+  Candidate extends OperationCandidateRef<infer Definition, any> ? Definition : never;
 
 /**
  * Why: Prevents a general approval or authorization for different bytes from authorizing this operation.
@@ -327,7 +342,7 @@ declare const operationAuthorizationBrand: unique symbol;
 export interface OperationAuthorizationRef<
   Definition extends ProtectedOperationDefinition,
   Candidate extends OperationCandidateRef<Definition>,
-> {
+> extends NominalValue<readonly ["operation-authorization", Definition, Candidate]> {
   readonly ref: string;
   readonly candidateRef: Candidate["ref"];
   readonly operation: Definition["name"];
@@ -340,6 +355,20 @@ export interface OperationAuthorizationRef<
   readonly expiresAt?: string;
   readonly [operationAuthorizationBrand]: readonly [definition: Definition, candidate: Candidate];
 }
+
+/**
+ * Why: Recovers the protected definition already bound into a candidate-specific authorization.
+ * Use: Infer the validated output of advanced execution without repeating the definition.
+ */
+export type OperationAuthorizationDefinitionOf<Authorization> =
+  Authorization extends OperationAuthorizationRef<infer Definition, any> ? Definition : never;
+
+/**
+ * Why: Recovers the exact frozen candidate already bound into an operation authorization.
+ * Use: Preserve candidate correlation when an advanced execution starts from authority alone.
+ */
+export type OperationAuthorizationCandidateOf<Authorization> =
+  Authorization extends OperationAuthorizationRef<any, infer Candidate> ? Candidate : never;
 
 /**
  * Why: Supplies durable identity while the engine validates and freezes one protected operation input.
@@ -362,6 +391,12 @@ export interface OperationAuthorizeOptions {
 }
 
 /**
+ * Why: Lets advanced lifecycle calls inherit their durable key from a prepared candidate.
+ * Use: Pass it to the candidate-only `authorize` overload; the engine derives the authorization subkey.
+ */
+export type AdvancedOperationAuthorizeOptions = Omit<OperationAuthorizeOptions, "key">;
+
+/**
  * Why: Pairs exactly one frozen operation candidate with the nominal authority minted for it.
  * Use: Construct it from matching `prepare` and `authorize` results for protected execution.
  */
@@ -382,6 +417,32 @@ export interface OperationInvocationOptions {
   label?: string;
   timeout?: Duration;
   attempts?: number;
+}
+
+/**
+ * Why: Lets advanced execution inherit durable identity from candidate-bound authorization.
+ * Use: Pass it to the authorization-only `execute` overload when explicit lifecycle control is required.
+ */
+export type AdvancedOperationInvocationOptions = Omit<OperationInvocationOptions, "key">;
+
+/**
+ * Why: Carries candidate-specific authorization presentation inside one protected-operation call.
+ * Use: Supply optional detail or a tighter approval timeout without repeating action or risk policy.
+ */
+export interface OperationRunAuthorizationOptions {
+  detail?: string;
+  timeout?: Duration;
+  readonly mode?: never;
+  readonly action?: never;
+  readonly risk?: never;
+}
+
+/**
+ * Why: Gives ordinary authors one durable key while preserving prepare, authorize, and execute internally.
+ * Use: Pass it to `ctx.operation.run`; the engine derives `.prepare`, `.authorize`, and `.execute` subkeys.
+ */
+export interface ProtectedOperationRunOptions extends OperationInvocationOptions {
+  authorization: OperationRunAuthorizationOptions;
 }
 
 // ---------------------------------------------------------------------------
@@ -409,7 +470,7 @@ export interface OperationExecutionReceipt<
   Definition extends ProtectedOperationDefinition,
   Candidate extends OperationCandidateRef<Definition>,
   IdempotencyKey extends string,
-> {
+> extends NominalValue<"operation-execution-receipt"> {
   readonly ref: string;
   readonly operation: Definition["name"];
   readonly definitionDigest: Candidate["definitionDigest"];
@@ -460,7 +521,7 @@ export interface OperationAttemptIntent<
   Primary extends ProtectedOperationDefinition,
   PrimaryCandidate extends OperationCandidateRef<Primary>,
   PrimaryIdempotencyKey extends string,
-> {
+> extends NominalValue<"operation-attempt"> {
   readonly ref: string;
   readonly operation: Primary["name"];
   readonly definitionDigest: PrimaryCandidate["definitionDigest"];
@@ -631,6 +692,203 @@ export interface OperationRecoveryState<
 }
 
 /**
+ * Why: Lets reusable recovery bind guaranteed direct cleanup without exposing attempt-state generic plumbing.
+ * Use: Provide it to `withRecovery`; the engine derives the cleanup stage key and freezes both mapped input and idempotency before primary dispatch.
+ */
+export interface RecoverableCancellationConfig<
+  Primary extends ProtectedOperationDefinition,
+  Cancellation extends ConditionalCleanupOperationDefinition,
+  CancellationInput extends OperationInputOf<Cancellation>,
+  CancellationIdempotencyKey extends string,
+> {
+  readonly operation: Cancellation;
+  readonly map: (
+    attempt: OperationAttemptIntent<Primary, OperationCandidateRef<Primary>, string>,
+  ) => CancellationInput;
+  readonly idempotencyKey: (
+    attempt: OperationAttemptIntent<Primary, OperationCandidateRef<Primary>, string>,
+  ) => CancellationIdempotencyKey;
+}
+
+/**
+ * Why: Binds a success-only compensation mapper once without granting compensation authority before success.
+ * Use: Add it to `withRecovery`; a successful receipt still requires explicit candidate-bound authorization before later recovery.
+ */
+export interface RecoverableCompensationConfig<
+  Primary extends ProtectedOperationDefinition,
+  Compensation extends ProtectedOperationDefinition,
+  CompensationInput extends OperationInputOf<Compensation>,
+> {
+  readonly operation: Compensation;
+  readonly map: (
+    receipt: OperationExecutionReceipt<Primary, OperationCandidateRef<Primary>, string>,
+  ) => CompensationInput;
+}
+
+/** Recovery configuration with guaranteed direct cancellation and no post-success compensation. */
+export interface CancellationOnlyRecoverableOperationConfig<
+  Primary extends ProtectedOperationDefinition,
+  Cancellation extends ConditionalCleanupOperationDefinition,
+  CancellationInput extends OperationInputOf<Cancellation>,
+  CancellationIdempotencyKey extends string,
+> {
+  readonly cancel: RecoverableCancellationConfig<
+    Primary,
+    Cancellation,
+    CancellationInput,
+    CancellationIdempotencyKey
+  >;
+  readonly compensate?: never;
+}
+
+/** Recovery configuration with guaranteed direct cancellation and protected success-only compensation. */
+export interface CompensatedRecoverableOperationConfig<
+  Primary extends ProtectedOperationDefinition,
+  Cancellation extends ConditionalCleanupOperationDefinition,
+  CancellationInput extends OperationInputOf<Cancellation>,
+  CancellationIdempotencyKey extends string,
+  Compensation extends ProtectedOperationDefinition,
+  CompensationInput extends OperationInputOf<Compensation>,
+> {
+  readonly cancel: RecoverableCancellationConfig<
+    Primary,
+    Cancellation,
+    CancellationInput,
+    CancellationIdempotencyKey
+  >;
+  readonly compensate: RecoverableCompensationConfig<Primary, Compensation, CompensationInput>;
+}
+
+/** Hidden recovery relationships carried by the non-node wrapper returned from `withRecovery`. */
+export interface RecoverableOperationTypes {
+  readonly primary: ProtectedOperationDefinition;
+  readonly cancellation: ConditionalCleanupOperationDefinition;
+  readonly cancellationInput: unknown;
+  readonly cancellationIdempotencyKey: string;
+  readonly compensation: ProtectedOperationDefinition | null;
+  readonly compensationInput: unknown;
+}
+
+/**
+ * Why: Binds recovery mapping once while keeping the primary operation as the only runtime definition node.
+ * Use: Create it with `withRecovery`, then call `ctx.operation.runRecoverable(wrapper, input, options)`.
+ */
+export interface RecoverableOperationDefinition<
+  Types extends RecoverableOperationTypes = RecoverableOperationTypes,
+> extends NominalValue<readonly ["recoverable-operation", Types]> {
+  readonly operation: Types["primary"];
+  readonly [recoverableOperationTypes]: Types;
+}
+
+/** Hidden exact recovery relationships retained by `RecoverableOperationDefinition`. */
+declare const recoverableOperationTypes: unique symbol;
+
+/** Complete hidden recovery relationships of one wrapper. */
+export type RecoverableOperationTypesOf<Definition> =
+  Definition extends RecoverableOperationDefinition<infer Types> ? Types : never;
+
+/** Protected primary operation bound by one recovery wrapper. */
+export type RecoverableOperationPrimaryOf<Definition> =
+  RecoverableOperationTypesOf<Definition>["primary"];
+
+/** Exact recovery state inferred from one wrapper without exposing registration generics at the call site. */
+export type RecoverableOperationStateOf<Definition> =
+  RecoverableOperationTypesOf<Definition> extends infer Types extends RecoverableOperationTypes
+    ? OperationRecoveryState<
+        Types["cancellation"],
+        Types["cancellationInput"] & OperationInputOf<Types["cancellation"]>,
+        Types["cancellationIdempotencyKey"],
+        Types["compensation"],
+        Types["compensation"] extends ProtectedOperationDefinition
+          ? Types["compensationInput"] & OperationInputOf<Types["compensation"]>
+          : never
+      >
+    : never;
+
+/** Engine-minted attempt type behind one ordinary recoverable run. */
+export type RecoverableOperationAttemptOf<
+  Definition extends RecoverableOperationDefinition,
+  Input extends OperationInputOf<RecoverableOperationPrimaryOf<Definition>>,
+  PrimaryIdempotencyKey extends string,
+> = OperationAttemptRef<
+  RecoverableOperationPrimaryOf<Definition>,
+  OperationCandidateRef<RecoverableOperationPrimaryOf<Definition>, Input>,
+  PrimaryIdempotencyKey,
+  RecoverableOperationStateOf<Definition>
+>;
+
+/** Exhaustive commit classification returned by the one-shot recoverable façade. */
+export type RecoverableOperationRunResult<
+  Definition extends RecoverableOperationDefinition,
+  Input extends OperationInputOf<RecoverableOperationPrimaryOf<Definition>>,
+  PrimaryIdempotencyKey extends string,
+> = OperationAttemptResult<
+  RecoverableOperationAttemptOf<Definition, Input, PrimaryIdempotencyKey>
+>;
+
+/** One parent key, frozen external idempotency, and fixed authorization presentation for a recoverable run. */
+export interface RecoverableOperationRunOptions<PrimaryIdempotencyKey extends string>
+  extends ProtectedOperationRunOptions {
+  readonly idempotencyKey: PrimaryIdempotencyKey;
+}
+
+/**
+ * Why: Creates an inference-friendly recovery wrapper without adding a new `WorkflowNode` category.
+ * Use: Bind mandatory direct cleanup once; ordinary calls then need only primary input and one run-options object.
+ */
+export declare function withRecovery<
+  Primary extends ProtectedOperationDefinition,
+  Cancellation extends ConditionalCleanupOperationDefinition,
+  CancellationInput extends OperationInputOf<Cancellation>,
+  const CancellationIdempotencyKey extends string,
+>(
+  operation: Primary,
+  recovery: CancellationOnlyRecoverableOperationConfig<
+    Primary,
+    Cancellation,
+    CancellationInput,
+    CancellationIdempotencyKey
+  >,
+): RecoverableOperationDefinition<{
+  primary: Primary;
+  cancellation: Cancellation;
+  cancellationInput: CancellationInput;
+  cancellationIdempotencyKey: CancellationIdempotencyKey;
+  compensation: null;
+  compensationInput: never;
+}>;
+
+/**
+ * Why: Adds protected success-only compensation to the same inference-friendly recovery wrapper.
+ * Use: Compensation remains inert until a successful primary receipt is explicitly authorized for recovery.
+ */
+export declare function withRecovery<
+  Primary extends ProtectedOperationDefinition,
+  Cancellation extends ConditionalCleanupOperationDefinition,
+  CancellationInput extends OperationInputOf<Cancellation>,
+  const CancellationIdempotencyKey extends string,
+  Compensation extends ProtectedOperationDefinition,
+  CompensationInput extends OperationInputOf<Compensation>,
+>(
+  operation: Primary,
+  recovery: CompensatedRecoverableOperationConfig<
+    Primary,
+    Cancellation,
+    CancellationInput,
+    CancellationIdempotencyKey,
+    Compensation,
+    CompensationInput
+  >,
+): RecoverableOperationDefinition<{
+  primary: Primary;
+  cancellation: Cancellation;
+  cancellationInput: CancellationInput;
+  cancellationIdempotencyKey: CancellationIdempotencyKey;
+  compensation: Compensation;
+  compensationInput: CompensationInput;
+}>;
+
+/**
  * Why: Records one engine-owned registration without exposing its executable mapper as mutable workflow state.
  * Use: Audit definition, mapper, input, and idempotency digests from a journaled attempt.
  */
@@ -689,7 +947,7 @@ export interface OperationAttemptRef<
  * Why: Gives dispatch and receipt APIs one nominal attempt constraint while preserving exact hidden type state.
  * Use: Accept any engine-minted attempt and recover its exact members through the helper types below.
  */
-export interface OperationAttemptRefMarker {
+export interface OperationAttemptRefMarker extends NominalValue<"operation-attempt"> {
   readonly ref: string;
   readonly recovery: RegisteredOperationRecoveryPlan;
   readonly [operationAttemptBrand]: readonly [
@@ -806,7 +1064,8 @@ export type RecoverableOperationReceipt<Attempt extends OperationAttemptRefMarke
  * Why: Gives compensation methods one nominal receipt constraint.
  * Use: Recover its exact attempt with the helper.
  */
-export interface RecoverableOperationReceiptMarker {
+export interface RecoverableOperationReceiptMarker
+  extends NominalValue<"operation-execution-receipt"> {
   readonly ref: string;
   readonly attemptRef: string;
   readonly [recoverableOperationReceiptBrand]: OperationAttemptRefMarker;
@@ -863,7 +1122,7 @@ declare const operationAttemptOutcomeBrand: unique symbol;
 export interface OperationAttemptNotCommitted<
   Attempt extends OperationAttemptRefMarker,
   Status extends "retryable" | "terminal",
-> {
+> extends NominalValue<readonly ["operation-attempt-outcome", Attempt]> {
   readonly status: Status;
   readonly commit: "not-committed";
   readonly attemptRef: Attempt["ref"];
@@ -881,7 +1140,8 @@ declare const operationCancellationEvidenceBrand: unique symbol;
  * Why: Carries exact provenance shared by all automatic cancellation outcomes.
  * Use: Correlate host cleanup with the registered definition, frozen mapped input, and idempotency identity.
  */
-export interface OperationCancellationEvidenceBase<Attempt extends OperationAttemptRefMarker> {
+export interface OperationCancellationEvidenceBase<Attempt extends OperationAttemptRefMarker>
+  extends NominalValue<readonly ["operation-cancellation", Attempt]> {
   readonly attemptRef: Attempt["ref"];
   readonly operation: OperationAttemptCancellationOf<Attempt>["name"];
   readonly definitionDigest: string;
@@ -928,7 +1188,8 @@ export type OperationCancellationResult<Attempt extends OperationAttemptRefMarke
  * Why: Represents a dispatch whose commit state the host cannot prove after all bounded attempts.
  * Use: Inspect mandatory automatic cancellation evidence before deciding whether external reconciliation remains.
  */
-export interface OperationAttemptAmbiguous<Attempt extends OperationAttemptRefMarker> {
+export interface OperationAttemptAmbiguous<Attempt extends OperationAttemptRefMarker>
+  extends NominalValue<readonly ["operation-attempt-outcome", Attempt]> {
   readonly status: "ambiguous";
   readonly commit: "may-have-committed";
   readonly attemptRef: Attempt["ref"];
@@ -941,7 +1202,8 @@ export interface OperationAttemptAmbiguous<Attempt extends OperationAttemptRefMa
  * Why: Keeps the successful receipt in the same exhaustive host-minted result as non-commit and ambiguity evidence.
  * Use: Narrow on `status`; compensation is available only through the receipt in this branch.
  */
-export interface OperationAttemptSucceeded<Attempt extends OperationAttemptRefMarker> {
+export interface OperationAttemptSucceeded<Attempt extends OperationAttemptRefMarker>
+  extends NominalValue<readonly ["operation-attempt-outcome", Attempt]> {
   readonly status: "succeeded";
   readonly receipt: RecoverableOperationReceipt<Attempt>;
   readonly [operationAttemptOutcomeBrand]: Attempt;
@@ -999,7 +1261,9 @@ export interface OperationRecoveryEvidenceBase<
   Receipt extends RecoverableOperationReceiptMarker,
   RecoveryCandidate extends OperationRecoveryCandidateRef<Receipt>,
   RecoveryIdempotencyKey extends string,
-> {
+> extends NominalValue<
+    readonly ["operation-recovery", Receipt, RecoveryCandidate, RecoveryIdempotencyKey]
+  > {
   readonly kind: "compensation";
   readonly primaryReceiptRef: Receipt["ref"];
   readonly recoveryRegistrationRef: string;
@@ -1063,21 +1327,43 @@ export type OperationRecoveryResult<
   | OperationRecoveryUnsuccessful<Receipt, RecoveryCandidate, RecoveryIdempotencyKey, "terminal">
   | OperationRecoveryUnsuccessful<Receipt, RecoveryCandidate, RecoveryIdempotencyKey, "ambiguous">;
 
-/**
- * Why: Makes protected operation execution a three-step type-state while keeping explicit no-authorization calls terse.
- * Use: Call definitions with `mode: "none"` directly; otherwise prepare, authorize, and execute in order.
- */
-export interface OperationFn {
+/** Ordinary direct and one-shot protected operation calls. */
+export interface OperationApi {
   <Definition extends DirectOperationDefinition>(
     definition: Definition,
     input: OperationInputOf<Definition>,
     options: OperationInvocationOptions,
   ): Promise<OperationOutputOf<Definition>>;
+  run<Definition extends ProtectedOperationDefinition, Input extends OperationInputOf<Definition>>(
+    definition: Definition,
+    input: Input,
+    options: ProtectedOperationRunOptions,
+  ): Promise<OperationOutputOf<Definition>>;
+  runRecoverable<
+    Definition extends RecoverableOperationDefinition,
+    Input extends OperationInputOf<RecoverableOperationPrimaryOf<Definition>>,
+    const PrimaryIdempotencyKey extends string,
+  >(
+    definition: Definition,
+    input: Input,
+    options: RecoverableOperationRunOptions<PrimaryIdempotencyKey>,
+  ): Promise<RecoverableOperationRunResult<Definition, Input, PrimaryIdempotencyKey>>;
+}
+
+/**
+ * Why: Adds the explicit protected and recoverable lifecycle to the ordinary operation facade.
+ * Use: Import its contracts from `/advanced`; ordinary workflow contexts expose only `OperationApi`.
+ */
+export interface OperationFn extends OperationApi {
   prepare<Definition extends ProtectedOperationDefinition, Input extends OperationInputOf<Definition>>(
     definition: Definition,
     input: Input,
     options: OperationPrepareOptions,
   ): Promise<OperationCandidateRef<Definition, Input>>;
+  authorize<Definition extends ProtectedOperationDefinition, Input extends OperationInputOf<Definition>>(
+    candidate: OperationCandidateRef<Definition, Input>,
+    options: AdvancedOperationAuthorizeOptions,
+  ): Promise<OperationAuthorizationRef<Definition, OperationCandidateRef<Definition, Input>>>;
   authorize<
     Definition extends ProtectedOperationDefinition,
     Candidate extends OperationCandidateRef<Definition>,
@@ -1086,6 +1372,13 @@ export interface OperationFn {
     candidate: Candidate,
     options: OperationAuthorizeOptions,
   ): Promise<OperationAuthorizationRef<Definition, Candidate>>;
+  execute<
+    Definition extends ProtectedOperationDefinition,
+    Candidate extends OperationCandidateRef<Definition>,
+  >(
+    authorization: OperationAuthorizationRef<Definition, Candidate>,
+    options: AdvancedOperationInvocationOptions,
+  ): Promise<OperationOutputOf<Definition>>;
   execute<
     Definition extends ProtectedOperationDefinition,
     Candidate extends OperationCandidateRef<Definition>,

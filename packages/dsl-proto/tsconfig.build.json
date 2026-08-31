@@ -2,13 +2,13 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,
+    "emitDeclarationOnly": true,
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true,
     "rewriteRelativeImportExtensions": true,
     "rootDir": "src",
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "include": ["src/index.ts", "src/core/**/*.ts"]
+  "include": ["src/index.ts", "src/advanced.ts", "src/testing.ts", "src/core/**/*.ts"]
 }

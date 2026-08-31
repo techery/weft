@@ -1,38 +1,33 @@
 /** Declaration-only human surface for the Weft DSL prototype. */
 import type { ArtifactRefBase } from "./artifacts.ts";
-import type { AnySchema, Duration, InferIn, InferOut, WorkflowNode } from "./shared.ts";
+import type {
+  AnySchema,
+  DefinitionTypeCarrier,
+  Duration,
+  InferIn,
+  InferOut,
+  WorkflowNode,
+} from "./shared.ts";
 
 // ---------------------------------------------------------------------------
 // Human interaction and custom UI
 // ---------------------------------------------------------------------------
 
-/**
- * Why: Gives the human DSL an explicit human timeout policy contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Human timeout policy. */
 export interface HumanTimeoutDefault<T> {
   default: T;
 }
 
-/**
- * Why: Gives the human DSL an explicit human timeout policy contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Human timeout policy. */
 export type HumanTimeoutPolicy<T> = "deny" | "escalate" | HumanTimeoutDefault<T>;
 
-/**
- * Why: Gives the human DSL an explicit reviewer identity contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Reviewer identity. */
 export interface ReviewerIdentity {
   id: string;
   displayName?: string;
 }
 
-/**
- * Why: Gives the human DSL an explicit human review file subject contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Human review file subject. */
 export interface HumanReviewFileSubject {
   kind: "file";
   path: string;
@@ -40,35 +35,46 @@ export interface HumanReviewFileSubject {
 }
 
 /**
- * Why: Gives the human DSL an explicit human review artifact subject contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
+ * Why: Requires inline artifact content instead of accepting an empty artifact-shaped review subject.
+ * Use: Select it when review material is supplied directly rather than through a workspace path.
  */
-export interface HumanReviewArtifactSubject {
+export interface HumanReviewArtifactContentSubject {
   kind: "artifact";
-  content?: string;
-  path?: string;
+  content: string;
+  path?: never;
   mediaType?: string;
   label?: string;
 }
 
 /**
- * Why: Gives the human DSL an explicit human review subject contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
+ * Why: Requires a concrete artifact path instead of accepting an empty artifact-shaped review subject.
+ * Use: Select it when the engine should snapshot review material from a workspace path.
  */
+export interface HumanReviewArtifactPathSubject {
+  kind: "artifact";
+  path: string;
+  content?: never;
+  mediaType?: string;
+  label?: string;
+}
+
+/**
+ * Why: Makes content-backed and path-backed artifact review subjects explicit and mutually exclusive.
+ * Use: Pass exactly one material source to human review subjects and attachments.
+ */
+export type HumanReviewArtifactSubject =
+  | HumanReviewArtifactContentSubject
+  | HumanReviewArtifactPathSubject;
+
+/** Human review subject. */
 export type HumanReviewSubject =
   | HumanReviewFileSubject
   | HumanReviewArtifactSubject
   | ArtifactRefBase<unknown>;
-/**
- * Why: Gives the human DSL an explicit human review attachment contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Human review attachment. */
 export type HumanReviewAttachment = HumanReviewArtifactSubject | ArtifactRefBase<unknown>;
 
-/**
- * Why: Gives the human DSL an explicit reviewed subject contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Reviewed subject. */
 export interface ReviewedFileSubject {
   kind: "file";
   path: string;
@@ -78,10 +84,7 @@ export interface ReviewedFileSubject {
   applied: boolean;
 }
 
-/**
- * Why: Gives the human DSL an explicit reviewed artifact subject contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Reviewed artifact subject. */
 export interface ReviewedArtifactSubject {
   kind: "artifact";
   ref: string;
@@ -89,10 +92,7 @@ export interface ReviewedArtifactSubject {
   applied: false;
 }
 
-/**
- * Why: Gives the human DSL an explicit reviewed subject contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Reviewed subject. */
 export type ReviewedSubject = ReviewedFileSubject | ReviewedArtifactSubject;
 
 /**
@@ -120,10 +120,7 @@ export interface HumanReviewResult<T, Subject = ReviewedSubject> {
   waitedMs: number;
 }
 
-/**
- * Why: Gives the human DSL an explicit human edit file result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Human edit file result. */
 export interface HumanEditFileResult {
   path: string;
   ref: string;
@@ -135,38 +132,27 @@ export interface HumanEditFileResult {
   waitedMs: number;
 }
 
-/**
- * Why: Gives the human DSL an explicit ui view ref contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Ui view ref. */
 export interface UiViewRef<
   Props,
   Answer = never,
   Mode extends "input" | "display" = "input" | "display",
   Id extends string = string,
   Revision extends string = string,
-> extends WorkflowNode<"weft.ui-view"> {
+> extends WorkflowNode<"weft.ui-view">,
+    DefinitionTypeCarrier<{ props: Props; answer: Answer; mode: Mode }> {
   readonly kind: "weft.ui-view";
   readonly id: Id;
   readonly revision: Revision;
-  readonly __props?: Props;
-  readonly __answer?: Answer;
-  readonly __mode?: Mode;
 }
 
-/**
- * Why: Gives the human DSL an explicit input ui component props contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Input ui component props. */
 export interface InputUiComponentProps<Props, Answer> {
   props: Props;
   propose(answer: Answer): void;
 }
 
-/**
- * Why: Gives the human DSL an explicit result ui component props contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Result ui component props. */
 export interface ResultUiComponentProps<Props> {
   props: Props;
 }
@@ -228,21 +214,15 @@ export declare function defineResultView<
   config: ResultViewConfig<PropsSchema, Id, Revision>,
 ): UiViewRef<InferOut<PropsSchema>, never, "display", Id, Revision>;
 
-/**
- * Why: Gives the human DSL an explicit input ui binding contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Input ui binding. */
 export interface InputUiBinding<Props, Answer> {
   view: UiViewRef<Props, Answer, "input">;
   props: Props;
 }
 
-/**
- * Why: Gives the human DSL an explicit human ask options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Human ask options. */
 export interface HumanAskOptions<S extends AnySchema, Props = never> {
-  key?: string;
+  key: string;
   question: string;
   detail?: string;
   schema: S;
@@ -251,29 +231,20 @@ export interface HumanAskOptions<S extends AnySchema, Props = never> {
   ui?: InputUiBinding<Props, InferIn<S>>;
 }
 
-/**
- * Why: Gives the human DSL an explicit denied approval default contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Denied approval default. */
 export interface DeniedApprovalDefault {
   approved: false;
   note?: string;
 }
 
-/**
- * Why: Gives the human DSL an explicit human approval timeout default contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Human approval timeout default. */
 export interface HumanApprovalTimeoutDefault {
   default: DeniedApprovalDefault;
 }
 
-/**
- * Why: Gives the human DSL an explicit human approve options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Human approve options. */
 export interface HumanApproveOptions {
-  key?: string;
+  key: string;
   action: string;
   detail?: string;
   timeout?: Duration;
@@ -281,15 +252,24 @@ export interface HumanApproveOptions {
 }
 
 /**
- * Why: Gives the human DSL an explicit human review options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
+ * Why: Describes one durable human confirmation used for workflow branching without minting effect authority.
+ * Use: Pass it to `ctx.human.confirm`; protected actions still require candidate-bound authorization.
  */
+export interface HumanConfirmOptions {
+  key: string;
+  action: string;
+  detail?: string;
+  timeout?: Duration;
+  onTimeout?: "deny" | "escalate" | HumanApprovalTimeoutDefault;
+}
+
+/** Human review options. */
 export interface HumanReviewOptions<
   S extends AnySchema,
   Props = never,
   Subject extends HumanReviewSubject = HumanReviewSubject,
 > {
-  key?: string;
+  key: string;
   question?: string;
   subject: Subject;
   attachments?: HumanReviewAttachment[];
@@ -299,12 +279,9 @@ export interface HumanReviewOptions<
   ui?: InputUiBinding<Props, InferIn<S>>;
 }
 
-/**
- * Why: Gives the human DSL an explicit human edit file options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Human edit file options. */
 export interface HumanEditFileOptions {
-  key?: string;
+  key: string;
   path: string;
   question?: string;
   timeout?: Duration;
@@ -317,6 +294,8 @@ export interface HumanEditFileOptions {
  */
 export interface HumanApi {
   ask<S extends AnySchema, Props = never>(opts: HumanAskOptions<S, Props>): Promise<InferOut<S>>;
+  confirm(opts: HumanConfirmOptions): Promise<HumanConfirmationResult>;
+  /** @deprecated Use `confirm`; a confirmation is a branching answer, not effect authority. */
   approve(opts: HumanApproveOptions): Promise<HumanApprovalResult>;
   review<S extends AnySchema, Props = never, Subject extends HumanReviewSubject = HumanReviewSubject>(
     opts: HumanReviewOptions<S, Props, Subject>,
@@ -324,10 +303,7 @@ export interface HumanApi {
   editFile(opts: HumanEditFileOptions): Promise<HumanEditFileResult>;
 }
 
-/**
- * Why: Gives the human DSL an explicit human approval result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Human approval result. */
 export interface HumanApprovalResult {
   approved: boolean;
   note?: string;
@@ -335,9 +311,16 @@ export interface HumanApprovalResult {
 }
 
 /**
- * Why: Gives the human DSL an explicit ui render options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
+ * Why: Returns an attributable human branch answer without presenting it as reusable authorization.
+ * Use: Branch on `confirmed`; operations, waivers, and deliveries require their own nominal references.
  */
+export interface HumanConfirmationResult {
+  readonly confirmed: boolean;
+  readonly note?: string;
+  readonly reviewer: ReviewerIdentity;
+}
+
+/** Ui render options. */
 export interface UiRenderOptions<Props> {
   key: string;
   slot?: string;
@@ -345,10 +328,7 @@ export interface UiRenderOptions<Props> {
   props: Props;
 }
 
-/**
- * Why: Gives the human DSL an explicit ui api contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding human API.
- */
+/** Ui api. */
 export interface UiApi {
   render<Props>(opts: UiRenderOptions<Props>): Promise<void>;
 }

@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type CheckCommand,
   type CheckExecutionResult,
@@ -12,8 +14,7 @@ import {
   definePathPolicy,
   definePrompt,
   defineWorkflow,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 // This example deliberately uses a workflow-owned branch. The implementation
 // agent writes into that durable workspace, so its successful result has no
@@ -401,7 +402,8 @@ defineWorkflow(
     }),
   },
   async (ctx, input) => {
-    const packageManager = (await ctx.env.get("WEFT_PACKAGE_MANAGER")) ?? "pnpm";
+    const packageManager =
+      (await ctx.env.get("WEFT_PACKAGE_MANAGER", { key: "read-package-manager" })) ?? "pnpm";
     if (packageManager !== "pnpm") {
       throw new Error(`Unsupported package manager: ${packageManager}`);
     }
@@ -417,18 +419,20 @@ defineWorkflow(
       timeout: "2m",
     });
 
-    const analysis = await ctx.phase("Analyze", (phase) =>
-      phase.agent({
-        key: "migration-analysis",
-        agent: dependencyMigrationAnalyst,
-        input: {
+    const analysis = await ctx.step("analyze", (step) =>
+      step.agent(
+        dependencyMigrationAnalyst,
+        {
           dependency: input.dependency,
           targetVersion: input.targetVersion,
           requestedPackages: input.packageScope ?? [],
           release,
           workspace,
         },
-      }),
+        {
+          key: "migration-analysis",
+        },
+      ),
     );
     const plan = analysis.value;
     assertKnownPackages(plan, workspace);
@@ -449,34 +453,37 @@ defineWorkflow(
       }
 
       await ctx.note({
+        key: "record-migration-approval",
         kind: "decision",
         text: "A human approved the breaking or low-confidence dependency migration.",
         evidence: approval.note ?? `Approved by ${approval.reviewer.id}`,
       });
     }
 
-    const implementation = await ctx.phase("Implement and verify", async (phase) => {
-      const writeScope = await phase.paths.resolve(
+    const implementation = await ctx.step("implement-and-verify", async (step) => {
+      const writeScope = await step.paths.resolve(
         dependencyMigrationPaths,
         { proposedPaths: migrationWritePaths(plan) },
         { key: "migration-write-scope", label: "Resolve dependency migration paths" },
       );
-      return phase.agent({
-        key: "migration-implementation",
-        agent: dependencyMigrationDeveloper,
-        input: {
+      return step.agent(
+        dependencyMigrationDeveloper,
+        {
           dependency: input.dependency,
           targetVersion: input.targetVersion,
           packageManager,
           release,
           plan,
         },
-        write: writeScope,
-        goal: {
-          definition: migrationGoal,
-          input: { packages: plan.affectedPackages },
+        {
+          key: "migration-implementation",
+          write: writeScope,
+          goal: {
+            definition: migrationGoal,
+            input: { packages: plan.affectedPackages },
+          },
         },
-      });
+      );
     });
 
     const verification = implementation.goal.results.check;
@@ -484,14 +491,17 @@ defineWorkflow(
       throw new Error("The implementation goal returned without passing its required quality suite");
     }
 
-    const changed = await ctx.git.changedSince(input.baseRef);
+    const changed = await ctx.git.changedSince(input.baseRef, {
+      key: "migration-changes-since-base",
+    });
     if (changed.files.length === 0) {
       throw new Error("The dependency migration produced no repository changes");
     }
 
     const changedPaths = changed.files.map((file) => file.path);
-    await ctx.git.add({ paths: changedPaths });
+    await ctx.git.add({ key: "stage-migration-changes", paths: changedPaths });
     const commit = await ctx.git.commit({
+      key: "commit-migration",
       message: `chore(deps): upgrade ${input.dependency} to ${input.targetVersion}`,
       paths: changedPaths,
     });
@@ -524,6 +534,7 @@ defineWorkflow(
     );
 
     await ctx.note({
+      key: "record-migration-verification",
       kind: "claim",
       text: `${input.dependency}@${input.targetVersion} passed all required package checks.`,
       evidence: evidence.ref,

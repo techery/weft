@@ -1,7 +1,9 @@
+import { z } from "zod";
+
 import {
   type CheckDefinition,
   type CheckResultOf,
-  type CheckSuiteDefinition,
+  type CheckSuiteMembersOf,
   type CheckSuiteMembers,
   type CheckSuiteUse,
   type Ctx,
@@ -9,7 +11,6 @@ import {
   defineCheckSuite,
   defineOperation,
   defineWorkflow,
-  type EvidenceRef,
   type InferWorkflowInput,
   type OperationAttemptCompensationOf,
   type OperationAttemptIdempotencyOf,
@@ -18,15 +19,15 @@ import {
   type OperationInputOf,
   type OperationOutputOf,
   type PromotionEvidence,
+  type PromotionProof,
   type ProtectedOperationDefinition,
   type ProtectedOperationExecution,
   type SubjectAttestation,
-  type WorkflowDefinition,
+  type AnyWorkflowDefinition,
   type WorkflowNode,
   type WorkflowRunReceipt,
   type WorkspaceSnapshotRef,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes positive and negative compile-time assertions readable without runtime behavior. Use: Pass inferred helper results to it throughout this file. */
 declare function expectType<Type>(value: Type): void;
@@ -99,7 +100,7 @@ const declarationsCheck = defineCheck({
 });
 
 /** Why: Preserves a static check tuple rather than widening it to an array. Use: Feed the result directly to defineCheckSuite. */
-function checkTuple<const Checks extends readonly CheckDefinition<void, string, any, any, any>[]>(
+function checkTuple<const Checks extends readonly CheckDefinition<any, string>[]>(
   ...checks: Checks
 ): Checks {
   return checks;
@@ -153,10 +154,6 @@ const mappedQualitySuite = defineCheckSuite({
   concurrency: 2,
 });
 
-/** Why: Extracts exact result-member keys from a suite for helper assertions. Use: Replace it with a public core helper if suite metaprogramming becomes common. */
-type CheckSuiteMembersOf<Suite> =
-  Suite extends CheckSuiteDefinition<any, infer Members, any> ? Members : never;
-
 type StaticQualityMembers = CheckSuiteMembersOf<typeof staticQualitySuite>;
 type MappedQualityMembers = CheckSuiteMembersOf<typeof mappedQualitySuite>;
 
@@ -165,7 +162,7 @@ expectType<"freeze" | "integrity">(null as unknown as keyof MappedQualityMembers
 
 /** Why: Exercises tuple/map result inference through the callable check API. Use: Typecheck only; the host executes the commands. */
 async function exerciseCheckSuites(ctx: Ctx): Promise<void> {
-  const staticResult = await ctx.check(staticQualitySuite, { keyPrefix: "static-quality" });
+  const staticResult = await ctx.check(staticQualitySuite, { key: "static-quality" });
   expectType<CheckResultOf<typeof formattingCheck>>(staticResult.results[formattingCheck.name]);
   // @ts-expect-error Static tuple members do not invent arbitrary result keys.
   expectType<CheckResultOf<typeof formattingCheck>>(staticResult.results.missing);
@@ -173,7 +170,7 @@ async function exerciseCheckSuites(ctx: Ctx): Promise<void> {
   const mappedResult = await ctx.check(
     mappedQualitySuite,
     { releaseId: "release-8", emergency: true, digest: "sha256:abc" },
-    { keyPrefix: "mapped-quality" },
+    { key: "mapped-quality" },
   );
   expectType<CheckResultOf<typeof eligibleReleaseFreeze>>(mappedResult.results.freeze);
   expectType<CheckResultOf<typeof artifactIntegrity>>(mappedResult.results.integrity);
@@ -345,8 +342,6 @@ const buildWorkflow = defineWorkflow(
 );
 
 /** Why: Names the broad bound accepted by exact-definition workflow helpers. Use: Keep registry members concrete rather than storing only this erased type. */
-type AnyWorkflowDefinition = WorkflowDefinition<any, any, any, any, any, any, any>;
-
 const workflowRegistry = {
   inspect: inspectWorkflow,
   build: buildWorkflow,
@@ -441,63 +436,63 @@ async function exerciseWorkflowRegistry(ctx: Ctx): Promise<void> {
 expectType<(ctx: Ctx) => Promise<void>>(exerciseWorkflowRegistry);
 
 // ---------------------------------------------------------------------------
-// Subject-preserving evidence tuples
+// Candidate-preserving evidence tuples
 // ---------------------------------------------------------------------------
 
-/** Why: Refines one nominal engine subject so evidence helpers can retain its exact type. Use: Compile-time fixture only. */
-type CandidateSubject = WorkspaceSnapshotRef & {
+/** Why: Refines one nominal candidate snapshot so evidence helpers can retain its exact type. Use: Compile-time fixture only. */
+type CandidateSnapshot = WorkspaceSnapshotRef & {
   readonly workspaceId: "candidate-workspace";
   readonly generation: 8;
 };
 
-/** Why: Refines a different nominal subject for negative mixed-evidence assertions. Use: It must never enter CandidateSubject evidence tuples. */
-type OtherSubject = WorkspaceSnapshotRef & {
+/** Why: Refines a different nominal snapshot for negative mixed-evidence assertions. Use: It must never enter CandidateSnapshot evidence tuples. */
+type OtherSnapshot = WorkspaceSnapshotRef & {
   readonly workspaceId: "other-workspace";
   readonly generation: 9;
 };
 
-/** Why: Builds a reusable core promotion-evidence tuple before delivery preparation. Use: Preserve the subject inferred from the explicit anchor. */
-function evidenceFor<Subject extends WorkspaceSnapshotRef>(
-  _subject: Subject,
-  first: SubjectAttestation<string, unknown, NoInfer<Subject>>,
-  ...additional: SubjectAttestation<string, unknown, NoInfer<Subject>>[]
-): PromotionEvidence<Subject> {
+/** Why: Builds a reusable positive promotion-proof tuple before delivery preparation. Use: Preserve the candidate inferred from the explicit snapshot anchor. */
+function evidenceFor<Candidate extends WorkspaceSnapshotRef>(
+  _candidate: Candidate,
+  first: PromotionProof<"check" | "review" | "goal", NoInfer<Candidate>>,
+  ...additional: PromotionProof<"check" | "review" | "goal", NoInfer<Candidate>>[]
+): PromotionEvidence<Candidate> {
   return [first, ...additional];
 }
 
-/** Why: Recovers the exact subject carried by one evidence union. Use: Prove tuple helpers did not widen it to WorkspaceSnapshotRef. */
-type EvidenceSubjectOf<Evidence> =
-  Evidence extends EvidenceRef<string, unknown, infer Subject> ? Subject : never;
+/** Why: Recovers the exact candidate carried by one proof union. Use: Prove tuple helpers did not widen it to WorkspaceSnapshotRef. */
+type EvidenceCandidateOf<Evidence> =
+  Evidence extends PromotionProof<any, infer Candidate> ? Candidate : never;
 
-declare const candidateSubject: CandidateSubject;
-declare const otherSubject: OtherSubject;
-declare const candidateCheckEvidence: SubjectAttestation<"check", { status: "pass" }, CandidateSubject>;
-declare const candidateReviewEvidence: SubjectAttestation<"review", { status: "accepted" }, CandidateSubject>;
-declare const otherCheckEvidence: SubjectAttestation<"check", { status: "pass" }, OtherSubject>;
+declare const candidateSnapshot: CandidateSnapshot;
+declare const otherSnapshot: OtherSnapshot;
+declare const candidateCheckEvidence: PromotionProof<"check", CandidateSnapshot>;
+declare const candidateReviewEvidence: PromotionProof<"review", CandidateSnapshot>;
+declare const otherCheckEvidence: PromotionProof<"check", OtherSnapshot>;
 
-const candidateEvidence = evidenceFor(candidateSubject, candidateCheckEvidence, candidateReviewEvidence);
-expectType<PromotionEvidence<CandidateSubject>>(candidateEvidence);
-expectType<CandidateSubject>(null as unknown as EvidenceSubjectOf<(typeof candidateEvidence)[number]>);
-expectType<PromotionEvidence<CandidateSubject>>(candidateEvidence);
+const candidateEvidence = evidenceFor(candidateSnapshot, candidateCheckEvidence, candidateReviewEvidence);
+expectType<PromotionEvidence<CandidateSnapshot>>(candidateEvidence);
+expectType<CandidateSnapshot>(null as unknown as EvidenceCandidateOf<(typeof candidateEvidence)[number]>);
+expectType<PromotionEvidence<CandidateSnapshot>>(candidateEvidence);
 
 evidenceFor(
-  candidateSubject,
+  candidateSnapshot,
   candidateCheckEvidence,
   // @ts-expect-error Evidence for generation 9 cannot enter a generation-8 tuple.
   otherCheckEvidence,
 );
 
-expectType<OtherSubject>(otherSubject);
+expectType<OtherSnapshot>(otherSnapshot);
 
 const structuralEvidence = {
   kind: "check" as const,
   ref: "forged",
   sha256: "forged",
-  subject: candidateSubject,
+  candidate: candidateSnapshot,
   createdAt: "2026-08-29T12:00:00.000Z",
 };
 // @ts-expect-error Evidence-shaped data lacks the engine's nominal EvidenceRef brand.
-expectType<SubjectAttestation<"check", unknown, CandidateSubject>>(structuralEvidence);
+expectType<SubjectAttestation<"check", unknown, CandidateSnapshot>>(structuralEvidence);
 
 expectType<WorkflowNode<"weft.check">>(eligibleReleaseFreeze);
 expectType<WorkflowNode<"weft.check-suite">>(mappedQualitySuite);

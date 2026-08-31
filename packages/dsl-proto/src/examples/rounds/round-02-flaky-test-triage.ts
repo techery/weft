@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type AgentResult,
   type CheckCommand,
@@ -18,9 +20,8 @@ import {
   type PatchAgentResult,
   prompt,
   type WorkflowNode,
-  type WorkspaceSubject,
-  z,
-} from "../../index.ts";
+  type WorkspaceSnapshotRef,
+} from "../../core/index.ts";
 
 /**
  * Why: Makes compile-time assertions visible without turning this declaration-only example into a runtime test.
@@ -61,7 +62,7 @@ const SeedTrial = z.object({
   status: z.enum(["pass", "fail"]),
   summary: z.string().optional(),
   evidence: z.string().optional(),
-  subject: WorkspaceSnapshot,
+  candidate: WorkspaceSnapshot,
 });
 
 const HypothesisInput = z.object({
@@ -120,7 +121,7 @@ const PatchSummary = z.object({
 });
 
 const CandidateEvidence = z.object({
-  subject: WorkspaceSnapshot,
+  snapshot: WorkspaceSnapshot,
   attempts: z.number().int().positive(),
   goalEvidence: z.string().min(1),
   qualityPassed: z.literal(true),
@@ -129,7 +130,7 @@ const CandidateEvidence = z.object({
 
 const FlakyTestEvidenceContent = z.object({
   target: z.string().min(1),
-  sourceSubject: WorkspaceSnapshot,
+  sourceSnapshot: WorkspaceSnapshot,
   trials: z.array(SeedTrial).min(4),
   failingSeeds: z.array(z.number().int().nonnegative()).min(1),
   passingSeeds: z.array(z.number().int().nonnegative()).min(1),
@@ -155,8 +156,8 @@ const FlakyTestOutput = z.object({
   patch: PatchSummary,
   evidenceRef: z.string().min(1),
   evidenceSha256: z.string().min(1),
-  sourceSubject: WorkspaceSnapshot,
-  candidateSubject: WorkspaceSnapshot,
+  sourceSnapshot: WorkspaceSnapshot,
+  candidateSnapshot: WorkspaceSnapshot,
 });
 
 /**
@@ -166,10 +167,10 @@ const FlakyTestOutput = z.object({
 type SeedTrialValue = z.infer<typeof SeedTrial>;
 
 /**
- * Why: Retains the engine-minted subject while remaining schema-compatible with serialized trial evidence.
+ * Why: Retains the engine-minted candidate while remaining schema-compatible with serialized trial evidence.
  * Use: Keep this richer type inside orchestration and allow schema validation to erase provenance only at boundaries.
  */
-type SeedTrialRecord = Omit<SeedTrialValue, "subject"> & { subject: WorkspaceSubject };
+type SeedTrialRecord = Omit<SeedTrialValue, "candidate"> & { candidate: WorkspaceSnapshotRef };
 
 /**
  * Why: Names the analyst's validated explanation independently from its operational agent envelope.
@@ -342,31 +343,28 @@ const flakyTestEvidence = defineArtifact({
 
 /**
  * Why: Requires the engine's workspace snapshot before evidence can influence a repair decision.
- * Use: Convert the currently optional check subject into a deliberate fail-closed workflow boundary.
+ * Use: Read the exact candidate carried by a deterministic check result.
  */
-function requireSubject(result: CheckResult): WorkspaceSubject {
-  if (result.subject === undefined) {
-    throw new Error("A deterministic trial returned without a workspace subject");
-  }
-  return result.subject;
+function requireCandidate(result: CheckResult): WorkspaceSnapshotRef {
+  return result.candidate;
 }
 
 /**
  * Why: Proves every baseline trial observed one unchanged source generation rather than a moving checkout.
  * Use: Call it before treating the pass/fail split as evidence of flakiness.
  */
-function requireStableBaseline(trials: readonly SeedTrialRecord[]): WorkspaceSubject {
+function requireStableBaseline(trials: readonly SeedTrialRecord[]): WorkspaceSnapshotRef {
   const first = trials.at(0);
   if (first === undefined) {
     throw new Error("At least one baseline trial is required");
   }
 
-  const source = first.subject;
+  const source = first.candidate;
   const drifted = trials.find(
-    ({ subject }) =>
-      subject.workspaceId !== source.workspaceId ||
-      subject.generation !== source.generation ||
-      subject.treeHash !== source.treeHash,
+    ({ candidate }) =>
+      candidate.workspaceId !== source.workspaceId ||
+      candidate.generation !== source.generation ||
+      candidate.treeHash !== source.treeHash,
   );
   if (drifted !== undefined) {
     throw new Error("The source workspace changed while collecting flaky-test evidence");
@@ -398,7 +396,7 @@ interface FlakeClassification {
 
 /**
  * Why: Converts an invoked check result into the stable artifact and agent-input schema.
- * Use: Retain its seed, verdict, evidence, and exact workspace subject after each sequence item.
+ * Use: Retain its seed, verdict, evidence, and exact workspace candidate after each sequence item.
  */
 function toSeedTrial(
   ordinal: number,
@@ -409,7 +407,7 @@ function toSeedTrial(
     ordinal,
     seed,
     status: result.status,
-    subject: requireSubject(result),
+    candidate: requireCandidate(result),
     ...(result.summary === undefined ? {} : { summary: result.summary }),
     ...(result.evidence === undefined ? {} : { evidence: result.evidence }),
   };
@@ -420,8 +418,8 @@ function toSeedTrial(
  * Use: Check that the isolated candidate forks from the measured source and produces a different tree.
  */
 function assertCandidateLineage(
-  source: WorkspaceSubject,
-  candidate: WorkspaceSubject,
+  source: WorkspaceSnapshotRef,
+  candidate: WorkspaceSnapshotRef,
   patchBaseTree: string,
 ): void {
   if (patchBaseTree !== source.treeHash) {
@@ -450,13 +448,13 @@ const flakyTestTriageWorkflow = defineWorkflow(
   async (ctx, input) => {
     const seeds = Array.from({ length: input.repetitions }, (_, index) => input.baseSeed + index);
 
-    const baselineResults = await ctx.phase("Collect deterministic baseline", (phase) =>
-      phase.sequence(
+    const baselineResults = await ctx.step("collect-baseline", (step) =>
+      step.sequence(
         seeds,
         {
           key: "baseline-trials",
           keyOf: (seed, index) => `${index + 1}-${seed}`,
-          phase: (_seed, index) => `Trial ${index + 1}`,
+          labelOf: (_seed, index) => `Trial ${index + 1}`,
         },
         async (seed, scope, index) => {
           const result = await scope.ctx.check(
@@ -469,95 +467,104 @@ const flakyTestTriageWorkflow = defineWorkflow(
       ),
     );
 
-    const sourceSubject = requireStableBaseline(baselineResults);
+    const sourceSnapshot = requireStableBaseline(baselineResults);
     const classification = classifySeeds(baselineResults);
 
-    const analysis = await ctx.phase("Form hypothesis", (phase) =>
-      phase.agent({
-        key: "flaky-test-analysis",
-        agent: flakyTestAnalyst,
-        input: { target: input.target, trials: baselineResults },
-      }),
+    const analysis = await ctx.step("form-hypothesis", (step) =>
+      step.agent(
+        flakyTestAnalyst,
+        { target: input.target, trials: baselineResults },
+        {
+          key: "flaky-test-analysis",
+        },
+      ),
     );
     expectType<AgentResult<FlakeHypothesisValue>>(analysis);
 
-    const implementation = await ctx.phase("Repair isolated candidate", async (phase) => {
-      const writeScope = await phase.paths.resolve(
+    const implementation = await ctx.step("repair-candidate", async (step) => {
+      const writeScope = await step.paths.resolve(
         flakyTestWritePolicy,
         { proposedPaths: input.allowedPaths },
         { key: "resolve-flaky-test-write-paths", label: "Resolve repair paths" },
       );
-      return phase.agent({
-        key: "flaky-test-fix",
-        agent: flakyTestFixer,
-        input: {
+      return step.agent(
+        flakyTestFixer,
+        {
           target: input.target,
           command: input.command,
           seedFlag: input.seedFlag,
           trials: baselineResults,
           hypothesis: analysis.value,
         },
-        write: writeScope,
-        goal: {
-          definition: stabilizedCandidate,
-          input: {
-            command: input.command,
-            qualityCommand: input.qualityCommand,
-            seedFlag: input.seedFlag,
-            seeds,
+        {
+          key: "flaky-test-fix",
+          write: writeScope,
+          goal: {
+            definition: stabilizedCandidate,
+            input: {
+              command: input.command,
+              qualityCommand: input.qualityCommand,
+              seedFlag: input.seedFlag,
+              seeds,
+            },
+            attempts: 3,
           },
-          attempts: 3,
         },
-      });
+      );
     });
 
     expectType<PatchAgentResult<FixResultValue, typeof implementation.goal>>(implementation);
-    const candidateSubject = implementation.goal.subject;
+    const candidateSnapshot = implementation.goal.candidate;
     const verification = implementation.goal.results.check;
     if (!verification.passed) {
       throw new Error("The completion goal returned without passing candidate verification");
     }
-    assertCandidateLineage(sourceSubject, candidateSubject, implementation.patch.baseTree);
+    assertCandidateLineage(sourceSnapshot, candidateSnapshot, implementation.patch.baseTree);
 
     const evidence = await ctx.artifact(
       flakyTestEvidence,
       {
         content: {
           target: input.target,
-          sourceSubject,
+          sourceSnapshot,
           trials: baselineResults,
           failingSeeds: classification.failing,
           passingSeeds: classification.passing,
           hypothesis: analysis.value,
           fix: implementation.value,
           candidate: {
-            subject: candidateSubject,
+            snapshot: candidateSnapshot,
             attempts: implementation.goal.attempts,
             goalEvidence: implementation.goal.evidence,
             qualityPassed: true,
             patch: {
               ref: implementation.patch.ref,
               key: implementation.patch.key,
-              files: implementation.patch.files,
+              files: [...implementation.patch.files],
               baseTree: implementation.patch.baseTree,
             },
           },
         },
         metadata: {
-          sourceWorkspaceId: sourceSubject.workspaceId,
-          sourceGeneration: sourceSubject.generation,
-          sourceTreeHash: sourceSubject.treeHash,
-          candidateWorkspaceId: candidateSubject.workspaceId,
-          candidateGeneration: candidateSubject.generation,
-          candidateTreeHash: candidateSubject.treeHash,
+          sourceWorkspaceId: sourceSnapshot.workspaceId,
+          sourceGeneration: sourceSnapshot.generation,
+          sourceTreeHash: sourceSnapshot.treeHash,
+          candidateWorkspaceId: candidateSnapshot.workspaceId,
+          candidateGeneration: candidateSnapshot.generation,
+          candidateTreeHash: candidateSnapshot.treeHash,
         },
       },
-      { key: "flaky-test-evidence", label: `Flaky-test proof for ${input.target}` },
+      {
+        key: "flaky-test-evidence",
+        label: `Flaky-test proof for ${input.target}`,
+        candidate: candidateSnapshot,
+      },
     );
 
     expectType<MetadataArtifactRef<unknown, FlakyTestEvidenceMetadataValue>>(evidence);
 
     await ctx.note({
+      key: "record-flaky-test-verification",
       kind: "claim",
       text: `${input.target} passed every observed deterministic seed on an isolated candidate.`,
       evidence: `${implementation.goal.evidence}\nArtifact: ${evidence.ref}`,
@@ -571,13 +578,13 @@ const flakyTestTriageWorkflow = defineWorkflow(
       patch: {
         ref: implementation.patch.ref,
         key: implementation.patch.key,
-        files: implementation.patch.files,
+        files: [...implementation.patch.files],
         baseTree: implementation.patch.baseTree,
       },
       evidenceRef: evidence.ref,
       evidenceSha256: evidence.sha256,
-      sourceSubject,
-      candidateSubject,
+      sourceSnapshot,
+      candidateSnapshot,
     } satisfies FlakyTestOutputValue;
 
     return output;

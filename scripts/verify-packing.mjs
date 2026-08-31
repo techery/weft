@@ -43,13 +43,36 @@ try {
     const fail = (msg) => problems.push(`${src.name}: ${msg}`);
     const has = (file) => entries.includes(file.replace(/^\.\//, ""));
 
-    // publishConfig has to have replaced the source-pointing exports.
-    const main = manifest.exports?.["."];
-    const target = typeof main === "string" ? main : main?.default;
-    const types = typeof main === "string" ? undefined : main?.types;
-    if (!target?.startsWith("./dist/")) fail(`exports resolve to ${target}, not ./dist/`);
-    else if (!has(target)) fail(`exports point at ${target}, which is not in the tarball`);
-    if (types && !has(types)) fail(`types point at ${types}, which is not in the tarball`);
+    // publishConfig has to replace every source-pointing export. A declaration-only package
+    // may intentionally provide `types` without a runtime `default`; all other packages still
+    // need their runtime target, and every declared target must be present in the tarball.
+    const exports = manifest.exports ?? {};
+    if (!("." in exports)) fail('exports omit the "." entry');
+    for (const [exportName, exported] of Object.entries(exports)) {
+      const sourceExport = src.exports?.[exportName];
+      const sourceHasRuntimeTarget = typeof sourceExport === "string" || Boolean(sourceExport?.default);
+      const target = typeof exported === "string" ? exported : exported?.default;
+      const types = typeof exported === "string" ? undefined : exported?.types;
+      if (!target && !types) fail(`export "${exportName}" has no default or types target`);
+      if (sourceHasRuntimeTarget && !target) {
+        fail(`export "${exportName}" lost its runtime target while packing`);
+      }
+      if (target && !target.startsWith("./dist/")) {
+        fail(`export "${exportName}" resolves to ${target}, not ./dist/`);
+      } else if (target && !has(target)) {
+        fail(`export "${exportName}" points at ${target}, which is not in the tarball`);
+      }
+      if (types && !types.startsWith("./dist/")) {
+        fail(`export "${exportName}" types resolve to ${types}, not ./dist/`);
+      } else if (types && !has(types)) {
+        fail(`export "${exportName}" types point at ${types}, which is not in the tarball`);
+      }
+    }
+    if (manifest.types && !manifest.types.startsWith("./dist/")) {
+      fail(`package types resolve to ${manifest.types}, not ./dist/`);
+    } else if (manifest.types && !has(manifest.types)) {
+      fail(`package types point at ${manifest.types}, which is not in the tarball`);
+    }
 
     for (const [name, file] of Object.entries(manifest.bin ?? {})) {
       if (!has(file)) fail(`bin "${name}" points at ${file}, which is not in the tarball`);

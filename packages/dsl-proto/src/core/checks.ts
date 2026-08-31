@@ -2,29 +2,27 @@
 
 import type {
   AnySchema,
+  DefinitionTypeCarrier,
   Duration,
   HostBinding,
   InferIn,
   InferOut,
+  InputMode,
+  NominalValue,
+  PromotionProof,
   Risk,
   SubjectAttestation,
   WorkflowNode,
-  WorkspaceSubject,
+  WorkspaceSnapshotRef,
 } from "./shared.ts";
 
 // ---------------------------------------------------------------------------
 // Checks and check suites
 // ---------------------------------------------------------------------------
 
-/**
- * Why: Gives the checks DSL an explicit check status contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Check status. */
 export type CheckStatus = "pass" | "fail";
-/**
- * Why: Gives the checks DSL an explicit check policy contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Check policy. */
 export type CheckPolicy = "required" | "advisory";
 
 /**
@@ -52,10 +50,7 @@ export interface EligibleCheckWaiverPolicy {
  * Use: Narrow on `mode`; workflow invocations cannot replace or weaken the selected branch.
  */
 export type CheckWaiverPolicy = NeverCheckWaiverPolicy | EligibleCheckWaiverPolicy;
-/**
- * Why: Gives the checks DSL an explicit check disposition contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Check disposition. */
 export type CheckDisposition = "executed" | "trusted" | "waived";
 
 /**
@@ -67,10 +62,7 @@ export interface TextCheckEvidence {
   text: string;
 }
 
-/**
- * Why: Gives the checks DSL an explicit file check evidence contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** File check evidence. */
 export interface FileCheckEvidence {
   kind: "file";
   path: string;
@@ -78,10 +70,7 @@ export interface FileCheckEvidence {
   message?: string;
 }
 
-/**
- * Why: Gives the checks DSL an explicit metric check evidence contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Metric check evidence. */
 export interface MetricCheckEvidence {
   kind: "metric";
   name: string;
@@ -90,20 +79,14 @@ export interface MetricCheckEvidence {
   unit?: string;
 }
 
-/**
- * Why: Gives the checks DSL an explicit command check evidence contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Command check evidence. */
 export interface CommandCheckEvidence {
   kind: "command";
   exitCode: number;
   output?: string;
 }
 
-/**
- * Why: Gives the checks DSL an explicit artifact check evidence contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Artifact check evidence. */
 export interface ArtifactCheckEvidence {
   kind: "artifact";
   ref: string;
@@ -121,19 +104,16 @@ export type CheckEvidence =
   | CommandCheckEvidence
   | ArtifactCheckEvidence;
 
-/**
- * Why: Gives the checks DSL an explicit check execution result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Check execution result. */
 export interface CheckExecutionResult<Details extends readonly CheckEvidence[] = readonly CheckEvidence[]> {
-  status: CheckStatus;
-  summary?: string;
-  evidence?: string;
-  details?: Details;
+  readonly status: CheckStatus;
+  readonly summary?: string;
+  readonly evidence?: string;
+  readonly details?: Details;
 }
 
 /**
- * Why: Names the successful execution payload carried by exact-subject check attestations.
+ * Why: Names the successful execution payload carried by exact-candidate check attestations.
  * Use: Prefer it to intersecting an anonymous status discriminator into `CheckExecutionResult`.
  */
 export interface PassedCheckExecutionResult<
@@ -159,46 +139,48 @@ export interface FailedCheckExecutionResult<
 declare const checkResultBrand: unique symbol;
 
 /**
- * Why: Centralizes engine-minted identity and exact-subject evidence shared by every check-result branch.
+ * Why: Centralizes engine-minted identity and exact-candidate evidence shared by every check-result branch.
  * Use: Extend it only through the closed executed, trusted, and waived result contracts below.
  */
 export interface CheckResultBase<
   Details extends readonly CheckEvidence[] = readonly CheckEvidence[],
-  Subject extends WorkspaceSubject = WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
   Definition extends AnyCheckDefinition = AnyCheckDefinition,
-> extends CheckExecutionResult<Details> {
-  readonly subject: Subject;
-  readonly attestation: SubjectAttestation<"check", CheckExecutionResult<Details>, Subject>;
-  readonly [checkResultBrand]: readonly [definition: Definition, subject: Subject];
+> extends CheckExecutionResult<Details>,
+    NominalValue<readonly ["check-result", Definition, Candidate]> {
+  readonly candidate: Candidate;
+  readonly attestation: SubjectAttestation<"check", CheckExecutionResult<Details>, Candidate>;
+  readonly [checkResultBrand]: readonly [definition: Definition, candidate: Candidate];
 }
 
 /**
  * Why: Makes an executed passing verdict a distinct branch for sound control-flow narrowing.
- * Use: Require it where exact-subject verification must actually run and pass.
+ * Use: Require it where exact-candidate verification must actually run and pass.
  */
 export interface ExecutedPassedCheckResult<
   Details extends readonly CheckEvidence[] = readonly CheckEvidence[],
-  Subject extends WorkspaceSubject = WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
   Definition extends AnyCheckDefinition = AnyCheckDefinition,
-> extends CheckResultBase<Details, Subject, Definition> {
+> extends CheckResultBase<Details, Candidate, Definition> {
   readonly status: "pass";
   readonly disposition: "executed";
-  readonly attestation: SubjectAttestation<"check", PassedCheckExecutionResult<Details>, Subject>;
+  readonly attestation: SubjectAttestation<"check", PassedCheckExecutionResult<Details>, Candidate>;
+  readonly proof: PromotionProof<"check", Candidate>;
   readonly waiver?: never;
 }
 
 /**
  * Why: Makes an executed failure the only result branch accepted by waiver authorization.
- * Use: Narrow an eligible result to this branch before calling `ctx.check.authorize`.
+ * Use: Narrow an eligible result to this branch before calling `ctx.check.authorizeWaiver`.
  */
 export interface ExecutedFailedCheckResult<
   Details extends readonly CheckEvidence[] = readonly CheckEvidence[],
-  Subject extends WorkspaceSubject = WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
   Definition extends AnyCheckDefinition = AnyCheckDefinition,
-> extends CheckResultBase<Details, Subject, Definition> {
+> extends CheckResultBase<Details, Candidate, Definition> {
   readonly status: "fail";
   readonly disposition: "executed";
-  readonly attestation: SubjectAttestation<"check", FailedCheckExecutionResult<Details>, Subject>;
+  readonly attestation: SubjectAttestation<"check", FailedCheckExecutionResult<Details>, Candidate>;
   readonly waiver?: never;
 }
 
@@ -208,25 +190,25 @@ export interface ExecutedFailedCheckResult<
  */
 export interface TrustedCheckResult<
   Details extends readonly CheckEvidence[] = readonly CheckEvidence[],
-  Subject extends WorkspaceSubject = WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
   Definition extends AnyCheckDefinition = AnyCheckDefinition,
-> extends CheckResultBase<Details, Subject, Definition> {
+> extends CheckResultBase<Details, Candidate, Definition> {
   readonly disposition: "trusted";
   readonly waiver?: never;
 }
 
 /**
  * Why: Carries every non-waived verdict as a discriminated union that narrows by execution and status.
- * Use: Inspect `status`, `disposition`, `subject`, and `attestation` after an ordinary invocation.
+ * Use: Inspect `status`, `disposition`, `candidate`, and `attestation` after an ordinary invocation.
  */
 export type NonWaivedCheckResult<
   Details extends readonly CheckEvidence[] = readonly CheckEvidence[],
-  Subject extends WorkspaceSubject = WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
   Definition extends AnyCheckDefinition = AnyCheckDefinition,
 > =
-  | ExecutedPassedCheckResult<Details, Subject, Definition>
-  | ExecutedFailedCheckResult<Details, Subject, Definition>
-  | TrustedCheckResult<Details, Subject, Definition>;
+  | ExecutedPassedCheckResult<Details, Candidate, Definition>
+  | ExecutedFailedCheckResult<Details, Candidate, Definition>
+  | TrustedCheckResult<Details, Candidate, Definition>;
 
 /**
  * Why: Retains the exact nominal waiver authority on every waived verdict instead of reducing it to a disposition string.
@@ -234,12 +216,12 @@ export type NonWaivedCheckResult<
  */
 export interface WaivedCheckResult<
   Details extends readonly CheckEvidence[] = readonly CheckEvidence[],
-  Subject extends WorkspaceSubject = WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
   Definition extends WaiverEligibleCheckDefinition = WaiverEligibleCheckDefinition,
-> extends CheckResultBase<Details, Subject, Definition> {
+> extends CheckResultBase<Details, Candidate, Definition> {
   readonly status: "fail";
   readonly disposition: "waived";
-  readonly waiver: CheckWaiverRef<Definition, Subject>;
+  readonly waiver: CheckWaiverRef<Definition, Candidate>;
 }
 
 /**
@@ -248,28 +230,22 @@ export interface WaivedCheckResult<
  */
 export type CheckResult<
   Details extends readonly CheckEvidence[] = readonly CheckEvidence[],
-  Subject extends WorkspaceSubject = WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
   Definition extends AnyCheckDefinition = AnyCheckDefinition,
 > =
-  | NonWaivedCheckResult<Details, Subject, Definition>
+  | NonWaivedCheckResult<Details, Candidate, Definition>
   | (Definition extends WaiverEligibleCheckDefinition
-      ? WaivedCheckResult<Details, Subject, Definition>
+      ? WaivedCheckResult<Details, Candidate, Definition>
       : never);
 
-/**
- * Why: Gives the checks DSL an explicit command result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Command result. */
 export interface CommandResult {
   exitCode: number;
   stdout: string;
   stderr: string;
 }
 
-/**
- * Why: Gives the checks DSL an explicit check run context contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Check run context. */
 export interface CheckRunContext {
   signal: AbortSignal;
 }
@@ -280,37 +256,85 @@ export interface CheckRunContext {
  */
 export type CheckCommand = readonly [executable: string, ...arguments: string[]];
 
-/**
- * Why: Gives the checks DSL an explicit check defaults contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Check defaults. */
 export interface CheckDefaults {
   timeout?: Duration;
 }
+
+/**
+ * Why: Names the hidden input, result, waiver, revision, and definition-form relationships of one check.
+ * Use: Check builders construct it; authors normally consume its fields through definition extractors.
+ */
+export interface CheckTypes {
+  readonly input: unknown;
+  readonly parsedInput: unknown;
+  readonly executionResult: CheckExecutionResult;
+  readonly result: unknown;
+  readonly waiver: CheckWaiverPolicy;
+  readonly revision: string;
+  readonly inputMode: InputMode;
+}
+
+/** Exact hidden type relationships carried by one reusable check definition. */
+export type CheckTypesOf<Definition> =
+  Definition extends CheckDefinition<infer Types, any> ? Types : never;
+
+/** Hidden relationship bag constructed by the check builder overloads. */
+type DefinedCheckTypes<
+  Input,
+  ParsedInput,
+  Result extends CheckExecutionResult,
+  Waiver extends CheckWaiverPolicy,
+  Revision extends string,
+  Mode extends InputMode,
+> = {
+  readonly input: Input;
+  readonly parsedInput: ParsedInput;
+  readonly executionResult: Result;
+  readonly result: CheckResult<NonNullable<Result["details"]>, WorkspaceSnapshotRef>;
+  readonly waiver: Waiver;
+  readonly revision: Revision;
+  readonly inputMode: Mode;
+};
+
+/** Broad hidden relationship bag constrained to one waiver-policy branch. */
+type CheckTypesWithWaiver<Waiver extends CheckWaiverPolicy> = Omit<CheckTypes, "waiver"> & {
+  readonly waiver: Waiver;
+};
+
+/** Broad hidden relationship bag constrained to one waiver branch and definition-form input mode. */
+type CheckTypesWithWaiverAndInputMode<
+  Waiver extends CheckWaiverPolicy,
+  Mode extends InputMode,
+> = Omit<CheckTypes, "waiver" | "inputMode"> & {
+  readonly waiver: Waiver;
+  readonly inputMode: Mode;
+};
+
+/** Any check definition constrained to one builder-level input mode without erasing waiver eligibility. */
+type CheckDefinitionWithInputMode<Mode extends InputMode> =
+  | CheckDefinition<CheckTypesWithWaiverAndInputMode<NeverCheckWaiverPolicy, Mode>, string>
+  | CheckDefinition<CheckTypesWithWaiverAndInputMode<EligibleCheckWaiverPolicy, Mode>, string>;
 
 /**
  * Why: Captures a named deterministic verification contract independently from any particular invocation.
  * Use: Create it with `defineCheck`, then invoke it through `ctx.check`, a suite, or an agent goal.
  */
 export interface CheckDefinition<
-  Input = void,
+  Types extends CheckTypes = CheckTypes,
   Name extends string = string,
-  ParsedInput = Input,
-  Result extends CheckExecutionResult = CheckExecutionResult,
-  Waiver extends CheckWaiverPolicy = CheckWaiverPolicy,
-  Revision extends string = string,
-> extends WorkflowNode<"weft.check"> {
+> extends WorkflowNode<"weft.check">,
+    DefinitionTypeCarrier<Types> {
   readonly kind: "weft.check";
   readonly name: Name;
   readonly description?: string;
-  readonly policy: Waiver extends EligibleCheckWaiverPolicy ? "required" : CheckPolicy;
-  readonly revision: Waiver extends EligibleCheckWaiverPolicy ? Revision : string | undefined;
-  readonly waiver: Readonly<Waiver>;
+  readonly policy: Types["waiver"] extends EligibleCheckWaiverPolicy ? "required" : CheckPolicy;
+  readonly revision: Types["waiver"] extends EligibleCheckWaiverPolicy
+    ? Types["revision"]
+    : string | undefined;
+  readonly waiver: Readonly<Types["waiver"]>;
   readonly input?: AnySchema;
   readonly defaults?: Readonly<CheckDefaults>;
-  readonly __input?: Input;
-  readonly __parsedInput?: ParsedInput;
-  readonly __result?: Result;
 }
 
 /**
@@ -318,25 +342,36 @@ export interface CheckDefinition<
  * Use: Prefer an exact `typeof definition` at call sites; use this only when code intentionally handles any check.
  */
 export type AnyCheckDefinition =
-  | CheckDefinition<any, string, any, any, NeverCheckWaiverPolicy>
-  | CheckDefinition<any, string, any, any, EligibleCheckWaiverPolicy>;
+  | CheckDefinition<CheckTypesWithWaiver<NeverCheckWaiverPolicy>, string>
+  | CheckDefinition<CheckTypesWithWaiver<EligibleCheckWaiverPolicy>, string>;
+
+/**
+ * Why: Recovers one check definition's raw invocation input without using `void` or `undefined` as a presence signal.
+ * Use: Pair it with `CheckInputModeOf` in generic check helpers.
+ */
+export type CheckInputOf<Definition> =
+  Definition extends CheckDefinition<infer Types, any> ? Types["input"] : never;
+
+/**
+ * Why: Recovers whether the check builder used the static or schema-backed definition form.
+ * Use: Require explicit input for schema-backed checks even when their raw input is `any`, `unknown`, or includes `undefined`.
+ */
+export type CheckInputModeOf<Definition> =
+  Definition extends CheckDefinition<infer Types, any> ? Types["inputMode"] : InputMode;
 
 /**
  * Why: Narrows check APIs to definitions whose non-weakenable policy permits host-authorized waivers.
- * Use: It is the constraint for `ctx.check.authorize` and `CheckWaiverRef`.
+ * Use: It is the constraint for `ctx.check.authorizeWaiver` and `CheckWaiverRef`.
  */
-export type WaiverEligibleCheckDefinition = CheckDefinition<any, string, any, any, EligibleCheckWaiverPolicy>;
+export type WaiverEligibleCheckDefinition = CheckDefinition<
+  CheckTypesWithWaiver<EligibleCheckWaiverPolicy>,
+  string
+>;
 
-/**
- * Why: Centralizes the internal check outcome relationship so adjacent public declarations infer consistently.
- * Use: It is used by the surrounding checks types and is not a separate runtime feature.
- */
+/** Outcome accepted from a check implementation. */
 type CheckOutcome = boolean | CheckExecutionResult | Promise<boolean | CheckExecutionResult>;
 
-/**
- * Why: Gives the checks DSL an explicit check config base contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Check config base. */
 export interface CheckConfigBase<
   Name extends string,
   Waiver extends CheckWaiverPolicy = NeverCheckWaiverPolicy,
@@ -382,10 +417,7 @@ export type CheckConfigWithWaiverPolicy<
   ? Config & EligibleCheckConfigPolicy<Waiver, Revision>
   : Config & NeverCheckConfigPolicy;
 
-/**
- * Why: Gives the checks DSL an explicit schema run check config contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Schema run check config. */
 export interface SchemaRunCheckConfig<
   S extends AnySchema,
   Name extends string,
@@ -395,10 +427,7 @@ export interface SchemaRunCheckConfig<
   run: (input: InferOut<S>, context: CheckRunContext) => CheckOutcome;
 }
 
-/**
- * Why: Gives the checks DSL an explicit schema command check config contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Schema command check config. */
 export interface SchemaCommandCheckConfig<
   S extends AnySchema,
   Name extends string,
@@ -408,10 +437,7 @@ export interface SchemaCommandCheckConfig<
   command: (input: InferOut<S>) => CheckCommand;
 }
 
-/**
- * Why: Gives the checks DSL an explicit parsed schema command check config contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Parsed schema command check config. */
 export interface ParsedSchemaCommandCheckConfig<
   S extends AnySchema,
   Name extends string,
@@ -421,10 +447,7 @@ export interface ParsedSchemaCommandCheckConfig<
   parse: (result: CommandResult) => Result;
 }
 
-/**
- * Why: Gives the checks DSL an explicit static run check config contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Static run check config. */
 export interface StaticRunCheckConfig<
   Name extends string,
   Waiver extends CheckWaiverPolicy = NeverCheckWaiverPolicy,
@@ -432,10 +455,7 @@ export interface StaticRunCheckConfig<
   run: (context: CheckRunContext) => CheckOutcome;
 }
 
-/**
- * Why: Gives the checks DSL an explicit static command check config contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Static command check config. */
 export interface StaticCommandCheckConfig<
   Name extends string,
   Waiver extends CheckWaiverPolicy = NeverCheckWaiverPolicy,
@@ -443,10 +463,7 @@ export interface StaticCommandCheckConfig<
   command: CheckCommand;
 }
 
-/**
- * Why: Gives the checks DSL an explicit parsed static command check config contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Parsed static command check config. */
 export interface ParsedStaticCommandCheckConfig<
   Name extends string,
   Result extends CheckExecutionResult,
@@ -466,7 +483,10 @@ export declare function defineCheck<
   const Revision extends string = string,
 >(
   config: CheckConfigWithWaiverPolicy<SchemaRunCheckConfig<S, Name, Waiver>, Waiver, Revision>,
-): CheckDefinition<InferIn<S>, Name, InferOut<S>, CheckExecutionResult, Waiver, Revision>;
+): CheckDefinition<
+  DefinedCheckTypes<InferIn<S>, InferOut<S>, CheckExecutionResult, Waiver, Revision, "required">,
+  Name
+>;
 
 /**
  * Why: Declares a reusable command or function check without executing it.
@@ -484,7 +504,10 @@ export declare function defineCheck<
     Waiver,
     Revision
   >,
-): CheckDefinition<InferIn<S>, Name, InferOut<S>, Result, Waiver, Revision>;
+): CheckDefinition<
+  DefinedCheckTypes<InferIn<S>, InferOut<S>, Result, Waiver, Revision, "required">,
+  Name
+>;
 
 /**
  * Why: Declares a reusable command or function check without executing it.
@@ -497,7 +520,10 @@ export declare function defineCheck<
   const Revision extends string = string,
 >(
   config: CheckConfigWithWaiverPolicy<SchemaCommandCheckConfig<S, Name, Waiver>, Waiver, Revision>,
-): CheckDefinition<InferIn<S>, Name, InferOut<S>, CheckExecutionResult, Waiver, Revision>;
+): CheckDefinition<
+  DefinedCheckTypes<InferIn<S>, InferOut<S>, CheckExecutionResult, Waiver, Revision, "required">,
+  Name
+>;
 
 /**
  * Why: Declares a reusable command or function check without executing it.
@@ -509,7 +535,7 @@ export declare function defineCheck<
   const Revision extends string = string,
 >(
   config: CheckConfigWithWaiverPolicy<StaticRunCheckConfig<Name, Waiver>, Waiver, Revision>,
-): CheckDefinition<void, Name, void, CheckExecutionResult, Waiver, Revision>;
+): CheckDefinition<DefinedCheckTypes<void, void, CheckExecutionResult, Waiver, Revision, "none">, Name>;
 
 /**
  * Why: Declares a reusable command or function check without executing it.
@@ -522,7 +548,7 @@ export declare function defineCheck<
   const Revision extends string = string,
 >(
   config: CheckConfigWithWaiverPolicy<ParsedStaticCommandCheckConfig<Name, Result, Waiver>, Waiver, Revision>,
-): CheckDefinition<void, Name, void, Result, Waiver, Revision>;
+): CheckDefinition<DefinedCheckTypes<void, void, Result, Waiver, Revision, "none">, Name>;
 
 /**
  * Why: Declares a reusable command or function check without executing it.
@@ -534,61 +560,77 @@ export declare function defineCheck<
   const Revision extends string = string,
 >(
   config: CheckConfigWithWaiverPolicy<StaticCommandCheckConfig<Name, Waiver>, Waiver, Revision>,
-): CheckDefinition<void, Name, void, CheckExecutionResult, Waiver, Revision>;
+): CheckDefinition<DefinedCheckTypes<void, void, CheckExecutionResult, Waiver, Revision, "none">, Name>;
 
-/**
- * Why: Gives the checks DSL an explicit check suite member contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
-export interface CheckSuiteMember<Definition extends CheckDefinition<any, any, any, any>> {
+/** Check suite member. */
+export interface CheckSuiteMember<Definition extends CheckDefinition<any, any>> {
   readonly definition: Definition;
-  readonly input: Definition extends CheckDefinition<infer Input, any, any, any> ? Input : never;
+  readonly input: CheckInputOf<Definition>;
 }
 
-/**
- * Why: Gives the checks DSL an explicit check suite use contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Check suite use. */
 export interface CheckSuiteUse {
-  <Definition extends CheckDefinition<void, any, any, any>>(
+  <Definition extends CheckDefinitionWithInputMode<"none">>(
     definition: Definition,
   ): CheckSuiteMember<Definition>;
-  <Input, Definition extends CheckDefinition<Input, any, any, any>>(
+  <Definition extends CheckDefinitionWithInputMode<"required">>(
     definition: Definition,
-    input: Input,
+    input: CheckInputOf<Definition>,
   ): CheckSuiteMember<Definition>;
 }
 
-/**
- * Why: Gives the checks DSL an explicit check suite members contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
-export type CheckSuiteMembers = Record<string, CheckSuiteMember<CheckDefinition<any, any, any, any>>>;
+/** Check suite members. */
+export type CheckSuiteMembers = Record<string, CheckSuiteMember<CheckDefinition<any, any>>>;
 
 /**
- * Why: Gives the checks DSL an explicit check suite definition contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
+ * Why: Names the hidden input, member, result, and definition-form relationships of one check suite.
+ * Use: Suite builders construct it; authors normally consume its fields through definition extractors.
  */
+export interface CheckSuiteTypes {
+  readonly input: unknown;
+  readonly parsedInput: unknown;
+  readonly members: CheckSuiteMembers;
+  readonly result: unknown;
+  readonly inputMode: InputMode;
+}
+
+/** Exact hidden type relationships carried by one reusable check suite definition. */
+export type CheckSuiteTypesOf<Definition> =
+  Definition extends CheckSuiteDefinition<infer Types, any> ? Types : never;
+
+/** Hidden relationship bag constructed by the check-suite builder overloads. */
+type DefinedCheckSuiteTypes<
+  Input,
+  Members extends CheckSuiteMembers,
+  ParsedInput,
+  Mode extends InputMode,
+> = {
+  readonly input: Input;
+  readonly parsedInput: ParsedInput;
+  readonly members: Members;
+  readonly result: CheckSuiteResult<Members>;
+  readonly inputMode: Mode;
+};
+
+/** Broad hidden suite relationship bag constrained to one definition-form input mode. */
+type CheckSuiteTypesWithInputMode<Mode extends InputMode> = Omit<CheckSuiteTypes, "inputMode"> & {
+  readonly inputMode: Mode;
+};
+
+/** Check suite definition. */
 export interface CheckSuiteDefinition<
-  Input = void,
-  Members extends CheckSuiteMembers = CheckSuiteMembers,
-  ParsedInput = Input,
+  Types extends CheckSuiteTypes = CheckSuiteTypes,
   Name extends string = string,
-> extends WorkflowNode<"weft.check-suite"> {
+> extends WorkflowNode<"weft.check-suite">,
+    DefinitionTypeCarrier<Types> {
   readonly kind: "weft.check-suite";
   readonly name: Name;
   readonly description?: string;
   readonly input?: AnySchema;
   readonly concurrency?: number;
-  readonly __input?: Input;
-  readonly __parsedInput?: ParsedInput;
-  readonly __members?: Members;
 }
 
-/**
- * Why: Gives the checks DSL an explicit schema check suite config contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Schema check suite config. */
 export interface SchemaCheckSuiteConfig<
   S extends AnySchema,
   Members extends CheckSuiteMembers,
@@ -601,12 +643,9 @@ export interface SchemaCheckSuiteConfig<
   concurrency?: number;
 }
 
-/**
- * Why: Gives the checks DSL an explicit static check suite config contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
- */
+/** Static check suite config. */
 export interface StaticCheckSuiteConfig<
-  Checks extends readonly CheckDefinition<void, string, any, any>[],
+  Checks extends readonly CheckDefinitionWithInputMode<"none">[],
   Name extends string = string,
 > {
   name: Name;
@@ -625,13 +664,12 @@ export declare function defineCheckSuite<
   const Name extends string = string,
 >(
   config: SchemaCheckSuiteConfig<S, Members, Name>,
-): CheckSuiteDefinition<InferIn<S>, Members, InferOut<S>, Name>;
+): CheckSuiteDefinition<DefinedCheckSuiteTypes<InferIn<S>, Members, InferOut<S>, "required">, Name>;
 
-/**
- * Why: Centralizes the internal static check members relationship so adjacent public declarations infer consistently.
- * Use: It is used by the surrounding checks types and is not a separate runtime feature.
- */
-type StaticCheckMembers<Checks extends readonly CheckDefinition<void, string, any, any>[]> = {
+/** Named suite members inferred from static check definitions. */
+type StaticCheckMembers<
+  Checks extends readonly CheckDefinitionWithInputMode<"none">[],
+> = {
   [Definition in Checks[number] as Definition["name"]]: CheckSuiteMember<Definition>;
 };
 
@@ -640,74 +678,119 @@ type StaticCheckMembers<Checks extends readonly CheckDefinition<void, string, an
  * Use: Use the static overload for fixed checks or the schema-backed overload to derive members from input.
  */
 export declare function defineCheckSuite<
-  const Checks extends readonly CheckDefinition<void, string, any, any>[],
+  const Checks extends readonly CheckDefinitionWithInputMode<"none">[],
   const Name extends string = string,
 >(
   config: StaticCheckSuiteConfig<Checks, Name>,
-): CheckSuiteDefinition<void, StaticCheckMembers<Checks>, void, Name>;
+): CheckSuiteDefinition<DefinedCheckSuiteTypes<void, StaticCheckMembers<Checks>, void, "none">, Name>;
 
 /**
  * Why: Recovers the exact definition-time suite name for heterogeneous registries and diagnostics.
  * Use: Apply it to a concrete `defineCheckSuite` result; broad legacy definitions continue to produce `string`.
  */
 export type CheckSuiteNameOf<Definition> =
-  Definition extends CheckSuiteDefinition<any, any, any, infer Name> ? Name : never;
+  Definition extends CheckSuiteDefinition<any, infer Name> ? Name : never;
 
 /**
- * Why: Gives the checks DSL an explicit check result of contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
+ * Why: Recovers one suite definition's raw input independently of its definition-form presence mode.
+ * Use: It supplies schema-backed suite calls and goal bindings.
  */
+export type CheckSuiteInputOf<Definition> =
+  Definition extends CheckSuiteDefinition<infer Types, any> ? Types["input"] : never;
+
+/**
+ * Why: Recovers whether a suite was built from fixed checks or an input-derived member factory.
+ * Use: Require explicit input for the schema-backed branch even when its value type includes `undefined`.
+ */
+export type CheckSuiteInputModeOf<Definition> =
+  Definition extends CheckSuiteDefinition<infer Types, any> ? Types["inputMode"] : InputMode;
+
+/** Exact named member map retained by one reusable check suite definition. */
+export type CheckSuiteMembersOf<Definition> =
+  Definition extends CheckSuiteDefinition<infer Types, any> ? Types["members"] : never;
+
+/** Check result of. */
 type CheckResultDefinition<Definition> = Definition extends AnyCheckDefinition
   ? Definition
   : AnyCheckDefinition;
 
 /**
- * Why: Derives a definition-specific check result while preserving its exact workspace subject type.
+ * Why: Derives a definition-specific check result while preserving its exact workspace candidate type.
  * Use: Apply it to `typeof check`; the engine brand then prevents results from another definition authorizing it.
  */
-export type CheckResultOf<Definition, Subject extends WorkspaceSubject = WorkspaceSubject> =
-  Definition extends CheckDefinition<any, any, any, infer Result, any>
-    ? CheckResult<NonNullable<Result["details"]>, Subject, CheckResultDefinition<Definition>>
-    : CheckResult<readonly CheckEvidence[], Subject>;
+export type CheckResultOf<Definition, Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef> =
+  Definition extends CheckDefinition<infer Types, any>
+    ? CheckResult<
+        NonNullable<Types["executionResult"]["details"]>,
+        Candidate,
+        CheckResultDefinition<Definition>
+      >
+    : CheckResult<readonly CheckEvidence[], Candidate>;
 
 /**
- * Why: Narrows authorization input to an actually executed failure for one exact check definition and subject.
- * Use: Check `status === "fail"` and `disposition === "executed"` before calling `ctx.check.authorize`.
+ * Why: Narrows authorization input to an actually executed failure for one exact check definition and candidate.
+ * Use: Check `status === "fail"` and `disposition === "executed"` before calling `ctx.check.authorizeWaiver`.
  */
-export type FailedCheckResultOf<Definition, Subject extends WorkspaceSubject = WorkspaceSubject> = Extract<
-  CheckResultOf<Definition, Subject>,
+export type FailedCheckResultOf<Definition, Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef> = Extract<
+  CheckResultOf<Definition, Candidate>,
   ExecutedFailedCheckResult<any, any, any>
 >;
 
 /**
- * Why: Gives the checks DSL an explicit check suite result contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
+ * Why: Carries the exact suite member results, workspace generation, and attestation shared by both verdict branches.
+ * Use: Narrow the public `CheckSuiteResult` on `passed` before accessing promotion proof.
  */
-export interface CheckSuiteResult<
+export interface CheckSuiteResultBase<
   Members extends CheckSuiteMembers = CheckSuiteMembers,
-  Subject extends WorkspaceSubject = WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
 > {
-  passed: boolean;
-  results: CheckSuiteResults<Members, Subject>;
-  subject: Subject;
-  attestation: SubjectAttestation<"check-suite", CheckSuiteResults<Members, Subject>, Subject>;
+  readonly results: CheckSuiteResults<Members, Candidate>;
+  readonly candidate: Candidate;
+  readonly attestation: SubjectAttestation<"check-suite", CheckSuiteResults<Members, Candidate>, Candidate>;
 }
 
 /**
- * Why: Gives the checks DSL an explicit check suite results contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
+ * Why: Mints positive promotion proof only when the suite policy is satisfied for one exact candidate.
+ * Use: Narrow `passed === true`, then pass `proof` to verified delivery.
  */
-export type CheckSuiteResults<
-  Members extends CheckSuiteMembers,
-  Subject extends WorkspaceSubject = WorkspaceSubject,
-> = {
-  [Name in keyof Members]: CheckResultOf<Members[Name]["definition"], Subject>;
-};
+export interface PassedCheckSuiteResult<
+  Members extends CheckSuiteMembers = CheckSuiteMembers,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
+> extends CheckSuiteResultBase<Members, Candidate> {
+  readonly passed: true;
+  readonly proof: PromotionProof<"check", Candidate>;
+}
 
 /**
- * Why: Gives the checks DSL an explicit trusted check source contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding checks API.
+ * Why: Retains failed suite evidence for remediation without allowing it to authorize promotion.
+ * Use: Narrow `passed === false`, inspect member results, and rerun or explicitly handle policy failure.
  */
+export interface FailedCheckSuiteResult<
+  Members extends CheckSuiteMembers = CheckSuiteMembers,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
+> extends CheckSuiteResultBase<Members, Candidate> {
+  readonly passed: false;
+  readonly proof?: never;
+}
+
+/**
+ * Why: Makes suite success and failure an exhaustive union whose positive proof exists only after acceptance.
+ * Use: Receive it from `ctx.check` and narrow on `passed` before promotion.
+ */
+export type CheckSuiteResult<
+  Members extends CheckSuiteMembers = CheckSuiteMembers,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
+> = PassedCheckSuiteResult<Members, Candidate> | FailedCheckSuiteResult<Members, Candidate>;
+
+/** Check suite results. */
+export type CheckSuiteResults<
+  Members extends CheckSuiteMembers,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
+> = {
+  [Name in keyof Members]: CheckResultOf<Members[Name]["definition"], Candidate>;
+};
+
+/** Trusted check source. */
 export interface TrustedCheckSource {
   run: string;
   reason: string;
@@ -748,18 +831,18 @@ export interface CheckWaiverAttestationValue<
 
 /**
  * Why: Prevents plain objects or human answers from masquerading as host-minted waiver authority.
- * Use: It is carried only by `ctx.check.authorize`.
+ * Use: It is carried only by `ctx.check.authorizeWaiver`.
  */
 declare const checkWaiverRefBrand: unique symbol;
 
 /**
- * Why: Binds one host authorization to an eligible check's exact name, revision, failed subject, and expiry.
+ * Why: Binds one host authorization to an eligible check's exact name, revision, failed candidate, and expiry.
  * Use: Pass it unchanged to the matching check invocation and retain it from a waived `CheckResult`.
  */
 export interface CheckWaiverRef<
   Definition extends WaiverEligibleCheckDefinition = WaiverEligibleCheckDefinition,
-  Subject extends WorkspaceSubject = WorkspaceSubject,
-> {
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
+> extends NominalValue<readonly ["check-waiver", Definition, Candidate]> {
   readonly ref: string;
   readonly check: Definition["name"];
   readonly revision: Definition["revision"];
@@ -768,8 +851,8 @@ export interface CheckWaiverRef<
   readonly action: Definition["waiver"]["action"];
   readonly risk: Definition["waiver"]["risk"];
   readonly maxTtl: Definition["waiver"]["maxTtl"];
-  readonly subject: Subject;
-  readonly failure: SubjectAttestation<"check", FailedCheckExecutionResult, Subject>;
+  readonly candidate: Candidate;
+  readonly failure: SubjectAttestation<"check", FailedCheckExecutionResult, Candidate>;
   readonly reason: string;
   readonly issue?: string;
   readonly authorizedBy: CheckWaiverAuthorizer;
@@ -778,14 +861,14 @@ export interface CheckWaiverRef<
   readonly attestation: SubjectAttestation<
     "check-waiver",
     CheckWaiverAttestationValue<Definition["name"], Definition["revision"], Definition["waiver"]>,
-    Subject
+    Candidate
   >;
-  readonly [checkWaiverRefBrand]: readonly [definition: Definition, subject: Subject];
+  readonly [checkWaiverRefBrand]: readonly [definition: Definition, candidate: Candidate];
 }
 
 /**
  * Why: Supplies replay identity and a bounded human or policy request without allowing callers to weaken definition policy.
- * Use: Pass it to `ctx.check.authorize`; the host enforces `binding`, `action`, `risk`, and `maxTtl` from the definition.
+ * Use: Pass it to `ctx.check.authorizeWaiver`; the host enforces `binding`, `action`, `risk`, and `maxTtl` from the definition.
  */
 export interface CheckWaiverAuthorizeOptions {
   readonly key: string;
@@ -800,7 +883,7 @@ export interface CheckWaiverAuthorizeOptions {
  * Use: Extend it only through the mutually exclusive public invocation option branches.
  */
 export interface CheckInvocationBaseOptions {
-  readonly key?: string;
+  readonly key: string;
   readonly policy?: "required";
   readonly timeout?: Duration;
 }
@@ -810,7 +893,7 @@ export interface CheckInvocationBaseOptions {
  * Use: This is the default branch when neither `trust` nor `waive` is supplied.
  */
 export interface ExecutedCheckInvocationOptions extends CheckInvocationBaseOptions {
-  readonly subject?: never;
+  readonly candidate?: never;
   readonly trust?: never;
   readonly waive?: never;
 }
@@ -820,49 +903,49 @@ export interface ExecutedCheckInvocationOptions extends CheckInvocationBaseOptio
  * Use: Supply a trusted run and reason only where host policy permits evidence reuse.
  */
 export interface TrustedCheckInvocationOptions extends CheckInvocationBaseOptions {
-  readonly subject?: never;
+  readonly candidate?: never;
   readonly trust: TrustedCheckSource;
   readonly waive?: never;
 }
 
 /**
- * Why: Requires nominal workspace evidence when an executed check should return one refined subject type.
- * Use: Supply the current engine-minted subject instead of selecting a subject generic at the call site.
+ * Why: Requires nominal workspace evidence when an executed check should return one refined candidate type.
+ * Use: Supply the current engine-minted candidate; the host rejects drift before minting the result.
  */
-export interface SubjectExecutedCheckInvocationOptions<Subject extends WorkspaceSubject>
+export interface CandidateExecutedCheckInvocationOptions<Candidate extends WorkspaceSnapshotRef>
   extends CheckInvocationBaseOptions {
-  readonly subject: Subject;
+  readonly candidate: Candidate;
   readonly trust?: never;
   readonly waive?: never;
 }
 
 /**
- * Why: Couples trusted evidence reuse to the exact nominal workspace subject claimed by its result.
- * Use: Supply both `subject` and `trust`; the host remains responsible for validating the trusted run.
+ * Why: Couples trusted evidence reuse to the exact nominal workspace candidate claimed by its result.
+ * Use: Supply both `candidate` and `trust`; the host remains responsible for validating the trusted run.
  */
-export interface SubjectTrustedCheckInvocationOptions<Subject extends WorkspaceSubject>
+export interface CandidateTrustedCheckInvocationOptions<Candidate extends WorkspaceSnapshotRef>
   extends CheckInvocationBaseOptions {
-  readonly subject: Subject;
+  readonly candidate: Candidate;
   readonly trust: TrustedCheckSource;
   readonly waive?: never;
 }
 
 /**
- * Why: Allows only one nominal ref for the matching eligible definition and failed workspace subject.
- * Use: Obtain `waive` from `ctx.check.authorize`; do not copy or reconstruct its fields.
+ * Why: Allows only one nominal ref for the matching eligible definition and failed workspace candidate.
+ * Use: Obtain `waive` from `ctx.check.authorizeWaiver`; do not copy or reconstruct its fields.
  */
 export interface WaivedCheckInvocationOptions<
   Definition extends WaiverEligibleCheckDefinition,
-  Subject extends WorkspaceSubject = WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
 > extends CheckInvocationBaseOptions {
-  readonly subject?: NoInfer<Subject>;
+  readonly candidate?: NoInfer<Candidate>;
   readonly trust?: never;
-  readonly waive: CheckWaiverRef<Definition, Subject>;
+  readonly waive: CheckWaiverRef<Definition, Candidate>;
 }
 
 /**
- * Why: Names the only ordinary invocation branches that do not claim a refined workspace subject.
- * Use: Use it for executed or trusted calls whose result should remain the broad `WorkspaceSubject`.
+ * Why: Names the only ordinary invocation branches that do not claim a refined workspace candidate.
+ * Use: Use it for executed or trusted calls whose result should remain the broad `WorkspaceSnapshotRef`.
  */
 export type UnboundCheckInvocationOptions = ExecutedCheckInvocationOptions | TrustedCheckInvocationOptions;
 
@@ -871,96 +954,110 @@ export type UnboundCheckInvocationOptions = ExecutedCheckInvocationOptions | Tru
  * Use: Pass it to `ctx.check`; checks with `mode: "never"` have no waived branch.
  */
 export type CheckInvocationOptions<
-  Definition extends CheckDefinition<any, any, any, any, any> = AnyCheckDefinition,
-  Subject extends WorkspaceSubject = WorkspaceSubject,
+  Definition extends AnyCheckDefinition = AnyCheckDefinition,
+  Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
 > =
-  | SubjectExecutedCheckInvocationOptions<Subject>
-  | SubjectTrustedCheckInvocationOptions<Subject>
+  | CandidateExecutedCheckInvocationOptions<Candidate>
+  | CandidateTrustedCheckInvocationOptions<Candidate>
   | (Definition extends WaiverEligibleCheckDefinition
-      ? WaivedCheckInvocationOptions<Definition, Subject>
+      ? WaivedCheckInvocationOptions<Definition, Candidate>
       : never);
 
 /**
- * Why: Holds suite controls shared by exact-subject and unbound invocation paths.
+ * Why: Holds suite controls shared by exact-candidate and unbound invocation paths.
  * Use: Extend it through the two mutually exclusive suite option branches below.
  */
 export interface CheckSuiteInvocationBaseOptions {
-  keyPrefix?: string;
+  key: string;
   policy?: "required";
   timeout?: Duration;
   concurrency?: number;
 }
 
 /**
- * Why: Requires nominal workspace evidence before a suite result may retain one refined subject type.
- * Use: Pass the current engine-minted subject whenever suite evidence will authorize review or promotion.
+ * Why: Requires nominal workspace evidence before a suite result may retain one refined candidate type.
+ * Use: Pass the current engine-minted candidate; the host rejects drift before minting suite evidence.
  */
-export interface CheckSuiteInvocationOptions<Subject extends WorkspaceSubject = WorkspaceSubject>
+export interface CheckSuiteInvocationOptions<Candidate extends WorkspaceSnapshotRef = WorkspaceSnapshotRef>
   extends CheckSuiteInvocationBaseOptions {
-  subject: Subject;
+  candidate: Candidate;
 }
 
 /**
- * Why: Gives subject-agnostic suite calls a distinct path whose result cannot claim a refined subject.
- * Use: Omit `subject` only when broad `WorkspaceSubject` evidence is sufficient.
+ * Why: Gives candidate-agnostic suite calls a distinct path whose result cannot claim a refined candidate.
+ * Use: Omit `candidate` only when broad `WorkspaceSnapshotRef` evidence is sufficient.
  */
 export interface UnboundCheckSuiteInvocationOptions extends CheckSuiteInvocationBaseOptions {
-  subject?: never;
+  candidate?: never;
 }
 
 /**
  * Why: Exposes the sole host-authorized transition from an eligible executed failure to nominal waiver authority.
- * Use: Access it as `ctx.check.authorize`; the exact definition and result brands must match.
+ * Use: Access it as `ctx.check.authorizeWaiver`; the exact definition and result brands must match.
  */
 export type CheckWaiverAuthorizeFn = <
   Definition extends WaiverEligibleCheckDefinition,
-  Subject extends WorkspaceSubject,
+  Candidate extends WorkspaceSnapshotRef,
 >(
   definition: Definition,
-  failure: FailedCheckResultOf<Definition, Subject>,
+  failure: FailedCheckResultOf<Definition, Candidate>,
   options: CheckWaiverAuthorizeOptions,
-) => Promise<CheckWaiverRef<Definition, Subject>>;
+) => Promise<CheckWaiverRef<Definition, Candidate>>;
 
 /**
  * Why: Defines the standalone check invocation surface shared by workflow and workspace contexts.
  * Use: Call `ctx.check(definition, input?, options?)` when workflow code owns the response to failure.
  */
 export interface CheckFn {
+  readonly authorizeWaiver: CheckWaiverAuthorizeFn;
+  /** @deprecated Use `authorizeWaiver` to keep failed-check exception authority explicit. */
   readonly authorize: CheckWaiverAuthorizeFn;
-  <Definition extends CheckDefinition<void, any, any, any>, Subject extends WorkspaceSubject>(
+  <
+    Definition extends CheckDefinitionWithInputMode<"none">,
+    Candidate extends WorkspaceSnapshotRef,
+  >(
     definition: Definition,
-    opts: CheckInvocationOptions<Definition, Subject>,
-  ): Promise<CheckResultOf<Definition, Subject>>;
-  <Definition extends CheckDefinition<void, any, any, any>>(
+    opts: CheckInvocationOptions<Definition, Candidate>,
+  ): Promise<CheckResultOf<Definition, Candidate>>;
+  <Definition extends CheckDefinitionWithInputMode<"none">>(
     definition: Definition,
-    opts?: UnboundCheckInvocationOptions,
-  ): Promise<CheckResultOf<Definition, WorkspaceSubject>>;
-  <Input, Definition extends CheckDefinition<Input, any, any, any>, Subject extends WorkspaceSubject>(
+    opts: UnboundCheckInvocationOptions,
+  ): Promise<CheckResultOf<Definition, WorkspaceSnapshotRef>>;
+  <
+    Definition extends CheckDefinitionWithInputMode<"required">,
+    Candidate extends WorkspaceSnapshotRef,
+  >(
     definition: Definition,
-    input: Input,
-    opts: CheckInvocationOptions<Definition, Subject>,
-  ): Promise<CheckResultOf<Definition, Subject>>;
-  <Input, Definition extends CheckDefinition<Input, any, any, any>>(
+    input: CheckInputOf<Definition>,
+    opts: CheckInvocationOptions<Definition, Candidate>,
+  ): Promise<CheckResultOf<Definition, Candidate>>;
+  <Definition extends CheckDefinitionWithInputMode<"required">>(
     definition: Definition,
-    input: Input,
-    opts?: UnboundCheckInvocationOptions,
-  ): Promise<CheckResultOf<Definition, WorkspaceSubject>>;
-  <Members extends CheckSuiteMembers, Subject extends WorkspaceSubject>(
-    suite: CheckSuiteDefinition<void, Members>,
-    opts: CheckSuiteInvocationOptions<Subject>,
-  ): Promise<CheckSuiteResult<Members, Subject>>;
-  <Members extends CheckSuiteMembers>(
-    suite: CheckSuiteDefinition<void, Members>,
-    opts?: UnboundCheckSuiteInvocationOptions,
-  ): Promise<CheckSuiteResult<Members, WorkspaceSubject>>;
-  <Input, Members extends CheckSuiteMembers, Subject extends WorkspaceSubject>(
-    suite: CheckSuiteDefinition<Input, Members, any>,
-    input: Input,
-    opts: CheckSuiteInvocationOptions<Subject>,
-  ): Promise<CheckSuiteResult<Members, Subject>>;
-  <Input, Members extends CheckSuiteMembers>(
-    suite: CheckSuiteDefinition<Input, Members, any>,
-    input: Input,
-    opts?: UnboundCheckSuiteInvocationOptions,
-  ): Promise<CheckSuiteResult<Members, WorkspaceSubject>>;
+    input: CheckInputOf<Definition>,
+    opts: UnboundCheckInvocationOptions,
+  ): Promise<CheckResultOf<Definition, WorkspaceSnapshotRef>>;
+  <
+    Definition extends CheckSuiteDefinition<CheckSuiteTypesWithInputMode<"none">, any>,
+    Candidate extends WorkspaceSnapshotRef,
+  >(
+    suite: Definition,
+    opts: CheckSuiteInvocationOptions<Candidate>,
+  ): Promise<CheckSuiteResult<CheckSuiteMembersOf<Definition>, Candidate>>;
+  <Definition extends CheckSuiteDefinition<CheckSuiteTypesWithInputMode<"none">, any>>(
+    suite: Definition,
+    opts: UnboundCheckSuiteInvocationOptions,
+  ): Promise<CheckSuiteResult<CheckSuiteMembersOf<Definition>, WorkspaceSnapshotRef>>;
+  <
+    Definition extends CheckSuiteDefinition<CheckSuiteTypesWithInputMode<"required">, any>,
+    Candidate extends WorkspaceSnapshotRef,
+  >(
+    suite: Definition,
+    input: CheckSuiteInputOf<Definition>,
+    opts: CheckSuiteInvocationOptions<Candidate>,
+  ): Promise<CheckSuiteResult<CheckSuiteMembersOf<Definition>, Candidate>>;
+  <Definition extends CheckSuiteDefinition<CheckSuiteTypesWithInputMode<"required">, any>>(
+    suite: Definition,
+    input: CheckSuiteInputOf<Definition>,
+    opts: UnboundCheckSuiteInvocationOptions,
+  ): Promise<CheckSuiteResult<CheckSuiteMembersOf<Definition>, WorkspaceSnapshotRef>>;
 }

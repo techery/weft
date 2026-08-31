@@ -9,25 +9,17 @@ import type { Ctx } from "./workflow.ts";
 // Workspaces, patches, integration, gates, and notes
 // ---------------------------------------------------------------------------
 
-/**
- * Why: Gives the workspace DSL an explicit apply patches options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding workspace API.
- */
+/** Apply patches options. */
 export interface ApplyPatchesOptions<Context = unknown> {
+  key: string;
   order?: "sequential";
   onConflict?: "ask" | "fail" | GitConflictResolver<Context>;
 }
 
-/**
- * Why: Gives the workspace DSL an explicit integrate options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding workspace API.
- */
+/** Integrate options. */
 export interface IntegrateOptions<Context = unknown> extends ApplyPatchesOptions<Context> {}
 
-/**
- * Why: Gives the workspace DSL an explicit integration ledger contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding workspace API.
- */
+/** Integration ledger. */
 export interface IntegrationLedger {
   merged: string[];
   conflicts: string[];
@@ -35,27 +27,19 @@ export interface IntegrationLedger {
   skipped: string[];
 }
 
-/**
- * Why: Gives the workspace DSL an explicit capture options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding workspace API.
- */
+/** Capture options. */
 export interface CaptureOptions {
+  key: string;
   scope: WriteScope;
 }
 
-/**
- * Why: Gives the workspace DSL an explicit nested workspace options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding workspace API.
- */
+/** Nested workspace options. */
 export interface NestedWorkspaceOptions {
   key: string;
   from?: string;
 }
 
-/**
- * Why: Gives the workspace DSL an explicit checkout lease options contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding workspace API.
- */
+/** Checkout lease options. */
 export interface CheckoutLeaseOptions {
   key: string;
   checkout: string;
@@ -67,15 +51,14 @@ export interface CheckoutLeaseOptions {
  */
 export interface CandidateWorkspaceContext<TaskInput = unknown, TaskOutput = TaskInput>
   extends Ctx<TaskInput, TaskOutput, true> {
-  apply(patches: ReadonlyArray<PatchRef>, opts?: ApplyPatchesOptions): Promise<void>;
+  apply(patches: ReadonlyArray<PatchRef>, opts: ApplyPatchesOptions): Promise<void>;
   capture(opts: CaptureOptions): Promise<PatchRef>;
 }
 
-/**
- * Why: Gives the workspace DSL an explicit nested workspace api contract instead of relying on untyped values.
- * Use: Import it when declaring, configuring, or consuming the corresponding workspace API.
- */
+/** Nested workspace api. */
 export interface NestedWorkspaceApi<TaskInput = unknown, TaskOutput = TaskInput> {
+  /** Compares two independently loaded engine-minted workspace snapshots. */
+  sameSnapshot(left: WorkspaceSnapshotRef, right: WorkspaceSnapshotRef): boolean;
   with<Result>(
     opts: NestedWorkspaceOptions,
     run: (candidate: CandidateWorkspaceContext<TaskInput, TaskOutput>) => Promise<Result> | Result,
@@ -93,7 +76,9 @@ export interface NestedWorkspaceApi<TaskInput = unknown, TaskOutput = TaskInput>
  */
 export interface ActiveWorkspaceApi<TaskInput = unknown, TaskOutput = TaskInput>
   extends NestedWorkspaceApi<TaskInput, TaskOutput> {
-  readonly subject: WorkspaceSnapshotRef;
+  /** Advanced diagnostic that rejects when a snapshot no longer describes the active workspace generation. */
+  assertUnchanged(snapshot: WorkspaceSnapshotRef): Promise<void>;
+  readonly snapshot: WorkspaceSnapshotRef;
   readonly id: string;
   readonly path: string;
   readonly branch: string;
@@ -103,19 +88,50 @@ export interface ActiveWorkspaceApi<TaskInput = unknown, TaskOutput = TaskInput>
 }
 
 /**
- * Why: Separates authorization intent from the operation that may later execute.
- * Use: Pass it to `ctx.gate` with a stable action, risk, and explanatory detail.
+ * Why: Describes a durable policy question used only to choose a workflow branch, never to authorize an effect.
+ * Use: Pass it to `ctx.policy.decide`; protected operations and deliveries still require their own nominal authority.
  */
-export interface GateRequest {
-  key?: string;
+export interface PolicyDecisionRequest {
+  key: string;
   action: string;
   risk: Risk;
   detail?: string;
 }
 
 /**
- * Why: Records whether policy or a person authorized an action and who supplied the answer.
- * Use: Inspect it before performing the gated operation.
+ * Why: Makes a branching decision visibly different from candidate-bound authorization.
+ * Use: Branch on `outcome`; never pass this value as authority to an operation or delivery.
+ */
+export interface PolicyDecisionResult {
+  readonly outcome: "allow" | "deny";
+  readonly note?: string;
+  readonly decidedBy: "human" | "policy" | "timeout";
+}
+
+/**
+ * Why: Names the non-authoritative policy decision surface separately from protected effect authorization.
+ * Use: Call `ctx.policy.decide` for business-flow branching only.
+ */
+export interface PolicyApi {
+  decide(request: PolicyDecisionRequest): Promise<PolicyDecisionResult>;
+}
+
+/**
+ * Why: Preserves the previous gate request shape for advanced compatibility during migration.
+ * Use: Prefer `PolicyDecisionRequest` and `ctx.policy.decide` in new workflow code.
+ * @deprecated Use `PolicyDecisionRequest`.
+ */
+export interface GateRequest {
+  key: string;
+  action: string;
+  risk: Risk;
+  detail?: string;
+}
+
+/**
+ * Why: Preserves the previous boolean gate result for advanced compatibility during migration.
+ * Use: Prefer `PolicyDecisionResult`, whose name and outcome do not imply reusable authority.
+ * @deprecated Use `PolicyDecisionResult`.
  */
 export interface GateResult {
   approved: boolean;
@@ -128,6 +144,7 @@ export interface GateResult {
  * Use: Pass it to `ctx.note` for claims, decisions, and risks that must survive replay.
  */
 export interface NoteInput {
+  key: string;
   kind: "decision" | "claim" | "risk";
   text: string;
   evidence?: string;

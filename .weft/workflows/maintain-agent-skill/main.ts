@@ -100,7 +100,15 @@ const AuthorResult = z.object({
 const SKILL_SOURCE = "packages/cli/src/commands/skill.ts";
 const CLI_REGISTRATION = "packages/cli/src/main.ts";
 const CLI_TEST = "packages/cli/test/cli.test.ts";
-const WRITE_SCOPE = [SKILL_SOURCE, CLI_REGISTRATION, CLI_TEST] as const;
+const SKILL_VALIDATOR = ".weft/scripts/validate-weft-skill.mjs";
+const PROTOTYPE_SURFACE_INVENTORY = "scripts/list-dsl-proto-authoring-surface.mjs";
+const WRITE_SCOPE = [
+  SKILL_SOURCE,
+  CLI_REGISTRATION,
+  CLI_TEST,
+  SKILL_VALIDATOR,
+  PROTOTYPE_SURFACE_INVENTORY,
+] as const;
 
 const DEFAULT_SOURCE_PATTERNS = [
   "README.md",
@@ -111,6 +119,9 @@ const DEFAULT_SOURCE_PATTERNS = [
   ".weft/workflows/**/*.ts",
   ".weft/workflows/**/CHANGELOG.md",
   "packages/*/README.md",
+  "packages/dsl-proto/*.md",
+  "packages/dsl-proto/package.json",
+  "packages/dsl-proto/src/**/*.ts",
   "packages/sdk/src/**/*.ts",
   "packages/core/src/**/*.ts",
   "packages/host/src/**/*.ts",
@@ -126,6 +137,11 @@ const CORE_SOURCES = [
   "package.json",
   "packages/sdk/src/define.ts",
   "packages/sdk/src/types.ts",
+  "packages/dsl-proto/src/index.ts",
+  "packages/dsl-proto/src/facade.ts",
+  "packages/dsl-proto/src/advanced.ts",
+  PROTOTYPE_SURFACE_INVENTORY,
+  SKILL_VALIDATOR,
   CLI_REGISTRATION,
   SKILL_SOURCE,
   "packages/host/src/weft.ts",
@@ -402,7 +418,7 @@ async function validateGeneratedSkill(ctx: Ctx, round: number, required: boolean
   const suffix = required ? ":final" : "";
   return Promise.all([
     ctx.check(`skill-output:${round}${suffix}`, {
-      exec: ["node", ".weft/scripts/validate-weft-skill.mjs"],
+      exec: ["node", SKILL_VALIDATOR],
       required,
     }),
     ctx.check(`skill-tests:${round}${suffix}`, {
@@ -442,6 +458,7 @@ function authorPrompt(input: {
     `Create or refresh Weft's canonical Agent Skill. This is a ${input.initialDisposition} run.`,
     `Current Weft source commit: ${input.sourceSha}. Comparison base: ${input.base}.`,
     `Canonical source: ${SKILL_SOURCE}. Registration: ${CLI_REGISTRATION}. Tests: ${CLI_TEST}.`,
+    `Coverage guard: ${PROTOTYPE_SURFACE_INVENTORY}. Validator: ${SKILL_VALIDATOR}.`,
     "",
     "The original skill belongs inside the Weft codebase and is emitted by `weft skill` on stdout.",
     "Do not create .codex, .claude, .agents, or other consumer installation directories.",
@@ -458,6 +475,7 @@ function authorPrompt(input: {
     "- be portable to Codex, Claude Code, and other coding agents without depending on private vendor tools;",
     "- teach real Weft authoring, checking, running, resuming, replay, tasks, write/integrate, and verification semantics;",
     "- distinguish implemented behavior from roadmap/design claims and never claim publication or runtime proof without evidence;",
+    "- keep runnable SDK and declaration-only DSL prototype sections separate and cover every source-derived public ctx, nested callback context, and authoring builder;",
     "- keep essential routing in SKILL.md and include only source-backed commands and API names;",
     "- retain explicit destination examples as distribution guidance, not as files owned by this workflow;",
     "- contain no TODOs, placeholders, changelog, or duplicated generic coding advice.",

@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type DetailedObserverResult,
   defineObserver,
@@ -7,8 +9,7 @@ import {
   type OperationInputOf,
   type OperationOutputOf,
   type WorkflowNode,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 /** Why: Makes compile-time contract assertions visible without adding runtime test behavior. Use: Pass inferred DSL values to it in this typechecked example. */
 declare function expectType<T>(value: T): void;
@@ -409,6 +410,7 @@ const deploymentObservationWorkflow = defineWorkflow(
     const observationMode = completionEvidence.provenance.endpoint;
 
     await ctx.note({
+      key: "record-deployment-observation",
       kind: terminal.outcome === "succeeded" ? "claim" : "risk",
       text: `${receipt.providerDeploymentId} completed with ${terminal.outcome} via authoritative ${observationMode} observation.`,
       evidence: observed.evidence.ref,

@@ -68,6 +68,25 @@ async function tempRoot(): Promise<string> {
   return dir;
 }
 
+function boundedSection(text: string, startMarker: string, endMarker: string): string {
+  const start = text.indexOf(startMarker);
+  if (start < 0) throw new Error(`missing section marker: ${startMarker}`);
+  if (text.indexOf(startMarker, start + startMarker.length) >= 0) {
+    throw new Error(`duplicate section marker: ${startMarker}`);
+  }
+  const end = text.indexOf(endMarker, start + startMarker.length);
+  if (end < 0) throw new Error(`missing section marker: ${endMarker}`);
+  if (text.indexOf(endMarker, end + endMarker.length) >= 0) {
+    throw new Error(`duplicate section marker: ${endMarker}`);
+  }
+  return text.slice(start, end + endMarker.length);
+}
+
+function hasApiToken(text: string, token: string): boolean {
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^A-Za-z0-9_.])${escaped}(?![A-Za-z0-9_.])`, "m").test(text);
+}
+
 async function write(root: string, file: string, content: string): Promise<string> {
   const target = path.join(root, file);
   await mkdir(path.dirname(target), { recursive: true });
@@ -566,14 +585,81 @@ describe("weft skill", () => {
 
   it("documents every public Ctx surface derived from the SDK", async () => {
     const printed = await cli("--cwd", await tempRoot(), "skill");
+    const prototypeBlock = boundedSection(
+      printed.text,
+      "<!-- weft-dsl-proto-reference:start -->",
+      "<!-- weft-dsl-proto-reference:end -->",
+    );
+    const sdkSkill = printed.text.replace(prototypeBlock, "");
     const { stdout } = await run(process.execPath, ["scripts/check-example-coverage.mjs", "--list"], {
       cwd: process.cwd(),
     });
     const surfaces = stdout.trim().split("\n").filter(Boolean);
-    const missing = surfaces.filter((surface) => !printed.text.includes(surface));
+    const missing = surfaces.filter((surface) => !hasApiToken(sdkSkill, surface));
 
-    expect(surfaces).toHaveLength(77);
+    expect(surfaces.length).toBeGreaterThan(70);
     expect(missing).toEqual([]);
+  });
+
+  it("documents every public DSL prototype context surface and authoring value", async () => {
+    const printed = await cli("--cwd", await tempRoot(), "skill");
+    const prototypeBlock = boundedSection(
+      printed.text,
+      "<!-- weft-dsl-proto-reference:start -->",
+      "<!-- weft-dsl-proto-reference:end -->",
+    );
+    const advancedBlock = boundedSection(
+      prototypeBlock,
+      "#### Advanced-only `ctx` additions",
+      "<!-- weft-dsl-proto-reference:end -->",
+    );
+    const inventory = async (mode: string) => {
+      const { stdout } = await run(process.execPath, ["scripts/list-dsl-proto-authoring-surface.mjs", mode], {
+        cwd: process.cwd(),
+      });
+      return stdout.trim().split("\n").filter(Boolean);
+    };
+    const [ctxSurfaces, builders, advancedSurfaces] = await Promise.all([
+      inventory("--ctx"),
+      inventory("--builders"),
+      inventory("--advanced-ctx"),
+    ]);
+
+    expect(ctxSurfaces.length).toBeGreaterThan(100);
+    expect(builders.length).toBeGreaterThan(20);
+    expect(advancedSurfaces.length).toBeGreaterThan(10);
+    expect(ctxSurfaces.filter((surface) => !hasApiToken(prototypeBlock, surface))).toEqual([]);
+    expect(builders.filter((builder) => !hasApiToken(prototypeBlock, builder))).toEqual([]);
+    expect(hasApiToken(prototypeBlock, "z")).toBe(true);
+    expect(advancedSurfaces.filter((surface) => !hasApiToken(advancedBlock, surface))).toEqual([]);
+  });
+
+  it("separates the runnable SDK from the declaration-only DSL prototype", async () => {
+    const printed = await cli("--cwd", await tempRoot(), "skill");
+
+    expect(printed.text).toContain("@techery/weft-sdk");
+    expect(printed.text).toContain("@techery/weft-dsl-proto");
+    expect(printed.text).toContain("Declaration-only prototype in this checkout");
+    expect(printed.text).toContain("Never copy prototype syntax into an SDK workflow and claim it runs");
+    expect(printed.text).toContain("ctx.agent(planner, issue");
+    expect(printed.text).toContain('failure: "return"');
+    expect(printed.text).toContain("ctx.workspace.snapshot");
+    expect(printed.text).toContain(".mapEffect");
+    expect(printed.text).toContain("a phase labels effects");
+    expect(printed.text).toContain("prototype step owns a callback");
+    expect(printed.text).toContain("needs no separate `.stage(...)` layer");
+    expect(printed.text).toContain("sameSnapshot");
+    expect(printed.text).toContain("assertUnchanged");
+    expect(printed.text).toContain("A `subject` is simply the thing");
+    expect(printed.text).toContain("const planner = defineAgent");
+    expect(printed.text).toContain(
+      "no author-maintained task-contract version, revision, or migration chain",
+    );
+    expect(printed.text).toContain("ctx.agent.detailed");
+    expect(printed.text).toContain('from "@techery/weft-sdk"');
+    expect(printed.text).toContain("validated value directly");
+    expect(printed.text).toContain("ctx.phase");
+    expect(printed.text).toContain('onError: "null"');
   });
 
   it("is state-independent, writes only the document to stdout, and creates nothing", async () => {

@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   type ArtifactRefOf,
   defineAgent,
@@ -11,13 +13,12 @@ import {
   defineWorkflow,
   type Provider,
   type WorkspaceSnapshotRef,
-  z,
-} from "../../index.ts";
+} from "../../core/index.ts";
 
 // This round models review as a reusable recipe over an immutable workspace
-// subject. Only the outer workflow can mutate the workflow-owned workspace.
+// snapshot. Only the outer workflow can mutate the workflow-owned workspace.
 
-const WorkspaceSubjectSchema = z.object({
+const WorkspaceSnapshotSchema = z.object({
   workspaceId: z.string().min(1),
   generation: z.number().int().nonnegative(),
   treeHash: z.string().min(1),
@@ -33,16 +34,16 @@ const adversarialReviewWritePolicy = definePathPolicy({
 });
 
 /**
- * Why: Gives schemas and deterministic guards a serializable view of the engine-minted workspace subject.
+ * Why: Gives schemas and deterministic guards a serializable view of the engine-minted workspace snapshot.
  * Use: Bind every reviewer, refuter, decision, and evidence artifact to one exact tree generation.
  */
-type WorkspaceSubjectValue = z.infer<typeof WorkspaceSubjectSchema>;
+type WorkspaceSnapshotValue = z.infer<typeof WorkspaceSnapshotSchema>;
 
 const ReviewTargetSchema = z.object({
   branch: z.string().min(1),
   base: z.string().min(1),
   head: z.string().min(1),
-  subject: WorkspaceSubjectSchema,
+  snapshot: WorkspaceSnapshotSchema,
 });
 
 /**
@@ -265,7 +266,7 @@ const ReviewRoundEvidenceMetadataSchema = z.object({
   runId: z.string().min(1),
   branch: z.string().min(1),
   head: z.string().min(1),
-  subject: WorkspaceSubjectSchema,
+  snapshot: WorkspaceSnapshotSchema,
   recordedAt: z.number(),
 });
 
@@ -294,7 +295,7 @@ const reviewerPrompt = definePrompt({
   input: ReviewerInputSchema,
   render: ({ target, lens, acceptanceCriteria }) => [
     `Review only ${target.head} on ${target.branch} using the ${lens} lens.`,
-    `The exact engine-observed tree is ${target.subject.treeHash} at generation ${target.subject.generation}.`,
+    `The exact engine-observed tree is ${target.snapshot.treeHash} at generation ${target.snapshot.generation}.`,
     `Compare against ${target.base}. Do not edit files or review a newer workspace state.`,
     `Acceptance criteria:\n${acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n")}`,
     "Return only repository-supported findings with precise evidence and a stable local ID.",
@@ -313,7 +314,7 @@ const deduplicatorPrompt = definePrompt({
   name: "deduplicate-review-findings",
   input: DeduplicationInputSchema,
   render: ({ target, candidates }) => [
-    `Partition ${candidates.length} findings for exact tree ${target.subject.treeHash}.`,
+    `Partition ${candidates.length} findings for exact tree ${target.snapshot.treeHash}.`,
     "Every sourceId must occur exactly once. Do not add, remove, merge unrelated, or rewrite findings.",
     "Choose canonicalSourceId from its own cluster and group only claims with the same cause and remedy.",
     JSON.stringify(candidates),
@@ -340,7 +341,7 @@ const refuterPrompt = definePrompt({
   name: "refute-clustered-review-finding",
   input: RefutationInputSchema,
   render: ({ target, acceptanceCriteria, cluster }) => [
-    `Try to disprove ${cluster.canonicalSourceId} against exact tree ${target.subject.treeHash}.`,
+    `Try to disprove ${cluster.canonicalSourceId} against exact tree ${target.snapshot.treeHash}.`,
     `Claim: ${cluster.canonical.claim}`,
     `Reported by: ${cluster.sourceLenses.join(", ")}`,
     `Acceptance criteria:\n${acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n")}`,
@@ -395,14 +396,14 @@ const reviewPolicy = {
 } satisfies ReviewAcceptancePolicyValue;
 
 /**
- * Why: Converts the nominal engine subject into schema-backed evidence without pretending workflows can mint it.
- * Use: Snapshot `ctx.workspace.subject` immediately after each candidate commit.
+ * Why: Converts the nominal engine snapshot into schema-backed evidence without pretending workflows can mint it.
+ * Use: Snapshot `ctx.workspace.snapshot` immediately after each candidate commit.
  */
-function serializeSubject(subject: WorkspaceSnapshotRef): WorkspaceSubjectValue {
+function serializeSnapshot(snapshot: WorkspaceSnapshotRef): WorkspaceSnapshotValue {
   return {
-    workspaceId: subject.workspaceId,
-    generation: subject.generation,
-    treeHash: subject.treeHash,
+    workspaceId: snapshot.workspaceId,
+    generation: snapshot.generation,
+    treeHash: snapshot.treeHash,
   };
 }
 
@@ -594,16 +595,16 @@ function collectBlockingFindings(
  */
 function assertTargetStillCurrent(
   target: ReviewTargetValue,
-  subject: WorkspaceSnapshotRef,
+  snapshot: WorkspaceSnapshotRef,
   branch: string,
   head: string,
 ): void {
   if (
     target.branch !== branch ||
     target.head !== head ||
-    target.subject.workspaceId !== subject.workspaceId ||
-    target.subject.generation !== subject.generation ||
-    target.subject.treeHash !== subject.treeHash
+    target.snapshot.workspaceId !== snapshot.workspaceId ||
+    target.snapshot.generation !== snapshot.generation ||
+    target.snapshot.treeHash !== snapshot.treeHash
   ) {
     throw new Error("Workspace changed while adversarial review was in progress");
   }
@@ -618,81 +619,81 @@ const adversarialReviewRound = defineRecipe({
   run: async (ctx, input) => {
     assertConfiguredCoverage(input.policy);
 
-    const reviews = ctx.all(
-      await ctx.parallel(
-        reviewLanes,
-        async (lane): Promise<ReviewerResultValue> => {
-          const review = await ctx.agent({
+    const reviews = await ctx.parallel.all(
+      reviewLanes,
+      async (lane): Promise<ReviewerResultValue> => {
+        const review = await ctx.agent(
+          codeReviewer,
+          {
+            target: input.target,
+            lens: lane.lens,
+            acceptanceCriteria: input.acceptanceCriteria,
+          },
+          {
             key: `review:${input.round}:${lane.key}`,
-            agent: codeReviewer,
-            input: {
-              target: input.target,
-              lens: lane.lens,
-              acceptanceCriteria: input.acceptanceCriteria,
-            },
             provider: lane.provider,
             providerRequirements: { structured: "native" },
-          });
-          if (review.value.lens !== lane.lens) {
-            throw new Error(`${lane.lens} reviewer returned ${review.value.lens} output`);
-          }
-          return review.value;
-        },
-        {
-          key: `reviews:${input.round}`,
-          keyOf: (lane) => lane.key,
-          concurrency: reviewLanes.length,
-          errors: "throw",
-        },
-      ),
+          },
+        );
+        if (review.value.lens !== lane.lens) {
+          throw new Error(`${lane.lens} reviewer returned ${review.value.lens} output`);
+        }
+        return review.value;
+      },
+      {
+        key: `reviews:${input.round}`,
+        keyOf: (lane) => lane.key,
+        concurrency: reviewLanes.length,
+      },
     );
     assertReviewCoverage(reviews, input.policy.requiredLenses);
     const candidates = collectCandidates(reviews);
 
     let proposals: FindingClusterProposalValue[] = [];
     if (candidates.length > 0) {
-      const deduplication = await ctx.agent({
-        key: `deduplicate:${input.round}`,
-        agent: findingDeduplicator,
-        input: { target: input.target, candidates },
-        providerRequirements: { structured: "native" },
-      });
+      const deduplication = await ctx.agent(
+        findingDeduplicator,
+        { target: input.target, candidates },
+        {
+          key: `deduplicate:${input.round}`,
+          providerRequirements: { structured: "native" },
+        },
+      );
       proposals = deduplication.value.clusters;
     }
     const clusters = materializeClusters(candidates, proposals);
 
-    const refutations = ctx.all(
-      await ctx.parallel(
-        clusters,
-        async (cluster): Promise<RefutationResultValue> => {
-          const refutation = await ctx.agent({
+    const refutations = await ctx.parallel.all(
+      clusters,
+      async (cluster): Promise<RefutationResultValue> => {
+        const refutation = await ctx.agent(
+          findingRefuter,
+          {
+            target: input.target,
+            acceptanceCriteria: input.acceptanceCriteria,
+            cluster,
+          },
+          {
             key: `refute:${input.round}:${cluster.canonicalSourceId}`,
-            agent: findingRefuter,
-            input: {
-              target: input.target,
-              acceptanceCriteria: input.acceptanceCriteria,
-              cluster,
-            },
             provider: refutationProviderFor(cluster),
             providerRequirements: { structured: "native" },
-          });
-          if (refutation.value.canonicalSourceId !== cluster.canonicalSourceId) {
-            throw new Error(`Refuter changed canonical identity ${cluster.canonicalSourceId}`);
-          }
-          return refutation.value;
-        },
-        {
-          key: `refutations:${input.round}`,
-          keyOf: (cluster) => cluster.canonicalSourceId,
-          concurrency: 4,
-          errors: "throw",
-        },
-      ),
+          },
+        );
+        if (refutation.value.canonicalSourceId !== cluster.canonicalSourceId) {
+          throw new Error(`Refuter changed canonical identity ${cluster.canonicalSourceId}`);
+        }
+        return refutation.value;
+      },
+      {
+        key: `refutations:${input.round}`,
+        keyOf: (cluster) => cluster.canonicalSourceId,
+        concurrency: 4,
+      },
     );
 
     const decision = evaluateReview(input.policy, clusters, refutations);
     const blocking = collectBlockingFindings(decision, clusters);
-    const recordedAt = await ctx.now();
+    const recordedAt = await ctx.now({ key: `review-round-${input.round}-recorded-at` });
     const evidence = await ctx.artifact(
       reviewRoundEvidence,
       {
@@ -711,7 +712,7 @@ const adversarialReviewRound = defineRecipe({
           runId: ctx.run.id,
           branch: input.target.branch,
           head: input.target.head,
-          subject: input.target.subject,
+          snapshot: input.target.snapshot,
           recordedAt,
         },
       },
@@ -845,7 +846,7 @@ const WorkflowInputSchema = z.object({
 const WorkflowOutputSchema = z.object({
   branch: z.string().min(1),
   head: z.string().min(1),
-  subject: WorkspaceSubjectSchema,
+  snapshot: WorkspaceSnapshotSchema,
   rounds: z.number().int().positive(),
   changedFiles: z.array(z.string().min(1)),
   reviewEvidence: z.array(ArtifactPointerSchema).min(1),
@@ -871,17 +872,15 @@ defineWorkflow(
     let blockers: BlockingFindingValue[] = [];
 
     for (let round = 1; round <= reviewPolicy.maxRounds; round += 1) {
-      const implementation = await ctx.phase(`Implementation round ${round}`, async (phase) => {
-        const writeScope = await phase.paths.resolve(
+      const implementation = await ctx.step(`implementation:${round}`, async (step) => {
+        const writeScope = await step.paths.resolve(
           adversarialReviewWritePolicy,
           { proposedPaths: input.allowedPaths },
           { key: `resolve-implementation-write-paths:${round}` },
         );
-        return phase.agent({
-          key: `implementation:${round}`,
-          label: round === 1 ? `Implement ${input.ticket}` : `Resolve review round ${round - 1}`,
-          agent: implementationAgent,
-          input: {
+        return step.agent(
+          implementationAgent,
+          {
             mode: round === 1 ? "initial" : "rework",
             round,
             ticket: input.ticket,
@@ -890,13 +889,17 @@ defineWorkflow(
             allowedPaths: input.allowedPaths,
             blockers,
           },
-          write: writeScope,
-          goal: {
-            definition: candidateGoal,
-            input: { packageFilter: input.packageFilter },
-            attempts: 2,
+          {
+            key: `implementation:${round}`,
+            label: round === 1 ? `Implement ${input.ticket}` : `Resolve review round ${round - 1}`,
+            write: writeScope,
+            goal: {
+              definition: candidateGoal,
+              input: { packageFilter: input.packageFilter },
+              attempts: 2,
+            },
           },
-        });
+        );
       });
       assertBlockersAcknowledged(blockers, implementation.value.addressedCanonicalSourceIds);
       if (implementation.files.length === 0) {
@@ -904,8 +907,12 @@ defineWorkflow(
       }
       for (const file of implementation.files) changedFiles.add(file);
 
-      await ctx.git.add({ paths: implementation.files });
+      await ctx.git.add({
+        key: `stage-adversarial-round-${round}`,
+        paths: implementation.files,
+      });
       const commit = await ctx.git.commit({
+        key: `commit-adversarial-round-${round}`,
         message: round === 1 ? `feat: ${input.title}` : `fix: address review round ${round - 1}`,
         paths: implementation.files,
       });
@@ -913,11 +920,11 @@ defineWorkflow(
         branch: ctx.workspace.branch,
         base: input.base,
         head: commit.sha,
-        subject: serializeSubject(ctx.workspace.subject),
+        snapshot: serializeSnapshot(ctx.workspace.snapshot),
       };
 
-      const review = await ctx.phase(`Adversarial review round ${round}`, (phase) =>
-        phase.recipe(adversarialReviewRound, {
+      const review = await ctx.step(`adversarial-review:${round}`, (step) =>
+        step.recipe(adversarialReviewRound, {
           round,
           target,
           acceptanceCriteria: input.acceptanceCriteria,
@@ -926,10 +933,13 @@ defineWorkflow(
       );
       reviewEvidence.push(review.evidence);
 
-      const currentHead = await ctx.git.head();
-      assertTargetStillCurrent(review.target, ctx.workspace.subject, ctx.workspace.branch, currentHead.sha);
+      const currentHead = await ctx.git.head({
+        key: `read-reviewed-head-round-${round}`,
+      });
+      assertTargetStillCurrent(review.target, ctx.workspace.snapshot, ctx.workspace.branch, currentHead.sha);
       if (review.decision.status === "accepted") {
         await ctx.note({
+          key: `record-review-acceptance:${round}`,
           kind: "claim",
           text: `Accepted ${currentHead.sha} after ${round} adversarial review round(s).`,
           evidence: review.evidence.ref,
@@ -937,7 +947,7 @@ defineWorkflow(
         return {
           branch: ctx.workspace.branch,
           head: currentHead.sha,
-          subject: serializeSubject(ctx.workspace.subject),
+          snapshot: serializeSnapshot(ctx.workspace.snapshot),
           rounds: round,
           changedFiles: [...changedFiles],
           reviewEvidence,
@@ -947,6 +957,7 @@ defineWorkflow(
       blockers = review.blocking;
       if (round === reviewPolicy.maxRounds) {
         await ctx.note({
+          key: `record-review-exhaustion:${round}`,
           kind: "risk",
           text: `Stopped with ${blockers.length} policy blocker(s) after ${round} rounds.`,
           evidence: review.evidence.ref,
