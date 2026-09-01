@@ -247,7 +247,7 @@ describe("createCodexProvider", () => {
     }
   });
 
-  it("tells the agent the final answer is JSON matching the schema", async () => {
+  it("reserves the configured JSON output for the final message", async () => {
     const codex = new FakeCodex([{ id: "t1", reply: turn("{}") }]);
 
     await createCodexProvider({ codex }).run(request(), control());
@@ -255,8 +255,9 @@ describe("createCodexProvider", () => {
     const prompt = codex.threads[0]?.prompts[0] ?? "";
     expect(prompt.startsWith("Find correctness bugs in src/auth.ts")).toBe(true);
     expect(prompt).toContain("## Output");
-    expect(prompt).toContain("single JSON value matching this schema");
-    expect(prompt).toContain(JSON.stringify(SCHEMA));
+    expect(prompt).toContain("Do not emit the required JSON while you are still working");
+    expect(prompt).toContain("Only when all work is complete");
+    expect(prompt).not.toContain(JSON.stringify(SCHEMA));
   });
 
   it("gives a read-only step the strictest sandbox mode", async () => {
@@ -411,8 +412,9 @@ describe("createCodexProvider", () => {
         changes: [{ path: "src/auth.ts", kind: "update" }],
         status: "completed",
       },
-      { id: "i3", type: "agent_message", text: '{"ok":true}' },
-      { id: "i4", type: "agent_message", text: "   " },
+      { id: "i3", type: "agent_message", text: '{"ok":false}' },
+      { id: "i4", type: "agent_message", text: '{"ok":true}' },
+      { id: "i5", type: "agent_message", text: "   " },
     ];
     const codex = new FakeCodex([{ id: "t1", reply: turn('{"ok":true}', { items }) }]);
 
@@ -423,7 +425,8 @@ describe("createCodexProvider", () => {
         "reasoning: check the token check",
         "exec (exit 0): rg TODO",
         "files (completed): update src/auth.ts",
-        'assistant: {"ok":true}',
+        'assistant: {"ok":false}',
+        'assistant (final): {"ok":true}',
       ].join("\n"),
     );
   });
@@ -537,6 +540,18 @@ describe("renderTranscript", () => {
         "error: sandbox denied write",
         "exec (in_progress): pnpm test",
       ].join("\n"),
+    );
+  });
+
+  it("marks only the last agent message matching the captured final response", () => {
+    const items: ThreadItem[] = [
+      { id: "a", type: "agent_message", text: '{"ok":true}' },
+      { id: "b", type: "reasoning", text: "verify it" },
+      { id: "c", type: "agent_message", text: '{"ok":true}' },
+    ];
+
+    expect(renderTranscript(items, '{"ok":true}')).toBe(
+      ['assistant: {"ok":true}', "reasoning: verify it", 'assistant (final): {"ok":true}'].join("\n"),
     );
   });
 

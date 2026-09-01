@@ -109,13 +109,17 @@ function codexStepOptions(value: unknown): CodexStepOptions {
 /** Thrown when the run was cancelled around a turn; the engine maps it to a StepError. */
 const ABORTED = "aborted";
 
-/** The `## Output` contract appended to every prompt; repair turns restate it their own way. */
+/**
+ * The `## Output` contract appended to every prompt. The schema itself already travels
+ * through `TurnOptions.outputSchema`; leaving the duplicate out of the prose avoids
+ * inviting provisional schema-shaped progress updates before the turn is complete.
+ */
 function withOutputNote(req: AgentRequest): string {
   return (
     `${req.prompt}\n\n## Output\n` +
-    "Finish by replying with a single JSON value matching this schema. The JSON is the " +
-    "answer, so send it alone — no prose around it, no code fence.\n\n" +
-    `\`\`\`json\n${JSON.stringify(req.schema)}\n\`\`\``
+    "Do not emit the required JSON while you are still working. Use plain prose for any " +
+    "progress updates. Only when all work is complete, make your final message the single " +
+    "JSON value required by the configured output schema — no prose around it, no code fence."
   );
 }
 
@@ -380,7 +384,7 @@ function toResult(thread: CodexThreadLike, turn: RunResult): AgentResult {
   };
   // Populated once the first turn has started; a resumed thread already has it.
   if (typeof thread.id === "string" && thread.id.length > 0) result.sessionId = thread.id;
-  const transcript = renderTranscript(turn.items);
+  const transcript = renderTranscript(turn.items, turn.finalResponse);
   if (transcript.length > 0) result.transcript = transcript;
   return result;
 }

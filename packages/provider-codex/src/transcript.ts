@@ -6,21 +6,33 @@
  */
 import type { ThreadItem } from "@openai/codex-sdk";
 
-/** Renders a completed turn's items; an absent or empty list renders to "". */
-export function renderTranscript(items: readonly ThreadItem[] | undefined): string {
+/**
+ * Renders a completed turn's items; an absent or empty list renders to "".
+ *
+ * The Codex SDK derives `finalResponse` by replacing it for every completed agent
+ * message. Matching from the end therefore identifies the one response the adapter
+ * actually captured, even when an earlier message contains identical text.
+ */
+export function renderTranscript(items: readonly ThreadItem[] | undefined, finalResponse?: string): string {
   if (items === undefined) return "";
+  const finalResponseIndex = findFinalResponseIndex(items, finalResponse);
   const lines: string[] = [];
-  for (const item of items) {
-    const line = renderItem(item);
+  for (const [index, item] of items.entries()) {
+    const line = renderItem(item, index === finalResponseIndex);
     if (line !== undefined) lines.push(line);
   }
   return lines.join("\n");
 }
 
-function renderItem(item: ThreadItem): string | undefined {
+function findFinalResponseIndex(items: readonly ThreadItem[], finalResponse: string | undefined): number {
+  if (finalResponse === undefined) return -1;
+  return items.findLastIndex((item) => item.type === "agent_message" && item.text === finalResponse);
+}
+
+function renderItem(item: ThreadItem, isFinalResponse: boolean): string | undefined {
   switch (item.type) {
     case "agent_message":
-      return labelled("assistant", item.text);
+      return labelled(isFinalResponse ? "assistant (final)" : "assistant", item.text);
     case "reasoning":
       return labelled("reasoning", item.text);
     case "command_execution": {
