@@ -4,6 +4,7 @@ import {
   defineCheckSuite,
   defineGoal,
   definePathPolicy,
+  defineProcedure,
   definePrompt,
   defineResultView,
   defineTaskContract,
@@ -11,6 +12,7 @@ import {
   defineWorkflow,
   type HumanReviewResult,
   type PatchRef,
+  type WorkspaceCtx,
   z,
 } from "../index.ts";
 
@@ -145,6 +147,24 @@ const resultView = defineResultView({
   component: ({ props }) => expectType<string>(props.url),
 });
 
+/**
+ * A named reusable body. It carries its own schemas and revision, so a workflow view can present it
+ * without a child run, and its durable keys stay local to one `ctx.procedure` invocation.
+ */
+const redBaseline = defineProcedure({
+  name: "red-baseline",
+  description: "Record the branch head and the failing test output before a fix lands",
+  revision: "v1",
+  input: z.object({ testCommand: z.array(z.string()).min(1) }),
+  output: z.object({ head: z.string(), redEvidence: z.string() }),
+  run: async (ctx: Pick<WorkspaceCtx, "git" | "exec">, input) => {
+    const [program = "npm", ...args] = input.testCommand;
+    const head = await ctx.git.head({ key: "head" });
+    const tests = await ctx.exec(program, args, { key: "tests" });
+    return { head: head.sha, redEvidence: tests.stdout.slice(0, 400) };
+  },
+});
+
 const branchDeliveryWorkflow = defineWorkflow(
   {
     id: "branch-delivery",
@@ -153,21 +173,25 @@ const branchDeliveryWorkflow = defineWorkflow(
     workspace: ({ input }) => ({ branch: `feature/${input.ticket}`, from: "main" }),
   },
   async (ctx, input) => {
-    const built = await ctx.step("build", async (step) => {
-      const writeScope = await step.paths.resolve(
-        bugWriterPaths,
-        { proposedPaths: input.allowedPaths },
-        { key: "developer-write-scope", label: "Resolve branch bug-fix paths" },
-      );
-      return step.agent(
-        developer,
-        { ticket: input },
-        {
-          key: "developer",
-          write: writeScope,
-        },
-      );
-    });
+    const baseline = await ctx.procedure(
+      redBaseline,
+      { testCommand: input.testCommand },
+      { key: "baseline", label: "Record the red baseline" },
+    );
+
+    const writeScope = await ctx.paths.resolve(
+      bugWriterPaths,
+      { proposedPaths: input.allowedPaths },
+      { key: "build:developer-write-scope", label: "Resolve branch bug-fix paths" },
+    );
+    const built = await ctx.agent(
+      developer,
+      { ticket: input },
+      {
+        key: "build:developer",
+        write: writeScope,
+      },
+    );
 
     // Workspace writes are already present and never yield a patch to integrate.
     expectType<undefined>(built.patch);
@@ -183,7 +207,7 @@ const branchDeliveryWorkflow = defineWorkflow(
     expectType<HumanReviewResult<{ decision: "approved" | "changes-requested" }>>(reviewed);
 
     await ctx.ui.render({ key: "result", view: resultView, props: { url: "https://example.com" } });
-    return built.value;
+    return { summary: built.value.summary, redEvidence: baseline.redEvidence };
   },
 );
 

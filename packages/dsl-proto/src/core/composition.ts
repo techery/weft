@@ -27,7 +27,6 @@ export interface ParallelLaneContext<
   Workspace extends boolean = false,
 > extends Ctx<TaskInput, TaskOutput, Workspace> {
   readonly itemKey: string;
-  key(local: string): string;
 }
 
 /**
@@ -68,7 +67,6 @@ export interface ReviewParallelLaneContext {
   readonly budget: import("./workflow.ts").BudgetView;
   readonly run: import("./workflow.ts").RunInfo;
   readonly itemKey: string;
-  key(local: string): string;
 }
 
 /** Read-only parallel fan-out available inside reusable reviews. */

@@ -161,6 +161,7 @@ export type WorkflowNodeKind =
   | "weft.observer"
   | "weft.operation"
   | "weft.path-policy"
+  | "weft.procedure"
   | "weft.prompt"
   | "weft.review"
   | "weft.task-contract"

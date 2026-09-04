@@ -263,11 +263,6 @@ const delivery = defineDelivery({
     .strict(),
   output: z
     .object({
-      repository: z.string().min(1),
-      issueNumber: z.number().int().positive(),
-      base: z.string().min(1),
-      branch: z.string().min(1),
-      head: z.string().min(1),
       pullRequestNumber: z.number().int().positive(),
       pullRequestUrl: z.string().url(),
     })
@@ -412,17 +407,17 @@ export const issueToReviewedPrWorkflow: WorkflowContract<
     let feedback: z.infer<typeof FeedbackSchema>[] = [];
 
     for (let attempt = 1; attempt <= 3; attempt += 1) {
-      const attemptCtx = ctx.scope({ keyPrefix: `attempt-${attempt}` });
-      const scope = await attemptCtx.paths.resolve(
+      const key = (local: string) => `attempt-${attempt}:${local}`;
+      const scope = await ctx.paths.resolve(
         writePolicy,
         { proposedPaths: plan.proposedPaths },
-        { key: "paths" },
+        { key: key("paths") },
       );
-      const implementation = await attemptCtx.agent(
+      const implementation = await ctx.agent(
         implementer,
         { issue, plan, attempt, feedback },
         {
-          key: "implement",
+          key: key("implement"),
           context: [issueSnapshot],
           write: scope,
         },
@@ -434,24 +429,24 @@ export const issueToReviewedPrWorkflow: WorkflowContract<
           feedback = [{ source: "implementation", summary: "No files changed", details: [] }];
           continue;
         }
-        const head = (await attemptCtx.git.head({ key: "empty-implementation-head" })).sha;
+        const head = (await ctx.git.head({ key: key("empty-implementation-head") })).sha;
         return blocked(input, "implementation-exhausted", attempt, head, null);
       }
 
-      await attemptCtx.git.add({ key: "stage-changed-files", paths: changedFiles });
-      const committed = await attemptCtx.git.commit({
-        key: "commit-implementation",
+      await ctx.git.add({ key: key("stage-changed-files"), paths: changedFiles });
+      const committed = await ctx.git.commit({
+        key: key("commit-implementation"),
         message: `fix: resolve #${issue.number} ${issue.title}`.slice(0, 120),
         paths: changedFiles,
       });
-      const status = await attemptCtx.git.status({ key: "committed-git-status" });
-      const head = (await attemptCtx.git.head({ key: "committed-git-head" })).sha;
+      const status = await ctx.git.status({ key: key("committed-git-status") });
+      const head = (await ctx.git.head({ key: key("committed-git-head") })).sha;
       if (!status.clean || status.branch !== input.branch || head !== committed.sha) {
         throw new Error("The committed attempt is not the clean workflow branch head");
       }
-      const candidate = attemptCtx.workspace.snapshot;
+      const candidate = ctx.workspace.snapshot;
       const candidateFiles = (
-        await attemptCtx.git.changedSince(baseHead, { key: "candidate-files-since-base" })
+        await ctx.git.changedSince(baseHead, { key: key("candidate-files-since-base") })
       ).files.map(({ path }) => path);
       if (candidateFiles.length === 0) {
         if (attempt < 3) {
@@ -461,10 +456,10 @@ export const issueToReviewedPrWorkflow: WorkflowContract<
         return blocked(input, "implementation-exhausted", attempt, head, null);
       }
 
-      const quality = await attemptCtx.check(
+      const quality = await ctx.check(
         qualitySuite,
         {},
-        { key: "quality", policy: "required", concurrency: 3, candidate },
+        { key: key("quality"), policy: "required", concurrency: 3, candidate },
       );
       if (!quality.passed) {
         const details = [quality.results.typecheck, quality.results.tests, quality.results.lint]
@@ -477,10 +472,10 @@ export const issueToReviewedPrWorkflow: WorkflowContract<
         return blocked(input, "quality-exhausted", attempt, head, quality.attestation.ref);
       }
 
-      const review = await attemptCtx.review(
+      const review = await ctx.review(
         candidateReview,
         { issue, plan, head, changedFiles: candidateFiles, checkAttestationRef: quality.attestation.ref },
-        { key: "review", candidate },
+        { key: key("review"), candidate },
       );
       if (review.status === "rework") {
         const details = review.blocking.map(({ code, message, path }) =>
@@ -493,17 +488,17 @@ export const issueToReviewedPrWorkflow: WorkflowContract<
         return blocked(input, "review-exhausted", attempt, head, review.attestation.ref);
       }
 
-      const refreshed = await attemptCtx.context(
+      const refreshed = await ctx.context(
         issueSource,
         { repository: input.repository, issueNumber: input.issueNumber },
-        { key: "refresh-issue", maxAge: "30s" },
+        { key: key("refresh-issue"), maxAge: "30s" },
       );
       requireIssue(refreshed.value, input);
       if (refreshed.value.revision !== issue.revision || !eligible(refreshed.value)) {
         return blocked(input, "issue-drift", attempt, head, refreshed.evidence.ref);
       }
 
-      const dossier = await attemptCtx.artifact(
+      const dossier = await ctx.artifact(
         dossierArtifact,
         {
           content: {
@@ -520,15 +515,14 @@ export const issueToReviewedPrWorkflow: WorkflowContract<
           },
         },
         {
-          key: "dossier",
+          key: key("dossier"),
           candidate,
           sources: [issueSnapshot.evidence, refreshed.evidence, quality.attestation, review.attestation],
         },
       );
-      const receipt = await attemptCtx.delivery(delivery, {
-        key: "publish-pull-request",
-        candidate,
-        input: {
+      const receipt = await ctx.delivery(
+        delivery,
+        {
           idempotencyKey: `${issue.repository}#${issue.number}:${candidate.treeHash}`,
           repository: issue.repository,
           issueNumber: issue.number,
@@ -541,21 +535,16 @@ export const issueToReviewedPrWorkflow: WorkflowContract<
           dossierRef: dossier.ref,
           dossierSha256: dossier.sha256,
         },
-        proofs: [quality.proof, review.proof],
-        artifacts: [dossier],
-        authorization: { detail: `Push ${input.branch} at ${head} and open its pull request.` },
-        attempts: 2,
-      });
+        {
+          key: key("publish-pull-request"),
+          candidate,
+          proofs: [quality.proof, review.proof],
+          artifacts: [dossier],
+          authorization: { detail: `Push ${input.branch} at ${head} and open its pull request.` },
+          attempts: 2,
+        },
+      );
       const value = receipt.value;
-      if (
-        value.repository !== issue.repository ||
-        value.issueNumber !== issue.number ||
-        value.base !== input.baseRef ||
-        value.branch !== input.branch ||
-        value.head !== head
-      ) {
-        throw new Error("The delivery receipt does not match the authorized candidate");
-      }
       return {
         status: "opened",
         repository: issue.repository,

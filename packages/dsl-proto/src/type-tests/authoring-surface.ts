@@ -1,4 +1,16 @@
-import { defineOperation, type WorkflowCtx, type WorkspaceCtx, withRecovery, z } from "../index.ts";
+import type { ReviewParallelLaneContext } from "../core/composition.ts";
+import type { ReviewCtx } from "../core/workflow.ts";
+import {
+  defineCheck,
+  defineDelivery,
+  defineOperation,
+  defineProcedure,
+  type WorkflowCtx,
+  type WorkspaceCtx,
+  type WorkspaceSnapshotRef,
+  withRecovery,
+  z,
+} from "../index.ts";
 
 const protectedOperation = defineOperation({
   name: "type-test-protected-operation",
@@ -31,6 +43,28 @@ const recoverableOperation = withRecovery(protectedOperation, {
   },
 });
 
+const deliveryCheck = defineCheck({
+  name: "type-test-delivery-check",
+  revision: "v1",
+  command: ["true"],
+  policy: "required",
+  waiver: { mode: "never" },
+});
+
+const delivery = defineDelivery({
+  name: "type-test-delivery",
+  binding: "type-test.delivery",
+  input: z.object({ id: z.string() }).strict(),
+  output: z.object({ url: z.string().url() }).strict(),
+  capabilities: ["network"],
+  defaults: {
+    authorization: {
+      action: "Publish the type-test candidate",
+      risk: "high",
+    },
+  },
+});
+
 async function exerciseSmallerSurface(ctx: WorkflowCtx): Promise<void> {
   const protectedResult = await ctx.operation(
     protectedOperation,
@@ -53,14 +87,14 @@ async function exerciseSmallerSurface(ctx: WorkflowCtx): Promise<void> {
   );
   if (recoverableResult.status === "succeeded") recoverableResult.receipt.output.accepted;
 
-  await ctx.step("group", async (step) => {
-    await step.sleep("1s", { key: "wait" });
-  });
+  ctx.scope({ budget: { tokens: 100 } });
 
   await ctx.parallel.all(
     ["a", "b"],
     async (item, lane) => {
-      await lane.sleep("1s", { key: lane.key("wait") });
+      await lane.sleep("1s", { key: "wait" });
+      // @ts-expect-error Lane calls use local keys directly; authors do not assemble resolved keys.
+      lane.key;
       return item;
     },
     { key: "parallel", keyOf: (item) => item },
@@ -84,8 +118,10 @@ async function exerciseSmallerSurface(ctx: WorkflowCtx): Promise<void> {
   ctx.successes;
   // @ts-expect-error Settled arrays are handled with ordinary discriminated-union code.
   ctx.all;
-  // @ts-expect-error Durable grouping always owns a callback.
-  ctx.step("missing-callback");
+  // @ts-expect-error Workflow structure uses TypeScript rather than a durable grouping callback.
+  ctx.step;
+  // @ts-expect-error Scope changes inherited defaults and does not organize durable keys.
+  ctx.scope({ keyPrefix: "group" });
   // @ts-expect-error Policy decisions replaced the deprecated gate alias.
   ctx.gate;
   // @ts-expect-error Human branching uses confirm.
@@ -102,13 +138,141 @@ async function exerciseSmallerSurface(ctx: WorkflowCtx): Promise<void> {
   ctx.bash;
 }
 
-function exerciseWorkspaceSurface(ctx: WorkspaceCtx): void {
-  ctx.workspace.snapshot;
+async function exerciseWorkspaceSurface(ctx: WorkspaceCtx): Promise<void> {
+  const candidate = ctx.workspace.snapshot;
+  const checked = await ctx.check(deliveryCheck, { key: "delivery-check", candidate });
+  if (checked.status === "pass" && checked.disposition === "executed") {
+    await ctx.delivery(
+      delivery,
+      { id: "candidate" },
+      {
+        key: "delivery",
+        candidate,
+        proofs: [checked.proof],
+        authorization: { detail: "Publish the checked candidate" },
+      },
+    );
+
+    // @ts-expect-error Delivery input is the second argument, not a field inside execution options.
+    await ctx.delivery(delivery, {
+      key: "legacy-delivery",
+      candidate,
+      input: { id: "candidate" },
+      proofs: [checked.proof],
+      authorization: { detail: "Legacy request shape" },
+    });
+  }
   // @ts-expect-error Candidate freshness is enforced inside candidate-bound host calls.
   ctx.workspace.assertUnchanged;
   // @ts-expect-error Snapshot comparison is an engine responsibility.
   ctx.workspace.sameSnapshot;
 }
 
+declare const candidateAIdentity: unique symbol;
+declare const candidateBIdentity: unique symbol;
+declare const candidateA: WorkspaceSnapshotRef & { readonly [candidateAIdentity]: true };
+declare const candidateB: WorkspaceSnapshotRef & { readonly [candidateBIdentity]: true };
+
+async function exerciseCandidateCorrelation(ctx: WorkspaceCtx): Promise<void> {
+  const checked = await ctx.check(deliveryCheck, { key: "candidate-a-check", candidate: candidateA });
+  if (checked.status === "pass" && checked.disposition === "executed") {
+    await ctx.delivery(
+      delivery,
+      { id: "candidate-b" },
+      {
+        key: "mismatched-delivery",
+        candidate: candidateB,
+        // @ts-expect-error Positive proof for candidate A cannot promote candidate B.
+        proofs: [checked.proof],
+        authorization: { detail: "Reject mixed candidates" },
+      },
+    );
+  }
+}
+
+/** Declares exactly the capabilities the body reads, so the requirement stays a whitelist. */
+const collectRepositoryFacts = defineProcedure({
+  name: "collect-repository-facts",
+  description: "Read head and the dependency tree",
+  revision: "v1",
+  input: z.object({ baseRef: z.string().min(1) }).strict(),
+  output: z.object({ head: z.string().min(1), files: z.array(z.string()) }).strict(),
+  run: async (ctx: Pick<WorkflowCtx, "git" | "exec">, input) => {
+    // Durable keys inside a procedure body are local to one invocation.
+    const head = await ctx.git.head({ key: "head" });
+    const changed = await ctx.git.changedSince(input.baseRef, { key: "changed" });
+    await ctx.exec("npm", ["ls", "--json"], { key: "dependencies" });
+    return { head: head.sha, files: changed.files.map(({ path }) => path) };
+  },
+});
+
+/** A procedure that mutates the workspace cannot be invoked from a read-only workflow context. */
+const commitRemediation = defineProcedure({
+  name: "commit-remediation",
+  revision: "v1",
+  input: z.object({ message: z.string().min(1) }).strict(),
+  output: z.object({ sha: z.string().min(1) }).strict(),
+  run: async (ctx: Pick<WorkspaceCtx, "git">, input) => {
+    const committed = await ctx.git.commit({ key: "commit", message: input.message });
+    return { sha: committed.sha };
+  },
+});
+
+async function exerciseProcedureSurface(ctx: WorkflowCtx, workspaceCtx: WorkspaceCtx): Promise<void> {
+  const facts = await ctx.procedure(
+    collectRepositoryFacts,
+    { baseRef: "main" },
+    { key: "collect", label: "Collect repository facts" },
+  );
+  expectString(facts.head);
+  expectString(facts.files[0] ?? "");
+
+  const receipt = await ctx.procedure.detailed(
+    collectRepositoryFacts,
+    { baseRef: "main" },
+    { key: "collect-detailed" },
+  );
+  expectBoolean(receipt.replayed);
+  expectString(receipt.inputDigest);
+
+  // A workspace context supplies strictly more, so the read-only body remains callable.
+  await workspaceCtx.procedure(collectRepositoryFacts, { baseRef: "main" }, { key: "collect-in-workspace" });
+  await workspaceCtx.procedure(commitRemediation, { message: "fix: patch" }, { key: "commit" });
+
+  // @ts-expect-error A read-only workflow context cannot satisfy a body that requires workspace mutation.
+  await ctx.procedure(commitRemediation, { message: "fix: patch" }, { key: "commit" });
+
+  // @ts-expect-error Procedure input is the second argument, matching every other definition-backed call.
+  await ctx.procedure(collectRepositoryFacts, { key: "inline-input", input: { baseRef: "main" } });
+
+  // @ts-expect-error Procedure input is schema-validated rather than structurally loose.
+  await ctx.procedure(collectRepositoryFacts, { baseRef: 1 }, { key: "wrong-input" });
+
+  // @ts-expect-error Invocations never restate the body's declared revision.
+  await ctx.procedure(collectRepositoryFacts, { baseRef: "main" }, { key: "k", revision: "v2" });
+}
+
+function expectString(_value: string): void {}
+function expectBoolean(_value: boolean): void {}
+
 void exerciseSmallerSurface;
 void exerciseWorkspaceSurface;
+void exerciseCandidateCorrelation;
+void exerciseProcedureSurface;
+
+type AssertNever<Value extends never> = Value;
+type AssertTrue<Value extends true> = Value;
+type IsAssignable<From, To> = [From] extends [To] ? true : false;
+
+/** Review lanes retain every review capability. */
+export type ReviewLaneMissingCapabilities = AssertNever<
+  Exclude<keyof ReviewCtx, keyof ReviewParallelLaneContext>
+>;
+
+/** Review lanes add identity, never authority. */
+export type ReviewLaneUnexpectedCapabilities = AssertNever<
+  Exclude<keyof ReviewParallelLaneContext, keyof ReviewCtx | "itemKey">
+>;
+
+/** Review lanes remain usable wherever an ordinary review context is expected. */
+export type ReviewLaneIsReviewContext = AssertTrue<IsAssignable<ReviewParallelLaneContext, ReviewCtx>>;

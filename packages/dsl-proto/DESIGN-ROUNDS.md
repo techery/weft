@@ -364,3 +364,47 @@ Authoring changes accepted:
 Proof boundary: this package still contains declarations and compile-time fixtures, not the engine behavior
 implied by journaling, key derivation, host validation, freezing, freshness checks, authorization consumption,
 or task persistence. Round 11 makes those runtime obligations more precise; it does not claim they ship here.
+
+## Post-round authoring grammar simplification
+
+The current prototype supersedes several Round 11 authoring choices while retaining its safety results:
+
+- ordinary TypeScript plus explicit stable effect keys replaces `ctx.step`; `ctx.scope` now changes inherited
+  agent, task, parallel, or budget defaults and no longer prefixes keys;
+- delivery follows the same `definition, input, options` grammar as other definition-backed capabilities;
+- parallel lanes own their durable namespace, so calls through a lane use local keys and no `lane.key` helper;
+- delivery receipts own candidate identity, while provider output is reserved for new remote facts;
+- public authority contexts remain explicit whitelists, with compile-time parity assertions preventing review
+  lanes from losing review capabilities or gaining authority.
+
+No prototype `phase` replaces `step`. A phase would require host-observable lifecycle semantics such as status,
+timing, progress, or resumption; presentation grouping alone does not justify another DSL construct.
+
+## Named reusable bodies
+
+Removing `step` left one requirement genuinely unserved. A reusable helper had no way to appear in a workflow
+view under its own name and schemas: a plain function is invisible to the engine, `label` names a single call
+without schemas, and `ctx.workflow` pays for a separate durable run. `step` never served it either — it carried a
+key and an anonymous callback, no name, no schemas, and no node in the execution model.
+
+`ctx.procedure` fills that gap, and it clears the bar the previous section sets rather than working around it:
+
+- resumption — a procedure's validated output is recorded under its key, so replay returns the recorded result
+  instead of re-entering the body; `revision` invalidates that record when the body changes meaning. A plain
+  function cannot do this, which is what makes the construct durable rather than decorative;
+- status and timing — recorded once at the boundary, so a view presents the body by name and schema;
+- key ownership — durable keys inside the body are local to one invocation, restoring for named helpers the
+  property that scoped key prefixes used to provide, now attached to an identity instead of a string.
+
+Authority is narrowed, never widened. The `run` context parameter is annotated with exactly the capabilities the
+body consumes, and the requirement is contravariant, so a body needing `Pick<WorkspaceCtx, "git">` cannot be
+invoked from a read-only workflow context. This keeps public contexts explicit whitelists.
+
+The construct is deliberately weaker than a child workflow. It shares the caller's run, workspace, budget, and
+cancellation, so it mints no run identity — and consequently its output must be schema-expressible. Helpers that
+thread proofs, evidence refs, or snapshots remain plain functions or become child workflows, because crossing a
+run boundary requires re-minted evidence.
+
+Proof boundary: recording, replay short-circuiting, revision invalidation, and boundary timing are engine
+obligations. This package declares the authoring contract and proves the capability requirement at compile time;
+it does not implement the durable behavior those obligations describe.

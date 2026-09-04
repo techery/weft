@@ -36,32 +36,69 @@ The prototype deliberately uses ordinary TypeScript wherever a separate DSL conc
 - `await` expresses order;
 - `if`, `switch`, and bounded loops express control flow;
 - plain typed functions provide same-run reuse;
-- `ctx.step(key, callback)` groups several durable effects under one stable namespace;
+- explicit stable keys identify independently replayable effects;
 - `ctx.parallel.all` and `ctx.parallel.settled` provide durable keyed fan-out;
+- `ctx.procedure` runs a named, revisioned, schema-validated body inside the current run;
 - `ctx.workflow` starts a separately durable child workflow.
 
-There is no recipe, sequence, pipeline, stage, or graph-builder abstraction. For example:
+There is no recipe, sequence, pipeline, step, stage, or graph-builder abstraction. For example:
 
 ```ts
-async function inspect(item: Item): Promise<Inspection> {
-  return analyze(item);
-}
-
 const inspections = await ctx.parallel.all(
   items,
-  (item) => inspect(item),
+  (item, lane) => lane.agent(inspector, item, { key: "inspect" }),
   { key: "inspect", keyOf: (item) => item.id },
 );
 
-for (const item of inspections) {
-  await ctx.step(item.id, async (step) => {
-    await step.agent(reviewer, item, { key: "review" });
-  });
+for (const item of items) {
+  await ctx.agent(reviewer, item, { key: `review:${item.id}` });
 }
 ```
 
-`ctx.scope(...)` remains for inherited defaults such as agent settings, budgets, task access, concurrency, and a
-composed key prefix. It does not create a new execution node.
+`ctx.scope(...)` remains only for inherited defaults such as agent settings, budgets, task access, and
+concurrency. It does not organize keys, create an execution node, or mint authority.
+
+## Named reusable bodies
+
+A plain function is the right tool while a helper is incidental. When a helper deserves a name, schemas, and a
+place in a workflow view, promote it to a procedure rather than reaching for a grouping label:
+
+```ts
+const redBaseline = defineProcedure({
+  name: "red-baseline",
+  revision: "v1",
+  input: z.object({ testCommand: z.array(z.string()).min(1) }),
+  output: z.object({ head: z.string(), redEvidence: z.string() }),
+  run: async (ctx: Pick<WorkspaceCtx, "git" | "exec">, input) => {
+    const [program = "npm", ...args] = input.testCommand;
+    const head = await ctx.git.head({ key: "head" });
+    const tests = await ctx.exec(program, args, { key: "tests" });
+    return { head: head.sha, redEvidence: tests.stdout.slice(0, 400) };
+  },
+});
+
+const baseline = await ctx.procedure(redBaseline, { testCommand }, { key: "baseline" });
+```
+
+A procedure earns its place in the DSL by carrying durable behavior a plain function cannot:
+
+- its validated output is recorded under one key, so replay returns the recorded result instead of re-entering
+  the body, and `revision` invalidates that record when the body stops meaning what it meant;
+- its status and timing are recorded at one boundary, so a view can present the body by name and schema;
+- durable keys written inside the body are local to one invocation, so a reusable helper no longer threads a
+  caller-supplied key prefix through its signature.
+
+The `run` context parameter is annotated with exactly the capabilities the body consumes, and that requirement is
+contravariant: a body needing `Pick<WorkspaceCtx, "git">` cannot be invoked from a read-only workflow context.
+A procedure therefore narrows authority and never widens it.
+
+A procedure is not a child workflow. It shares the caller's run, workspace, budget, and cancellation, so it costs
+no separate run identity — and for the same reason its output must be schema-expressible. Helpers that thread
+proofs, evidence refs, or snapshots stay plain functions or become child workflows, because crossing a run
+boundary requires re-minted evidence.
+
+A phase belongs in the DSL only if a future host gives it lifecycle semantics of its own; presentation grouping
+alone remains insufficient.
 
 ## One call per capability
 
@@ -103,13 +140,16 @@ Recoverable results still distinguish success, confirmed non-commit, and ambiguo
 Verified delivery is also one call:
 
 ```ts
-const receipt = await ctx.delivery(pullRequestDelivery, {
-  key: "deliver",
-  candidate: ctx.workspace.snapshot,
+const receipt = await ctx.delivery(
+  pullRequestDelivery,
   input,
-  proofs: [quality.proof, review.proof],
-  authorization: { detail: "Open the pull request" },
-});
+  {
+    key: "deliver",
+    candidate: ctx.workspace.snapshot,
+    proofs: [quality.proof, review.proof],
+    authorization: { detail: "Open the pull request" },
+  },
+);
 ```
 
 ## Safety boundaries
@@ -122,6 +162,8 @@ const receipt = await ctx.delivery(pullRequestDelivery, {
   mutation and `ctx.workspace.snapshot`.
 - Checks, reviews, artifacts, and delivery bind to the exact snapshot they observed. The host must reject stale
   candidates or evidence from another candidate atomically.
+- A delivery binding must correlate its provider response to the frozen request. Provider output should contain
+  new remote facts; the receipt already carries local candidate identity.
 - `ctx.policy.decide` and `ctx.human.confirm` are branching answers, not reusable authorization.
 - Protected operations and delivery derive candidate-specific authorization from their definitions inside the
   engine-owned call.
@@ -139,7 +181,7 @@ identities, digests, snapshots, policy, expiry, and replay state before honoring
   cancellation, and diagnostics.
 
 Candidate workspace callbacks use `WorkspaceCtx` plus `apply` and `capture`. Parallel lanes are the scoped context
-itself and add only `itemKey` and `key(local)`.
+itself and add only `itemKey`; durable calls made through the lane use lane-local keys.
 
 ## Task state
 
@@ -152,6 +194,7 @@ revision for optimistic updates, while `dedupeKey` makes retried upserts converg
 - `src/index.ts` — the only public authoring barrel
 - `src/core/workflow.ts` — workflow definitions and the canonical context
 - `src/core/composition.ts` — parallel fan-out
+- `src/core/procedures.ts` — named reusable bodies that run inside the calling run
 - `src/core/agent.ts` — agents, results, goals, write scopes, and patches
 - `src/core/checks.ts`, `reviews.ts`, and `artifacts.ts` — candidate-bound evidence
 - `src/core/operations.ts` and `deliveries.ts` — one-shot protected external effects

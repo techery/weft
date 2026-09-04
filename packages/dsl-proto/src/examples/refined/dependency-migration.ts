@@ -109,7 +109,6 @@ const DeliveryInputSchema = z.object({
 const DeliveryOutputSchema = z.object({
   pullRequestNumber: z.number().int().positive(),
   url: z.string().url(),
-  head: z.string().min(1),
 });
 const MigrationOutputSchema = z.object({
   branch: z.string().min(1),
@@ -174,31 +173,26 @@ async function discoverContext(
   request: MigrationRequest,
   key: string,
 ): Promise<DiscoveryBundle> {
-  const queries: ReadonlyArray<{ key: string; run: () => Promise<DiscoverySnapshot> }> = [
+  const snapshots = await ctx.parallel.all(
+    ["repository", "release"] as const,
+    async (query, lane): Promise<DiscoverySnapshot> =>
+      query === "repository"
+        ? lane.context(
+            repositorySource,
+            { repository: request.repository, dependency: request.dependency },
+            { key: "read" },
+          )
+        : lane.context(
+            releaseSource,
+            { dependency: request.dependency, version: request.targetVersion },
+            { key: "read" },
+          ),
     {
-      key: "repository",
-      run: () =>
-        ctx.context(
-          repositorySource,
-          { repository: request.repository, dependency: request.dependency },
-          { key: `${key}:repository` },
-        ),
+      key,
+      keyOf: (query) => query,
+      concurrency: 2,
     },
-    {
-      key: "release",
-      run: () =>
-        ctx.context(
-          releaseSource,
-          { dependency: request.dependency, version: request.targetVersion },
-          { key: `${key}:release` },
-        ),
-    },
-  ];
-  const snapshots = await ctx.parallel.all(queries, (query) => query.run(), {
-    key,
-    keyOf: (query) => query.key,
-    concurrency: 2,
-  });
+  );
   let repository: DiscoveryBundle["repository"] | undefined;
   let release: DiscoveryBundle["release"] | undefined;
   for (const snapshot of snapshots) {
@@ -491,10 +485,9 @@ const dependencyMigrationWorkflow = defineWorkflow(
     );
 
     ctx.cancellation.throwIfRequested();
-    const delivered = await ctx.delivery(pullRequest, {
-      key: "publish-pull-request",
-      candidate: candidate.snapshot,
-      input: {
+    const delivered = await ctx.delivery(
+      pullRequest,
+      {
         repository: input.repository,
         baseBranch: discovery.repository.value.defaultBranch,
         expectedBaseHead: discovery.repository.value.headSha,
@@ -503,12 +496,15 @@ const dependencyMigrationWorkflow = defineWorkflow(
         dossierRef: dossier.ref,
         dossierSha256: dossier.sha256,
       },
-      proofs: [candidate.quality.proof, candidate.assessment.proof],
-      artifacts: [dossier],
-      authorization: { detail: `Publish checked and reviewed commit ${head}.` },
-      attempts: 2,
-    });
-    if (delivered.value.head !== head) throw new Error("Delivery returned a different head");
+      {
+        key: "publish-pull-request",
+        candidate: candidate.snapshot,
+        proofs: [candidate.quality.proof, candidate.assessment.proof],
+        artifacts: [dossier],
+        authorization: { detail: `Publish checked and reviewed commit ${head}.` },
+        attempts: 2,
+      },
+    );
     return {
       branch: ctx.workspace.branch,
       head,

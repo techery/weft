@@ -282,9 +282,6 @@ const PublishRemediationInput = z.object({
 
 const PublishRemediationOutput = z.object({
   status: z.literal("published"),
-  caseId: z.string().min(1),
-  branch: z.string().min(1),
-  candidateTree: z.string().min(1),
   commitSha: z.string().min(1),
   pullRequestUrl: z.string().url(),
 });
@@ -441,11 +438,9 @@ const securityRemediationWorkflow = defineWorkflow(
         ],
       },
     );
-    const delivery = await ctx.delivery(publishSecurityRemediation, {
-      key: "publish-remediation",
-      label: `Publish ${securityCase.caseId}`,
-      candidate,
-      input: {
+    const delivery = await ctx.delivery(
+      publishSecurityRemediation,
+      {
         caseId: securityCase.caseId,
         repository: securityCase.repository,
         branch: securityCase.routing.branch,
@@ -454,20 +449,18 @@ const securityRemediationWorkflow = defineWorkflow(
         changedFiles,
         evidence: { ref: evidence.ref, sha256: evidence.sha256 },
       },
-      proofs: [verification.proof, review.proof],
-      artifacts: [evidence],
-      authorization: {
-        detail: `Publish ${securityCase.caseId} from exact tree ${candidate.treeHash} with evidence ${evidence.sha256}.`,
+      {
+        key: "publish-remediation",
+        label: `Publish ${securityCase.caseId}`,
+        candidate,
+        proofs: [verification.proof, review.proof],
+        artifacts: [evidence],
+        authorization: {
+          detail: `Publish ${securityCase.caseId} from exact tree ${candidate.treeHash} with evidence ${evidence.sha256}.`,
+        },
+        attempts: 1,
       },
-      attempts: 1,
-    });
-    if (
-      delivery.value.caseId !== securityCase.caseId ||
-      delivery.value.branch !== securityCase.routing.branch ||
-      delivery.value.candidateTree !== candidate.treeHash
-    ) {
-      throw new Error("Delivery receipt does not identify the authorized remediation candidate");
-    }
+    );
 
     return {
       status: "delivered",

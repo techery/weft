@@ -13,6 +13,7 @@ export { defineResultView, defineUiView } from "./core/human.ts";
 export { defineObserver } from "./core/observers.ts";
 export { defineOperation, withRecovery } from "./core/operations.ts";
 export { definePathPolicy } from "./core/path-policies.ts";
+export { defineProcedure } from "./core/procedures.ts";
 export { defineReview } from "./core/reviews.ts";
 export { definePrompt, prompt, renderPrompt, renderPromptDefinition } from "./core/shared.ts";
 export { defineTaskContract } from "./core/tasks.ts";
@@ -77,6 +78,14 @@ export type {
 } from "./core/operations.ts";
 
 export type { PathGrantRef, PathPolicyDefinition, WriteScope } from "./core/path-policies.ts";
+export type {
+  AnyProcedureDefinition,
+  ProcedureDefinition,
+  ProcedureInputOf,
+  ProcedureOptions,
+  ProcedureOutputOf,
+  ProcedureReceipt,
+} from "./core/procedures.ts";
 export type { ReviewDefinition, ReviewResult } from "./core/reviews.ts";
 export type {
   AnySchema,

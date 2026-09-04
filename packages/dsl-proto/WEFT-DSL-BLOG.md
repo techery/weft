@@ -8,12 +8,13 @@ What changed is the proposed authoring contract.
 
 ## The short version
 
-The new model has four basic ideas:
+The new model has five basic ideas:
 
 1. Use normal TypeScript for order, branching, loops, and reusable functions.
-2. Use `ctx.step` when several effects need one durable key namespace.
-3. Use `ctx.parallel.all` or `ctx.parallel.settled` for durable fan-out.
-4. Use one function per capability: `ctx.agent`, `ctx.operation`, and `ctx.delivery`.
+2. Give every independently replayable effect one explicit stable key.
+3. Use `ctx.parallel.all` or `ctx.parallel.settled` when the engine must own durable fan-out identity.
+4. Use one definition-first call per capability; when a definition accepts input, it comes before options.
+5. Promote a helper to `ctx.procedure` when it deserves a name, schemas, and a recorded boundary.
 
 The engine still owns replay, authorization, candidate freshness, evidence, and recovery. Authors simply see less
 of that machinery.
@@ -73,15 +74,18 @@ Authors no longer choose the lifecycle twice—once in the definition and again 
 Delivery is now callable too:
 
 ```ts
-const receipt = await ctx.delivery(pullRequestDelivery, {
-  key: "deliver",
-  candidate: ctx.workspace.snapshot,
-  input: { title, branch },
-  proofs: [quality.proof, review.proof],
-  authorization: {
-    detail: "Publish the exact checked and reviewed candidate",
+const receipt = await ctx.delivery(
+  pullRequestDelivery,
+  { title, branch },
+  {
+    key: "deliver",
+    candidate: ctx.workspace.snapshot,
+    proofs: [quality.proof, review.proof],
+    authorization: {
+      detail: "Publish the exact checked and reviewed candidate",
+    },
   },
-});
+);
 ```
 
 The host still freezes the request, checks that every proof belongs to the same candidate, rejects stale workspace
@@ -105,9 +109,7 @@ Sequential processing is a loop:
 
 ```ts
 for (const item of items) {
-  await ctx.step(item.id, async (step) => {
-    await step.agent(reviewer, item, { key: "review" });
-  });
+  await ctx.agent(reviewer, item, { key: `review:${item.id}` });
 }
 ```
 
@@ -116,7 +118,7 @@ Parallel processing remains explicit because the engine needs stable lane identi
 ```ts
 const inspections = await ctx.parallel.all(
   items,
-  (item) => inspect(item),
+  (item, lane) => lane.agent(inspector, item, { key: "inspect" }),
   {
     key: "inspect-packages",
     keyOf: (item) => item.name,
@@ -127,20 +129,57 @@ const inspections = await ctx.parallel.all(
 
 Use `settled` instead of `all` when failures are expected domain data that the workflow will inspect.
 
-## Step and phase are no longer competing ideas
+## Scope is not workflow structure
 
-The prototype keeps one grouping primitive:
+The prototype no longer has a step, stage, or phase abstraction. Plain TypeScript owns sequential structure, and
+stable effect keys remain explicit:
 
 ```ts
-const result = await ctx.step("verify", async (step) => {
-  const tests = await step.check(testSuite, { key: "tests" });
-  const review = await step.review(codeReview, input, { key: "review" });
-  return { tests, review };
-});
+const tests = await ctx.check(testSuite, { key: "verify:tests" });
+const review = await ctx.review(codeReview, input, { key: "verify:review" });
 ```
 
-A step owns a callback and namespaces the durable effects inside it. Presentation-only phase labels belong to the
-runnable SDK and UI, not to this prototype's authoring grammar. There is no additional stage layer.
+`ctx.scope(...)` has a different job: it inherits agent defaults, task access, concurrency, or budget limits. It
+does not organize durable keys or create a runtime-visible section.
+
+## Name a body when it deserves a name
+
+Deleting `step` left a real question open: how does a reusable helper appear in a workflow view with its name and
+schemas? A plain function is invisible, `label` names one call without schemas, and a child workflow costs a
+separate durable run. `step` never answered it either—it had a key and an anonymous callback, no name and no
+schemas.
+
+`ctx.procedure` answers it:
+
+```ts
+const redBaseline = defineProcedure({
+  name: "red-baseline",
+  revision: "v1",
+  input: z.object({ testCommand: z.array(z.string()).min(1) }),
+  output: z.object({ head: z.string(), redEvidence: z.string() }),
+  run: async (ctx: Pick<WorkspaceCtx, "git" | "exec">, input) => {
+    const [program = "npm", ...args] = input.testCommand;
+    const head = await ctx.git.head({ key: "head" });
+    const tests = await ctx.exec(program, args, { key: "tests" });
+    return { head: head.sha, redEvidence: tests.stdout.slice(0, 400) };
+  },
+});
+
+const baseline = await ctx.procedure(redBaseline, { testCommand }, { key: "baseline" });
+```
+
+What makes this a durable construct rather than a label: the validated output is recorded under one key, so
+replay returns it instead of re-entering the body, and `revision` invalidates that record when the body changes
+meaning. Keys inside the body are local, so the helper stops threading a caller-supplied prefix through its
+signature.
+
+The context parameter is annotated with exactly what the body reads, and the requirement is contravariant—a body
+needing workspace mutation cannot be called from a read-only context. A procedure narrows authority; it never
+widens it.
+
+It is not a child workflow. It shares the caller's run, workspace, budget, and cancellation, which is why it is
+cheap and also why its output has to be schema-expressible. Helpers that thread proofs or evidence refs stay
+plain functions, or graduate to `ctx.workflow`.
 
 ## One public context
 
@@ -164,7 +203,7 @@ The following author-facing concepts were removed:
 - `ctx.sequence`
 - `ctx.pipeline`
 - `ctx.successes` and `ctx.all`
-- the context-returning `ctx.step(key)` overload
+- `ctx.step` and scoped key prefixes
 - `ctx.workspace.lease`
 - `ctx.gate`
 - `ctx.human.approve`

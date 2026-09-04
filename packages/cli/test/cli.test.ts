@@ -625,6 +625,11 @@ describe("weft skill", () => {
 
   it("separates the runnable SDK from the declaration-only DSL prototype", async () => {
     const printed = await cli("--cwd", await tempRoot(), "skill");
+    const prototypeBlock = boundedSection(
+      printed.text,
+      "<!-- weft-dsl-proto-reference:start -->",
+      "<!-- weft-dsl-proto-reference:end -->",
+    );
 
     expect(printed.text).toContain("@techery/weft-sdk");
     expect(printed.text).toContain("@techery/weft-dsl-proto");
@@ -633,9 +638,15 @@ describe("weft skill", () => {
     expect(printed.text).toContain("ctx.agent(planner, issue");
     expect(printed.text).toContain('failure: "return"');
     expect(printed.text).toContain("ctx.workspace.snapshot");
-    expect(printed.text).toContain("a phase labels effects");
-    expect(printed.text).toContain("prototype step owns a callback");
-    expect(printed.text).toContain("needs no separate `.stage(...)` layer");
+    expect(printed.text).toContain("no step, stage, or phase abstraction");
+    expect(printed.text).toContain("does not organize keys or create workflow structure");
+    expect(printed.text).toContain("ctx.delivery(");
+    expect(printed.text).toContain("provider output should contain new remote facts");
+    expect(printed.text).toContain("defineProcedure");
+    expect(printed.text).toContain("ctx.procedure(redBaseline");
+    expect(printed.text).toContain("replay returns the recorded result instead of re-entering");
+    expect(printed.text).toContain("that requirement is contravariant");
+    expect(printed.text).toContain("A procedure is not a child workflow");
     expect(printed.text).toContain("future host performs those comparisons internally");
     expect(printed.text).toContain("A `subject` is simply the thing");
     expect(printed.text).toContain("const planner = defineAgent");
@@ -647,6 +658,10 @@ describe("weft skill", () => {
     expect(printed.text).toContain("validated value directly");
     expect(printed.text).toContain("ctx.phase");
     expect(printed.text).toContain('onError: "null"');
+    expect(prototypeBlock).not.toContain("ctx.step");
+    expect(prototypeBlock).not.toContain("keyPrefix");
+    expect(prototypeBlock).not.toContain("lane.key");
+    expect(prototypeBlock).not.toContain("reviewLane.key");
   });
 
   it("is state-independent, writes only the document to stdout, and creates nothing", async () => {

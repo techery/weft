@@ -19,6 +19,7 @@ import type { HumanApi, UiApi } from "./human.ts";
 import type { ObserverFn } from "./observers.ts";
 import type { OperationApi } from "./operations.ts";
 import type { PathPolicyApi } from "./path-policies.ts";
+import type { ProcedureFn } from "./procedures.ts";
 import type { ReviewFn } from "./reviews.ts";
 import type {
   AnySchema,
@@ -100,8 +101,6 @@ export interface CtxScopeOptions {
   tasks?: false | AgentTaskAccess;
   parallel?: ParallelScopeDefaults;
   budget?: BudgetLimits;
-  /** Prefixes durable child keys and composes with nested scopes. */
-  keyPrefix?: string;
 }
 
 /** Sub workflow options. */
@@ -247,11 +246,10 @@ export interface Ctx<
   context: ContextFn;
   parallel: ParallelFn<TaskExtensionInput, TaskExtensions, Workspace>;
   workflow: WorkflowFn;
+  /** Runs a named, revisioned, schema-validated body inside this run; the body's durable keys are local to the call. */
+  procedure: ProcedureFn<Ctx<TaskExtensionInput, TaskExtensions, Workspace>>;
+  /** Returns a context with inherited execution defaults; it neither namespaces keys nor creates workflow structure. */
   scope(opts: CtxScopeOptions): Ctx<TaskExtensionInput, TaskExtensions, Workspace>;
-  step<Result>(
-    key: string,
-    run: (ctx: Ctx<TaskExtensionInput, TaskExtensions, Workspace>) => Promise<Result> | Result,
-  ): Promise<Result>;
   policy: PolicyApi;
   human: HumanApi;
   observe: ObserverFn;

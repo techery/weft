@@ -10,19 +10,6 @@ in TypeScript. This package is not usually installed on its own; see the
 npm i @techery/weft-provider-claude
 ```
 
-Per-step Claude SDK mechanics live under the `claude` provider namespace:
-
-```ts
-await ctx.agent("Inspect the change", {
-  provider: "claude",
-  providerOptions: { claude: { permissionMode: "dontAsk" } },
-  schema: Verdict,
-});
-```
-
-`default` routes permission questions through Weft's hook; `dontAsk` denies tools that are not already
-permitted. Neither value can widen Weft's read/write scope.
-
 - Source: [`packages/provider-claude`](https://github.com/techery/weft/tree/main/packages/provider-claude)
 - Issues: https://github.com/techery/weft/issues
 - License: MIT

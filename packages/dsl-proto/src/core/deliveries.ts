@@ -42,7 +42,7 @@ export interface DeliveryDefaults {
 
 /**
  * Why: Represents one host-bound promotion contract whose input is frozen before authorization.
- * Use: Create it with `defineDelivery`, prepare a verified candidate, authorize it, then execute it through `ctx.delivery`.
+ * Use: Create it with `defineDelivery`; one `ctx.delivery` call performs the engine-owned prepare, authorize, and execute lifecycle.
  */
 export interface DeliveryDefinition<
   InputSchema extends AnySchema,
@@ -270,17 +270,13 @@ export interface DeliveryRunAuthorizationOptions {
 }
 
 /**
- * Why: Gives ordinary authors one durable delivery key while retaining the exact candidate and its proofs.
- * Use: Pass it to `ctx.delivery`; the host atomically rejects stale candidates or mismatched proofs.
+ * Why: Keeps delivery execution policy separate from the domain input frozen into the promotion candidate.
+ * Use: Pass it after the definition and input; the host atomically rejects stale candidates or mismatched proofs.
  */
-export interface DeliveryOneShotRequest<
-  Definition extends DeliveryDefinition<any, any>,
-  Snapshot extends WorkspaceSnapshotRef = WorkspaceSnapshotRef,
-> {
+export interface DeliveryOptions<Snapshot extends WorkspaceSnapshotRef = WorkspaceSnapshotRef> {
   key: string;
   label?: string;
   candidate: Snapshot;
-  input: DeliveryInputOf<Definition>;
   proofs: PromotionProofs<NoInfer<Snapshot>>;
   artifacts?: readonly ArtifactRefBase<unknown>[];
   rollback?: ArtifactRefBase<unknown>;
@@ -291,7 +287,7 @@ export interface DeliveryOneShotRequest<
 
 /**
  * Why: Returns host-validated output and an attested link to the exact candidate that was delivered.
- * Use: Read `value` for provider data and retain `attestation` for later CI observation or audit.
+ * Use: Read `value` for new provider data and use `candidate`, `snapshot`, or `attestation` for local identity instead of requiring echoed input fields.
  */
 export interface DeliveryReceipt<
   Definition extends DeliveryDefinition<any, any>,
@@ -312,5 +308,6 @@ export type DeliveryApi = <
   Snapshot extends WorkspaceSnapshotRef,
 >(
   definition: Definition,
-  request: DeliveryOneShotRequest<Definition, Snapshot>,
+  input: DeliveryInputOf<Definition>,
+  options: DeliveryOptions<Snapshot>,
 ) => Promise<DeliveryReceipt<Definition, PromotionCandidateRef<Definition, Snapshot>>>;

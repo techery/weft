@@ -116,6 +116,7 @@ the host starts durable work only when a workflow invokes the matching \`ctx\` c
 | Operations | \`defineOperation\`, \`withRecovery\` | \`ctx.operation\` |
 | Deliveries | \`defineDelivery\` | \`ctx.delivery\` |
 | Path policies | \`definePathPolicy\` | \`ctx.paths.resolve\` |
+| Procedures | \`defineProcedure\` | \`ctx.procedure\` or \`ctx.procedure.detailed\` |
 | Human UI | \`defineUiView\`, \`defineResultView\` | \`ctx.human.ask\`, \`ctx.human.review\`, and \`ctx.ui.render\` |
 | Task state | \`defineTaskContract\` | the workflow's \`tasks\` metadata and \`ctx.tasks\` API |
 | Admission | \`defineTrigger\` | host registration; admitted provenance is readable at \`ctx.run.trigger\` |
@@ -183,12 +184,45 @@ Inputless definitions omit the input argument. One-off calls put \`{ prompt, sch
 definition position. There are no separate prototype \`agent.run\`, \`agent.write\`, or
 \`agent.try\` methods.
 
-The prototype has one durable grouping concept: \`ctx.step("name", callback)\` namespaces
-arbitrary child effects. Plain functions and bounded \`for...of\` loops handle same-run reuse
-and sequential traversal; \`ctx.parallel.all/settled\` handles keyed fan-out.
-This is different from the runnable SDK's \`ctx.phase("name")\`: a phase labels effects for
-presentation, while a prototype step owns a callback and gives its child effects a stable key
-namespace. The prototype therefore needs no separate \`.stage(...)\` layer.
+The prototype has no step, stage, or phase abstraction. Plain functions and bounded
+\`for...of\` loops handle same-run reuse and sequential traversal, while explicit effect keys
+retain replay identity. \`ctx.scope(...)\` changes inherited agent, task, parallel, or budget
+defaults; it does not organize keys or create workflow structure. \`ctx.parallel.all/settled\`
+owns keyed fan-out because concurrency needs engine-controlled lane identity.
+
+When a reusable helper deserves a name, schemas, and a place in a workflow view, promote it to
+\`defineProcedure\` and call it through \`ctx.procedure\`:
+
+\`\`\`ts
+const redBaseline = defineProcedure({
+  name: "red-baseline",
+  revision: "v1",
+  input: z.object({ testCommand: z.array(z.string()).min(1) }),
+  output: z.object({ head: z.string(), redEvidence: z.string() }),
+  run: async (ctx: Pick<WorkspaceCtx, "git" | "exec">, input) => {
+    const [program = "npm", ...args] = input.testCommand;
+    const head = await ctx.git.head({ key: "head" });
+    const tests = await ctx.exec(program, args, { key: "tests" });
+    return { head: head.sha, redEvidence: tests.stdout.slice(0, 400) };
+  },
+});
+
+const baseline = await ctx.procedure(redBaseline, { testCommand }, { key: "baseline" });
+\`\`\`
+
+A procedure is durable rather than decorative: its validated output is recorded under one key so
+replay returns the recorded result instead of re-entering the body, \`revision\` invalidates that
+record when the body changes meaning, and its status and timing are recorded at the boundary.
+Durable keys written inside the body are local to one invocation, so a named helper never threads
+a caller-supplied key prefix through its signature. The \`run\` context parameter is annotated with
+exactly the capabilities the body consumes, and that requirement is contravariant, so a body
+needing \`Pick<WorkspaceCtx, "git">\` cannot be invoked from a read-only workflow context.
+
+A procedure is not a child workflow. It shares the caller's run, workspace, budget, and
+cancellation, so it mints no run identity, and for that reason its output must be
+schema-expressible. Helpers that thread proofs, evidence refs, or snapshots stay plain functions
+or become \`ctx.workflow\` children, because crossing a run boundary requires re-minted evidence.
+A future phase would still need lifecycle semantics of its own to earn a place.
 
 Workspace language follows the value's role:
 
@@ -204,13 +238,30 @@ const review = await ctx.review(candidateReview, reviewInput, {
   key: "review",
   candidate,
 });
+
+if (!checks.passed || review.status !== "accepted") {
+  throw new Error("Candidate is not ready for delivery");
+}
+
+const receipt = await ctx.delivery(
+  pullRequestDelivery,
+  deliveryInput,
+  {
+    key: "deliver",
+    candidate,
+    proofs: [checks.proof, review.proof],
+    authorization: { detail: "Publish the checked and reviewed candidate" },
+  },
+);
 \`\`\`
 
 \`snapshot\` means the current engine-minted workspace generation. \`candidate\` means that
 exact snapshot is being checked, reviewed, captured, or delivered. Candidate-bound host
 operations must atomically reject stale candidates and evidence from another candidate, so
 ordinary prototype workflows do not call manual sameness or freshness assertions.
-The future host performs those comparisons internally. A \`subject\` is simply the thing a human decision, observation, or
+The future host performs those comparisons internally. Delivery bindings must also correlate
+provider responses to the frozen request; provider output should contain new remote facts because
+the receipt already carries candidate identity. A \`subject\` is simply the thing a human decision, observation, or
 generic evidence record is about. That word remains useful for those APIs, but it is not the
 ordinary workspace API name.
 
@@ -237,8 +288,9 @@ effect takes a stable \`key\`, including filesystem, process, network, wait, and
 | --- | --- | --- |
 | Definitions and children | \`ctx.agent\`, \`ctx.artifact\`, \`ctx.context\`, \`ctx.workflow\`, \`ctx.workflow.detailed\` | Run reusable definitions; \`detailed\` retains nominal child-run evidence |
 | Fan-out | \`ctx.parallel.all\`, \`ctx.parallel.settled\` | Required fan-out or explicitly inspected failures |
-| Grouping and defaults | \`ctx.scope\`, \`ctx.step\` | Inherit invocation defaults or namespace a callback's durable effects |
-| Lane context | \`lane.itemKey\`, \`lane.key\` | Stable per-item identity; the lane itself is the scoped \`ctx\` |
+| Named bodies | \`ctx.procedure\`, \`ctx.procedure.detailed\` | Run a named, revisioned, schema-validated body in this run; \`detailed\` reports digests and whether replay reused a recorded result |
+| Inherited defaults | \`ctx.scope\` | Set inherited agent, task, parallel, or budget defaults without creating workflow structure or authority |
+| Lane context | \`lane.itemKey\` | Stable per-item identity; durable calls through the lane use lane-local keys |
 | Decisions and people | \`ctx.policy.decide\`, \`ctx.human.ask\`, \`ctx.human.confirm\`, \`ctx.human.review\`, \`ctx.human.editFile\` | Branching answers and human-authored input; none grants effect authority |
 | Observation | \`ctx.observe\`, \`ctx.observe.detailed\` | Wait for an observer definition, optionally retaining provenance |
 | Checks and reviews | \`ctx.check\`, \`ctx.check.authorizeWaiver\`, \`ctx.review\` | Run checks/reviews and mint an exact failed-check waiver |
@@ -289,7 +341,7 @@ as \`reviewCtx\`, plus stable per-item identity:
 | Files | \`reviewLane.fs.read\`, \`reviewLane.fs.glob\`, \`reviewLane.fs.stat\` |
 | Git reads | \`reviewLane.git.status\`, \`reviewLane.git.head\`, \`reviewLane.git.branches\`, \`reviewLane.git.mergeBase\`, \`reviewLane.git.changedSince\`, \`reviewLane.git.diff\`, \`reviewLane.git.log\`, \`reviewLane.git.show\`, \`reviewLane.git.blame\`, \`reviewLane.git.fileAt\`, \`reviewLane.git.snapshot\`, \`reviewLane.git.compare\`, \`reviewLane.git.fetch\` |
 | Cancellation | \`reviewLane.cancellation.signal\`, \`reviewLane.cancellation.reason\`, \`reviewLane.cancellation.throwIfRequested\` |
-| Identity and diagnostics | \`reviewLane.itemKey\`, \`reviewLane.key\`, \`reviewLane.log\`, \`reviewLane.budget\`, \`reviewLane.run\` |
+| Identity and diagnostics | \`reviewLane.itemKey\`, \`reviewLane.log\`, \`reviewLane.budget\`, \`reviewLane.run\` |
 
 Three builder callbacks receive deliberately tiny execution contexts rather than a workflow
 \`ctx\`: an implemented operation gets \`operationCtx.signal\` and \`operationCtx.attempt\`;
