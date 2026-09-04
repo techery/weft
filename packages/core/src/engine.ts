@@ -1775,6 +1775,11 @@ export class Engine implements EngineHost {
           else if (rec.ev.type === "run.completed") terminal = "complete";
           else if (rec.ev.type === "run.failed") terminal = "failed";
           else if (rec.ev.type === "run.cancelled") terminal = "cancelled";
+          // A resume re-opens the run: a run.status back to executing after a
+          // terminal event means the run is live again and answers must land —
+          // otherwise a failed-then-resumed run can never have a gate answered
+          // and any step waiting on one deadlocks into its timeout.
+          else if (rec.ev.type === "run.status" && rec.ev.status === "executing") terminal = undefined;
         }
         // An external process can land a TERMINAL event (a CLI's cancel beside
         // this daemon) between the pending check and the append: the lost CAS
@@ -1824,6 +1829,10 @@ export class Engine implements EngineHost {
         if (r.ev.type === "run.completed") terminal = "complete";
         else if (r.ev.type === "run.failed") terminal = "failed";
         else if (r.ev.type === "run.cancelled") terminal = "cancelled";
+        // Mirror the live-run fold: a resume (run.status back to executing)
+        // re-opens the run, so a historical terminal event must not block
+        // answers forever.
+        else if (r.ev.type === "run.status" && r.ev.status === "executing") terminal = undefined;
       }
       if (terminal !== undefined) {
         throw new Error(`run ${runId} is already ${terminal} — resume it before answering`);
