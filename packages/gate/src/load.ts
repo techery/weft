@@ -95,8 +95,7 @@ export async function instantiateBundle(
   // reads it immediately (and a hand-rolled object would otherwise fail much later).
   const def = mod.exports.default ?? mod.exports;
   if (!isWorkflowDefinition(def) || typeof def.meta?.description !== "string") {
-    const message =
-      `no workflow definition exported from ${where}` + ' - use "export default defineWorkflow({ … }, run)"';
+    const message = `no workflow definition exported from ${where} - use "export default defineWorkflow({ … }, run)"`;
     throw new GateError(message, [{ rule: "no-workflow-export", message, file: where, line: 0, column: 0 }]);
   }
   return def;

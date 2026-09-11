@@ -15,7 +15,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && pnpm --filter @techery/weft-ui typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "biome check .",
+    "lint": "biome check --error-on-warnings .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "sync:meta": "node scripts/sync-package-meta.mjs",

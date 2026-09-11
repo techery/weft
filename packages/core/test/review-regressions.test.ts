@@ -2796,7 +2796,7 @@ describe("codex review findings, round 33 (PR #1)", () => {
   });
 });
 
-describe("codex review findings, round 33 (PR #1)", () => {
+describe("codex review findings, round 33 continued (PR #1)", () => {
   test("object enum/const equality ignores property entry order", async () => {
     const { structuralCheck } = await import("../src/jsonschema.ts");
     const schema = { enum: [{ a: 1, b: { c: [1, 2] } }] };

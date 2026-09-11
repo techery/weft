@@ -38,13 +38,20 @@ Useful everyday commands:
 ```bash
 pnpm test:watch
 pnpm dev:ui           # Vite on :4782, proxied to a `weft ui` daemon
-pnpm lint             # Biome checks
+pnpm lint             # Biome checks — warnings fail, same as CI
 pnpm lint:fix         # Biome writes lint fixes
 pnpm format           # Biome formatting
 pnpm build            # package dist/ output and workflow-manager bundle
 pnpm clean            # remove package dist/ output
 pnpm verify:examples  # ensure every public Ctx API has a runnable example
 ```
+
+`biome.json` enables 96 rules beyond Biome's `recommended` preset, including the type-aware
+`noFloatingPromises` / `noMisusedPromises` / `useExhaustiveSwitchCases`. Most were adopted because
+they already fired zero times — they exist to keep it that way. Before adding a rule, measure it;
+before switching one off, read
+[`docs/reviews/2026-08-lint-strictness.md`](docs/reviews/2026-08-lint-strictness.md), which records
+what each rule cost and why the rejected ones were rejected.
 
 The test harness is deliberately model-free. Use `@techery/weft-testing` fixtures matched on stable step keys;
 they execute the real engine validation and journal path. A test should assert the observable workflow result or

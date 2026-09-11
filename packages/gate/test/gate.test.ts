@@ -292,7 +292,7 @@ describe("checkSource", () => {
       `export * from "chalk";`,
     ];
     const diagnostics = checkSource(lines.join("\n"), "imports.ts");
-    expect(diagnostics.map((d) => d.rule)).toEqual(Array(4).fill("no-bare-import"));
+    expect(diagnostics.map((d) => d.rule)).toEqual(new Array(4).fill("no-bare-import"));
     expect(diagnostics.map((d) => d.line)).toEqual([6, 7, 8, 10]);
     expect(diagnostics[0]?.message).toContain('node builtin "node:fs"');
     expect(diagnostics[1]?.message).toContain('node builtin "path"');

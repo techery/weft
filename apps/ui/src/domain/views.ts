@@ -23,7 +23,7 @@ export function runTabs(run: Run, pendingGate: boolean): RunTabDef[] {
 }
 
 export function isRunTab(value: string | undefined): value is RunTab {
-  return !!value && (RUN_TABS as readonly string[]).includes(value);
+  return value !== undefined && (RUN_TABS as readonly string[]).includes(value);
 }
 
 /** Fall back to the pending gate, then to whatever step the run recorded first. */

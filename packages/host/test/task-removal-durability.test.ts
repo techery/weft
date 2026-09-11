@@ -34,8 +34,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 const { TaskStore } = await import("../src/tasks.ts");
 
-afterAll(cleanupRoots);
 beforeEach(() => events.splice(0));
+afterAll(cleanupRoots);
 
 describe("TaskStore removal durability", () => {
   it("syncs the workflow directory after unlinking a task", async () => {

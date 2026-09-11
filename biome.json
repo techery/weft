@@ -18,18 +18,127 @@
     "enabled": true,
     "rules": {
       "preset": "recommended",
+
       "suspicious": {
         "noExplicitAny": "off",
-        "noAssignInExpressions": "off"
+
+        "noAlert": "error",
+        "noArrayIndexKey": "error",
+        "noBitwiseOperators": "error",
+        "noConstantBinaryExpressions": "error",
+        "noDuplicateDependencies": "error",
+        "noDuplicateTestHooks": "error",
+        "noDuplicatedSpreadProps": "error",
+        "noEmptySource": "error",
+        "noEqualsToNull": "error",
+        "noExportsInTest": "error",
+        "noFocusedTests": "error",
+        "noForIn": "error",
+        "noLeakedRender": "error",
+        "noParametersOnlyUsedInRecursion": "error",
+        "noReactForwardRef": "error",
+        "noReturnAssign": "error",
+        "noSkippedTests": "error",
+        "noUnassignedVariables": "error",
+        "noUnusedExpressions": "error",
+        "noVar": "error",
+        "useDeprecatedDate": "error",
+        "useErrorMessage": "error",
+        "useNumberToFixedDigitsArgument": "error",
+        "useStaticResponseMethods": "error"
       },
+
+      "correctness": {
+        "noGlobalDirnameFilename": "error",
+        "noPrivateImports": "error",
+        "noUndeclaredVariables": "error",
+        "noUnusedInstantiation": "error",
+        "useImportExtensions": "error",
+        "useJsonImportAttributes": "error",
+        "useSingleJsDocAsterisk": "error",
+
+        "noChildrenProp": "error",
+        "noNestedComponentDefinitions": "error",
+        "noReactPropAssignments": "error",
+        "noRenderReturnValue": "error",
+        "useExhaustiveDependencies": "error",
+        "useHookAtTopLevel": "error",
+        "useJsxKeyInIterable": "error"
+      },
+
       "style": {
         "noNonNullAssertion": "off",
-        "noParameterAssign": "off",
-        "useTemplate": "off"
+
+        "noCommonJs": "error",
+        "noDoneCallback": "error",
+        "noEnum": "error",
+        "noInferrableTypes": "error",
+        "noMultiAssign": "error",
+        "noParameterAssign": "error",
+        "noSubstr": "error",
+        "noUselessElse": "error",
+        "noYodaExpression": "error",
+        "useAsConstAssertion": "error",
+        "useCollapsedElseIf": "error",
+        "useConsistentBuiltinInstantiation": "error",
+        "useConsistentEnumValueType": "error",
+        "useConsistentObjectDefinitions": "error",
+        "useDefaultParameterLast": "error",
+        "useEnumInitializers": "error",
+        "useForOf": "error",
+        "useFragmentSyntax": "error",
+        "useGroupedAccessorPairs": "error",
+        "useNodeAssertStrict": "error",
+        "useNumberNamespace": "error",
+        "useObjectSpread": "error",
+        "useSelfClosingElements": "error",
+        "useShorthandAssign": "error",
+        "useSpreadOverApply": "error",
+        "useSymbolDescription": "error",
+        "useThrowNewError": "error",
+        "useThrowOnlyError": "error",
+        "useTrimStartEnd": "error"
       },
+
       "complexity": {
         "noForEach": "off",
-        "useLiteralKeys": "off"
+        "useLiteralKeys": "off",
+
+        "noDivRegex": "error",
+        "noExcessiveNestedTestSuites": "error",
+        "noImplicitCoercions": "error",
+        "noRedundantDefaultExport": "error",
+        "noUselessCatchBinding": "error",
+        "noUselessStringConcat": "error",
+        "noUselessReturn": "error",
+        "useArrayFind": "error",
+        "useWhile": "error"
+      },
+
+      "security": {
+        "noDangerouslySetInnerHtml": "error",
+        "noDangerouslySetInnerHtmlWithChildren": "error"
+      },
+
+      "nursery": {
+        "noEmptyObjectKeys": "error",
+        "noExcessiveNestedCallbacks": "error",
+        "noExtendNative": "error",
+        "noFloatingPromises": "error",
+        "noIdenticalTestTitle": "error",
+        "noMisusedPromises": "error",
+        "noNegationInEqualityCheck": "error",
+        "noUnnecessaryTemplateExpression": "error",
+        "noUnsafePlusOperands": "error",
+        "noUselessTypeConversion": "error",
+        "useArraySome": "error",
+        "useExhaustiveSwitchCases": "error",
+        "useIncludes": "error",
+        "useReduceTypeParameter": "error",
+        "useRegexpTest": "error",
+        "useStringStartsEndsWith": "error",
+        "useTestHooksInOrder": "error",
+        "useTestHooksOnTop": "error"
       }
     }
   },
@@ -38,5 +147,17 @@
       "quoteStyle": "double",
       "semicolons": "always"
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["apps/ui/**"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "useImportExtensions": "off"
+          }
+        }
+      }
+    }
+  ]
 }

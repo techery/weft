@@ -262,7 +262,7 @@ export function jsonUnsafeAt(value: unknown, path = "$", ancestors?: WeakSet<obj
   // path. Entries are removed on the way back up, so shared (diamond)
   // references — which JSON serializes fine, duplicated — stay legal.
   if (Array.isArray(value)) {
-    const seen = (ancestors ??= new WeakSet());
+    const seen = ancestors ?? new WeakSet();
     if (seen.has(value)) return `${path} (circular reference)`;
     seen.add(value);
     try {
@@ -284,7 +284,7 @@ export function jsonUnsafeAt(value: unknown, path = "$", ancestors?: WeakSet<obj
     const name = (value as object).constructor?.name ?? "object";
     return `${path} (${name})`;
   }
-  const seen = (ancestors ??= new WeakSet());
+  const seen = ancestors ?? new WeakSet();
   if (seen.has(value as object)) return `${path} (circular reference)`;
   seen.add(value as object);
   try {

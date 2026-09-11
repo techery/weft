@@ -805,7 +805,7 @@ describe("the whole app", () => {
 });
 
 /** Referenced so the RunState import is load-bearing for the shapes asserted above. */
-export type _State = RunState;
+type _State = RunState;
 
 // ---------------------------------------------------------------------------
 // Regressions

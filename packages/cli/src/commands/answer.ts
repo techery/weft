@@ -35,14 +35,15 @@ export function answerCommand(io: CliIo): Command {
         try {
           // `weft answer 7f3a '{"approved":true}'` — the id is optional, so a lone JSON
           // argument lands in its place. Read it back out rather than making people pad it.
-          if (json === undefined && req !== undefined && looksLikeJson(req)) {
-            json = req;
-            req = undefined;
-          }
-          const request = await pickRequest(io, weft, runId, req);
+          const loneJson = json === undefined && req !== undefined && looksLikeJson(req);
+          const answerJson = loneJson ? req : json;
+          const requestId = loneJson ? undefined : req;
+
+          const request = await pickRequest(io, weft, runId, requestId);
           if (!request) return;
 
-          const value = json !== undefined ? parseJsonValue(json, "answer") : await promptForAnswer(request);
+          const value =
+            answerJson !== undefined ? parseJsonValue(answerJson, "answer") : await promptForAnswer(request);
           if (value === undefined) {
             io.out(pc.dim("cancelled — nothing was answered"));
             return;
