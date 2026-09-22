@@ -63,6 +63,40 @@ export function RunDetailPage() {
         onOpenWorkflow={() => void navigate({ to: "/workflows", search: { wf: run.wf } })}
       />
 
+      {(run.recovery ?? []).map((item, index) => (
+        <section key={item.requestId ?? index} className={styles.recovery} aria-label={item.title}>
+          <strong>{item.title}</strong>
+          <span>{item.detail}</span>
+          <span>{item.nextAction}</span>
+          {item.resources.length > 0 ? <code>{item.resources.join(" · ")}</code> : null}
+        </section>
+      ))}
+      {run.delivery ? (
+        <section className={styles.delivery} aria-label="Delivery evidence">
+          <strong>{run.delivery.status}</strong>
+          <span>
+            Workspace {run.delivery.retained ? "retained" : "removed"}: {run.delivery.workspacePath}
+          </span>
+          <span>
+            Branch {run.delivery.branch}
+            {run.delivery.head ? ` · Commit ${run.delivery.head}` : ""}
+          </span>
+          {run.delivery.candidateId ? <span>Candidate {run.delivery.candidateId}</span> : null}
+          {run.delivery.feedback ? (
+            <span>
+              PR feedback: {run.delivery.feedback.status} · {run.delivery.feedback.detail} · observed{" "}
+              {new Date(run.delivery.feedback.updatedAt).toLocaleString()}
+            </span>
+          ) : null}
+          {run.delivery.output !== undefined ? (
+            <pre>{JSON.stringify(run.delivery.output, null, 2)}</pre>
+          ) : null}
+          <small>
+            Recorded evidence for this candidate. The engine checks freshness again before delivery.
+          </small>
+        </section>
+      ) : null}
+
       <RunTabsBar tabs={tabs} active={tab} onSelect={(next) => patch({ tab: next })} />
 
       <div className={styles.body}>

@@ -363,11 +363,13 @@ async function runTurn(
   if (ctl.signal.aborted) throw new Error(ABORTED);
   const deadline = turnSignal(req, ctl);
   try {
+    ctl.onProgress?.({ stage: "working", message: "Agent session started" });
     const result = await thread.run(prompt, {
       signal: deadline.signal,
       ...(req.schema !== undefined ? { outputSchema: toStrictSchema(req.schema) } : {}),
     });
     if (ctl.signal.aborted) throw new Error(ABORTED);
+    ctl.onProgress?.({ stage: "finalizing", message: "Agent turn returned; validating its output" });
     return toResult(thread, result);
   } finally {
     deadline.done();

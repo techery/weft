@@ -8,6 +8,7 @@ import {
   bundleWorkflow,
   checkSource,
   createWorkflowRegistry,
+  DEFAULT_ALLOW_BARE,
   formatDiagnostics,
   GateError,
   loadWorkflow,
@@ -334,6 +335,14 @@ describe("checkSource", () => {
     expect(checkSource(source, "custom.ts", ["ky", "zod"])).toEqual([]);
   });
 
+  it("allows the runtime standard library by default and respects explicit restrictions", () => {
+    const source = 'import { findingKey, uniqueFindings } from "@techery/weft-stdlib";';
+    expect(checkSource(source, "stdlib.ts")).toEqual([]);
+    expect(checkSource(source, "stdlib.ts", []).map((diagnostic) => diagnostic.rule)).toEqual([
+      "no-bare-import",
+    ]);
+  });
+
   it("reports every violation in one pass", () => {
     const source = [
       `import lodash from "lodash";`,
@@ -375,6 +384,21 @@ describe("checkSource", () => {
 // ---------------------------------------------------------------------------
 
 describe("bundleWorkflow", () => {
+  it("declares every default host import as a production package dependency", async () => {
+    const manifest = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8")) as {
+      dependencies: Record<string, string>;
+    };
+    for (const module of DEFAULT_ALLOW_BARE) {
+      const packageName = module.startsWith("@")
+        ? module.split("/").slice(0, 2).join("/")
+        : module.split("/")[0]!;
+      expect(
+        manifest.dependencies[packageName],
+        `${packageName} must resolve in a packed install`,
+      ).toBeDefined();
+    }
+  });
+
   it("builds .ui.tsx as an opaque Node token and a separately hashed browser asset", async () => {
     const dir = await tempDir();
     const view = await write(
@@ -1007,6 +1031,39 @@ describe("createWorkflowRegistry", () => {
 
     expect(inspection.entries.map((entry) => entry.name)).toEqual(["ship"]);
     expect(inspection.issues).toEqual([]);
+  });
+
+  it("does not mistake an example collection runner for a complete direct workflow package", async () => {
+    const primary = await tempDir();
+    const extra = await tempDir();
+    await write(extra, "main.ts", 'import "./ship/tests/main.test.ts";');
+    await writeWorkflowPackage(extra, "ship", { id: "stable.ship" });
+    const registry = createWorkflowRegistry({ dir: primary, extraDirs: [extra] });
+    expect((await registry.load("ship")).file).toBe(path.join(extra, "ship/main.ts"));
+    expect((await registry.loadIdentity("stable.ship")).name).toBe("ship");
+    const inspection = await registry.listWithIssues();
+    expect(inspection.entries.map((entry) => entry.name)).toEqual(["ship"]);
+    // Selecting a known package works; broad inspection still surfaces unsupported files.
+    expect(inspection.issues).toEqual([
+      expect.objectContaining({
+        file: path.join(extra, "main.ts"),
+        error: expect.stringContaining("flat workflow files are not supported"),
+      }),
+    ]);
+  });
+
+  it("preserves diagnostics for an incomplete direct extra package with no nested packages", async () => {
+    const primary = await tempDir();
+    const extra = await tempDir();
+    await write(extra, "main.ts", sandboxProbe({}));
+    const inspection = await createWorkflowRegistry({ dir: primary, extraDirs: [extra] }).listWithIssues();
+    expect(inspection.entries).toEqual([]);
+    expect(inspection.issues).toEqual([
+      expect.objectContaining({
+        file: extra,
+        error: expect.stringContaining("missing lib/, tests/, CHANGELOG.md"),
+      }),
+    ]);
   });
 
   it("rejects duplicate identities across workflow directories", async () => {

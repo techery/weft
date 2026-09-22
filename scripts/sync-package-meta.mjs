@@ -55,7 +55,9 @@ const compare = (file, want) => {
   console.log(`wrote ${file}`);
 };
 
-for (const dir of readdirSync("packages")) {
+for (const entry of readdirSync("packages", { withFileTypes: true })) {
+  if (!entry.isDirectory()) continue;
+  const dir = entry.name;
   const pkg = JSON.parse(readFileSync(join("packages", dir, "package.json"), "utf8"));
   compare(join("packages", dir, "LICENSE"), license);
   compare(join("packages", dir, "README.md"), readme(pkg, dir));

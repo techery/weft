@@ -297,8 +297,20 @@ class ClaudeProvider implements AgentProvider {
     };
 
     try {
+      ctl.onProgress?.({
+        stage: resume ? "repairing" : "working",
+        message: resume ? "Continuing the agent session" : "Agent session started",
+      });
       for await (const message of this.queryFn({ prompt, options })) {
         absorb(message, turn);
+        if (message.type === "assistant") {
+          for (const block of message.message?.content ?? []) {
+            if (block.type === "tool_use")
+              ctl.onProgress?.({ stage: "tool", message: `Using ${block.name}` });
+          }
+        } else if (message.type === "result") {
+          ctl.onProgress?.({ stage: "finalizing", message: "Agent turn returned; validating its output" });
+        }
       }
     } finally {
       if (timer !== undefined) clearTimeout(timer);

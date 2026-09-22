@@ -11,6 +11,7 @@ import {
   loadWorkflow,
   parseBudget,
   persistInlineScript,
+  persistRetainedWorkflow,
   persistUiCatalog,
   persistWorkflowRef,
   rejectUnknownInput,
@@ -60,8 +61,15 @@ export function runCommand(io: CliIo): Command {
         // reserved by an exclusive directory create, so a collision can never
         // write into an EXISTING run's directory.
         const runId = await reserveRunId(weft);
-        if (code !== undefined) await persistInlineScript(weft, runId, code);
-        if (code !== undefined && uiCatalog !== undefined) await persistUiCatalog(weft, runId, uiCatalog);
+        if (code !== undefined && hash !== undefined)
+          await persistRetainedWorkflow(weft, runId, {
+            name,
+            code,
+            hash,
+            ...(uiCatalog ? { uiCatalog } : {}),
+          });
+        if (ref === "-" && code !== undefined) await persistInlineScript(weft, runId, code);
+        if (ref === "-" && uiCatalog !== undefined) await persistUiCatalog(weft, runId, uiCatalog);
         else if (isWorkflowPathRef(ref)) await persistWorkflowRef(weft, runId, ref);
         const handle = await weft.engine
           .start(def, {
@@ -94,7 +102,7 @@ interface ResolvedRef {
   def: WorkflowDefinition;
   name: string;
   hash?: string;
-  /** The bundled source, present only for inline (stdin) scripts — persisted with the run. */
+  /** Bundled source retained independently from current-source provenance. */
   code?: string;
   uiCatalog?: CompiledUiCatalog;
 }

@@ -9,6 +9,7 @@ import type {
   Risk,
   SerializedStepError,
   Usage,
+  WorkspaceCandidate,
 } from "@techery/weft-sdk";
 import type {
   BlobRefJson,
@@ -20,6 +21,37 @@ import type {
   StepKind,
   UiPresentation,
 } from "./events.ts";
+import type { OwnedWorkspace } from "./workspace.ts";
+
+export interface OperationState {
+  requestId: string;
+  binding: string;
+  key?: string;
+  digest?: string;
+  status: "pending" | "unknown" | "complete";
+  detail?: string;
+  resources?: readonly string[];
+  output?: unknown;
+  reconciled?: boolean;
+  updatedAt: number;
+}
+
+export interface RecoveryAttention {
+  kind: "operation" | "workspace" | "run" | "verification" | "delivery";
+  title:
+    | "Recovery required"
+    | "Verification failed"
+    | "Candidate stale"
+    | "PR feedback failed"
+    | "PR feedback pending"
+    | "PR feedback unknown";
+  detail: string;
+  nextAction: string;
+  requestId?: string;
+  binding?: string;
+  resources: readonly string[];
+  updatedAt: number;
+}
 
 export interface StepState {
   seq: number;
@@ -44,6 +76,8 @@ export interface StepState {
   patchRef?: string;
   childRunId?: string;
   presentation?: UiPresentation;
+  progress?: import("@techery/weft-sdk").ProviderProgress;
+  progressAt?: number;
 }
 
 export interface HumanState {
@@ -94,6 +128,41 @@ export interface RunState {
   cwd: string;
   baseRef?: string;
   phases: Array<{ name: string; steps: number[] }>;
+  workspace?: OwnedWorkspace & { status: "preparing" | "ready"; retained?: boolean; cleanedAt?: number };
+  resumeBlocked?: { reason: string; at: number };
+  candidates?: WorkspaceCandidate[];
+  verifications?: Array<{
+    candidateId: string;
+    key: string;
+    passed: boolean;
+    results: Readonly<Record<string, import("@techery/weft-sdk").CheckResult>>;
+    proofId?: string;
+    at: number;
+  }>;
+  operations?: OperationState[];
+  deliveries?: Array<{
+    candidateId: string;
+    requestId: string;
+    binding: string;
+    output: unknown;
+    at: number;
+  }>;
+  /** Derived from unresolved intents/unknown outcomes, never from an assumed remote success. */
+  attention?: RecoveryAttention[];
+  /** Named transparent composition boundaries, including separate entries for replayed passes. */
+  procedures?: Array<{
+    key: string;
+    name: string;
+    revision: string;
+    definitionDigest: string;
+    inputDigest: string;
+    requires: readonly string[];
+    status: "running" | "complete" | "failed";
+    startedAt: number;
+    durationMs?: number;
+    outputDigest?: string;
+    error?: SerializedStepError;
+  }>;
   steps: StepState[];
   humans: HumanState[];
   checks: CheckState[];
@@ -128,6 +197,12 @@ export function reduceState(records: JournalRecord[]): RunState {
     depth: 0,
     cwd: "",
     phases: [],
+    candidates: [],
+    verifications: [],
+    operations: [],
+    deliveries: [],
+    attention: [],
+    procedures: [],
     steps: [],
     humans: [],
     checks: [],
@@ -168,6 +243,7 @@ export function reduceState(records: JournalRecord[]): RunState {
         break;
       case "run.status":
         state.status = ev.status;
+        if (ev.status === "executing") delete state.resumeBlocked;
         // A resumed run going nonterminal again must not keep showing the
         // previous pass's outcome while it executes or waits.
         if (ev.status !== "cancelled" && ev.status !== "complete" && ev.status !== "failed") {
@@ -190,6 +266,101 @@ export function reduceState(records: JournalRecord[]): RunState {
       case "run.cancelled":
         state.status = "cancelled";
         break;
+      case "workspace.intent":
+      case "workspace.ready":
+        state.workspace = {
+          ...ev.workspace,
+          status: ev.type === "workspace.ready" ? "ready" : "preparing",
+          retained: true,
+        };
+        break;
+      case "workspace.cleaned":
+        if (state.workspace?.id === ev.workspaceId) {
+          state.workspace.retained = false;
+          state.workspace.cleanedAt = rec.at;
+        }
+        break;
+      case "resume.blocked":
+        state.resumeBlocked = { reason: ev.reason, at: rec.at };
+        break;
+      case "workspace.candidate":
+        if (!state.candidates!.some((candidate) => candidate.id === ev.candidate.id))
+          state.candidates!.push(ev.candidate);
+        break;
+      case "verification.recorded":
+        state.verifications!.push({
+          candidateId: ev.candidateId,
+          key: ev.key,
+          passed: ev.passed,
+          results: ev.results,
+          ...(ev.proofId ? { proofId: ev.proofId } : {}),
+          at: rec.at,
+        });
+        break;
+      case "delivery.completed":
+        state.deliveries!.push({
+          candidateId: ev.candidateId,
+          requestId: ev.requestId,
+          binding: ev.binding,
+          output: ev.output,
+          at: rec.at,
+        });
+        break;
+      case "operation.intent":
+      case "operation.unknown":
+      case "operation.receipt": {
+        let operation = state.operations!.find((entry) => entry.requestId === ev.requestId);
+        if (!operation) {
+          operation = { requestId: ev.requestId, binding: ev.binding, status: "pending", updatedAt: rec.at };
+          state.operations!.push(operation);
+        }
+        operation.updatedAt = rec.at;
+        if (ev.type === "operation.intent") {
+          operation.key = ev.key;
+          operation.digest = ev.digest;
+        } else if (ev.type === "operation.unknown") {
+          operation.status = "unknown";
+          operation.detail = ev.detail;
+          operation.resources = ev.resources;
+        } else {
+          operation.status = "complete";
+          operation.digest = ev.digest;
+          operation.output = ev.output;
+          operation.reconciled = ev.reconciled;
+          delete operation.detail;
+          delete operation.resources;
+        }
+        break;
+      }
+      case "procedure.started":
+        state.procedures!.push({
+          key: ev.key,
+          name: ev.name,
+          revision: ev.revision,
+          definitionDigest: ev.definitionDigest,
+          inputDigest: ev.inputDigest,
+          requires: ev.requires,
+          status: "running",
+          startedAt: rec.at,
+        });
+        break;
+      case "procedure.completed":
+      case "procedure.failed": {
+        const procedure = state.procedures!.findLast(
+          (entry) => entry.key === ev.key && entry.status === "running",
+        );
+        if (procedure) {
+          procedure.durationMs = ev.durationMs;
+          if (ev.type === "procedure.completed") {
+            procedure.status = "complete";
+            procedure.outputDigest = ev.outputDigest;
+          } else {
+            procedure.status = "failed";
+            procedure.error = ev.error;
+          }
+        }
+        break;
+      }
       case "phase": {
         currentPhase = ev.name;
         if (!state.phases.some((p) => p.name === ev.name)) state.phases.push({ name: ev.name, steps: [] });
@@ -228,6 +399,14 @@ export function reduceState(records: JournalRecord[]): RunState {
           if (!phase.steps.includes(ev.seq)) phase.steps.push(ev.seq);
         }
         if (ev.childRunId) state.children.push({ seq: ev.seq, childRunId: ev.childRunId });
+        break;
+      }
+      case "step.progress": {
+        const step = stepsBySeq.get(ev.seq);
+        if (step?.status === "running") {
+          step.progress = ev.progress;
+          step.progressAt = rec.at;
+        }
         break;
       }
       case "step.completed": {
@@ -385,7 +564,89 @@ export function reduceState(records: JournalRecord[]): RunState {
     }
   }
   state.steps = [...allSteps].sort((a, b) => a.seq - b.seq);
+  state.attention = recoveryAttention(state);
   return state;
+}
+
+/** Unknown remote effects remain actionable across process exits until a receipt resolves them. */
+function recoveryAttention(state: RunState): RecoveryAttention[] {
+  const terminal = ["complete", "failed", "cancelled"].includes(state.status);
+  const items: RecoveryAttention[] = (state.operations ?? [])
+    .filter((operation) => operation.status === "unknown" || (operation.status === "pending" && terminal))
+    .map((operation) => ({
+      kind: "operation",
+      title: "Recovery required",
+      detail: operation.detail ?? "An operation intent has no confirmed receipt.",
+      nextAction: `Inspect request ${operation.requestId} with binding ${operation.binding}, then resume this run to reconcile its outcome. Execution is allowed only after absence is confirmed.`,
+      requestId: operation.requestId,
+      binding: operation.binding,
+      resources: operation.resources ?? [],
+      updatedAt: operation.updatedAt,
+    }));
+  if (state.resumeBlocked)
+    items.push({
+      kind: "run",
+      title: "Recovery required",
+      detail: state.resumeBlocked.reason,
+      nextAction:
+        "Inspect the workflow identity and due deadline. Restore the recorded definition, or preview changes and explicitly resume in edit-tolerant mode.",
+      resources: [],
+      updatedAt: state.resumeBlocked.at,
+    });
+  if (state.error?.code === "recovery_required" && items.length === 0) {
+    items.push({
+      kind: state.workspace ? "workspace" : "run",
+      title: "Recovery required",
+      detail: state.error.message,
+      nextAction: state.workspace
+        ? `Inspect the retained workspace ${state.workspace.path} and its ownership and branch, then resume the same run after resolving the reported condition.`
+        : "Inspect the recorded failure and retained resources, then resume the same run to reconcile the reported condition.",
+      resources: state.workspace ? [state.workspace.path] : [],
+      updatedAt: state.updatedAt,
+    });
+  }
+  if (
+    state.status === "failed" &&
+    (state.error?.code === "check_failed" || state.error?.code === "stale_candidate")
+  ) {
+    items.push({
+      kind: "verification",
+      title: state.error.code === "stale_candidate" ? "Candidate stale" : "Verification failed",
+      detail: state.error.message,
+      nextAction:
+        "Inspect the candidate and required-check evidence. Correct the workspace, capture its new candidate, and rerun verification before delivery.",
+      resources: state.workspace?.retained !== false && state.workspace ? [state.workspace.path] : [],
+      updatedAt: state.updatedAt,
+    });
+  }
+  // Remote feedback is an exact-head observation, separate from the receipt that
+  // confirms a PR was created. Never promote an old head's CI state to the current candidate.
+  const candidate = state.candidates?.at(-1);
+  const feedback = (state.operations ?? [])
+    .filter((operation) => operation.binding === "github.pr-feedback" && operation.status === "complete")
+    .findLast(
+      (operation) =>
+        !!operation.output &&
+        typeof operation.output === "object" &&
+        (operation.output as { head?: unknown }).head === candidate?.head,
+    );
+  if (candidate && feedback) {
+    const output = feedback.output as { status?: unknown; detail?: unknown; url?: unknown };
+    if (output.status === "failed" || output.status === "pending" || output.status === "unknown")
+      items.push({
+        kind: "delivery",
+        title: `PR feedback ${output.status}`,
+        detail:
+          typeof output.detail === "string"
+            ? output.detail
+            : `Remote checks or review are ${output.status} for ${candidate.head}.`,
+        nextAction:
+          "Inspect the exact-head PR checks and review. Resolve failures or wait for completion, then record a fresh feedback observation; PR creation is not CI approval.",
+        resources: typeof output.url === "string" ? [output.url] : [],
+        updatedAt: feedback.updatedAt,
+      });
+  }
+  return items;
 }
 
 // ---------------------------------------------------------------------------
@@ -472,6 +733,44 @@ export function renderReport(state: RunState): string {
   );
   if (state.error) lines.push(`**Error:** \`${state.error.code}\` — ${state.error.message}`);
   lines.push("");
+
+  if (state.attention?.length) {
+    lines.push("## Recovery required", "");
+    for (const item of state.attention) {
+      lines.push(`- ${item.detail}`, `  ${item.nextAction}`);
+      for (const resource of item.resources) lines.push(`  Resource: ${resource}`);
+    }
+    lines.push("");
+  }
+  if (state.workspace) {
+    lines.push(
+      "## Delivery evidence",
+      "",
+      `Workspace: ${state.workspace.path}`,
+      `Branch: ${state.workspace.branch}`,
+    );
+    const candidate = state.candidates?.at(-1);
+    if (candidate) {
+      lines.push(`Candidate: ${candidate.id}`, `Commit: ${candidate.head}`);
+      const verification = state.verifications?.findLast((item) => item.candidateId === candidate.id);
+      lines.push(
+        `Verification: ${verification ? (verification.passed ? "passing execution recorded" : "failed") : "not recorded for this candidate"}`,
+      );
+      const delivered = state.deliveries?.findLast((item) => item.candidateId === candidate.id);
+      if (delivered)
+        lines.push(
+          `Delivery confirmed: ${delivered.binding} (${delivered.requestId})`,
+          "```json",
+          JSON.stringify(delivered.output, null, 2),
+          "```",
+        );
+      else lines.push("Delivery: not confirmed for this candidate");
+    }
+    lines.push(
+      "Recorded evidence is candidate-specific; the runtime rechecks freshness before delivery.",
+      "",
+    );
+  }
 
   if (state.output !== undefined) {
     lines.push("## Outcome");

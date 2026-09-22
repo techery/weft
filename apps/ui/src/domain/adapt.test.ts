@@ -44,6 +44,59 @@ const detail = (over: Partial<RunDetail> = {}): RunDetail => ({
 });
 
 describe("run status", () => {
+  it("labels unknown outcomes as recovery required and never treats old candidate evidence as current", () => {
+    const run = adaptRun(
+      detail({
+        status: "failed",
+        error: { code: "recovery_required", message: "remote result unknown" },
+        workspace: { id: "w", path: "/repo/work", branch: "fix", status: "ready" },
+        candidates: [
+          { id: "old", branch: "fix", head: "aaa", tree: "t1", generation: 1 },
+          { id: "new", branch: "fix", head: "bbb", tree: "t2", generation: 2 },
+        ],
+        verifications: [{ candidateId: "old", key: "test", passed: true, proofId: "proof", at: 1 }],
+        deliveries: [
+          {
+            candidateId: "old",
+            requestId: "request",
+            binding: "pr",
+            output: { url: "https://example.test/pr" },
+            at: 2,
+          },
+        ],
+      }),
+    );
+    expect(run.pill).toBe("Recovery required");
+    expect(run.state).toBe("failed");
+    expect(run.delivery).toMatchObject({ head: "bbb", status: "Candidate captured" });
+    expect(run.delivery?.output).toBeUndefined();
+  });
+
+  it("requires actual candidate and receipt records before displaying confirmed delivery", () => {
+    const absent = adaptRun(detail({ status: "complete" }));
+    expect(absent.delivery).toBeUndefined();
+    const run = adaptRun(
+      detail({
+        status: "complete",
+        workspace: { id: "w", path: "/repo/work", branch: "fix", status: "ready" },
+        candidates: [{ id: "c", branch: "fix", head: "abc", tree: "tree", generation: 1 }],
+        deliveries: [
+          {
+            candidateId: "c",
+            requestId: "request",
+            binding: "pr",
+            output: { url: "https://example.test/pr" },
+            at: 2,
+          },
+        ],
+      }),
+    );
+    expect(run.delivery).toMatchObject({
+      status: "Delivery confirmed",
+      head: "abc",
+      output: { url: "https://example.test/pr" },
+    });
+  });
   it("maps every engine status onto a state the design paints", () => {
     const cases: Array<[RunDetail["status"], string]> = [
       ["planning", "running"],
@@ -58,6 +111,45 @@ describe("run status", () => {
     for (const [status, expected] of cases) {
       expect(adaptRun(detail({ status })).state, status).toBe(expected);
     }
+  });
+  it("separates PR creation from exact-head feedback and preserves observation freshness", () => {
+    const run = adaptRun(
+      detail({
+        status: "complete",
+        workspace: { id: "w", path: "/repo/work", branch: "fix", status: "ready", retained: false },
+        candidates: [{ id: "c", branch: "fix", head: "abc", tree: "tree", generation: 1 }],
+        deliveries: [
+          {
+            candidateId: "c",
+            requestId: "pr",
+            binding: "github.reviewed-pr",
+            output: { url: "https://example.test/pr" },
+            at: 2,
+          },
+        ],
+        operations: [
+          {
+            requestId: "feedback",
+            binding: "github.pr-feedback",
+            status: "complete",
+            output: { head: "abc", status: "failed", detail: "CI failed" },
+            updatedAt: 123,
+          },
+          {
+            requestId: "old",
+            binding: "github.pr-feedback",
+            status: "complete",
+            output: { head: "old", status: "passed", detail: "Old CI passed" },
+            updatedAt: 456,
+          },
+        ],
+      }),
+    );
+    expect(run.delivery).toMatchObject({
+      status: "Delivery confirmed",
+      retained: false,
+      feedback: { status: "failed", detail: "CI failed", updatedAt: 123 },
+    });
   });
 });
 

@@ -13,6 +13,7 @@ import {
   type JournalRecord,
   MemoryBlobStore,
   MemoryJournalStore,
+  type OperationBindings,
   type PendingRequest,
   ProviderRegistry,
   type RunHandle,
@@ -44,6 +45,10 @@ export type TaskSeed<Extensions = unknown> = Omit<CreateTaskInput, "actor" | "ex
 
 export interface RunWorkflowOptions<Input = unknown, TaskExtensionInput = unknown> {
   input: Input;
+  /** Strict fixtures by default; integration explicitly permits real host effects. */
+  fixtureMode?: "strict" | "integration";
+  /** Explicitly trusted host bindings, normally in-memory fakes. These are not sandboxed by fixtureMode. */
+  operations?: OperationBindings;
   /** Fallback registered for both provider ids; defaults to an empty, fail-loud mock. */
   provider?: MockAgentBuilder;
   /** Provider-specific fixtures override `provider`, allowing routing assertions. */
@@ -156,6 +161,7 @@ export async function runWorkflow<
     blobs,
     providers,
     config,
+    ...(opts.operations !== undefined ? { operations: opts.operations } : {}),
     ...(testHooks !== undefined ? { testHooks } : {}),
     taskTracker: {
       prepare: async (workflow, extensionSchema, taskOptions) => {

@@ -22,7 +22,23 @@ export type { ParsedBudget } from "./budget.ts";
 export { parseBudget } from "./budget.ts";
 export type { WeftConfig } from "./config.ts";
 export { CONFIG_FILE, configPath, loadConfig, parseConfig, WEFT_DIR } from "./config.ts";
+export type {
+  GitHubApiResponse,
+  GitHubDeliveryAdapter,
+  GitHubPrFeedback,
+  GitHubPrFeedbackOptions,
+  GitHubReviewedPrOptions,
+  GitHubReviewedPrReceipt,
+} from "./github-delivery.ts";
+export {
+  createGitHubPrFeedbackBinding,
+  createGitHubReviewedPrBinding,
+  GITHUB_PR_FEEDBACK_BINDING,
+  GITHUB_REVIEWED_PR_BINDING,
+} from "./github-delivery.ts";
 export { rejectUnknownInput } from "./input.ts";
+export type { RetainedWorkflow } from "./retention.ts";
+export { persistRetainedWorkflow, retainedDefOf } from "./retention.ts";
 export type {
   CreateTaskInput,
   TaskCriterion,
@@ -60,7 +76,11 @@ export type {
   EngineOptions,
   JournalEvent,
   JournalRecord,
+  OperationBinding,
+  OperationBindings,
+  OperationContext,
   PendingRequest,
+  ReconciledOperation,
   ResumeOptions,
   RunHandle,
   RunListFilter,

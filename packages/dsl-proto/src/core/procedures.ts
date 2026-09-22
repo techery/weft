@@ -33,7 +33,7 @@ export interface ProcedureDefinition<
   readonly kind: "weft.procedure";
   readonly name: Name;
   readonly description?: string;
-  /** Invalidates recorded results whose body no longer means what the recorded run meant. */
+  /** Binds nested effect identity when the procedure's semantics change. The body always re-enters. */
   readonly revision: string;
   readonly input: AnySchema;
   readonly output: AnySchema;
@@ -100,15 +100,15 @@ export interface ProcedureOptions {
 }
 
 /**
- * Why: Exposes the boundary facts an audit and a workflow view need, including whether replay reused a recorded result.
- * Use: Call `ctx.procedure.detailed` when the caller must distinguish a replayed body from a freshly executed one.
+ * Why: Exposes boundary digests while preserving individual effects' replay and reconciliation checks.
+ * Use: Call `ctx.procedure.detailed` for a receipt; the body is always entered, including on resume.
  */
 export interface ProcedureReceipt<Types extends ProcedureTypes = ProcedureTypes> {
   readonly value: Types["output"];
   readonly definitionDigest: string;
   readonly inputDigest: string;
   readonly outputDigest: string;
-  readonly replayed: boolean;
+  readonly bodyEntered: true;
 }
 
 /**

@@ -53,7 +53,7 @@ function again from the top and reuses a completed step when its recorded identi
 calls, human requests, filesystem reads, commands, HTTP requests, Git operations, checks, task operations,
 waits, time, randomness, and UUID generation all cross this durable boundary.
 
-Orchestration helpers such as `parallel`, `pipeline`, `sequence`, `successes`, `all`, `scope`, and `recipe`
+Orchestration helpers such as `parallel`, `pipeline`, `sequence`, `successes`, `all`, `scope`, `recipe`, and `procedure`
 do not hide their nested effects inside one opaque step. Each nested `ctx` call remains independently
 journaled and visible in the run tree.
 
@@ -77,7 +77,7 @@ keys where call sites benefit from explicit replay identity.
 
 ### Schemas are runtime contracts
 
-Agent results, human answers, workflow input/output, recipe input/output, signals, and optionally command or
+Agent results, human answers, workflow input/output, recipe and procedure input/output, signals, and optionally command or
 HTTP results are validated by their Standard Schema. A TypeScript type alone is not a runtime guarantee.
 Provider-facing JSON Schema may be a compatible projection, but the original Standard Schema remains the
 authority when Weft accepts a value.
@@ -102,8 +102,8 @@ POSIX repository-relative patterns: no absolute paths, backslashes, or `..` segm
 | Area | Methods and fields |
 | --- | --- |
 | Agents | `agent`, `agent.detailed` |
-| Fan-out and flow | `parallel`, `sequence`, `pipeline`, `successes`, `all` |
-| Composition | `workflow`, `scope`, `recipe`, `step` (deprecated) |
+| Fan-out and flow | `parallel.all`, `parallel.settled`; legacy `parallel`, `sequence`, `pipeline`, `successes`, `all` |
+| Composition | `procedure`, `workflow`, `scope`; legacy `recipe`, `step` (deprecated) |
 | Humans and UI | `gate`, `human.ask`, `human.approve`, `human.review`, `human.review.detailed`, `ui.render` |
 | Files and processes | `fs.read`, `fs.glob`, `fs.stat`, `exec`, `bash`, `env.get`, `secret` |
 | HTTP | `fetch` |
@@ -373,8 +373,68 @@ passed as a string, but passing the imported definition preserves input/output t
 the child rather than blindly serving the old outer result; the child's own journal decides which internal
 steps remain reusable after code edits.
 
-Use `ctx.workflow()` when the child needs a durable boundary. Use `ctx.recipe()` for transparent in-process
-composition whose individual effects should remain directly in the parent run.
+Use `ctx.workflow()` when the child needs its own run lifecycle. Use `ctx.procedure()` for named composition
+whose individual effects remain directly in the parent run.
+
+### `ctx.procedure(definition, input, { key, label? })`
+
+A procedure validates input and output, gives nested effects a local namespace, and records its name, status,
+digests, and timing. It shares the caller's run, workspace, budget, and cancellation:
+
+```ts
+import { type Ctx, defineProcedure, z } from "@techery/weft-sdk";
+
+const inspect = defineProcedure({
+  name: "inspect-file",
+  revision: "v1",
+  input: z.object({ path: z.string() }),
+  output: z.object({ summary: z.string() }),
+  requires: ["agent"],
+  run: (ctx: Pick<Ctx, "agent">, input) => ctx.agent(`Inspect ${input.path}`, {
+    key: "inspect",
+    schema: z.object({ summary: z.string() }),
+  }),
+});
+
+const result = await ctx.procedure(inspect, { path: "src/app.ts" }, { key: "app" });
+```
+
+The body always re-enters on resume. Each nested effect independently replays, verifies freshness, or recovers;
+the engine never serves an aggregate cached procedure result. Changing the procedure revision, body source,
+schema projection, or parsed input changes nested effect identity, including when resume requests `reuse: "key"`.
+Increment `revision` when a captured configuration, imported helper, schema refinement, or transform changes
+meaning: JavaScript function source and JSON Schema cannot reflect those dependencies automatically.
+
+The annotation on `run` is a compile-time capability requirement. An optional `requires` array exposes top-level
+capability names to the host and journal and checks their presence before execution. Type annotations cannot be
+reflected at runtime; omitting the manifest does not produce a runtime whitelist. This is an authoring contract,
+not a sandbox for arbitrary JavaScript. Procedure input/output must validate and be JSON-expressible.
+
+Call keys and lane item keys are URL-encoded path segments. The example's nested agent key is `app/inspect`;
+passing `{ key: "review:src/app.ts" }` yields `review%3Asrc%2Fapp.ts/inspect`. Reusing an invocation key in the
+same run pass fails even if the body has no effects. `ctx.scope()` still supplies defaults only.
+
+### `ctx.parallel.all(items, mapper, options)` and `ctx.parallel.settled(...)`
+
+These explicit fan-out modes accept items and a mapper. Each lane is a context with a stable `itemKey`:
+
+```ts
+const summaries = await ctx.parallel.all(
+  files,
+  (file, lane) => lane.procedure(inspect, { path: file.path }, { key: "inspect-file" }),
+  { key: "review", keyOf: (file) => file.path, concurrency: 3 },
+);
+```
+
+`all` waits for every lane, including queued lanes, then throws the first failure in input order. `settled` returns
+explicit `{ ok: true, value }` or `{ ok: false, error }` outcomes; workflow code must account for required coverage.
+Cancellation propagates from either mode after lanes settle. Duplicate or empty semantic keys and invalid
+concurrency fail before any mapper starts. Already-started promises are rejected.
+
+Use each item's stable semantic identity, not its array index: reordering items then preserves its namespace and
+replay. Calls through `lane.agent`, `lane.human.ask`, `lane.git`, nested procedures, and child workflows inherit
+the lane namespace. Lanes preserve the caller's task extension types. The legacy callable `ctx.parallel(...)`
+keeps returning settled results and retains its original failure policy.
 
 ### `ctx.scope(options)`
 
@@ -411,6 +471,10 @@ const summary = await ctx.recipe(summarizeFiles, { files });
 The recipe input is validated before its function runs and its output is validated afterward. Nested effects
 use the current phase/scope and remain ordinary journal entries. The recipe call itself is not an independent
 durability, budget, or suspension boundary.
+
+Existing recipes retain their original global keys. Migrating to a procedure adds an invocation namespace and
+definition binding, so old recipe entries are not silently reinterpreted as procedure leaves. Migrate at a new
+run boundary, or inspect a replay preview before resuming a changed workflow.
 
 ### `ctx.step(definition, input)` (deprecated)
 
@@ -992,6 +1056,41 @@ payload is journaled and replayed.
 Creates a durable timer. Resume waits only the remaining time from the original schedule; it does not restart
 the full duration. The engine records the timer firing before the step completes.
 
+A running daemon scans suspended deadlines on startup and periodically, then resumes due waits under the
+durable run lease and strict definition identity checks. Changed or missing executable provenance becomes
+recovery attention; automatic wake never opts into edit-tolerant replay. Stopping the daemon disarms its timer
+loop. A standalone stopped engine needs an explicit resume or a daemon to wake it.
+
+### Explicit resume compatibility
+
+`weft resume <run> --mode strict` (or `engine.resume(id, { mode: "strict" })`) refuses changed or missing
+current executable identity before running the body. `--mode retained` loads the saved emitted bundle and
+UI catalog, also under strict identity checks, so moved/deleted source does not change the run. New CLI, daemon,
+and MCP starts create this retention; legacy missing retention is refused without fallback.
+`--mode edit-tolerant` preserves the current default, re-entering
+edited source and reusing compatible leaf effects. `--reuse key` is deliberately stale salvage and cannot be
+combined with strict or retained mode. Bundle identity
+includes the currently installed external dependency graph, not a frozen dependency environment.
+
+Before accepting edited-source replay, use the existing preview:
+
+```sh
+weft replay --dry RUN_ID --reuse content
+weft resume RUN_ID --mode edit-tolerant --reuse content
+```
+
+The preview loads current registry/path source (or the saved script for an inline run), uses the same body and
+bundle identity guards as resume, and prints reached cache hits, salvaged matches, divergence, and pending human
+requests. It stops a path at its first live-effect boundary, including operations and fresh verification; it is
+not a complete future execution plan or cost estimate. No providers, host-operation execute/reconcile calls,
+workspace preparation commands, or journal appends run in dry mode. Existing owned workspaces are inspected,
+never recreated or repaired by the preview. Real resume still checks freshness and reconciles uncertainty.
+
+Dry replay executes workflow JavaScript, imports, and schema transforms: it is not a sandbox for arbitrary
+user code. Keep effects behind `ctx` and do not use it to execute untrusted workflows. Preview again after
+further source/dependency edits. `--reuse key` previews deliberately stale salvage and should be chosen only
+after inspecting the affected keys.
+
 ### `ctx.now()`
 
 Returns the host clock as journaled epoch milliseconds. Replays return the recorded value.
@@ -1008,6 +1107,34 @@ These methods are asynchronous because crossing the journal is the feature. Do n
 globals merely to avoid `await`.
 
 ## Structure, logging, and run metadata
+
+### Recovery attention and delivery evidence
+
+Run state includes retained workspace identity, captured candidates, verification records, operation receipts,
+and confirmed deliveries. The UI Queue includes a recovery section; run detail and reports show the request ID,
+external binding, known resources and inspection/resume guidance. An unknown operation remains visible even when
+its run is `failed`, and disappears from the recovery queue only after reconciliation records a receipt. Existing
+`RunStatus` values remain compatible; the failure code is `recovery_required`.
+
+`GET /api/attention` returns recovery items across runs and explicitly lists unreadable journals.
+`GET /api/runs/:id` and the read-only MCP tool `weft_inspect` expose the same candidate and recovery state. The latest
+candidate is displayed with only its own verification and delivery records. Historical evidence cannot imply
+that the current candidate was verified or delivered, and a successful run without a receipt is not displayed
+as confirmed delivery.
+
+Failed required checks and stale candidates also remain in the attention queue. Exact-head GitHub PR feedback
+is shown separately from PR-creation receipts: pending/failed/unknown feedback never means CI approval, and a
+passing observation for a different head cannot clear attention. Observation timestamps describe freshness;
+the queue does not claim background continuous CI polling. Explicit workspace cleanup marks the retained path
+removed while preserving candidate and delivery history.
+
+### Provider activity
+
+Providers can report public status through `RunControl.onProgress`. The engine records at most 100 updates per
+provider turn, truncates messages to 512 characters, suppresses consecutive duplicates, and ignores updates after
+cancellation or completion. These `step.progress` events are presentation metadata and do not affect replay.
+The UI shows current activity and the journal retains it. Claude reports turn and tool activity; the current
+nonstreaming Codex adapter reports turn start and finalization. Status contains no model reasoning or tool arguments.
 
 ### `ctx.phase(name)`
 

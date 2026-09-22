@@ -207,11 +207,12 @@ describe("RunStore eviction", () => {
 });
 
 describe("the weft MCP server", () => {
-  it("advertises the seven session tools", async () => {
+  it("advertises the session tools including machine-readable inspection", async () => {
     const s = await session();
     const { tools } = await s.client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       "weft_answer",
+      "weft_inspect",
       "weft_list",
       "weft_report",
       "weft_resume",
@@ -240,6 +241,12 @@ describe("the weft MCP server", () => {
     const { report } = await json<{ report: string }>(s, "weft_report", { runId: started.runId });
     expect(report).toContain("hello");
     expect(report).toContain("complete");
+    const inspected = await json<{ state: { runId: string; status: string; attention: unknown[] } }>(
+      s,
+      "weft_inspect",
+      { runId: started.runId },
+    );
+    expect(inspected.state).toMatchObject({ runId: started.runId, status: "complete", attention: [] });
   });
 
   it("accepts any JSON input — an explicit null reaches the workflow as itself", async () => {
@@ -574,6 +581,8 @@ export default defineWorkflow(
     expect(types).toContain("defineWorkflow");
     expect(types).toContain("export interface Ctx");
     expect(types).toContain("StandardSchemaV1");
+    expect(types).toContain("defineProcedure");
+    expect(types).toContain("defineOperation");
     expect(types).toContain("@techery/weft-sdk/types.ts");
   });
 });

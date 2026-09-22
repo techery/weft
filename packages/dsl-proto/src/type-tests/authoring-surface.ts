@@ -232,7 +232,7 @@ async function exerciseProcedureSurface(ctx: WorkflowCtx, workspaceCtx: Workspac
     { baseRef: "main" },
     { key: "collect-detailed" },
   );
-  expectBoolean(receipt.replayed);
+  expectBoolean(receipt.bodyEntered);
   expectString(receipt.inputDigest);
 
   // A workspace context supplies strictly more, so the read-only body remains callable.

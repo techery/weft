@@ -25,7 +25,7 @@ export interface GateDiagnostic {
 }
 
 /** Bare imports every workflow may use: the authoring surface and its schema library. */
-export const DEFAULT_ALLOW_BARE: readonly string[] = ["@techery/weft-sdk", "zod"];
+export const DEFAULT_ALLOW_BARE: readonly string[] = ["@techery/weft-sdk", "@techery/weft-stdlib", "zod"];
 
 /** `@techery/weft-sdk` is the authoring surface; a custom allow-list extends it, never removes it. */
 const REQUIRED_ALLOW_BARE: readonly string[] = ["@techery/weft-sdk"];

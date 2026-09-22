@@ -118,7 +118,7 @@ export class ReplayIndex {
             seq: ev.seq,
             hash: ev.hash,
             kind: ev.kind,
-            at: rec.at,
+            at: ev.originAt ?? rec.at,
             completed: false,
             consumed: false,
             ...(ev.childRunId ? { childRunId: ev.childRunId } : {}),

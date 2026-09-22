@@ -11,8 +11,11 @@
 
 export type { BundleOptions, BundleResult } from "./bundle.ts";
 export { bundleWorkflow } from "./bundle.ts";
+export type { FingerprintOptions } from "./fingerprint.ts";
+export { fingerprintBundle } from "./fingerprint.ts";
 export type { InstantiateOptions, LoadedWorkflow, LoadOptions } from "./load.ts";
 export { instantiateBundle, loadWorkflow } from "./load.ts";
+export { workflowMigrationWarnings } from "./migration.ts";
 export type {
   FileWorkflowRegistry,
   RegistryLoadResult,

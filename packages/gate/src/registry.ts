@@ -56,6 +56,8 @@ export interface WorkflowInspection {
 
 export interface RegistryLoadResult {
   def: WorkflowDefinition;
+  /** Bundled workflow and relative imports, suitable for optional retained resume. */
+  code: string;
   /** Callable registry name after package/default resolution. */
   name: string;
   /** Content hash of the bundle — the version a run pins. */
@@ -92,6 +94,7 @@ export interface RegistryOptions {
 
 interface CacheEntry {
   file: string;
+  code: string;
   hash: string;
   buildHash: string;
   uiCatalog: CompiledUiCatalog;
@@ -133,6 +136,7 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
 
     const def = await instantiateBundle(code, {
       filename: file,
+      expectedHash: hash,
       ...(allowBare ? { allowBare } : {}),
     });
     const name = def.meta.name ?? workflowPackage.name;
@@ -143,6 +147,7 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
     }
     const entry: CacheEntry = {
       file,
+      code,
       hash,
       buildHash,
       uiCatalog,
@@ -231,10 +236,22 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
       const directPackage = index > 0 && (await isFile(path.join(dir, PACKAGE_ENTRY)));
       if (directPackage) {
         const inspected = await inspectPackage(dir);
-        inspections.push({
-          packages: inspected.workflowPackage ? [inspected.workflowPackage] : [],
-          issues: inspected.issue ? [inspected.issue] : [],
-        });
+        if (inspected.workflowPackage) {
+          inspections.push({ packages: [inspected.workflowPackage], issues: [] });
+        } else {
+          // Example collections can have a top-level main.ts runner alongside complete
+          // nested packages. An entry file alone must not hide those packages. Keep the
+          // original incomplete-package diagnostic when there is no viable registry.
+          const root = await inspectRoot(dir);
+          inspections.push(
+            root.packages.length > 0
+              ? root
+              : {
+                  packages: [],
+                  issues: inspected.issue ? [inspected.issue] : [],
+                },
+          );
+        }
       } else {
         inspections.push(await inspectRoot(dir));
       }
@@ -299,6 +316,7 @@ export function createWorkflowRegistry(opts: RegistryOptions): FileWorkflowRegis
 
   const resultOf = (entry: CacheEntry): RegistryLoadResult => ({
     def: entry.def,
+    code: entry.code,
     name: entry.name,
     hash: entry.hash,
     buildHash: entry.buildHash,

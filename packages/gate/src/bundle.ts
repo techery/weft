@@ -6,14 +6,14 @@
  *
  * The gate runs inside the build: an `onLoad` hook reads every module esbuild pulls in and
  * checks it, so a `Date.now()` hiding in `./schemas.ts` fails the build just like one in the
- * entry. The returned `hash` is the SHA-256 of the emitted code — that is the content hash a
- * run is versioned by, and it covers every bundled module.
+ * entry. The returned `hash` fingerprints emitted code plus resolved external host
+ * dependencies, so local SDK/stdlib changes also change the run's executable identity.
  */
-import { createHash } from "node:crypto";
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { CompiledUiCatalog } from "@techery/weft-sdk";
 import { type BuildFailure, build, type Loader, type Message, type Plugin } from "esbuild";
+import { fingerprintBundle } from "./fingerprint.ts";
 import { checkSource, type GateDiagnostic, GateError, resolveAllowBare } from "./rules.ts";
 import { compileUiCatalog, discoverUiViews, uiMessageToDiagnostic } from "./ui-bundle.ts";
 
@@ -30,7 +30,7 @@ export interface BundleOptions {
 
 export interface BundleResult {
   code: string;
-  /** SHA-256 hex of `code` — the workflow's content version. */
+  /** SHA-256 of code plus the resolved host dependency graph and toolchain identity. */
   hash: string;
   /** Hash of browser assets and metadata; intentionally independent from the Node definition hash. */
   buildHash: string;
@@ -123,7 +123,7 @@ export async function bundleWorkflow(opts: BundleOptions): Promise<BundleResult>
   });
   return {
     code,
-    hash: createHash("sha256").update(code).digest("hex"),
+    hash: await fingerprintBundle(code, { allowBare }),
     buildHash: compiledUi.catalog.buildHash,
     uiCatalog: compiledUi.catalog,
     diagnostics: [

@@ -56,6 +56,7 @@
   "dependencies": {
     "@techery/weft-design-system": "workspace:*",
     "@techery/weft-sdk": "workspace:*",
+    "@techery/weft-stdlib": "workspace:*",
     "esbuild": "^0.28.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

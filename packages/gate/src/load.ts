@@ -19,7 +19,8 @@ import path from "node:path";
 import vm from "node:vm";
 import { type CompiledUiCatalog, isWorkflowDefinition, type WorkflowDefinition } from "@techery/weft-sdk";
 import { type BundleOptions, bundleWorkflow, INLINE_FILE } from "./bundle.ts";
-import { GateError, isAllowedBare, resolveAllowBare } from "./rules.ts";
+import { inspectBundleFingerprint } from "./fingerprint.ts";
+import { DEFAULT_ALLOW_BARE, GateError, isAllowedBare, resolveAllowBare } from "./rules.ts";
 
 export interface LoadOptions extends BundleOptions {
   /** Fallback workflow name when the file has no `meta.name` (inline source, mainly). */
@@ -40,7 +41,24 @@ export interface InstantiateOptions {
   /** Script name for stack traces; also the `__filename` the module sees. */
   filename?: string;
   allowBare?: readonly string[];
+  /** Require the code about to execute to match the caller's recorded fingerprint. */
+  expectedHash?: string;
 }
+
+// Node caches ESM and CommonJS dependencies, including shared transitive modules.
+// Re-importing a changed file does not replace those objects. Keep their first
+// observed identities and refuse drift until the host restarts.
+const loadedHostModules = new Map<string, string>();
+const uncertainHostModules = new Set<string>();
+// The SDK is already imported by this module (and usually by the host). Start its
+// baseline immediately, before the first workflow is requested, and observe failures
+// here so an unused loader cannot cause an unhandled rejection during initialization.
+const initialHostModules = inspectBundleFingerprint(
+  DEFAULT_ALLOW_BARE.map((id) => `require(${JSON.stringify(id)});`).join("\n"),
+).then(
+  (snapshot) => ({ snapshot }),
+  (error: unknown) => ({ error }),
+);
 
 type ModuleFactory = (
   exports: Record<string, unknown>,
@@ -56,6 +74,7 @@ export async function loadWorkflow(opts: LoadOptions): Promise<LoadedWorkflow> {
   const entry = opts.entry ? path.resolve(opts.cwd ?? process.cwd(), opts.entry) : undefined;
   const def = await instantiateBundle(code, {
     filename: entry ?? INLINE_FILE,
+    expectedHash: hash,
     ...(opts.allowBare ? { allowBare: opts.allowBare } : {}),
   });
   const fromFile = entry ? path.basename(entry, path.extname(entry)) : undefined;
@@ -72,7 +91,33 @@ export async function instantiateBundle(
 ): Promise<WorkflowDefinition> {
   const filename = opts.filename ?? INLINE_FILE;
   const allowBare = resolveAllowBare(opts.allowBare);
+  const initialized = await initialHostModules;
+  if ("error" in initialized) throw initialized.error;
+  for (const [file, identity] of initialized.snapshot.modules) {
+    if (!loadedHostModules.has(file)) loadedHostModules.set(file, identity);
+  }
+  const fingerprint = await inspectBundleFingerprint(code, { allowBare });
+  if (opts.expectedHash !== undefined && fingerprint.hash !== opts.expectedHash)
+    throw new GateError("Workflow dependencies changed before loading; load the workflow again");
+  for (const [file, identity] of fingerprint.modules) {
+    const previous = loadedHostModules.get(file);
+    if (uncertainHostModules.has(file) || (previous !== undefined && previous !== identity))
+      throw new GateError(
+        `Workflow host dependency changed after loading: ${file}; restart the host before loading workflows again`,
+      );
+  }
+  // Reserve before importing so concurrent loads cannot claim conflicting versions.
+  for (const [file, identity] of fingerprint.modules) loadedHostModules.set(file, identity);
   const requireShim = await createRequireShim(code, allowBare);
+  try {
+    if ((await inspectBundleFingerprint(code, { allowBare })).hash !== fingerprint.hash)
+      throw new GateError(
+        "Workflow dependencies changed during loading; restart the host before loading workflows again",
+      );
+  } catch (error) {
+    for (const file of fingerprint.modules.keys()) uncertainHostModules.add(file);
+    throw error;
+  }
   const context = createSandbox();
 
   // The wrapper opens on the same line as the bundle so line numbers (and the inline
@@ -249,15 +294,15 @@ function bannedClass(message: string): new (...args: unknown[]) => never {
 }
 
 /**
- * `require` is synchronous, so every module the bundle can legally ask for is imported
- * first: the allow-list itself plus any allow-listed subpath the emitted code mentions.
+ * `require` is synchronous, so every allowed module the bundle mentions is imported
+ * first. Unused configured modules must not populate Node's cache without a fingerprint.
  * Everything else throws — including an indirect `require` the AST rules cannot see.
  */
 async function createHostModules(
   code: string,
   allowBare: readonly string[],
 ): Promise<Map<string, HostModule>> {
-  const wanted = new Set(allowBare);
+  const wanted = new Set<string>();
   for (const id of requestedModuleIds(code)) {
     if (isAllowedBare(id, allowBare)) wanted.add(id);
   }

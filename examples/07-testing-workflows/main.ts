@@ -8,6 +8,7 @@
  */
 import assert from "node:assert/strict";
 import { defineWorkflow, z } from "@techery/weft-sdk";
+import { findingKey, uniqueFindings } from "@techery/weft-stdlib";
 import { mock, runWorkflow } from "@techery/weft-testing";
 
 const Finding = z.object({ file: z.string(), line: z.number(), claim: z.string() });
@@ -25,32 +26,33 @@ const review = defineWorkflow(
     const paths = files.filter((f) => f.status !== "D").map((f) => f.path);
 
     ctx.phase("Find");
-    const found = ctx.successes(
+    const found = ctx.all(
       await ctx.parallel(
-        paths.map((f) =>
+        [...new Set(paths)],
+        (f) =>
           ctx.agent(`Review ${f} for correctness bugs.`, {
             schema: z.object({ findings: z.array(Finding) }),
             key: `review:${f}`,
           }),
-        ),
+        { concurrency: 4 },
       ),
     );
-    const findings = found.flatMap((r) => r.findings);
+    const findings = uniqueFindings(found.flatMap((r) => r.findings));
 
     ctx.phase("Verify");
-    const confirmed = ctx.successes(
+    const confirmed = ctx.all(
       await ctx
         .pipeline(findings)
         .step((f) =>
           ctx.agent(`Try to refute: ${f.claim} (${f.file}:${f.line}). Default real=false if unsure.`, {
             schema: z.object({ real: z.boolean(), reason: z.string() }),
             provider: "codex",
-            key: `refute:${f.file}:${f.line}`,
+            key: `refute:${findingKey(f)}`,
           }),
         )
         .filter((verdict) => verdict.real)
         .map((_verdict, f) => f)
-        .run(),
+        .run({ concurrency: 4 }),
     );
     return { confirmed };
   },
@@ -78,8 +80,9 @@ assert.equal(output.confirmed[0]!.file, "a.ts");
 
 // journal assertions: the graph itself is testable
 assert.equal(journal.steps({ kind: "agent" }).length, 2); // deleted b.ts was never reviewed
-assert.match(journal.step("refute:a.ts:3").prompt ?? "", /Default real=false/);
-assert.equal(journal.step("refute:a.ts:3").route?.provider, "codex"); // cross-vendor grading
+const refuteKey = `refute:${findingKey(output.confirmed[0]!)}`;
+assert.match(journal.step(refuteKey).prompt ?? "", /Default real=false/);
+assert.equal(journal.step(refuteKey).route?.provider, "codex"); // cross-vendor grading
 assert.deepEqual(
   state.phases.map((p) => p.name),
   ["Scope", "Find", "Verify"],

@@ -21,6 +21,8 @@
     "sync:meta": "node scripts/sync-package-meta.mjs",
     "verify:packing": "node scripts/verify-packing.mjs",
     "verify:examples": "node scripts/check-example-coverage.mjs",
+    "evaluate:workflows": "node --import tsx scripts/evaluate-workflows.ts",
+    "test:evaluation": "node --import tsx --test scripts/evaluate-workflows.test.ts",
     "version:set": "node scripts/set-version.mjs",
     "verify:install": "node scripts/verify-install.mjs",
     "install:global": "cd packages/cli && pnpm link --global",

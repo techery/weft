@@ -12,13 +12,14 @@
  */
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
-import { Engine, ProviderRegistry, type ResumeOptions } from "@techery/weft-core";
+import { Engine, type OperationBindings, ProviderRegistry, type ResumeOptions } from "@techery/weft-core";
 import {
   createWorkflowRegistry,
   DEFAULT_ALLOW_BARE,
   type FileWorkflowRegistry,
+  fingerprintBundle,
   GateError,
   instantiateBundle,
   loadWorkflow,
@@ -29,6 +30,14 @@ import type { CompiledUiCatalog, WorkflowDefinition } from "@techery/weft-sdk";
 import { createFsStores } from "@techery/weft-store-fs";
 import * as z from "zod";
 import { loadConfig, WEFT_DIR, type WeftConfig } from "./config.ts";
+import {
+  createGitHubPrFeedbackBinding,
+  createGitHubReviewedPrBinding,
+  GITHUB_PR_FEEDBACK_BINDING,
+  GITHUB_REVIEWED_PR_BINDING,
+  type GitHubPrFeedbackOptions,
+  type GitHubReviewedPrOptions,
+} from "./github-delivery.ts";
 import { TaskStore } from "./tasks.ts";
 
 /** Derived, rebuildable, and safe to delete — never a source of truth. */
@@ -73,6 +82,12 @@ export interface CreateWeftOptions {
   providers?: "real" | "mock";
   /** Extra workflow directories; relative paths resolve against `cwd`. */
   extraWorkflowDirs?: readonly string[];
+  /** Trusted host executors; never loaded from workflow source or repository JSON config. */
+  operations?: OperationBindings;
+  /** Explicitly enable the built-in same-repository GitHub PR delivery binding. */
+  githubReviewedPr?: Omit<GitHubReviewedPrOptions, "repositoryPath">;
+  /** Explicitly enable read-only, exact-head GitHub CI/review observations. */
+  githubPrFeedback?: GitHubPrFeedbackOptions;
 }
 
 /**
@@ -94,17 +109,34 @@ export function mergedAllowBare(config: WeftConfig): string[] | undefined {
  * and are copied into every agent worktree — state that is local, rebuildable, and often
  * large. Workflows are deliberately NOT listed: they are source and belong in the repo.
  *
- * Written once, never overwritten — a user who edits it owns it from then on.
+ * Existing rules remain intact. New scoped runtime entries are appended unless the
+ * user already has an explicit rule (including an intentional unignore) for that path.
  */
 async function ensureStateIgnored(weftDir: string): Promise<void> {
   const file = join(weftDir, ".gitignore");
-  if (existsSync(file)) return;
+  const scopedRuntime = ["workspaces/", "github-delivery/"];
+  if (existsSync(file)) {
+    try {
+      const existing = await readFile(file, "utf8");
+      const rules = existing.split("\n").map((line) => line.trim().replace(/^!?\//, "").replace(/^!/, ""));
+      const missing = scopedRuntime.filter((entry) => !rules.includes(entry));
+      if (missing.length)
+        await appendFile(
+          file,
+          `${existing.endsWith("\n") || !existing ? "" : "\n"}# Weft owned workspaces and delivery recovery state\n${missing.join("\n")}\n`,
+        );
+    } catch {
+      /* A host must not overwrite user rules or fail assembly on a read-only ignore file. */
+    }
+    return;
+  }
   const body = [
-    "# Written by weft. Run state is local and rebuildable from nothing;",
+    "# Written by weft. Runtime journals and recovery records are durable local state;",
     "# workflows/ is source and stays tracked.",
     "runs/",
     "blobs/",
     "tasks/",
+    ...scopedRuntime,
     "index.sqlite",
     "",
   ].join("\n");
@@ -119,6 +151,26 @@ async function ensureStateIgnored(weftDir: string): Promise<void> {
 
 export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
   const cwd = resolve(opts.cwd);
+  if (opts.githubReviewedPr && opts.operations?.[GITHUB_REVIEWED_PR_BINDING]) {
+    throw new Error(`operation binding ${GITHUB_REVIEWED_PR_BINDING} was configured twice`);
+  }
+  if (opts.githubPrFeedback && opts.operations?.[GITHUB_PR_FEEDBACK_BINDING]) {
+    throw new Error(`operation binding ${GITHUB_PR_FEEDBACK_BINDING} was configured twice`);
+  }
+  const operations: OperationBindings = Object.freeze({
+    ...opts.operations,
+    ...(opts.githubReviewedPr
+      ? {
+          [GITHUB_REVIEWED_PR_BINDING]: createGitHubReviewedPrBinding({
+            ...opts.githubReviewedPr,
+            repositoryPath: cwd,
+          }),
+        }
+      : {}),
+    ...(opts.githubPrFeedback
+      ? { [GITHUB_PR_FEEDBACK_BINDING]: createGitHubPrFeedbackBinding(opts.githubPrFeedback) }
+      : {}),
+  });
   const config = opts.config ?? (await loadConfig(cwd));
   const weftDir = join(cwd, WEFT_DIR);
   const stores = createFsStores(weftDir);
@@ -172,6 +224,7 @@ export async function createWeft(opts: CreateWeftOptions): Promise<Weft> {
     journal: stores.journal,
     blobs: stores.blobs,
     providers,
+    operations,
     config,
     // The registry is what lets resume and ctx.workflow("name", …) find a definition by
     // name, in a process that never saw the file.
@@ -328,11 +381,14 @@ export async function persistedDefOf(weft: Weft, runId: string): Promise<Persist
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT" && code !== "ENOTDIR") throw err;
     const def = await inlineDefOf(weft, runId);
-    // An inline run's script is journaled with it, so it cannot have changed and there
-    // is nothing for a hash to catch.
     if (def === undefined) return undefined;
+    // Inline source is retained, but its current external runtime dependencies still
+    // need fingerprinting before strict resume can claim unchanged executable identity.
+    const retainedCode = await readFile(join(weft.runsDir, runId, "script.ts"), "utf8");
+    const allowBare = mergedAllowBare(weft.config);
+    const hash = await fingerprintBundle(retainedCode, { ...(allowBare ? { allowBare } : {}) });
     const uiCatalog = await persistedUiCatalogOf(weft, runId);
-    return { def, ...(uiCatalog !== undefined ? { uiCatalog } : {}) };
+    return { def, hash, ...(uiCatalog !== undefined ? { uiCatalog } : {}) };
   }
   const parsed = JSON.parse(raw) as { ref?: unknown };
   if (typeof parsed.ref !== "string") {
@@ -434,6 +490,8 @@ function workflowsDir(cwd: string, weftDir: string, config: WeftConfig): string 
 export interface ResolvedWorkflow {
   def: WorkflowDefinition;
   name: string;
+  /** The loaded executable bundle; its presence does not make a path/registry run inline. */
+  code: string;
   /** Bundle content hash — the version a run pins (`defHash` on `engine.start`). */
   hash?: string;
   uiCatalog?: CompiledUiCatalog;
@@ -458,7 +516,7 @@ export async function resolveWorkflow(weft: Weft, ref: string): Promise<Resolved
     });
     if (hit) {
       const name = hit.def.meta.name ?? ref;
-      return { def: named(hit.def, name), name, hash: hit.hash, uiCatalog: hit.uiCatalog };
+      return { def: named(hit.def, name), name, code: hit.code, hash: hit.hash, uiCatalog: hit.uiCatalog };
     }
     throw await unknownRef(weft, ref);
   }
@@ -470,6 +528,7 @@ export async function resolveWorkflow(weft: Weft, ref: string): Promise<Resolved
   return {
     def: named(loaded.def, loaded.name),
     name: loaded.name,
+    code: loaded.code,
     hash: loaded.hash,
     uiCatalog: loaded.uiCatalog,
   };

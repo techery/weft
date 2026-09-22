@@ -2,7 +2,7 @@ import { defineWorkflow, z } from "@techery/weft-sdk";
 import { reviewLead } from "./lib/agents.ts";
 import { reviewQuality } from "./lib/checks.ts";
 import { Finding, ReviewTask, Summary } from "./lib/contracts.ts";
-import { loadReviewContext, reviewOneFile } from "./lib/recipes.ts";
+import { loadReviewContext, reviewOneFile } from "./lib/procedures.ts";
 
 const Input = z.object({
   objective: z.string().min(1),
@@ -20,7 +20,7 @@ export default defineWorkflow(
   {
     id: "composable-review",
     name: "composable-review",
-    description: "Review files with reusable prompts, agents, recipes, and immutable execution contexts.",
+    description: "Review files with reusable prompts, agents, procedures, and immutable execution contexts.",
     input: Input,
     output: Output,
     defaults: { provider: "claude" },
@@ -30,21 +30,31 @@ export default defineWorkflow(
     const review = ctx.phase("Review");
 
     const understand = review.phase("Understand");
-    const context = await understand.recipe(loadReviewContext, { files: input.files });
+    const context = await understand.procedure(
+      loadReviewContext,
+      { files: [...new Set(input.files)] },
+      { key: "context" },
+    );
 
     const reviewers = review.phase("Inspect files").scope({
       tasks: { mode: "read" },
       parallel: { concurrency: 3, errors: "throw" },
     });
-    const lanes = await reviewers.parallel(context.files, (file, index) =>
-      reviewers.recipe(reviewOneFile, {
-        objective: input.objective,
-        file,
-        conventions: context.conventions,
-        key: `review:${index}:${file.path}`,
-      }),
+    const reviews = await reviewers.parallel.all(
+      context.files,
+      (file, lane) =>
+        lane.procedure(
+          reviewOneFile,
+          {
+            objective: input.objective,
+            file,
+            conventions: context.conventions,
+          },
+          { key: "inspect" },
+        ),
+      { key: "files", keyOf: (file) => file.path, concurrency: 3 },
     );
-    const findings = reviewers.all(lanes).flat();
+    const findings = reviews.flat();
 
     const decide = review.phase("Decide").scope({ agent: { effort: "high" } });
     const summary = await decide.agent(
@@ -54,7 +64,7 @@ export default defineWorkflow(
     );
 
     const verify = review.phase("Verify");
-    await verify.check(
+    const quality = await verify.check(
       reviewQuality,
       {
         requestedFiles: input.files,
@@ -63,6 +73,7 @@ export default defineWorkflow(
       },
       { keyPrefix: "review-quality" },
     );
+    if (!quality.passed) throw new Error("Review completeness or evidence checks failed");
 
     const approve = ctx.phase("Approve");
     const approval = input.requireApproval

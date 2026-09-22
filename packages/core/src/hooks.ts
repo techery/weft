@@ -6,6 +6,8 @@ import type { ExecResult, FetchResult } from "@techery/weft-sdk";
  * this for `git:`/`exec:`/`fetch:` fixtures. Never set in production hosts.
  */
 export interface TestHooks {
+  /** Real owned workspaces are only allowed by explicitly opted-in integration tests. */
+  allowWorkspace?: boolean;
   git?: (op: string, args: unknown) => unknown | Promise<unknown>;
   exec?: (file: string, args: string[]) => ExecResult | undefined | Promise<ExecResult | undefined>;
   bash?: (command: string) => ExecResult | undefined | Promise<ExecResult | undefined>;

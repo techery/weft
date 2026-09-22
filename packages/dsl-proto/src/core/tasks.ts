@@ -137,26 +137,32 @@ export interface WorkflowTasksApi<ExtensionInput = unknown, Extensions = Extensi
 }
 
 /**
- * Why: Pins short-lived workflow task extensions to one validation schema.
+ * Why: Pins persisted workflow task extensions to a versioned validation schema across runs.
  * Use: Create one with `defineTaskContract` and attach it to workflow metadata.
  */
 export interface TaskContract<S extends AnySchema> extends WorkflowNode<"weft.task-contract"> {
   readonly kind: "weft.task-contract";
   readonly schema: S;
+  readonly semanticRevision: string;
+  readonly schemaVersion?: number;
+  readonly migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
   readonly agentAccess?: false | "read" | "write";
 }
 
 /**
- * Why: Declares typed extensions and optional agent access for short-lived workflow tasks.
+ * Why: Declares typed extensions, migration, and optional agent access for persistent workflow tasks.
  * Use: Use it at module scope, then pass the returned contract as `defineWorkflow` metadata `tasks`.
  */
 export interface TaskContractConfig<S extends AnySchema> {
   schema: S;
+  semanticRevision: string;
+  schemaVersion?: number;
+  migrate?: (extensions: unknown, fromVersion: number) => unknown | Promise<unknown>;
   agentAccess?: false | "read" | "write";
 }
 
 /**
- * Why: Declares typed extensions and optional agent access for short-lived workflow tasks.
+ * Why: Declares typed extensions, migration, and optional agent access for persistent workflow tasks.
  * Use: Use it at module scope, then pass the returned contract as `defineWorkflow` metadata `tasks`.
  */
 export declare function defineTaskContract<S extends AnySchema>(

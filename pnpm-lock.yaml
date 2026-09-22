@@ -222,6 +222,9 @@ importers:
       '@techery/weft-sdk':
         specifier: workspace:*
         version: link:../sdk
+      '@techery/weft-stdlib':
+        specifier: workspace:*
+        version: link:../stdlib
       esbuild:
         specifier: ^0.28.2
         version: 0.28.2

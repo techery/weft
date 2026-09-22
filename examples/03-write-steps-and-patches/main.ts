@@ -55,18 +55,20 @@ const fixPass = defineWorkflow(
   },
   async (ctx) => {
     ctx.phase("Fix");
-    const fixes = ctx.successes(
+    const fixes = ctx.all(
       await ctx.parallel([
-        ctx.agent.detailed("Fix the retry loop in auth.ts and nothing else.", {
-          schema: FixResult,
-          key: "fix:auth",
-          write: { paths: ["auth.ts"], mode: "warn" },
-        }),
-        ctx.agent.detailed("Fix pagination in api.ts.", {
-          schema: FixResult,
-          key: "fix:api",
-          write: { paths: ["api.ts"], mode: "warn" }, // NOTES.md will be out of scope → flagged, still lands
-        }),
+        () =>
+          ctx.agent.detailed("Fix the retry loop in auth.ts and nothing else.", {
+            schema: FixResult,
+            key: "fix:auth",
+            write: { paths: ["auth.ts"], mode: "warn" },
+          }),
+        () =>
+          ctx.agent.detailed("Fix pagination in api.ts.", {
+            schema: FixResult,
+            key: "fix:api",
+            write: { paths: ["api.ts"], mode: "warn" }, // NOTES.md will be out of scope → flagged, still lands
+          }),
       ]),
     );
     for (const fix of fixes) {

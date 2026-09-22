@@ -83,6 +83,8 @@ function textOf(ev: JournalEvent, labelBySeq: Map<number, string> = new Map()): 
       return `phase · ${str(ev.name)}`;
     case "step.scheduled":
       return `${named} started${route(ev)}`;
+    case "step.progress":
+      return `${named} · ${str(nested(ev, "progress", "message"))}`;
     case "step.attempt":
       return `${named} retry ${num(ev.attempt)}${ev.detail ? ` · ${str(ev.detail)}` : ""}`;
     case "step.completed":

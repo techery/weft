@@ -101,14 +101,15 @@ export async function judgePanel<S extends AnySchema>(
   const route = routing(opts);
 
   const attemptSettled = await ctx.parallel(
-    angles.map((angle, i) =>
+    angles,
+    (angle, i) =>
       ctx.agent(attemptPrompt(opts.task, angle, i, angles.length), {
         schema: opts.attemptSchema,
         key: prefixed(prefix, `attempt:${i}`),
         label: `attempt:${i}`,
         ...route,
       }),
-    ),
+    { concurrency: 4 },
   );
   const attempts: Attempt[] = ctx.successes(attemptSettled);
   if (attempts.length === 0) {
@@ -118,14 +119,15 @@ export async function judgePanel<S extends AnySchema>(
   const total = attempts.length;
   const verdictSchema = judgeVerdictSchema(total);
   const judgeSettled = await ctx.parallel(
-    attempts.map((_attempt, i) =>
+    attempts,
+    (_attempt, i) =>
       ctx.agent(judgePrompt(opts.task, attempts, i, total), {
         schema: verdictSchema,
         key: prefixed(prefix, `judge:${i}`),
         label: `judge:${i}`,
         ...route,
       }),
-    ),
+    { concurrency: 4 },
   );
   const verdicts = ctx.successes(judgeSettled);
 

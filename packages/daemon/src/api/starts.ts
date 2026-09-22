@@ -14,7 +14,13 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { StartOptions, Weft } from "@techery/weft-host";
-import { parseBudget, rejectUnknownInput, reserveRunId, resolveWorkflow } from "@techery/weft-host";
+import {
+  parseBudget,
+  persistRetainedWorkflow,
+  rejectUnknownInput,
+  reserveRunId,
+  resolveWorkflow,
+} from "@techery/weft-host";
 import type { Hono } from "hono";
 import { fail, jsonBody } from "../http.ts";
 
@@ -60,6 +66,13 @@ export function registerStartRoutes(app: Hono, weft: Weft): void {
       // cannot land in the same run's directory. A registry name needs no provenance
       // written beside it: the journaled name finds the definition again on resume.
       const runId = await reserveRunId(weft);
+      if (resolved.code !== undefined && resolved.hash !== undefined)
+        await persistRetainedWorkflow(weft, runId, {
+          name: resolved.name,
+          code: resolved.code,
+          hash: resolved.hash,
+          ...(resolved.uiCatalog ? { uiCatalog: resolved.uiCatalog } : {}),
+        });
       const opts: StartOptions = {
         runId,
         input,

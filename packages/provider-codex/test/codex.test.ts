@@ -378,6 +378,16 @@ describe("createCodexProvider", () => {
     expect(codex.threads).toHaveLength(0);
   });
 
+  it("reports turn lifecycle status without exposing output as progress", async () => {
+    const codex = new FakeCodex([{ id: "t1", reply: turn('{"ok":true}') }]);
+    const progress: string[] = [];
+    await createCodexProvider({ codex }).run(request(), {
+      ...control(),
+      onProgress: (event) => progress.push(event.message),
+    });
+    expect(progress).toEqual(["Agent session started", "Agent turn returned; validating its output"]);
+  });
+
   it("returns the raw string when the final response will not parse", async () => {
     const codex = new FakeCodex([{ id: "t1", reply: turn("I could not find anything conclusive.") }]);
 

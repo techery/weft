@@ -62,6 +62,7 @@ jobs:
           git config --global init.defaultBranch main
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
+      - run: pnpm test:evaluation
 
   package:
     name: Build & packaging
@@ -106,11 +107,18 @@ jobs:
       # Every example is deterministic and offline (03 builds a throwaway git repo).
       - name: Run all examples
         run: |
-          for dir in examples/0*/; do
+          for dir in examples/[0-9][0-9]-*/; do
+            test -f "$dir/main.ts" || continue
             echo "::group::$dir"
             npx tsx "$dir/main.ts"
             echo "::endgroup::"
           done
+      - name: Portable workflow behavior
+        run: |
+          node packages/cli/bin/weft.js test
+          node packages/cli/bin/weft.js --extra-workflow-dir examples/10-api-cookbook test
+          node packages/cli/bin/weft.js --extra-workflow-dir examples/11-composable-workflow test composable-review
+          node packages/cli/bin/weft.js --extra-workflow-dir examples/12-reviewed-pr test reviewed-pr
       - name: CLI smoke (help, doctor, gate check of the bundled workflows)
         run: |
           node packages/cli/bin/weft.js --help

@@ -19,6 +19,8 @@ import { type CliIo, say } from "../io.ts";
 export function skillCommand(io: CliIo): Command {
   return new Command("skill")
     .description("print the agent skill for authoring and running weft workflows")
+    .option("--preview", "include the declaration-only DSL proposal alongside the runnable SDK guide")
+    .option("--commands-json", "print the CLI command schema derived from the registered commands")
     .addHelpText(
       "after",
       [
@@ -29,9 +31,61 @@ export function skillCommand(io: CliIo): Command {
         "  weft skill | pbcopy",
       ].join("\n"),
     )
-    .action(() => {
-      say(io, ...SKILL_MD.split("\n"));
+    .action((opts: { preview?: boolean; commandsJson?: boolean }, cmd: Command) => {
+      if (opts.commandsJson) {
+        io.out(JSON.stringify(commandSchema(cmd.parent ?? cmd), null, 2));
+        return;
+      }
+      const document = opts.preview
+        ? SKILL_MD
+        : SKILL_MD.replace(
+            /<!-- weft-dsl-proto-reference:start -->[\s\S]*?<!-- weft-dsl-proto-reference:end -->\n?/,
+            "",
+          );
+      say(io, ...document.split("\n"));
     });
+}
+
+interface CommandSchema {
+  name: string;
+  description: string;
+  arguments: Array<{ name: string; description: string; required: boolean; variadic: boolean }>;
+  options: Array<{
+    flags: string;
+    description: string;
+    valueRequired: boolean;
+    valueOptional: boolean;
+    mandatory: boolean;
+    negated: boolean;
+    choices?: string[];
+    default?: unknown;
+  }>;
+  commands: CommandSchema[];
+}
+
+/** The parser remains the authority for accepted commands, arguments, flags, and defaults. */
+export function commandSchema(command: Command): CommandSchema {
+  return {
+    name: command.name(),
+    description: command.description(),
+    arguments: command.registeredArguments.map((argument) => ({
+      name: argument.name(),
+      description: argument.description,
+      required: argument.required,
+      variadic: argument.variadic,
+    })),
+    options: command.options.map((option) => ({
+      flags: option.flags,
+      description: option.description,
+      valueRequired: option.required,
+      valueOptional: option.optional,
+      mandatory: option.mandatory,
+      negated: option.negate,
+      ...(option.argChoices !== undefined ? { choices: option.argChoices } : {}),
+      ...(option.defaultValue !== undefined ? { default: option.defaultValue } : {}),
+    })),
+    commands: command.commands.map(commandSchema),
+  };
 }
 
 /**
@@ -67,8 +121,8 @@ Two things break workflows more often than everything else combined. Read
 ## Establish what is actually available
 
 Treat source, registration, and tests as implementation evidence; treat README and design
-documents as explanations that can lag. This checkout currently labels Weft a design preview
-and says its packages are not published to npm. Use \`node packages/cli/bin/weft.js …\` in a
+documents as explanations that can lag. Installed code, published versions, and proposed
+APIs are distinct evidence. This guide does not assert a registry publication status. Use \`node packages/cli/bin/weft.js …\` in a
 Weft checkout, or a locally linked \`weft …\`. Use \`npx @techery/weft\` or
 \`@techery/weft-mcp\` only after independently confirming that the required package/version
 is published and installed.
@@ -91,7 +145,9 @@ copying syntax:
 | \`@techery/weft-sdk\` | Runnable in the current engine | Authoring workflows that \`weft check\`, \`weft run\`, tests, and the Workflow Manager execute |
 | \`@techery/weft-dsl-proto\` | Declaration-only prototype in this checkout | Compile-time API design, type fixtures, and future-host contracts; it has no workflow engine or runtime exports |
 
-The rest of this skill describes the runnable SDK unless a section is explicitly labelled
+The default \`weft skill\` guide contains runnable SDK guidance. Use \`weft skill --preview\`
+to include the declaration-only proposal, or \`weft skill --commands-json\` for the command
+schema generated from the installed CLI. The rest describes the runnable SDK unless a section is explicitly labelled
 **DSL prototype**. Never copy prototype syntax into an SDK workflow and claim it runs. Never
 rewrite SDK examples merely because the prototype has a smaller proposed API.
 
@@ -210,9 +266,10 @@ const redBaseline = defineProcedure({
 const baseline = await ctx.procedure(redBaseline, { testCommand }, { key: "baseline" });
 \`\`\`
 
-A procedure is durable rather than decorative: its validated output is recorded under one key so
-replay returns the recorded result instead of re-entering the body, \`revision\` invalidates that
-record when the body changes meaning, and its status and timing are recorded at the boundary.
+A procedure owns a durable namespace. Resume always re-enters its body, so nested effects
+retain their own replay, verification, and reconciliation behavior. Its validated output is
+recorded for inspection; it is not a cache that bypasses the body. \`revision\` binds nested
+effect identity when the body changes meaning; status and timing are recorded at the boundary.
 Durable keys written inside the body are local to one invocation, so a named helper never threads
 a caller-supplied key prefix through its signature. The \`run\` context parameter is annotated with
 exactly the capabilities the body consumes, and that requirement is contravariant, so a body
@@ -265,19 +322,20 @@ the receipt already carries candidate identity. A \`subject\` is simply the thin
 generic evidence record is about. That word remains useful for those APIs, but it is not the
 ordinary workspace API name.
 
-Prototype task contracts are intentionally run-scoped and small:
+Prototype task contracts preserve the runnable SDK's persistent cross-run task lifetime:
 
 \`\`\`ts
 const tasks = defineTaskContract({
   schema: TaskExtensions,
+  semanticRevision: "tasks-v1",
   agentAccess: "read",
 });
 \`\`\`
 
-They expose no author-maintained task-contract version, revision, or migration chain. A task
-row still has an engine-owned numeric revision for optimistic updates, and \`dedupeKey\` still
-makes retried upserts converge. If an old run cannot resume with the exact workflow build that
-created it, the future host must fail closed or restart it.
+The workflow identity owns the backlog across runs. \`semanticRevision\` is required;
+\`schemaVersion\` and \`migrate\` support explicit schema changes. Each task retains its
+engine-owned numeric revision for optimistic updates, and \`dedupeKey\` makes repeated
+upserts converge. A surface migration must preserve existing backlog, deduplication, and recurrence.
 
 #### Complete ordinary \`ctx\` surface
 
@@ -288,7 +346,7 @@ effect takes a stable \`key\`, including filesystem, process, network, wait, and
 | --- | --- | --- |
 | Definitions and children | \`ctx.agent\`, \`ctx.artifact\`, \`ctx.context\`, \`ctx.workflow\`, \`ctx.workflow.detailed\` | Run reusable definitions; \`detailed\` retains nominal child-run evidence |
 | Fan-out | \`ctx.parallel.all\`, \`ctx.parallel.settled\` | Required fan-out or explicitly inspected failures |
-| Named bodies | \`ctx.procedure\`, \`ctx.procedure.detailed\` | Run a named, revisioned, schema-validated body in this run; \`detailed\` reports digests and whether replay reused a recorded result |
+| Named bodies | \`ctx.procedure\`, \`ctx.procedure.detailed\` | Re-enter a named, revisioned, schema-validated body in this run; \`detailed\` reports digests and \`bodyEntered: true\` |
 | Inherited defaults | \`ctx.scope\` | Set inherited agent, task, parallel, or budget defaults without creating workflow structure or authority |
 | Lane context | \`lane.itemKey\` | Stable per-item identity; durable calls through the lane use lane-local keys |
 | Decisions and people | \`ctx.policy.decide\`, \`ctx.human.ask\`, \`ctx.human.confirm\`, \`ctx.human.review\`, \`ctx.human.editFile\` | Branching answers and human-authored input; none grants effect authority |
@@ -351,6 +409,49 @@ reporting, but cannot start nested effects.
 
 <!-- weft-dsl-proto-reference:end -->
 
+## Composition and verified delivery in the runnable SDK
+
+These are additive APIs in this checkout. Use the installed package version's exports and
+tests to establish availability; this guide does not establish publication.
+
+\`ctx.parallel.all(items, (item, lane) => ..., { key, keyOf, concurrency })\` requires every
+lane to succeed. \`ctx.parallel.settled\` returns explicit outcomes for intentionally optional
+work. Both reject duplicate item identities before dispatch. Calls through \`lane\` own local
+effect keys; \`lane.itemKey\` identifies the semantic item. Keep the existing \`ctx.parallel\`,
+\`ctx.all\`, and \`ctx.successes\` forms when maintaining older replay histories.
+
+\`defineProcedure\` declares a named body with input/output schemas, a required revision, and
+an explicitly typed context requirement such as \`Pick<Ctx, "git" | "exec">\`. Call it with
+\`ctx.procedure(definition, input, { key })\`. The body always re-enters on resume; individual
+effects replay under its local namespace. Its optional \`requires\` manifest names capabilities
+for host inspection and enforcement; it never grants capabilities. Existing \`ctx.recipe\` and
+\`ctx.step\` remain compatible helper APIs.
+
+For a coding run, \`meta.workspace: { branch, from?, prepare? }\` requests a persistent owned
+Git worktree; the metadata may derive options from validated input. Preparation commands
+must be safe to repeat after interruption. \`ctx.workspace\` is present only for these runs.
+\`ctx.workspace.id\`, \`ctx.workspace.path\`, and \`ctx.workspace.branch\` identify that resource.
+\`ctx.workspace.snapshot({ key })\` requires a clean committed tree and returns an engine-issued
+candidate. \`ctx.workspace.assertCurrent(candidate)\` checks that the workspace still matches it.
+
+\`ctx.verify(candidate, checks, { key, timeout? })\` executes static check definitions against
+that exact candidate. It returns results and \`passed\`; a proof exists only if every check
+executes and passes. Trusted or skipped checks cannot produce delivery proof. Code changes
+invalidate the candidate and require another snapshot and verification.
+
+\`defineOperation\` and its \`defineDelivery\` alias declare input/output schemas, revision,
+risk, and a named trusted host binding. \`ctx.operation(definition, input, { key, requestId? })\`
+persists intent and reconciles uncertain outcomes through that binding before retrying.
+Reusing a request identity with a changed payload fails. The executor is supplied explicitly
+by the host's operation registry; workflow code cannot inject an arbitrary executor callback.
+An unresolved outcome requires operator inspection and reconciliation.
+
+\`ctx.delivery(definition, input, { key, candidate, proofs, approval? })\` uses that same
+operation protocol and additionally validates candidate/proof freshness before the effect.
+\`approval: { question, timeout? }\` requests a human decision; host risk policy still applies.
+A Git branch and a TypeScript capability type are not provider isolation boundaries. Exercise
+the real host/provider before claiming enforced write authority or completed remote delivery.
+
 ## Layout
 
 \`\`\`text
@@ -380,8 +481,9 @@ needed to resume inline or path-based runs.
 
 \`weft new <name>\` uses the default \`review\` template and scaffolds
 \`.weft/workflows/<name>/\` with \`main.ts\`, \`lib/\`, \`tests/\`, and \`CHANGELOG.md\`; it
-already passes \`weft check\`. Choose the smallest supported
-starting point explicitly when review fan-out is not the job:
+already passes \`weft check\`. Install \`@techery/weft-sdk\` and \`@techery/weft-testing\`
+for the workflow and its tests; the review template also uses \`@techery/weft-stdlib\`.
+Choose the smallest supported starting point explicitly when review fan-out is not the job:
 
 - \`weft new <name> --template simple\` creates one typed agent step.
 - \`weft new <name> --template review\` creates the default find/refute workflow and creates
@@ -400,8 +502,9 @@ Treat the package boundary as part of the executable workflow contract:
   directory name exactly; a mismatch is rejected.
 - \`main.ts\` is the only registry entry point. Put schemas and other implementation code
   under \`lib/\`; imports from \`main.ts\` are bundled and content-hashed with the workflow.
-- Keep workflow-owned tests under \`tests/\`. With no pattern, \`weft test\` runs every
-  \`.weft/workflows/*/tests/**/*.test.ts\` using Node's test runner. \`weft check\` also
+- Keep workflow-owned tests under \`tests/\`. With no selection, \`weft test\` discovers every
+  registered workflow, including extra roots, and runs its test files with Node's runner.
+  \`weft test <name-or-id>\` selects one workflow; an empty selection fails unless \`--allow-empty\` is explicit. \`weft check\` also
   enforces Weft's fixed TypeScript and replay-safety lint rules over every workflow package;
   repository linter configuration does not change that contract. Use \`weft lint --fix\`
   only for a focused lint pass with safe automatic fixes.
@@ -564,7 +667,7 @@ A step's identity is its **kind + payload + schema + \`key\`**. That is the whol
   it. A cache miss re-runs; it never serves a stale answer.
 - \`--reuse content\` (the default) re-runs a step whose prompt or options moved.
   \`--reuse key\` keeps it by identity — fast iteration on the code around a settled step.
-- \`weft replay --dry <run>\` prints hits / salvaged / diverged before a single provider call.
+- \`weft replay --dry <run> --reuse content\` prints reached hits / salvage / divergence / pending requests, stopping each path at its first live-effect boundary. Inspect it before \`weft resume <run> --mode edit-tolerant --reuse content\`. Real resume still validates freshness. Workflow JavaScript/imports execute and host caches may be prepared; dry replay is not a sandbox.
   Run it before a resume you are not sure about.
 - The world is not in the key. What a step could *read* — the tree an agent greps — is not
   hashed. That is the trade edit-tolerant replay makes; do not rely on a resume noticing
@@ -888,18 +991,19 @@ either to a registry root containing those packages or directly to one complete 
 | Command | |
 | --- | --- |
 | \`weft run <name\\|file\\|->\` | start a run. Input fields become flags; \`--args '{…}'\` first, then \`--flag value\` merges over it. \`--budget "500k,$5"\`, \`--reuse content\\|key\`, \`--watch\`. \`-\` reads a script from stdin |
-| \`weft resume <run>\` | replay the journal and continue. \`--reuse\`, \`--watch\` |
+| \`weft resume <run>\` | replay the journal and continue. \`--mode edit-tolerant\\|strict\\|retained\`, \`--reuse\`, \`--watch\` |
 | \`weft ls\` | runs, newest first. \`--status\`, \`--workflow\`, \`--limit\` |
 | \`weft status <run>\` | one run: status, cost, tree, what it is waiting on |
 | \`weft answer <run> [req] [json]\` | answer a pending human step; interactive when no JSON is given |
 | \`weft cancel <run>\` | abort in-flight work; the run stays resumable |
-| \`weft replay --dry <run>\` | what would replay, what diverged — no providers, no writes |
+| \`weft replay --dry <run>\` | reached reuse and first divergence — no live effects; not a sandbox |
 | \`weft report <run>\` | the generated markdown report |
 | \`weft explain <run> <key\\|seq>\` | one step: route, exact prompt, output, usage, attempts |
 | \`weft diff <a> <b>\` | two runs' step outputs, matched by key — field-level, not prose |
-| \`weft check [name]\` | unified fixed lint, gate, bundle, schema/UI, and \`tsc --noEmit\` validation. \`--no-tsc\` |
+| \`weft check [name]\` | unified fixed lint, gate, bundle, schema/UI, and \`tsc --noEmit\` validation. \`--strict\` fails if typechecking is unavailable; \`--no-tsc\` explicitly skips it. Syntactic migration hints for partial lanes, eager promises, callback revisions, and preview imports are advisory |
 | \`weft lint [name]\` | focused lint-only subset of \`check\`; \`--fix\` applies safe general-rule fixes |
-| \`weft test [pattern]\` | run workflow tests with Vitest, Bun, or Node's \`node:test\`. With no pattern, runs \`.weft/workflows/*/tests/**/*.test.ts\` using Node; \`--runner\`, \`--watch\`, \`--coverage\` |
+| \`weft test [selection]\` | registry-aware workflow name/id or file/directory/glob selection; registered workflows use Node by default. Reports workflow/test-file counts and fails on zero files; \`--allow-empty\`, \`--runner\`, \`--watch\`, \`--coverage\` |
+| \`weft workspace <run> [--cleanup]\` | inspect retained run-owned workspace; cleanup requires a terminal run and refuses uncertain operations, dirty work, and ignored files |
 | \`weft new <name> [--template simple\\|review\\|task]\` | scaffold \`<name>/{main.ts,lib/,tests/,CHANGELOG.md}\`; never overwrites |
 | \`weft workflow list\` (alias \`ls\`) | list loadable definitions and rejected workflow files |
 | \`weft workflow inspect <name-or-id> [--json]\` | print the input/output/task/default contract by callable name or stable id; \`--json\` also exposes UI metadata in the complete machine-readable contract |
@@ -912,6 +1016,17 @@ either to a registry root containing those packages or directly to one complete 
 prints its output, a failed one exits 1 with the step key and the \`weft explain\` line, and
 a run that parks on a person prints the exact \`weft answer <run> <id> '<json>'\` command and
 exits. Parking is not losing — answer it, then \`weft resume <run>\`.
+
+Resume defaults to \`--mode edit-tolerant\`: registry/path runs load current source and
+re-evaluate changed effects under normal replay rules. \`--mode strict\` loads current
+source but refuses changed recorded bundle/body identity. \`--mode retained\` loads the
+original bundled workflow, relative modules, name, and UI graph saved by new host starts,
+then applies the same strict journal checks. Retention does not freeze external packages,
+the Node runtime, or separately loaded child registry workflows. Changed external dependency
+graphs refuse retained resume; restore the original environment or inspect an explicit
+current-source edit-tolerant resume. Old histories without retained provenance remain
+usable under their existing modes; retained mode does not silently fall back. Strict and
+retained modes reject key-only salvage (\`--reuse key\`).
 
 The task CLI is for human/operator mutations. Providers do not invoke it; they request
 validated structured operations through the agent result envelope. Use \`--json\` for
@@ -1015,10 +1130,13 @@ Thus workflows with human steps, signals, task state, and shell checks can run e
 a unit test when the needed fixtures are supplied.
 
 The mock agent is fail-closed, and a missing human answer or signal also fails loudly.
-Side-effect fixture tables are interceptors, not a host sandbox: an unmatched \`git\`,
-\`exec\`, \`bash\`, or \`fetch\` fixture falls through to the real host implementation, and
-omitting the \`env\` table reads \`process.env\`. Fixture every effect the test must isolate and
-use an appropriate temporary \`cwd\`. This proves the in-memory engine path with the supplied
+\`runWorkflow\` defaults to \`fixtureMode: "strict"\`: an unmatched \`git\`, \`exec\`,
+\`bash\`, or \`fetch\` fixture fails before dispatch, and omitted environment values are unset.
+Real owned workspaces are disabled in strict tests. Explicit \`fixtureMode: "integration"\`
+permits unmatched effects to reach the real host and environment. This is the migration
+option for older tests that intentionally depended on fixture fallthrough; use a temporary
+\`cwd\` and only enable it for integration tests. Fixture hooks are not a host sandbox.
+This proves the in-memory engine path with the supplied
 fixtures. It does not prove real provider credentials, subprocess/network availability, the
 filesystem host, MCP transport, daemon routes, or browser rendering; exercise those paths
 separately when the requested claim depends on them.

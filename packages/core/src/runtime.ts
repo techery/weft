@@ -101,6 +101,7 @@ export interface ChildRunSpec {
 }
 
 export interface EngineHost {
+  readonly operations?: import("./operations.ts").OperationBindings;
   readonly config: EngineConfig;
   readonly providers: ProviderRegistry;
   readonly journal: JournalStore;
@@ -121,6 +122,8 @@ export interface SharedRunResources {
   abort: AbortController;
   agentCounter: { count: number; warned: boolean };
   reuse: ReuseMode;
+  resumeMode?: "strict" | "edit-tolerant";
+  definitionBundleHash?: string;
   /**
    * False when the workflow script differs from the one that produced the journal being
    * replayed. Step positions carry no meaning across an edit, so a keyless step whose
@@ -172,7 +175,12 @@ export interface StepIO {
   unmarkWaiting(): void;
 }
 
-type ExecutionScope = CtxScopeOptions & { phase?: string };
+type ExecutionScope = CtxScopeOptions & {
+  phase?: string;
+  /** Engine-owned composition identity, separate from presentation and authoring defaults. */
+  keyNamespace?: string;
+  definitionPath?: readonly string[];
+};
 
 export interface StepOutcome<T> {
   value: T;
@@ -281,7 +289,7 @@ export class RunRuntime {
   readonly taskSchemaBinding: string | undefined;
   readonly taskSchemaVersion: number;
   readonly agentTaskAccess: false | "read" | "write";
-  readonly cwd: string;
+  cwd: string;
   readonly baseRef: string | undefined;
   readonly depth: number;
   readonly shared: SharedRunResources;
@@ -317,6 +325,7 @@ export class RunRuntime {
   private dryIndex = 0;
   private seqCounter = 0;
   private readonly seenKeys = new Set<string>();
+  private readonly seenBoundaries = new Set<string>();
   private humanCounter = 0;
   private agentOrdinal = 0;
   private inflightLive = 0;
@@ -425,6 +434,24 @@ export class RunRuntime {
 
   withScope<T>(scope: ExecutionScope, run: () => T): T {
     return this.executionScope.run(scope, run);
+  }
+
+  resolveKey(key: string | undefined): string | undefined {
+    const namespace = this.activeScope()?.keyNamespace;
+    return namespace && key !== undefined ? `${namespace}/${encodeURIComponent(key)}` : key;
+  }
+
+  /** Reserve a named boundary before dispatch, including bodies containing no effects. */
+  reserveBoundary(key: string): string {
+    if (typeof key !== "string" || key.trim() === "") {
+      throw new StepError("invalid_input", "composition key must be a non-empty string");
+    }
+    const resolved = this.activeScope()?.keyNamespace ? this.resolveKey(key)! : encodeURIComponent(key);
+    if (this.seenBoundaries.has(resolved)) {
+      throw new StepError("invalid_input", `duplicate composition key ${JSON.stringify(resolved)}`);
+    }
+    this.seenBoundaries.add(resolved);
+    return resolved;
   }
 
   log(message: string): void {
@@ -636,7 +663,10 @@ export class RunRuntime {
     // Capture scope synchronously at the call boundary. AsyncLocalStorage keeps
     // concurrent phase handles isolated; phase remains presentation metadata and
     // is deliberately excluded from the replay hash.
-    const scheduledPhase = this.activeScope()?.phase ?? this.currentPhase;
+    const executionScope = this.activeScope();
+    const scheduledPhase = executionScope?.phase ?? this.currentPhase;
+    const resolvedKey = this.resolveKey(spec.key);
+    if (resolvedKey !== spec.key) spec = { ...spec, key: resolvedKey };
     if (this.signal.aborted) {
       throw new CancelledError("run cancelled", { kind: spec.kind, key: spec.key, runId: this.runId });
     }
@@ -650,7 +680,14 @@ export class RunRuntime {
       }
       this.seenKeys.add(spec.key);
     }
-    const hash = hashStep(spec.kind, spec.payload, spec.schemaJson, spec.key);
+    const identityPayload = executionScope?.keyNamespace
+      ? {
+          payload: spec.payload,
+          namespace: executionScope.keyNamespace,
+          definitions: executionScope.definitionPath ?? [],
+        }
+      : spec.payload;
+    const hash = hashStep(spec.kind, identityPayload, spec.schemaJson, spec.key);
     const seq = ++this.seqCounter;
     const ref: StepRef = {
       seq,
@@ -681,7 +718,7 @@ export class RunRuntime {
         // A UI key names the presentation slot; it is not permission to reuse stale
         // props or an older component revision. UI replay is therefore always
         // content-addressed even when the run opts into key-based salvage elsewhere.
-        spec.kind === "ui" ? "content" : this.shared.reuse,
+        spec.kind === "ui" || executionScope?.definitionPath?.length ? "content" : this.shared.reuse,
         this.shared.positionsTrusted !== false,
       );
       if (match?.ambiguous) {
@@ -842,6 +879,8 @@ export class RunRuntime {
           ...(spec.route !== undefined ? { route: spec.route } : {}),
           ...(spec.scope !== undefined ? { scope: spec.scope } : {}),
           ...(spec.payload !== undefined ? { payload: spec.payload } : {}),
+          ...(priorScheduledAt !== undefined ? { originAt: priorScheduledAt } : {}),
+          ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {}),
           ...(spec.schemaJson !== undefined ? { schema: spec.schemaJson } : {}),
           ...(childRunId !== undefined ? { childRunId } : {}),
         },
@@ -1043,7 +1082,10 @@ export class RunRuntime {
   // -- humans ---------------------------------------------------------------
 
   async runHuman(spec: HumanSpec): Promise<HumanOutcome> {
-    const requestedPhase = this.activeScope()?.phase ?? this.currentPhase;
+    const executionScope = this.activeScope();
+    const requestedPhase = executionScope?.phase ?? this.currentPhase;
+    const resolvedKey = this.resolveKey(spec.key);
+    if (resolvedKey !== spec.key) spec = { ...spec, key: resolvedKey };
     if (this.signal.aborted) throw new CancelledError("run cancelled", { kind: "human", runId: this.runId });
     if (spec.onTimeout === "default") {
       // The default is journaled RAW with the request and, when the deadline
@@ -1101,7 +1143,10 @@ export class RunRuntime {
           }
         : {}),
     };
-    const hash = hashStep("human", payload, undefined, spec.key);
+    const identityPayload = executionScope?.keyNamespace
+      ? { payload, namespace: executionScope.keyNamespace, definitions: executionScope.definitionPath ?? [] }
+      : payload;
+    const hash = hashStep("human", identityPayload, undefined, spec.key);
     const seq = ++this.seqCounter;
 
     let match = this.replay?.matchHuman(hash, seq, this.shared.positionsTrusted !== false, spec.key);

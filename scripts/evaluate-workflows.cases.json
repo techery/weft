@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "review-distinct-findings",
+      "input": {
+        "file": "a.ts",
+        "findings": [
+          { "file": "a.ts", "line": 3, "claim": "Null pointer", "evidence": "value.id" },
+          { "file": "a.ts", "line": 3, "claim": "Stale value", "evidence": "cache.value" },
+          { "file": "a.ts", "line": 4, "claim": "Null pointer", "evidence": "value.id" }
+        ]
+      },
+      "expected": { "confirmed": 2, "reviewCalls": 1, "refuteCalls": 2 }
+    },
+    {
+      "id": "review-worker-failure",
+      "input": { "file": "a.ts" },
+      "expected": { "rejected": true, "reviewCalls": 1, "refuteCalls": 0 }
+    },
+    {
+      "id": "review-bounded-fanout",
+      "input": { "files": 12, "hostConcurrency": 32, "expectedBatchSize": 4 },
+      "expected": { "reviewCalls": 12, "maxActive": 4, "confirmed": 0 }
+    },
+    {
+      "id": "diagnostic-repair",
+      "input": { "maxRepairs": 3, "passAfter": 2 },
+      "expected": { "accepted": true, "repairRounds": 2, "diagnosticCalls": 3, "repairCalls": 2 }
+    },
+    {
+      "id": "diagnostic-exhaustion",
+      "input": { "maxRepairs": 1, "passAfter": 2 },
+      "expected": { "accepted": false, "repairRounds": 1, "diagnosticCalls": 2, "repairCalls": 1 }
+    },
+    {
+      "id": "procedure-restart",
+      "input": {},
+      "expected": {
+        "bodyEntries": 2,
+        "initialProviderCalls": 1,
+        "resumeProviderCalls": 0,
+        "sameOutput": true
+      }
+    },
+    {
+      "id": "operation-reconciliation",
+      "input": {},
+      "expected": {
+        "initialFailure": "recovery_required",
+        "executeCalls": 1,
+        "reconcileCalls": 1,
+        "reconciled": true,
+        "receipt": "mock-receipt"
+      }
+    },
+    {
+      "id": "missing-effect-fixture",
+      "input": {},
+      "expected": { "rejectedBeforeEffect": true, "providerCalls": 0 }
+    }
+  ]
+}

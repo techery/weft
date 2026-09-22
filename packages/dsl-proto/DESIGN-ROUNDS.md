@@ -389,9 +389,8 @@ key and an anonymous callback, no name, no schemas, and no node in the execution
 
 `ctx.procedure` fills that gap, and it clears the bar the previous section sets rather than working around it:
 
-- resumption — a procedure's validated output is recorded under its key, so replay returns the recorded result
-  instead of re-entering the body; `revision` invalidates that record when the body changes meaning. A plain
-  function cannot do this, which is what makes the construct durable rather than decorative;
+- resumption — the body re-enters and its leaves replay or reconcile independently. The procedure revision and
+  input bind nested effect identities; there is no aggregate cache that could bypass effect verification;
 - status and timing — recorded once at the boundary, so a view presents the body by name and schema;
 - key ownership — durable keys inside the body are local to one invocation, restoring for named helpers the
   property that scoped key prefixes used to provide, now attached to an identity instead of a string.
@@ -405,6 +404,6 @@ cancellation, so it mints no run identity — and consequently its output must b
 thread proofs, evidence refs, or snapshots remain plain functions or become child workflows, because crossing a
 run boundary requires re-minted evidence.
 
-Proof boundary: recording, replay short-circuiting, revision invalidation, and boundary timing are engine
+Proof boundary: recording, leaf replay and reconciliation, revision invalidation, and boundary timing are engine
 obligations. This package declares the authoring contract and proves the capability requirement at compile time;
 it does not implement the durable behavior those obligations describe.

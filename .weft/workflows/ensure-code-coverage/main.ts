@@ -6,6 +6,7 @@
  *   weft run ensure-code-coverage --base main --watch
  */
 import { type Ctx, defineWorkflow, z } from "@techery/weft-sdk";
+import { assertIntegratedWhenChanged, diagnosticRepair } from "@techery/weft-stdlib";
 
 const Provider = z
   .enum(["claude", "codex"])
@@ -368,7 +369,6 @@ export default defineWorkflow(
     }
     const baseline = current;
 
-    let round = 0;
     let quality: QualityAudit = {
       pass: true,
       summary: "No generated tests require independent quality review.",
@@ -376,86 +376,91 @@ export default defineWorkflow(
     };
     let roundChanged: string[] = [];
 
-    while ((!current.passed || !quality.pass) && round < maxRounds) {
-      round += 1;
-      ctx.phase(`Plan ${round}`);
-      const plan = await ctx.agent(planPrompt(current, quality, changedSource, maxTargetsPerRound, round), {
-        schema: CoveragePlan,
-        provider: plannerWith,
-        effort: "medium",
-        key: `coverage:plan:${round}`,
-        maxTurns: 12,
-        timeout: "8m",
-        repair: 1,
-        tasks: false,
-      });
-      const targets = plan.targets.slice(0, maxTargetsPerRound);
-      assertUniqueTargets(targets);
-      if (targets.length === 0) {
-        throw new Error(`coverage planner produced no repair targets: ${plan.summary}`);
-      }
+    const { repairs: round } = await diagnosticRepair({
+      maxRepairs: maxRounds,
+      diagnose: async () => ({ current, quality }),
+      accepted: ({ current, quality }) => current.passed && quality.pass,
+      repair: async (_diagnostic, round) => {
+        ctx.phase(`Plan ${round}`);
+        const plan = await ctx.agent(planPrompt(current, quality, changedSource, maxTargetsPerRound, round), {
+          schema: CoveragePlan,
+          provider: plannerWith,
+          effort: "medium",
+          key: `coverage:plan:${round}`,
+          maxTurns: 12,
+          timeout: "8m",
+          repair: 1,
+          tasks: false,
+        });
+        const targets = plan.targets.slice(0, maxTargetsPerRound);
+        assertUniqueTargets(targets);
+        if (targets.length === 0) {
+          throw new Error(`coverage planner produced no repair targets: ${plan.summary}`);
+        }
 
-      ctx.phase(`Author ${round}`);
-      const settled = await ctx.parallel(
-        targets.map(
-          (target) => () =>
-            ctx.agent.detailed(testPrompt(target, current, quality), {
-              schema: TestChange,
-              provider: writerWith,
-              effort: "medium",
-              key: `coverage:test:${round}:${target.id}`,
-              isolation: "worktree",
-              write: { paths: [...TEST_WRITE_SCOPE], mode: "strict" },
-              maxTurns: 16,
-              timeout: "10m",
-              repair: 1,
-              tasks: false,
-            }),
-        ),
-        { concurrency },
-      );
-      const failures = settled.filter((result) => !result.ok);
-      if (failures.length > 0) {
-        throw new Error(
-          `coverage test authoring failed: ${failures
-            .map((result) => (result.ok ? "" : result.error.message))
-            .join("; ")}`,
+        ctx.phase(`Author ${round}`);
+        const settled = await ctx.parallel(
+          targets.map(
+            (target) => () =>
+              ctx.agent.detailed(testPrompt(target, current, quality), {
+                schema: TestChange,
+                provider: writerWith,
+                effort: "medium",
+                key: `coverage:test:${round}:${target.id}`,
+                isolation: "worktree",
+                write: { paths: [...TEST_WRITE_SCOPE], mode: "strict" },
+                maxTurns: 16,
+                timeout: "10m",
+                repair: 1,
+                tasks: false,
+              }),
+          ),
+          { concurrency },
         );
-      }
-      const patches = settled.flatMap((result) => (result.ok ? [result.value] : []));
-      roundChanged = unique(patches.flatMap((patch) => patch.files));
-      changedFiles.push(...roundChanged);
-      const ledger = await ctx.integrate(patches, { order: "sequential", onConflict: "fail" });
-      for (const patch of patches) {
-        assertIntegratedWhenChanged(
-          patch.patch?.key ?? "coverage test patch",
-          patch.files,
-          ledger.merged,
-          ledger.quarantined,
-        );
-      }
+        const failures = settled.filter((result) => !result.ok);
+        if (failures.length > 0) {
+          throw new Error(
+            `coverage test authoring failed: ${failures
+              .map((result) => (result.ok ? "" : result.error.message))
+              .join("; ")}`,
+          );
+        }
+        const patches = settled.flatMap((result) => (result.ok ? [result.value] : []));
+        roundChanged = unique(patches.flatMap((patch) => patch.files));
+        changedFiles.push(...roundChanged);
+        const ledger = await ctx.integrate(patches, { order: "sequential", onConflict: "fail" });
+        for (const patch of patches) {
+          assertIntegratedWhenChanged(
+            patch.patch?.key ?? "coverage test patch",
+            patch.files,
+            ledger.merged,
+            ledger.quarantined,
+          );
+        }
 
-      ctx.phase(`Measure ${round}`);
-      current = await measure(ctx, args, `coverage:measure:${round}`);
-      if (!current.ready)
-        throw new Error(`coverage measurement failed after round ${round}: ${current.failure}`);
+        ctx.phase(`Measure ${round}`);
+        current = await measure(ctx, args, `coverage:measure:${round}`);
+        if (!current.ready)
+          throw new Error(`coverage measurement failed after round ${round}: ${current.failure}`);
 
-      ctx.phase(`Audit ${round}`);
-      quality = await ctx.agent(auditPrompt(roundChanged, current), {
-        schema: QualityAudit,
-        provider: verifyWith,
-        effort: "medium",
-        key: `coverage:audit:${round}`,
-        maxTurns: 12,
-        timeout: "8m",
-        repair: 1,
-        tasks: false,
-      });
-      if (quality.findings.length > 0) quality = { ...quality, pass: false };
-    }
+        ctx.phase(`Audit ${round}`);
+        quality = await ctx.agent(auditPrompt(roundChanged, current), {
+          schema: QualityAudit,
+          provider: verifyWith,
+          effort: "medium",
+          key: `coverage:audit:${round}`,
+          maxTurns: 12,
+          timeout: "8m",
+          repair: 1,
+          tasks: false,
+        });
+        if (quality.findings.length > 0) quality = { ...quality, pass: false };
+      },
+    });
 
     ctx.phase("Accept");
     const finalGate = await ctx.check("coverage:final", {
+      key: "coverage:final",
       exec: ["node", ".weft/scripts/measure-coverage.mjs", ...args],
       required: true,
       timeout: "10m",
@@ -592,18 +597,6 @@ function assertUniqueTargets(targets: Array<z.infer<typeof CoverageTarget>>): vo
   for (const target of targets) {
     if (ids.has(target.id)) throw new Error(`coverage target id must be unique: ${target.id}`);
     ids.add(target.id);
-  }
-}
-
-function assertIntegratedWhenChanged(
-  key: string,
-  files: string[],
-  merged: string[],
-  quarantined: string[],
-): void {
-  if (files.length === 0) return;
-  if (!merged.includes(key) || quarantined.includes(key)) {
-    throw new Error(`${key} changed files but its patch was not integrated`);
   }
 }
 

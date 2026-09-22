@@ -228,6 +228,7 @@ const compositionWorkflow = defineWorkflow(
 );
 
 const Tasks = defineTaskContract({
+  semanticRevision: "v1",
   schema: z.object({ ticket: z.string(), branch: z.string().nullable() }),
   agentAccess: "write",
 });

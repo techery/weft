@@ -82,8 +82,8 @@ const baseline = await ctx.procedure(redBaseline, { testCommand }, { key: "basel
 
 A procedure earns its place in the DSL by carrying durable behavior a plain function cannot:
 
-- its validated output is recorded under one key, so replay returns the recorded result instead of re-entering
-  the body, and `revision` invalidates that record when the body stops meaning what it meant;
+- its body re-enters on every resume; individual effects replay or reconcile under their own validity rules.
+  The procedure revision and input bind those effect identities, so changed procedure semantics cannot reuse stale leaves;
 - its status and timing are recorded at one boundary, so a view can present the body by name and schema;
 - durable keys written inside the body are local to one invocation, so a reusable helper no longer threads a
   caller-supplied key prefix through its signature.
@@ -185,9 +185,11 @@ itself and add only `itemKey`; durable calls made through the lane use lane-loca
 
 ## Task state
 
-Task contracts are run-scoped and intentionally small. They declare an extension schema and optional agent access.
-There is no author-managed task-contract version or migration chain. The engine may keep an internal numeric
-revision for optimistic updates, while `dedupeKey` makes retried upserts converge.
+Tasks persist across runs under the workflow's stable identity. Contracts declare an extension schema, a semantic
+revision, optional schema version and migration, and optional agent access. Task record revisions protect optimistic
+updates; `dedupeKey` makes recurring findings and retried upserts converge across runs. A run may finish while tasks
+remain open, and a new run can observe the existing backlog. A change to task lifetime requires an explicit product
+migration; adopting procedure or lane APIs does not change persisted task ownership.
 
 ## Module layout
 

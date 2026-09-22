@@ -24,6 +24,7 @@
  * `GET /api/blobs/:ref`, and `GET`/`PUT /api/config`.
  */
 export { type FileStat, parseDiffStats, registerArtifactRoutes } from "./api/artifacts.ts";
+export { type AttentionEntry, registerAttentionRoutes } from "./api/attention.ts";
 export { registerBlobRoutes } from "./api/blobs.ts";
 export { registerConfigRoutes } from "./api/config.ts";
 export { registerMetaRoutes } from "./api/meta.ts";
@@ -32,6 +33,7 @@ export { registerPresentationRoutes } from "./api/presentations.ts";
 export { registerStartRoutes } from "./api/starts.ts";
 export { registerWorkflowRoutes } from "./api/workflows.ts";
 export { type CreateAppOptions, createApp } from "./app.ts";
+export { type DeadlineScheduler, nextDeadline, startDeadlineScheduler } from "./deadlines.ts";
 export { detailOf, type RunDetail } from "./detail.ts";
 export { fail, jsonBody, messageOf, page } from "./http.ts";
 export type { DaemonHandle, StartDaemonOptions } from "./server.ts";

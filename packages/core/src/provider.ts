@@ -6,6 +6,7 @@
 import type {
   AnySchema,
   Effort,
+  ProviderProgress,
   Risk,
   SchemaIssue,
   Usage,
@@ -160,6 +161,8 @@ export interface AgentResult {
 
 export interface RunControl {
   signal: AbortSignal;
+  /** Optional status-only stream. The engine bounds, journals, and fences updates. */
+  onProgress?(progress: ProviderProgress): void;
 }
 
 export interface ProviderCapabilities {

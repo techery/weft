@@ -25,7 +25,9 @@ try {
   // npm would go looking for these versions on the registry, where they do not exist yet.
   const external = {};
   const overrides = {};
-  for (const pkgDir of readdirSync(join(root, "packages"))) {
+  for (const entry of readdirSync(join(root, "packages"), { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const pkgDir = entry.name;
     const cwd = join(root, "packages", pkgDir);
     const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
     if (pkg.private) continue;
@@ -74,7 +76,7 @@ try {
       () => {
         run("git", ["init", "-q", "."], { cwd: dir });
         run(cli, ["new", "probe"], { cwd: dir });
-        return run(cli, ["check"], { cwd: dir });
+        return run(cli, ["check", "--strict"], { cwd: dir });
       },
       (out) => out.includes("probe/main.ts"),
     ],

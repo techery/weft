@@ -112,6 +112,8 @@ export interface StepState {
   patchRef?: string;
   childRunId?: string;
   presentation?: UiPresentation;
+  progress?: { stage: "working" | "tool" | "finalizing" | "repairing"; message: string };
+  progressAt?: number;
 }
 
 export interface HumanState {
@@ -161,6 +163,54 @@ export interface RunDetail {
   /** What each step was scheduled with, by seq. `?detail=1` only. */
   inputs?: Record<string, unknown>;
   records: number;
+  workspace?: {
+    id: string;
+    path: string;
+    branch: string;
+    status: "preparing" | "ready";
+    retained?: boolean;
+    cleanedAt?: number;
+  };
+  candidates?: Array<{ id: string; branch: string; head: string; tree: string; generation: number }>;
+  verifications?: Array<{ candidateId: string; passed: boolean; key: string; proofId?: string; at: number }>;
+  operations?: Array<{
+    requestId: string;
+    binding: string;
+    status: "pending" | "unknown" | "complete";
+    output?: unknown;
+    reconciled?: boolean;
+    updatedAt: number;
+  }>;
+  deliveries?: Array<{
+    candidateId: string;
+    requestId: string;
+    binding: string;
+    output: unknown;
+    at: number;
+  }>;
+  attention?: RecoveryAttention[];
+}
+
+export interface RecoveryAttention {
+  kind: "operation" | "workspace" | "run" | "verification" | "delivery";
+  title:
+    | "Recovery required"
+    | "Verification failed"
+    | "Candidate stale"
+    | "PR feedback failed"
+    | "PR feedback pending"
+    | "PR feedback unknown";
+  detail: string;
+  nextAction: string;
+  requestId?: string;
+  binding?: string;
+  resources: readonly string[];
+  updatedAt: number;
+}
+
+export interface AttentionResponse {
+  attention: Array<{ runId: string; workflow: string; attention: RecoveryAttention }>;
+  unreadable: Array<{ runId: string; error: string }>;
 }
 
 /** One entry of `GET /api/pending`. */

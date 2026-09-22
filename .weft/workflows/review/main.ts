@@ -5,6 +5,7 @@
  *   weft run review --base main --watch
  */
 import { defineWorkflow, z } from "@techery/weft-sdk";
+import { findingKey, uniqueFindings } from "@techery/weft-stdlib";
 import { Finding, Verdict } from "./lib/schemas.ts";
 
 export default defineWorkflow(
@@ -17,36 +18,41 @@ export default defineWorkflow(
   async (ctx, { base }) => {
     ctx.phase("Scope");
     const { files } = await ctx.git.changedSince(base); // [{ path, status }] · journaled
-    const paths = files.filter((f) => f.status !== "D").map((f) => f.path);
+    const paths = [...new Set(files.filter((f) => f.status !== "D").map((f) => f.path))];
 
     ctx.phase("Find");
-    const found = ctx.successes(
+    const found = ctx.all(
       await ctx.parallel(
-        paths.map((f) =>
+        paths,
+        (f) =>
           ctx.agent(`Review ${f} for correctness bugs. Cite file:line and quote the evidence.`, {
             schema: z.object({ findings: z.array(Finding) }), // required on every step
             key: `review:${f}`, // stable identity for replay, tests, the tree
           }),
-        ),
+        { concurrency: 4 },
       ),
     );
-    const findings = found.flatMap((r) => r.findings); // typed — no nulls to filter
+    const findings = uniqueFindings(found.flatMap((r) => r.findings));
 
     ctx.phase("Verify");
-    const confirmed = ctx.successes(
-      await ctx
-        .pipeline(findings)
-        .step((f) =>
-          ctx.agent(`Try to refute: ${f.claim} (${f.file}:${f.line}). Default real=false if unsure.`, {
-            schema: Verdict,
-            provider: "codex", // a different vendor grades
-            key: `refute:${f.file}:${f.line}`,
-          }),
-        )
-        .filter((verdict) => verdict.real) // drop refuted lanes
-        .map((_verdict, f) => f) // back to the finding
-        .run(),
+    const verified = ctx.all(
+      await ctx.parallel(
+        findings,
+        async (f) => {
+          const verdict = await ctx.agent(
+            `Try to refute: ${f.claim} (${f.file}:${f.line}). Default real=false if unsure.\n\n${f.evidence}`,
+            {
+              schema: Verdict,
+              provider: "codex", // a different vendor grades
+              key: `refute:${findingKey(f)}`,
+            },
+          );
+          return { finding: f, verdict };
+        },
+        { concurrency: 4 },
+      ),
     );
+    const confirmed = verified.filter(({ verdict }) => verdict.real).map(({ finding }) => finding);
 
     return { confirmed };
   },

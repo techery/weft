@@ -72,7 +72,8 @@ export async function multiModalSweep<S extends AnySchema>(
   const names = modes.map((m) => m.name);
 
   const settled = await ctx.parallel(
-    modes.map(async (mode, i): Promise<SweepOutcome<InferOut<S>>> => {
+    modes,
+    async (mode, i): Promise<SweepOutcome<InferOut<S>>> => {
       const others = names.filter((_n, j) => j !== i);
       const result = await ctx.agent(sweepPrompt(opts.subject, mode, others), {
         schema: opts.schema,
@@ -81,7 +82,8 @@ export async function multiModalSweep<S extends AnySchema>(
         ...route,
       });
       return { mode: mode.name, result };
-    }),
+    },
+    { concurrency: 4 },
   );
 
   const dropped = modes.filter((_mode, i) => settled[i]?.ok !== true).map((mode) => mode.name);

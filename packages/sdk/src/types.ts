@@ -4,6 +4,7 @@
  */
 import type { Duration } from "./duration.ts";
 import type { StepError } from "./errors.ts";
+import type { ProcedureFn } from "./procedure.ts";
 import type { AnySchema, InferIn, InferOut } from "./schema.ts";
 import type { Settled } from "./settled.ts";
 import type { InputUiView, UiApi } from "./ui.ts";
@@ -13,6 +14,11 @@ import type { InputUiView, UiApi } from "./ui.ts";
 // ---------------------------------------------------------------------------
 
 export type ProviderId = "claude" | "codex" | (string & {});
+/** Bounded public activity status, never model reasoning or tool argument payloads. */
+export interface ProviderProgress {
+  stage: "working" | "tool" | "finalizing" | "repairing";
+  message: string;
+}
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 /** Claude Agent SDK mechanics that do not alter Weft's engine-owned safety boundary. */
@@ -428,7 +434,43 @@ export interface Pipeline<Item, Prev> {
   run(opts?: ParallelOptions): Promise<Settled<Prev>[]>;
 }
 
-export interface ParallelFn {
+export interface KeyedParallelOptions<Item> {
+  key: string;
+  keyOf(item: Item, index: number): string;
+  concurrency?: number;
+}
+
+/** Keyed fan-out accepts deferred item work, never already-started promises. */
+export type ParallelItems<Items extends ReadonlyArray<unknown>> =
+  Extract<Items[number], PromiseLike<unknown>> extends never ? Items : never;
+
+/** The lane is the calling context, with local effect keys and stable item identity. */
+export interface ParallelLaneContext<TaskExtensionInput = unknown, TaskExtensions = TaskExtensionInput>
+  extends Ctx<TaskExtensionInput, TaskExtensions> {
+  readonly itemKey: string;
+}
+
+export interface ParallelFn<TaskExtensionInput = unknown, TaskExtensions = TaskExtensionInput> {
+  /** Settle every lane, then throw the first failure. Duplicate semantic keys fail before dispatch. */
+  all<const Items extends ReadonlyArray<unknown>, Result>(
+    items: ParallelItems<Items>,
+    run: (
+      item: Items[number],
+      lane: ParallelLaneContext<TaskExtensionInput, TaskExtensions>,
+      index: number,
+    ) => Promise<Result> | Result,
+    opts: KeyedParallelOptions<Items[number]>,
+  ): Promise<Result[]>;
+  /** Settle every lane and return explicit outcomes. Cancellation still propagates. */
+  settled<const Items extends ReadonlyArray<unknown>, Result>(
+    items: ParallelItems<Items>,
+    run: (
+      item: Items[number],
+      lane: ParallelLaneContext<TaskExtensionInput, TaskExtensions>,
+      index: number,
+    ) => Promise<Result> | Result,
+    opts: KeyedParallelOptions<Items[number]>,
+  ): Promise<Settled<Result>[]>;
   /** Mixed/eager arrays are supported only without a concurrency cap. */
   <T>(tasks: ReadonlyArray<ParallelTask<T>>, opts?: ParallelEagerOptions): Promise<Settled<T>[]>;
   /** Thunks have not started yet, so Weft can enforce the requested concurrency. */
@@ -727,6 +769,8 @@ export interface GitRange {
 }
 
 export interface GitWriteOpts {
+  /** Stable replay identity, especially for repeated writes in procedures and loops. */
+  key?: string;
   /** Raise (never lower) the fixed risk tier of this op. */
   risk?: Risk;
 }
@@ -842,6 +886,10 @@ export interface CheckInvocationOptions {
   timeout?: Duration;
   trust?: { run: string; reason: string };
   waive?: { reason: string; issue?: string; expiresAt?: string };
+  /** Diagnostic attempts do not poison final completion; delivery uses candidate proofs. */
+  purpose?: "diagnostic" | "completion";
+  /** Observe current state instead of reusing a historical result. */
+  fresh?: boolean;
 }
 
 interface CheckDefinitionBase<Input, Name extends string, ParsedInput> {
@@ -1023,9 +1071,14 @@ export interface SubWorkflowOptions {
 // ---------------------------------------------------------------------------
 
 export interface Ctx<TaskExtensionInput = unknown, TaskExtensions = TaskExtensionInput> {
+  /** Present only for workflows declaring workspace ownership. */
+  readonly workspace?: import("./delivery.ts").WorkspaceApi;
+  verify: import("./delivery.ts").VerifyFn;
+  operation: import("./delivery.ts").OperationFn;
+  delivery: import("./delivery.ts").DeliveryFn;
   // steps
   agent: AgentFn;
-  parallel: ParallelFn;
+  parallel: ParallelFn<TaskExtensionInput, TaskExtensions>;
   /** Sequential item traversal with stable item keys and nested phase contexts. */
   sequence: SequenceFn<TaskExtensionInput, TaskExtensions>;
   pipeline<I>(items: ReadonlyArray<I>): Pipeline<I, I>;
@@ -1062,6 +1115,8 @@ export interface Ctx<TaskExtensionInput = unknown, TaskExtensions = TaskExtensio
   tasks: WorkflowTasksApi<TaskExtensionInput, TaskExtensions>;
 
   // reusable composition
+  /** Re-enter a named schema boundary on resume; each nested effect retains its own replay and recovery checks. */
+  procedure: ProcedureFn<Ctx<TaskExtensionInput, TaskExtensions>>;
   /** Derive an immutable context whose defaults are inherited by all nested calls. */
   scope(opts: CtxScopeOptions): Ctx<TaskExtensionInput, TaskExtensions>;
   /** Run a schema-backed transparent recipe. */
@@ -1074,7 +1129,7 @@ export interface Ctx<TaskExtensionInput = unknown, TaskExtensions = TaskExtensio
 
   // durable waits
   signal<S extends AnySchema>(name: string, schema: S, opts?: { timeout?: Duration }): Promise<InferOut<S>>;
-  sleep(duration: Duration): Promise<void>;
+  sleep(duration: Duration, options?: { key?: string }): Promise<void>;
 
   // journaled replacements for banned globals
   now(): Promise<number>;

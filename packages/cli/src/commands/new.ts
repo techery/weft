@@ -50,14 +50,19 @@ export function newCommand(io: CliIo): Command {
             path.join(libDir, template === "review" ? "schemas.ts" : "index.ts"),
             template === "review" ? SCHEMAS_TEMPLATE : LIB_TEMPLATE,
           ],
-          [path.join(testsDir, "main.test.ts"), TEST_TEMPLATE],
+          [path.join(testsDir, "main.test.ts"), testTemplate(template as "simple" | "review" | "task")],
           [path.join(packageDir, "CHANGELOG.md"), changelogTemplate(name)],
         ] as const;
         await Promise.all(files.map(([file, contents]) => writeFile(file, contents, "utf8")));
         for (const [file] of files) io.out(`${pc.green("created")} ${path.relative(weft.cwd, file)}`);
         const runArgs =
           template === "review" ? " --base main" : template === "simple" ? ' --request "…"' : "";
-        say(io, pc.dim(`next: weft check ${name} · weft run ${name}${runArgs} --watch`));
+        say(
+          io,
+          pc.dim(
+            `next: weft check ${name} --strict · weft test ${name} · weft run ${name}${runArgs} --watch`,
+          ),
+        );
       } finally {
         await weft.close();
       }
@@ -69,6 +74,7 @@ function workflowTemplate(name: string, template: "simple" | "review" | "task"):
   if (template === "simple") return simpleTemplate(name);
   if (template === "task") return taskTemplate(name);
   return `import { defineWorkflow, z } from "@techery/weft-sdk";
+import { findingKey, uniqueFindings } from "@techery/weft-stdlib";
 import { Finding } from "./lib/schemas.ts";
 
 /**
@@ -99,16 +105,15 @@ export default defineWorkflow(
         { concurrency: 4, errors: "throw" },
       ),
     );
-    const findings = reviews.flatMap((review) => review.findings);
+    const findings = uniqueFindings(reviews.flatMap((review) => review.findings));
 
     ctx.phase("Verify");
-    // The pipeline keeps each finding paired with its verdict, so a failed
-    // refuter branch drops its own lane instead of misaligning the rest.
+    // Keep every verdict paired with its source. Required reviewers fail the run.
     const confirmed = ctx.all(
       await ctx.pipeline(findings)
         .step((finding) =>
           ctx.agent(\`Try to refute this finding: \${finding.claim} (\${finding.file}:\${finding.line})\`, {
-            key: \`refute:\${finding.file}:\${finding.line}:\${finding.claim}\`,
+            key: \`refute:\${findingKey(finding)}\`,
             schema: z.object({ survives: z.boolean(), why: z.string() }),
           }),
         )
@@ -189,21 +194,98 @@ export const Finding = z.object({
   claim: z.string(),
   severity: z.enum(["low", "medium", "high"]),
 });
+
 `;
 
 const LIB_TEMPLATE = `/** Supporting workflow code belongs in this directory. */
 export {};
 `;
 
-const TEST_TEMPLATE = `import assert from "node:assert/strict";
+function testTemplate(template: "simple" | "review" | "task"): string {
+  const imports = `import assert from "node:assert/strict";
 import test from "node:test";
+import { mock, runWorkflow } from "@techery/weft-testing";
 import workflow from "../main.ts";
 
-test("workflow exposes a durable identity and description", () => {
-  assert.equal(typeof workflow.meta.id, "string");
-  assert.ok(workflow.meta.description.length > 0);
+`;
+  if (template === "simple")
+    return `${imports}test("returns the typed answer and fails when no agent fixture matches", async () => {
+  const result = await runWorkflow(workflow, {
+    input: { request: "Explain the change" },
+    fixtureMode: "strict",
+    provider: mock().on({ key: "answer" }, { answer: "A verified answer" }),
+  });
+  assert.deepEqual(result.output, { answer: "A verified answer" });
+  assert.equal(result.journal.steps({ kind: "agent" }).length, 1);
+  await assert.rejects(runWorkflow(workflow, { input: { request: "Explain the change" }, fixtureMode: "strict" }), /no fixture matches/);
 });
 `;
+  if (template === "task")
+    return `${imports}test("reports the active durable task queue", async () => {
+  const result = await runWorkflow(workflow, {
+    input: {},
+    fixtureMode: "strict",
+    taskSeeds: [{ title: "Investigate regression", description: "Reproduce and fix the failure", status: "todo", extensions: {} }],
+    provider: mock().on({ key: "summarize-tasks" }, { summary: "One active task" }),
+  });
+  assert.deepEqual(result.output, { active: 1, summary: "One active task" });
+  assert.equal(result.tasks.tasks.length, 1);
+});
+
+test("fails when the summary has no matching fixture", async () => {
+  await assert.rejects(runWorkflow(workflow, { input: {}, fixtureMode: "strict" }), /no fixture matches/);
+});
+`;
+  return `${imports}const finding = { file: "a.ts", line: 3, claim: "Off-by-one", severity: "high" as const };
+const git = { changedSince: { files: [{ path: "a.ts", status: "M" }] } };
+
+test("keeps a confirmed finding with its source and reports the reviewed count", async () => {
+  const result = await runWorkflow(workflow, {
+    input: { base: "main" },
+    fixtureMode: "strict",
+    git,
+    provider: mock()
+      .on({ key: "find:*" }, { findings: [finding] })
+      .on({ key: "refute:*" }, { survives: true, why: "The loop exceeds its bound" }),
+  });
+  assert.deepEqual(result.output, { confirmed: [finding], reviewed: 1 });
+  assert.equal(result.journal.steps({ kind: "agent" }).length, 2);
+});
+
+test("does not report success when a reviewer fails", async () => {
+  await assert.rejects(runWorkflow(workflow, {
+    input: { base: "main" }, fixtureMode: "strict", git,
+  }), /no fixture matches/);
+});
+
+test("does not report success when a refuter fails", async () => {
+  await assert.rejects(runWorkflow(workflow, {
+    input: { base: "main" }, fixtureMode: "strict", git,
+    provider: mock().on({ key: "find:*" }, { findings: [finding] }),
+  }), /no fixture matches/);
+});
+
+test("retains different claims on one line and removes duplicate claims", async () => {
+  const second = { ...finding, claim: "Missing validation" };
+  const result = await runWorkflow(workflow, {
+    input: { base: "main" }, fixtureMode: "strict", git,
+    provider: mock()
+      .on({ key: "find:*" }, { findings: [finding, second, finding] })
+      .on({ key: "refute:*" }, { survives: true, why: "Confirmed independently" }),
+  });
+  assert.deepEqual(result.output.confirmed, [finding, second]);
+  assert.equal(result.journal.steps({ kind: "agent" }).length, 3);
+});
+
+test("returns an empty review only when no changed files need review", async () => {
+  const result = await runWorkflow(workflow, {
+    input: { base: "main" }, fixtureMode: "strict", git: { changedSince: { files: [] } },
+  });
+  assert.deepEqual(result.output, { confirmed: [], reviewed: 0 });
+  assert.equal(result.journal.steps({ kind: "agent" }).length, 0);
+});
+`;
+}
 
 function changelogTemplate(name: string): string {
   return `# ${name} changelog

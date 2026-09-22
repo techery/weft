@@ -31,6 +31,7 @@ import { taskCommand } from "./commands/task.ts";
 import { testCommand } from "./commands/test.ts";
 import { uiCommand } from "./commands/ui.ts";
 import { workflowCommand } from "./commands/workflow.ts";
+import { workspaceCommand } from "./commands/workspace.ts";
 import { type CliIo, warn } from "./io.ts";
 
 /** Writes to the terminal: plain lines to stdout, live frames through log-update. */
@@ -85,6 +86,7 @@ export function buildProgram(io: CliIo = consoleIo): Command {
     testCommand,
     uiCommand,
     workflowCommand,
+    workspaceCommand,
   ]) {
     program.addCommand(factory(io));
   }

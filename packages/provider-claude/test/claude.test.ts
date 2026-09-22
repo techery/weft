@@ -193,6 +193,21 @@ async function gateContext(req: AgentRequest): Promise<Options> {
 // ---------------------------------------------------------------------------
 
 describe("createClaudeProvider", () => {
+  test("reports public turn activity without including assistant text in status messages", async () => {
+    const { fn } = fakeQuery([
+      {
+        emit: { payload: { verdict: "ok" } },
+        messages: [assistantText("private detailed reasoning"), resultMessage()],
+      },
+    ]);
+    const progress: string[] = [];
+    await createClaudeProvider({ queryFn: fn }).run(request(), {
+      ...control(),
+      onProgress: (event) => progress.push(event.message),
+    });
+    expect(progress).toEqual(["Agent session started", "Agent turn returned; validating its output"]);
+    expect(progress.join(" ")).not.toContain("private detailed reasoning");
+  });
   test("construction is inert and advertises tool-based structured output", () => {
     const provider = createClaudeProvider();
     expect(provider.id).toBe("claude");

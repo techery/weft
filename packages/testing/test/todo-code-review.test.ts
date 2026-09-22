@@ -92,6 +92,7 @@ describe("task-backed code review backlog", () => {
     const run = (reviewer = provider()) =>
       runWorkflow(workflow, {
         cwd,
+        fixtureMode: "integration",
         input: { maxFiles: 1, reviewWith: "codex", refuteWith: "claude" },
         provider: reviewer,
         answers: () => ({ record: [fingerprint], comment: "Track this regression." }),
@@ -133,6 +134,7 @@ describe("task-backed code review backlog", () => {
     const cwd = await repo();
     const result = await runWorkflow(workflow, {
       cwd,
+      fixtureMode: "integration",
       input: { maxFiles: 1, reviewWith: "codex", refuteWith: "claude" },
       provider: provider(),
       answers: () => ({ record: [] }),
@@ -148,6 +150,7 @@ describe("task-backed code review backlog", () => {
     const reviewer = provider(false);
     const result = await runWorkflow(workflow, {
       cwd,
+      fixtureMode: "integration",
       input: { maxFiles: 1, reviewWith: "codex", refuteWith: "claude" },
       provider: reviewer,
     });
@@ -165,6 +168,7 @@ describe("task-backed code review backlog", () => {
     await expect(
       runWorkflow(workflow, {
         cwd,
+        fixtureMode: "integration",
         input: { maxFiles: 1, reviewWith: "codex", refuteWith: "claude" },
         provider: reviewer,
       }),
@@ -179,6 +183,7 @@ describe("task-backed code review backlog", () => {
     await expect(
       runWorkflow(workflow, {
         cwd,
+        fixtureMode: "integration",
         input: { maxFiles: 1, reviewWith: "codex", refuteWith: "codex" },
         provider: reviewer,
       }),
@@ -192,6 +197,7 @@ describe("task-backed code review backlog", () => {
     const claude = provider();
     await runWorkflow(workflow, {
       cwd,
+      fixtureMode: "integration",
       input: { maxFiles: 1, reviewWith: "codex", refuteWith: "claude" },
       providers: { codex, claude },
       answers: () => ({ record: [] }),

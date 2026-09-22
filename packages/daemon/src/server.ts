@@ -13,6 +13,7 @@ import type { AddressInfo } from "node:net";
 import { type ServerType, serve } from "@hono/node-server";
 import { createWeft, type Weft } from "@techery/weft-host";
 import { createApp } from "./app.ts";
+import { startDeadlineScheduler } from "./deadlines.ts";
 import { BUNDLED_WEB_ROOT, openWebBundle } from "./web.ts";
 
 /** The design's default port; `weft ui` prints whatever it actually got. */
@@ -83,6 +84,7 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<DaemonHandl
 
   const listening = server as ServerType;
   const port = address.port;
+  const deadlines = startDeadlineScheduler(weft);
   let closed = false;
 
   return {
@@ -93,6 +95,7 @@ export async function startDaemon(opts: StartDaemonOptions): Promise<DaemonHandl
     async close(): Promise<void> {
       if (closed) return;
       closed = true;
+      await deadlines.close();
       await new Promise<void>((resolve, reject) => {
         listening.close((err) => (err ? reject(err) : resolve()));
         // An open event stream is a request that never ends; without this, close() waits

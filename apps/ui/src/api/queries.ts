@@ -11,6 +11,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./client";
 import type {
   ArtifactEntry,
+  AttentionResponse,
   ConfigResponse,
   Meta,
   PatchResponse,
@@ -29,6 +30,7 @@ export const keys = {
   runs: (spend: boolean) => ["runs", { spend }] as const,
   run: (runId: string) => ["run", runId] as const,
   pending: ["pending"] as const,
+  attention: ["attention"] as const,
   workflows: ["workflows"] as const,
   workflow: (name: string) => ["workflow", name] as const,
   workflowStats: (name: string) => ["workflow-stats", name] as const,
@@ -61,6 +63,10 @@ export function useRuns(opts: { spend?: boolean } = {}): UseQueryResult<RunRow[]
 
 export function usePending(): UseQueryResult<PendingResponse> {
   return useQuery({ queryKey: keys.pending, queryFn: api.pending, refetchInterval: LIST_POLL_MS });
+}
+
+export function useAttention(): UseQueryResult<AttentionResponse> {
+  return useQuery({ queryKey: keys.attention, queryFn: api.attention, refetchInterval: LIST_POLL_MS });
 }
 
 export function useRun(runId: string): UseQueryResult<RunDetail> {
@@ -138,6 +144,7 @@ function useRunInvalidation(): (runId: string) => Promise<void> {
       client.invalidateQueries({ queryKey: keys.run(runId) }),
       client.invalidateQueries({ queryKey: ["runs"] }),
       client.invalidateQueries({ queryKey: keys.pending }),
+      client.invalidateQueries({ queryKey: keys.attention }),
       client.invalidateQueries({ queryKey: keys.artifacts(runId) }),
       client.invalidateQueries({ queryKey: keys.patch(runId) }),
     ]);

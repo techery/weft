@@ -21,6 +21,8 @@ export type StepErrorCode =
   | "scope_violation"
   | "conflict"
   | "check_failed"
+  | "stale_candidate"
+  | "recovery_required"
   | "invalid_answer"
   | "invalid_input"
   | "invalid_output"

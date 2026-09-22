@@ -74,6 +74,10 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      - run: pnpm test:evaluation
+      - run: pnpm verify:examples
+      - run: node packages/cli/bin/weft.js test
+      - run: node packages/cli/bin/weft.js --extra-workflow-dir examples/12-reviewed-pr test reviewed-pr
       - run: pnpm sync:meta --check
       - run: pnpm build
 

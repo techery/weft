@@ -18,10 +18,11 @@
  * `/runs/r-045` survives a page load.
  */
 import type { JournalRecord, RunListFilter, RunStatus, Weft } from "@techery/weft-host";
-import { persistedDefOf, renderReport, renderTree, resumeOptions } from "@techery/weft-host";
+import { persistedDefOf, renderReport, renderTree, resumeOptions, retainedDefOf } from "@techery/weft-host";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { registerArtifactRoutes } from "./api/artifacts.ts";
+import { registerAttentionRoutes } from "./api/attention.ts";
 import { registerBlobRoutes } from "./api/blobs.ts";
 import { registerConfigRoutes } from "./api/config.ts";
 import { registerMetaRoutes } from "./api/meta.ts";
@@ -310,8 +311,26 @@ export function createApp(weft: Weft, opts: CreateAppOptions = {}): Hono {
     try {
       // Same fallback the wake paths use: an inline or path-ref run persisted its
       // definition at start precisely so a registry-less resume can find it here.
-      const persisted = await persistedDefOf(weft, runId);
-      const handle = await engine.resume(runId, resumeOptions(persisted));
+      // Legacy UI clients POST no body; explicit mode is an additive JSON option.
+      const raw = await c.req.text();
+      let body: unknown;
+      try {
+        body = raw.trim() ? JSON.parse(raw) : {};
+      } catch {
+        throw new Error("expected a JSON object body");
+      }
+      if (!body || typeof body !== "object" || Array.isArray(body))
+        throw new Error("expected a JSON object body");
+      const mode = (body as Record<string, unknown>)["mode"];
+      if (mode !== undefined && mode !== "strict" && mode !== "retained" && mode !== "edit-tolerant")
+        throw new Error("resume mode must be strict, retained, or edit-tolerant");
+      const persisted =
+        mode === "retained" ? await retainedDefOf(weft, runId) : await persistedDefOf(weft, runId);
+      if (mode === "retained" && !persisted) throw new Error(`run ${runId}: no retained executable source`);
+      const handle = await engine.resume(runId, {
+        ...resumeOptions(persisted),
+        ...(mode ? { mode: mode === "retained" ? ("strict" as const) : mode } : {}),
+      });
       // The run continues in the background; the caller watches /events or polls the state.
       void handle.outcome().catch(() => undefined);
       return c.json({ ok: true, runId: handle.runId });
@@ -325,6 +344,7 @@ export function createApp(weft: Weft, opts: CreateAppOptions = {}): Hono {
   // the bytes behind a ref, the config file, and one cross-run view of what is waiting.
   registerMetaRoutes(app, weft);
   registerPendingRoutes(app, weft);
+  registerAttentionRoutes(app, weft);
   registerWorkflowRoutes(app, weft);
   registerStartRoutes(app, weft);
   registerBlobRoutes(app, weft);

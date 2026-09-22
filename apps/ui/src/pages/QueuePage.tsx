@@ -1,6 +1,6 @@
 import type { UseQueryResult } from "@tanstack/react-query";
 import { useSetAtom } from "jotai";
-import { useMeta, usePending, useRuns, useWorkflows } from "~/api/queries";
+import { useAttention, useMeta, usePending, useRuns, useWorkflows } from "~/api/queries";
 import type { PendingRequest, RunRow } from "~/api/types";
 import { useOpenRun } from "~/app/useOpenRun";
 import { Button } from "~/components/atoms/Button";
@@ -17,6 +17,7 @@ import styles from "./QueuePage.module.css";
 /** Everything that wants a human, then everything that is working. */
 export function QueuePage() {
   const pending = usePending();
+  const attention = useAttention();
   const runs = useRuns({ spend: true });
   const workflows = useWorkflows();
   const meta = useMeta();
@@ -25,6 +26,7 @@ export function QueuePage() {
 
   const requests = pending.data?.pending ?? [];
   const unreadable = pending.data?.unreadable ?? [];
+  const recoveries = attention.data?.attention ?? [];
   const rows = runs.data ?? [];
   const running = rows.filter((row) => runState(row.status) === "running");
   // A request carries no spend of its own; the runs list is where a run's cost is.
@@ -42,7 +44,11 @@ export function QueuePage() {
     <ScrollPage maxWidth={1180} gap={18}>
       <PageHeader
         title="Queue"
-        summary={counted ? `${requests.length} waiting on you · ${running.length} running` : ""}
+        summary={
+          counted
+            ? `${requests.length} waiting on you · ${running.length} running${recoveries.length ? ` · ${recoveries.length} require recovery` : ""}`
+            : ""
+        }
         aside={
           <span className={styles.quickStart}>
             <span className={styles.quickStartLabel}>quick start</span>
@@ -87,6 +93,39 @@ export function QueuePage() {
           />
         ))}
         <GroupState query={pending} count={requests.length} empty="Nothing is waiting on you." />
+      </div>
+
+      <div className={styles.group}>
+        <QueueGroupHeader
+          label={`Attention required · ${recoveries.length}`}
+          note="inspect verification, recovery, and PR feedback"
+          color="var(--color-accent-700)"
+        />
+        {recoveries.map(({ runId, workflow, attention: item }, index) => (
+          <QueueCard
+            key={`${runId}:${item.requestId ?? index}`}
+            onOpen={() => openRun(runId, { from: "queue" })}
+            card={{
+              needsYou: true,
+              wf: workflow,
+              sub: `${runId} · ${item.title.toLowerCase()}`,
+              ask: item.detail,
+              detail: item.nextAction,
+              risk: "",
+              action: "Inspect run →",
+              facts: [
+                { k: "status", v: item.title },
+                ...(item.binding ? [{ k: "operation", v: item.binding }] : []),
+              ],
+            }}
+          />
+        ))}
+        {(attention.data?.unreadable ?? []).map((entry) => (
+          <div key={entry.runId} className={styles.warning}>
+            {entry.runId}: {entry.error}
+          </div>
+        ))}
+        <GroupState query={attention} count={recoveries.length} empty="No unresolved attention requests." />
       </div>
 
       <div className={styles.group}>

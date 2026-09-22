@@ -9,6 +9,7 @@
 import { vi } from "vitest";
 import type {
   ArtifactEntry,
+  AttentionResponse,
   ConfigResponse,
   Meta,
   PatchResponse,
@@ -27,6 +28,7 @@ export interface DaemonState {
   runs: RunRow[];
   detail: Record<string, RunDetail>;
   pending: PendingResponse;
+  attention?: AttentionResponse;
   workflows: WorkflowRow[];
   workflowIssues: WorkflowIssue[];
   workflow: Record<string, WorkflowDetail>;
@@ -550,6 +552,7 @@ export function fakeDaemon(overrides: Partial<DaemonState> = {}): FakeDaemon {
     }
     if (route === "/api/meta") return json(state.meta);
     if (route === "/api/pending") return json(state.pending);
+    if (route === "/api/attention") return json(state.attention ?? { attention: [], unreadable: [] });
     if (route === "/api/workflows") return json(state.workflows);
     if (route === "/api/config") {
       if (method === "PUT") {

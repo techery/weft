@@ -566,7 +566,7 @@ describe("config hardening (codex review round 15, PR #1)", () => {
 });
 
 describe("`.weft/` keeps its run state out of the user's git tree", () => {
-  it("writes .weft/.gitignore, and never overwrites an existing one", async () => {
+  it("writes .weft/.gitignore and appends only new scoped runtime paths to existing rules", async () => {
     // weft's tree helpers run `git add -A .` on every write-step dispatch and inside
     // every ctx.integrate, so without this the journal and blob store fold into a git
     // object on the first write step and ride into every agent worktree.
@@ -579,7 +579,7 @@ describe("`.weft/` keeps its run state out of the user's git tree", () => {
 
     const file = path.join(cwd, ".weft", ".gitignore");
     const body = await readFile(file, "utf8");
-    for (const entry of ["runs/", "blobs/", "tasks/", "index.sqlite"]) {
+    for (const entry of ["runs/", "blobs/", "tasks/", "workspaces/", "github-delivery/", "index.sqlite"]) {
       expect(body).toContain(entry);
     }
     // workflows/ is source and must stay tracked — check the RULES, not the comments.
@@ -602,10 +602,20 @@ describe("`.weft/` keeps its run state out of the user's git tree", () => {
     expect(await ignores(".weft/blobs/ab/cd")).toBe(true);
     expect(await ignores(".weft/workflows/w/main.ts")).toBe(false);
 
-    // A second assembly leaves a user's edited file alone.
+    // Existing rules survive; only new runtime directories are appended.
     await writeFile(file, "mine\n", "utf8");
     const again = await createWeft({ cwd, providers: "mock" });
     await again.close();
-    expect(await readFile(file, "utf8")).toBe("mine\n");
+    const updated = await readFile(file, "utf8");
+    expect(updated).toBe(
+      "mine\n# Weft owned workspaces and delivery recovery state\nworkspaces/\ngithub-delivery/\n",
+    );
+    const repeated = await createWeft({ cwd, providers: "mock" });
+    await repeated.close();
+    expect(await readFile(file, "utf8")).toBe(updated);
+    await writeFile(file, "!workspaces/\n/github-delivery/\n", "utf8");
+    const customized = await createWeft({ cwd, providers: "mock" });
+    await customized.close();
+    expect(await readFile(file, "utf8")).toBe("!workspaces/\n/github-delivery/\n");
   });
 });

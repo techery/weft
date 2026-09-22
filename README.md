@@ -5,7 +5,7 @@ Durable, journaled, schema-validated multi-agent coding workflows in TypeScript.
 Weft runs multi-agent coding workflows you write as ordinary TypeScript programs. Every step — an agent
 turn, a human answer, a shell command, an HTTP call, a git read — returns a schema-validated value, so the
 plumbing between steps is typed rather than parsed. Every run is journaled to an append-only event log, so it survives a crash, a
-reboot, or an overnight wait on a human, and resumes from the line it stopped on. The same script runs on
+reboot, or an overnight wait on a human, and resumes by re-entering code and replaying completed effects. The same script runs on
 Claude (Agent SDK) or Codex (Codex SDK), from a terminal or from inside a Claude Code / Codex session over
 MCP, and leaves behind two records of what happened: the mechanical journal and a generated report.
 
@@ -22,17 +22,18 @@ Status: design preview. See [Status and honest deviations](#status-and-honest-de
   is that what flows *between* steps has a shape you declared, not that prose is gone. Steps that opt out
   say so: `onError: "null"` yields `T | null`, and `ctx.exec`/`bash`/`fetch` without a `schema` hand back
   the raw result.
-- **Durable by journaled replay, and replay is edit-tolerant.** Side effects are journaled steps; resume
-  re-executes your code and serves completed steps from the journal. Reordering steps is free, rewording a
-  prompt re-runs that step and what depended on it, and a cache miss re-runs rather than lying. Identity is
+- **Durable by journaled replay, and replay is edit-tolerant by default.** Resume
+  re-executes your code and serves matching completed steps from the journal. Stable semantic keys support
+  reordering; changed content and ambiguous identity can require re-execution. Identity is
   content plus `key`: give each call a distinct `key` when two of them could share a prompt and schema, or
   replay re-runs them rather than guess which journaled answer belongs to which.
 - **Humans are steps.** `ctx.gate` and `ctx.human.ask/approve/review` suspend the run durably. The answer
   can arrive hours later from the CLI, the web UI, or the session that started the run, and it is validated
   like any other output. Auto-approvals by policy are still recorded.
-- **The journal owns the diffs.** A write step runs in its own git worktree and returns a patch, not a
+- **The journal owns the diffs.** By default, a write step runs in its own git worktree and returns a patch, not a
   mutated tree. Patches are scope-checked and merged only where the workflow says `ctx.integrate()`, so a
   resume on a fresh clone rebuilds the tree from the journal.
+  Workflows can instead declare an owned workspace for a retained branch/commit/PR lifecycle.
 - **Providers, not a host, and real accounting.** Claude and Codex sit behind one `AgentProvider` interface
   with per-step provider/model/effort routing, so a cross-vendor panel is one option on one step. Tokens and
   USD come from provider usage and enforce hard ceilings shared with sub-workflows.
@@ -42,6 +43,15 @@ Status: design preview. See [Status and honest deviations](#status-and-honest-de
 
 ## What ships today
 
+- **Candidate-bound coding delivery.** Opt into an owned worktree, fresh verification proofs and
+  recoverable host operations. The [reviewed-PR example](examples/12-reviewed-pr/README.md) joins repair,
+  independent review, candidate approval, GitHub publication and bounded feedback. See the
+  [delivery contract and its limits](docs/delivery.md); a receipt is not a merge or production-readiness guarantee.
+- **Named composition and deliberate resume.** `defineProcedure` and keyed `parallel.all/settled` add
+  same-run reuse with inspectable local effect identity. Strict, retained-source and edit-tolerant resume
+  make source selection explicit; the manager shows recovery attention and a running daemon wakes durable
+  deadlines. See [composition semantics](docs/adr/0001-composition-replay-semantics.md) and
+  [compatibility/evaluation evidence](docs/evaluation.md).
 - **Authoring and discovery.** Start from simple, review, or task-aware TypeScript templates with `weft new`,
   reject non-deterministic workflow code before it runs with `weft check`, and inspect every loadable workflow's
   input, output, task, routing, and UI contract with `weft workflow`.
@@ -96,6 +106,7 @@ To write workflows, or to embed the engine in your own program, install the libr
 
 ```bash
 npm i @techery/weft-sdk                        # defineWorkflow, ctx types, z
+npm i @techery/weft-stdlib                     # reusable coding helpers; used by the review scaffold
 npm i -D @techery/weft-testing                 # runWorkflow harness + mock fixtures
 npm i @techery/weft-core @techery/weft-host    # the Engine itself
 ```
@@ -103,7 +114,7 @@ npm i @techery/weft-core @techery/weft-host    # the Engine itself
 Node 22.12 or newer. Every package is ESM-only and ships compiled JavaScript with type
 declarations, so no loader or bundler is required.
 
-To give a coding agent the complete authoring contract in a repository-local skill, generate it from the same
+To give a coding agent the runnable authoring contract in a repository-local skill, generate it from the same
 CLI version that will run the workflows:
 
 ```bash
@@ -188,7 +199,7 @@ try to refute each one, return only what survived:
 
 ```ts
 import { defineWorkflow, z } from "@techery/weft-sdk";
-import { Finding, Verdict } from "./lib/schemas.ts"; // relative imports are bundled and hashed with the script
+import { Finding, Verdict, findingKey, uniqueFindings } from "./lib/schemas.ts";
 
 export default defineWorkflow(
   {
@@ -219,7 +230,7 @@ export default defineWorkflow(
         { concurrency: 4, errors: "throw" },
       ),
     );
-    const findings = found.flatMap((r) => r.findings);           // typed — no nulls to filter
+    const findings = uniqueFindings(found.flatMap((r) => r.findings));
 
     ctx.phase("Verify");
     const confirmed = ctx.all(
@@ -229,7 +240,7 @@ export default defineWorkflow(
           ctx.agent(`Try to refute: ${f.claim} (${f.file}:${f.line}). Default real=false if unsure.`, {
             schema: Verdict,
             provider: "codex",                                   // a different vendor grades
-            key: `refute:${f.file}:${f.line}`,
+            key: `refute:${findingKey(f)}`,
           }),
         )
         .filter((verdict) => verdict.real)                       // a falsy verdict drops the lane
@@ -240,6 +251,23 @@ export default defineWorkflow(
     return { confirmed };
   },
 );
+```
+
+The local schema module, `.weft/workflows/review/lib/schemas.ts`:
+
+```ts
+import { z } from "@techery/weft-sdk";
+
+export const Finding = z.object({ file: z.string(), line: z.number().int(), claim: z.string(), evidence: z.string() });
+export const Verdict = z.object({ real: z.boolean(), reason: z.string() });
+export function findingKey(finding: { file: string; claim: string }): string {
+  return [finding.file.replaceAll("\\", "/"), finding.claim.trim().replace(/\s+/g, " ")].map(encodeURIComponent).join(":");
+}
+export function uniqueFindings<T extends { file: string; claim: string }>(findings: readonly T[]): T[] {
+  const unique = new Map<string, T>();
+  for (const finding of findings) if (!unique.has(findingKey(finding))) unique.set(findingKey(finding), finding);
+  return [...unique.values()];
+}
 ```
 
 `.weft/workflows/audit-and-fix/main.ts` takes the same shape further: a cross-vendor refutation panel, an
@@ -472,26 +500,26 @@ weft test --watch
 weft test --coverage
 ```
 
-With no pattern, `weft test` runs `.weft/workflows/*/tests/**/*.test.ts` with Node's built-in
-`node:test` runner. Explicit patterns use locally installed Vitest when available, Bun's native runner for a
+With no selection, `weft test` discovers tests from every registered workflow, including
+`--extra-workflow-dir` roots, and runs them with Node's built-in `node:test` runner.
+`weft test <name-or-id>` selects one workflow. File counts are reported before execution;
+an empty selection fails unless `--allow-empty` is explicit. Explicit paths and globs use locally installed Vitest when available, Bun's native runner for a
 Bun project, and otherwise Node. It never installs dependencies implicitly. Use `--runner node`,
 `--runner bun`, or `--runner vitest` to select a runner explicitly. Use `weft check` separately to validate
-workflow source and schemas.
+workflow source and schemas; `weft check --strict` also requires a completed typecheck.
 
 Node-runner tests use Node's built-in APIs, so they do not import Vitest:
 
 ```ts
 import assert from "node:assert/strict";
 import { test } from "node:test";
-```
-
-```ts
 import { mock, runWorkflow } from "@techery/weft-testing";
 import review from "../.weft/workflows/review/main.ts";
 
 test("keeps only findings that survive refutation", async () => {
   const { output, journal } = await runWorkflow(review, {
     input: { base: "main" },
+    fixtureMode: "strict",
     provider: mock()
       .on({ key: "review:*" }, () => ({
         findings: [{ file: "a.ts", line: 3, claim: "off-by-one", evidence: "for (i <= n)" }],
@@ -500,14 +528,23 @@ test("keeps only findings that survive refutation", async () => {
     git: { changedSince: { files: [{ path: "a.ts", status: "M" }] } },
   });
 
-  expect(output.confirmed).toHaveLength(1);
-  expect(journal.steps({ kind: "agent" })).toHaveLength(2);
-  expect(journal.step("refute:a.ts:3").prompt).toContain("Default real=false");
+  assert.equal(output.confirmed.length, 1);
+  assert.equal(journal.steps({ kind: "agent" }).length, 2);
 });
 ```
 
 `runWorkflow` also takes `exec`, `bash`, `fetch`, `env`, and `answers` fixtures, so a workflow with human
 steps and shell checks runs end to end in a unit test.
+
+The harness defaults to `fixtureMode: "strict"`: missing Git, subprocess, shell, and fetch
+fixtures fail before the effect, and unprovided environment values are unset. Tests that
+intentionally exercise the real host must opt into `fixtureMode: "integration"` and use an
+appropriate temporary working directory. Existing tests that relied on unmatched fixtures
+falling through must add fixtures or explicitly choose integration mode.
+
+`weft skill` prints the runnable SDK guide. Use `weft skill --preview` to include the
+declaration-only DSL proposal, and `weft skill --commands-json` for the command schema
+derived from the installed CLI.
 
 Ordinary mock values are always treated as the workflow result, even when their domain schema contains fields
 named `result` and `taskOperations`. To exercise agent-requested tracker mutations explicitly, wrap the fixture

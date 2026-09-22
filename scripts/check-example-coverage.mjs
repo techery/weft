@@ -1,11 +1,14 @@
-import { access, readFile } from "node:fs/promises";
+import { access, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import ts from "typescript";
 
 const root = process.cwd();
+const sdkFiles = (await readdir(path.join(root, "packages/sdk/src")))
+  .filter((file) => file.endsWith(".ts"))
+  .map((file) => `packages/sdk/src/${file}`);
 const sources = await Promise.all(
-  ["packages/sdk/src/types.ts", "packages/sdk/src/ui.ts"].map(async (file) => ({
+  sdkFiles.map(async (file) => ({
     file,
     text: await readFile(path.join(root, file), "utf8"),
   })),
@@ -47,6 +50,11 @@ console.log(`example coverage: ${api.size} public workflow surfaces mapped`);
 function walkInterface(name, prefix) {
   const declaration = interfaces.get(name);
   if (!declaration) return;
+  for (const clause of declaration.heritageClauses ?? []) {
+    for (const parent of clause.types) {
+      if (ts.isIdentifier(parent.expression)) walkInterface(parent.expression.text, prefix);
+    }
+  }
   walkMembers(declaration.members, prefix, name);
 }
 
@@ -88,6 +96,9 @@ function propertyName(name) {
 }
 
 function typeReferenceName(node) {
+  if (node && ts.isImportTypeNode(node) && node.qualifier && ts.isIdentifier(node.qualifier)) {
+    return node.qualifier.text;
+  }
   return node && ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)
     ? node.typeName.text
     : undefined;

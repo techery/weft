@@ -3,6 +3,8 @@
  * provider or appending an event. It answers the only question that matters before an
  * edit lands: how much of this run survives, and where does it start costing money again.
  */
+
+import { persistedDefOf, resumeOptions } from "@techery/weft-host";
 import { Command } from "commander";
 import pc from "picocolors";
 import { openWeft, parseReuse } from "../context.ts";
@@ -15,7 +17,7 @@ interface ReplayOptions {
 
 export function replayCommand(io: CliIo): Command {
   return new Command("replay")
-    .description("preview a resume: what replays, what diverges — no providers, no writes")
+    .description("preview reached reuse and first divergence — no live effects")
     .argument("<run>", "run id")
     .option("--dry", "the only supported mode; a real replay is: weft resume")
     .option("--reuse <mode>", "content (default) or key")
@@ -24,7 +26,11 @@ export function replayCommand(io: CliIo): Command {
       const weft = await openWeft(cmd);
       try {
         const reuse = parseReuse(opts.reuse);
-        const result = await weft.engine.replayDry(runId, { ...(reuse !== undefined ? { reuse } : {}) });
+        const persisted = await persistedDefOf(weft, runId);
+        const result = await weft.engine.replayDry(runId, {
+          ...resumeOptions(persisted),
+          ...(reuse !== undefined ? { reuse } : {}),
+        });
         say(
           io,
           `${pc.dim("replay --dry")} ${runId}`,
@@ -40,8 +46,13 @@ export function replayCommand(io: CliIo): Command {
         for (const id of result.pendingRequests) io.out(`  ${pc.yellow("?")} still waiting on ${id}`);
         io.out(
           result.completed
-            ? pc.dim("the run replays to completion — a resume would only re-run what diverged")
-            : pc.dim(`a resume would continue from the first miss: weft resume ${runId}`),
+            ? pc.dim("the run replays to completion; real resume still validates effect freshness")
+            : pc.dim(
+                `preview stops each path at its first live boundary; inspect before: weft resume ${runId} --mode edit-tolerant`,
+              ),
+        );
+        io.out(
+          pc.dim("Workflow JavaScript/imports execute; this is not a sandbox. Host caches may be prepared."),
         );
       } finally {
         await weft.close();

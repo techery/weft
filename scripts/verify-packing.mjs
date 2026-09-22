@@ -17,14 +17,21 @@ const problems = [];
 let packed = 0;
 
 try {
-  for (const dir of readdirSync("packages")) {
+  for (const entry of readdirSync("packages", { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = entry.name;
     const src = JSON.parse(readFileSync(join("packages", dir, "package.json"), "utf8"));
     if (src.private) continue;
 
-    execFileSync("pnpm", ["pack", "--pack-destination", out], {
-      cwd: join("packages", dir),
-      stdio: ["ignore", "ignore", "pipe"],
-    });
+    try {
+      execFileSync("pnpm", ["pack", "--pack-destination", out], {
+        cwd: join("packages", dir),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      const detail = [error.stdout, error.stderr].filter(Boolean).join("\n");
+      throw new Error(`${src.name}: pnpm pack failed\n${detail}`, { cause: error });
+    }
     packed++;
 
     const tarball = join(

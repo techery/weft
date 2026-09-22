@@ -14,6 +14,33 @@ afterEach(() => {
 });
 
 describe("the queue", () => {
+  it("keeps failed runs with unknown remote outcomes visible in recovery attention", async () => {
+    daemon.state.attention = {
+      attention: [
+        {
+          runId: "r-running",
+          workflow: "review",
+          attention: {
+            kind: "operation",
+            title: "Recovery required",
+            detail: "Pull request result is unconfirmed",
+            nextAction: "Inspect request publish-1, then resume this run to reconcile its outcome.",
+            requestId: "publish-1",
+            binding: "github.pr",
+            resources: [],
+            updatedAt: 1,
+          },
+        },
+      ],
+      unreadable: [],
+    };
+    const { user, router } = renderApp("/queue");
+    expect(await screen.findByText("Pull request result is unconfirmed")).toBeInTheDocument();
+    expect(screen.getByText(/Attention required · 1/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Inspect run/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/runs/r-running"));
+  });
+
   it("shows the question a run is blocked on, from the daemon", async () => {
     renderApp("/queue");
     expect(await screen.findByText("Approve the v0.9.0 release")).toBeInTheDocument();

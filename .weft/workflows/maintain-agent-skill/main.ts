@@ -10,6 +10,7 @@
  * it never writes into a consuming repository's agent-specific directories.
  */
 import { type Ctx, defineWorkflow, z } from "@techery/weft-sdk";
+import { assertIntegratedWhenChanged, diagnosticRepair } from "@techery/weft-stdlib";
 
 const Provider = z
   .enum(["claude", "codex"])
@@ -283,60 +284,58 @@ export default defineWorkflow(
       authorLedger.quarantined,
     );
 
-    let repairRounds = 0;
-    let checks = await validateGeneratedSkill(ctx, repairRounds, false);
-    let audits = await auditSkill(ctx, providers, {
-      round: repairRounds,
-      sourceSha,
-      base,
-      sourceFiles,
-      relevantChanges,
-      checkEvidence: checks.map((check) => check.evidence ?? check.status),
-    });
-
-    while ((!auditsPass(audits) || !checksPass(checks)) && repairRounds < maxRepairRounds) {
-      repairRounds += 1;
-      ctx.phase(`Repair ${repairRounds}`);
-      const repair = await ctx.agent.detailed(
-        repairPrompt({
-          round: repairRounds,
+    const {
+      repairs: repairRounds,
+      result: { audits },
+    } = await diagnosticRepair({
+      maxRepairs: maxRepairRounds,
+      diagnose: async (round) => {
+        const checks = await validateGeneratedSkill(ctx, round, false);
+        const audits = await auditSkill(ctx, providers, {
+          round,
           sourceSha,
+          base,
           sourceFiles,
           relevantChanges,
-          checkEvidence: checks.map((check) => check.evidence ?? check.status).join("\n"),
-          audits,
-        }),
-        {
-          schema: AuthorResult,
-          provider: authorWith,
-          effort: "medium",
-          key: `skill:repair:${repairRounds}`,
-          isolation: "worktree",
-          write: { paths: [...WRITE_SCOPE], mode: "strict" },
-          maxTurns: 16,
-          timeout: "10m",
-          repair: 1,
-          tasks: false,
-        },
-      );
-      changedSkillFiles = unique([...changedSkillFiles, ...repair.files]);
-      const repairLedger = await ctx.integrate([repair], { order: "sequential", onConflict: "fail" });
-      assertIntegratedWhenChanged(
-        `skill:repair:${repairRounds}`,
-        repair.files,
-        repairLedger.merged,
-        repairLedger.quarantined,
-      );
-      checks = await validateGeneratedSkill(ctx, repairRounds, false);
-      audits = await auditSkill(ctx, providers, {
-        round: repairRounds,
-        sourceSha,
-        base,
-        sourceFiles,
-        relevantChanges,
-        checkEvidence: checks.map((check) => check.evidence ?? check.status),
-      });
-    }
+          checkEvidence: checks.map((check) => check.evidence ?? check.status),
+        });
+        return { checks, audits };
+      },
+      accepted: ({ checks, audits }) => auditsPass(audits) && checksPass(checks),
+      repair: async ({ checks, audits }, repairRounds) => {
+        ctx.phase(`Repair ${repairRounds}`);
+        const repair = await ctx.agent.detailed(
+          repairPrompt({
+            round: repairRounds,
+            sourceSha,
+            sourceFiles,
+            relevantChanges,
+            checkEvidence: checks.map((check) => check.evidence ?? check.status).join("\n"),
+            audits,
+          }),
+          {
+            schema: AuthorResult,
+            provider: authorWith,
+            effort: "medium",
+            key: `skill:repair:${repairRounds}`,
+            isolation: "worktree",
+            write: { paths: [...WRITE_SCOPE], mode: "strict" },
+            maxTurns: 16,
+            timeout: "10m",
+            repair: 1,
+            tasks: false,
+          },
+        );
+        changedSkillFiles = unique([...changedSkillFiles, ...repair.files]);
+        const repairLedger = await ctx.integrate([repair], { order: "sequential", onConflict: "fail" });
+        assertIntegratedWhenChanged(
+          `skill:repair:${repairRounds}`,
+          repair.files,
+          repairLedger.merged,
+          repairLedger.quarantined,
+        );
+      },
+    });
 
     ctx.phase("Accept");
     const finalChecks = await validateGeneratedSkill(ctx, repairRounds, true);
@@ -418,10 +417,12 @@ async function validateGeneratedSkill(ctx: Ctx, round: number, required: boolean
   const suffix = required ? ":final" : "";
   return Promise.all([
     ctx.check(`skill-output:${round}${suffix}`, {
+      key: `skill-output:${round}${suffix}`,
       exec: ["node", SKILL_VALIDATOR],
       required,
     }),
     ctx.check(`skill-tests:${round}${suffix}`, {
+      key: `skill-tests:${round}${suffix}`,
       exec: ["pnpm", "vitest", "run", "packages/cli/test/cli.test.ts", "-t", "weft skill"],
       required,
       timeout: "2m",
@@ -532,18 +533,6 @@ function repairPrompt(input: {
     "",
     "Return disposition=updated when you changed files, otherwise unchanged. List actual changed files and inspected sources.",
   ].join("\n");
-}
-
-function assertIntegratedWhenChanged(
-  key: string,
-  files: string[],
-  merged: string[],
-  quarantined: string[],
-): void {
-  if (files.length === 0) return;
-  if (!merged.includes(key) || quarantined.includes(key)) {
-    throw new Error(`${key} changed files but its patch was not integrated`);
-  }
 }
 
 function isRelevantWeftPath(path: string): boolean {

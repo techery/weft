@@ -1,0 +1,196 @@
+{
+  "format": 1,
+  "sourceCommit": "7fe75e96a9de66143005d392ce6d554b7b98de1e",
+  "construction": "Hand-authored event-contract vectors, checked against the reducer and replay index source at sourceCommit; not captured production runs.",
+  "cases": [
+    {
+      "id": "completed-review-with-required-check",
+      "events": [
+        {
+          "type": "run.created",
+          "runId": "history-complete",
+          "workflow": { "name": "legacy-review" },
+          "input": {},
+          "cwd": "/fixture/repo",
+          "depth": 0
+        },
+        { "type": "run.status", "status": "executing" },
+        { "type": "phase", "name": "Review" },
+        {
+          "type": "step.scheduled",
+          "seq": 1,
+          "kind": "agent",
+          "key": "review:a.ts",
+          "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "label": "Review a.ts",
+          "payload": { "prompt": "Review a.ts" }
+        },
+        {
+          "type": "step.completed",
+          "seq": 1,
+          "output": { "findings": [] },
+          "usage": { "input": 10, "output": 2, "usd": 0.01 }
+        },
+        {
+          "type": "step.scheduled",
+          "seq": 2,
+          "kind": "check",
+          "key": "tests",
+          "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "label": "check:tests",
+          "payload": { "name": "tests", "required": true }
+        },
+        { "type": "step.completed", "seq": 2, "output": { "status": "pass", "evidence": "1 test passed" } },
+        {
+          "type": "human.requested",
+          "id": "h1",
+          "seq": 3,
+          "key": "approve",
+          "hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "kind": "approve",
+          "question": "Accept review?",
+          "schema": {
+            "type": "object",
+            "properties": { "approved": { "type": "boolean" } },
+            "required": ["approved"]
+          }
+        },
+        { "type": "human.answered", "id": "h1", "answer": { "approved": true }, "answeredBy": "human" },
+        { "type": "budget.sampled", "tokens": 12, "usd": 0.01 },
+        { "type": "run.completed", "output": { "confirmed": [] } }
+      ],
+      "projection": {
+        "status": "complete",
+        "output": { "confirmed": [] },
+        "errorCode": null,
+        "checks": [
+          {
+            "name": "tests",
+            "status": "pass",
+            "disposition": "executed",
+            "required": true,
+            "evidence": "1 test passed"
+          }
+        ],
+        "humans": [{ "key": "approve", "status": "answered", "answer": { "approved": true } }],
+        "budget": { "tokens": 12, "usd": 0.01 }
+      },
+      "replay": { "completed": 2, "tokens": 12, "usd": 0.01, "pendingHumans": 0 }
+    },
+    {
+      "id": "failed-required-attempt-is-not-erased-by-a-later-pass",
+      "events": [
+        {
+          "type": "run.created",
+          "runId": "history-failed",
+          "workflow": { "name": "legacy-checks" },
+          "input": {},
+          "cwd": "/fixture/repo",
+          "depth": 0
+        },
+        { "type": "run.status", "status": "executing" },
+        {
+          "type": "step.scheduled",
+          "seq": 1,
+          "kind": "check",
+          "key": "tests:0",
+          "hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "label": "check:tests",
+          "payload": { "name": "tests", "required": true }
+        },
+        {
+          "type": "step.completed",
+          "seq": 1,
+          "output": { "status": "fail", "disposition": "executed", "evidence": "Regression failed" }
+        },
+        {
+          "type": "step.scheduled",
+          "seq": 2,
+          "kind": "check",
+          "key": "tests:1",
+          "hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "label": "check:tests",
+          "payload": { "name": "tests", "required": true }
+        },
+        {
+          "type": "step.completed",
+          "seq": 2,
+          "output": { "status": "pass", "disposition": "executed", "evidence": "Repaired regression passed" }
+        },
+        {
+          "type": "run.failed",
+          "error": {
+            "name": "StepError",
+            "code": "check_failed",
+            "message": "required check(s) failed: tests",
+            "step": {}
+          }
+        }
+      ],
+      "projection": {
+        "status": "failed",
+        "output": null,
+        "errorCode": "check_failed",
+        "checks": [
+          {
+            "name": "tests",
+            "status": "fail",
+            "disposition": "executed",
+            "required": true,
+            "evidence": "Regression failed"
+          },
+          {
+            "name": "tests",
+            "status": "pass",
+            "disposition": "executed",
+            "required": true,
+            "evidence": "Repaired regression passed"
+          }
+        ],
+        "humans": [],
+        "budget": { "tokens": 0, "usd": 0 }
+      },
+      "replay": { "completed": 2, "tokens": 0, "usd": 0, "pendingHumans": 0 }
+    },
+    {
+      "id": "rejected-human-answer-remains-pending",
+      "events": [
+        {
+          "type": "run.created",
+          "runId": "history-human",
+          "workflow": { "name": "legacy-human" },
+          "input": {},
+          "cwd": "/fixture/repo",
+          "depth": 0
+        },
+        { "type": "run.status", "status": "executing" },
+        {
+          "type": "human.requested",
+          "id": "h1",
+          "seq": 1,
+          "key": "decision",
+          "hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "kind": "approve",
+          "question": "Accept review?",
+          "schema": {
+            "type": "object",
+            "properties": { "approved": { "type": "boolean" } },
+            "required": ["approved"]
+          }
+        },
+        { "type": "human.answered", "id": "h1", "answer": { "approved": "yes" }, "answeredBy": "human" },
+        { "type": "human.rejected", "id": "h1", "reason": "approved must be boolean" },
+        { "type": "run.status", "status": "waiting_for_human" }
+      ],
+      "projection": {
+        "status": "waiting_for_human",
+        "output": null,
+        "errorCode": null,
+        "checks": [],
+        "humans": [{ "key": "decision", "status": "pending", "answer": null }],
+        "budget": { "tokens": 0, "usd": 0 }
+      },
+      "replay": { "completed": 0, "tokens": 0, "usd": 0, "pendingHumans": 1 }
+    }
+  ]
+}

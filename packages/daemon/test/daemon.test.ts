@@ -339,6 +339,16 @@ describe("steering a run", () => {
       .toBe(1);
   });
 
+  it("preserves empty-body resume and validates explicit compatibility modes", async () => {
+    const { app, runId } = await suspendedElsewhere();
+    expect((await post(app, `/api/runs/${runId}/resume`, { mode: "unknown" })).status).toBe(400);
+    const missing = await post(app, `/api/runs/${runId}/resume`, { mode: "retained" });
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toMatchObject({ error: expect.stringContaining("no retained executable") });
+    const response = await app.request(`/api/runs/${runId}/resume`, { method: "POST" });
+    expect(response.status).toBe(200);
+  });
+
   it("resumes an INLINE run through its persisted script — the registry has no entry for it", async () => {
     const cwd = await repo();
     const first = await open(cwd);

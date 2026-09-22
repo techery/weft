@@ -7,6 +7,7 @@ import {
   type EngineConfigInput,
   MemoryBlobStore,
   MemoryJournalStore,
+  type OperationBindings,
   ProviderRegistry,
   type WorkflowRegistry,
 } from "@techery/weft-core";
@@ -30,6 +31,7 @@ export function testEngine(
     registry?: WorkflowRegistry;
     builder?: MockAgentBuilder;
     taskTracker?: AgentTaskTrackerHost;
+    operations?: OperationBindings;
   } = {},
 ): TestEngine {
   const journal = new MemoryJournalStore();
@@ -45,6 +47,7 @@ export function testEngine(
     config: opts.config ?? {},
     ...(opts.registry ? { registry: opts.registry } : {}),
     ...(opts.taskTracker ? { taskTracker: opts.taskTracker } : {}),
+    ...(opts.operations ? { operations: opts.operations } : {}),
   });
   return { engine, journal, blobs, builder };
 }
@@ -59,6 +62,7 @@ export function reopen(
     /** Stand in for a blob store whose files did not survive (a pruned cache, a partial restore). */
     blobs?: MemoryBlobStore;
     taskTracker?: AgentTaskTrackerHost;
+    operations?: OperationBindings;
   } = {},
 ): TestEngine {
   const builder = opts.builder ?? mock();
@@ -73,6 +77,7 @@ export function reopen(
     config: opts.config ?? {},
     ...(opts.registry ? { registry: opts.registry } : {}),
     ...(opts.taskTracker ? { taskTracker: opts.taskTracker } : {}),
+    ...(opts.operations ? { operations: opts.operations } : {}),
   });
   return { engine, journal: prev.journal, blobs, builder };
 }

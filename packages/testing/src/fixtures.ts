@@ -3,7 +3,8 @@
  * served exactly as if the real side effect had run, so a fixtured run replays
  * like a real one. Every table takes either a function or a record whose keys are
  * matched exactly first and then as globs (picomatch: `*` stops at `/`, `**`
- * crosses it). Anything a table does not answer falls through to the real thing.
+ * crosses it). Strict mode rejects unmatched effects before dispatch; integration
+ * mode explicitly allows unmatched effects to reach the real host.
  */
 import type { TestHooks } from "@techery/weft-core";
 import type { ExecResult, FetchResult } from "@techery/weft-sdk";
@@ -38,6 +39,8 @@ export type FetchFixtures =
   | ((url: string, method: string) => FetchResult | undefined | Promise<FetchResult | undefined>);
 
 export interface FixtureOptions {
+  /** Strict by default. Integration permits real subprocess, network, and Git effects. */
+  fixtureMode?: "strict" | "integration";
   git?: GitFixtures;
   exec?: ExecFixtures;
   bash?: BashFixtures;
@@ -57,7 +60,7 @@ function globMatch(value: string, pattern: string): boolean {
 /** Exact keys win over globs, and earlier candidates win over later ones. */
 function lookup<T>(table: Record<string, T>, candidates: string[]): T | undefined {
   for (const candidate of candidates) {
-    const exact = table[candidate];
+    const exact = Object.hasOwn(table, candidate) ? table[candidate] : undefined;
     if (exact !== undefined) return exact;
   }
   for (const [pattern, value] of Object.entries(table)) {
@@ -68,39 +71,59 @@ function lookup<T>(table: Record<string, T>, candidates: string[]): T | undefine
   return undefined;
 }
 
-/** Build the engine's TestHooks, or undefined when no fixture table was given. */
+/** Build fail-closed engine hooks unless real effects were explicitly enabled. */
 export function buildTestHooks(opts: FixtureOptions): TestHooks | undefined {
-  const hooks: TestHooks = {};
+  const mode = opts.fixtureMode ?? "strict";
+  if (mode !== "strict" && mode !== "integration") {
+    throw new Error(`runWorkflow: invalid fixtureMode ${JSON.stringify(mode)}`);
+  }
+  const strict = mode === "strict";
+  const hooks: TestHooks = { allowWorkspace: !strict };
+  const missing = (effect: string): never => {
+    throw new Error(
+      `runWorkflow: missing ${effect} fixture (strict mode); provide a fixture or explicitly set fixtureMode: "integration" to allow real effects`,
+    );
+  };
 
-  if (opts.git) {
-    const table = opts.git;
+  if (opts.git || strict) {
+    const table = opts.git ?? {};
     hooks.git = async (op, args) => {
       const fixture = lookup(table, [op, `git.${op}`]);
-      if (fixture === undefined) return undefined;
-      return typeof fixture === "function" ? await fixture(args) : fixture;
+      const value = typeof fixture === "function" ? await fixture(args) : fixture;
+      return value === undefined && strict ? missing(`git.${op}`) : value;
     };
   }
 
-  if (opts.exec) {
-    const table = opts.exec;
-    hooks.exec =
-      typeof table === "function" ? table : (file, args) => lookup(table, [[file, ...args].join(" "), file]);
+  if (opts.exec || strict) {
+    const table = opts.exec ?? {};
+    hooks.exec = async (file, args) => {
+      const command = [file, ...args].join(" ");
+      const value = typeof table === "function" ? await table(file, args) : lookup(table, [command, file]);
+      return value === undefined && strict ? missing(`exec ${command}`) : value;
+    };
   }
 
-  if (opts.bash) {
-    const table = opts.bash;
-    hooks.bash = typeof table === "function" ? table : (command) => lookup(table, [command]);
+  if (opts.bash || strict) {
+    const table = opts.bash ?? {};
+    hooks.bash = async (command) => {
+      const value = typeof table === "function" ? await table(command) : lookup(table, [command]);
+      return value === undefined && strict ? missing(`bash ${command}`) : value;
+    };
   }
 
-  if (opts.fetch) {
-    const table = opts.fetch;
-    hooks.fetch =
-      typeof table === "function" ? table : (url, method) => lookup(table, [url, `${method} ${url}`]);
+  if (opts.fetch || strict) {
+    const table = opts.fetch ?? {};
+    hooks.fetch = async (url, method) => {
+      const value =
+        typeof table === "function" ? await table(url, method) : lookup(table, [`${method} ${url}`, url]);
+      return value === undefined && strict ? missing(`fetch ${method} ${url}`) : value;
+    };
   }
 
-  if (opts.env) {
-    const table = opts.env;
-    hooks.env = (name) => table[name];
+  if (opts.env || strict) {
+    // An absent value is a valid fixture for an unset variable; never read host secrets.
+    const table = opts.env ?? {};
+    hooks.env = (name) => (Object.hasOwn(table, name) ? table[name] : undefined);
   }
 
   return Object.keys(hooks).length > 0 ? hooks : undefined;

@@ -16,18 +16,22 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import {
   type CompiledUiCatalog,
   isWorkflowPathRef,
+  type JournalRecord,
   loadWorkflow,
   mergedAllowBare,
   type PersistedDef,
   parseBudget,
   persistedDefOf,
   persistInlineScript,
+  persistRetainedWorkflow,
   persistUiCatalog,
   persistWorkflowRef,
   type RunListFilter,
+  reduceState,
   reserveRunId,
   resolveWorkflow,
   resumeOptions,
+  retainedDefOf,
   type Weft,
   type WorkflowDefinition,
 } from "@techery/weft-host";
@@ -223,6 +227,12 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
         "the workflow file. Returns the same runId; follow with weft_wait.",
       inputSchema: {
         runId: z.string(),
+        mode: z
+          .enum(["strict", "retained", "edit-tolerant"])
+          .optional()
+          .describe(
+            "Current source identity check, original retained source, or compatible edited source (default).",
+          ),
         reuse: REUSE.optional().describe(
           '"content" (default) or "key" — keep answers by step key while iterating on wording.',
         ),
@@ -236,7 +246,12 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
         // falls through to the engine's registry lookup by the name the run journaled.
         const ref = tracked?.ref;
         let persisted: PersistedDef | undefined;
-        if (ref !== undefined) {
+        if (args.mode === "retained") {
+          persisted = await retainedDefOf(weft, args.runId);
+          if (!persisted) throw new Error(`run ${args.runId}: no retained executable source`);
+        } else if (args.mode === "strict") {
+          persisted = await persistedDefOf(weft, args.runId);
+        } else if (ref !== undefined) {
           const resolved = await resolveWorkflow(weft, ref);
           persisted = {
             def: resolved.def,
@@ -254,6 +269,7 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
         const handle = await weft.engine.resume(args.runId, {
           ...resumeOptions(persisted),
           ...(args.reuse !== undefined ? { reuse: args.reuse } : {}),
+          ...(args.mode ? { mode: args.mode === "retained" ? ("strict" as const) : args.mode } : {}),
         });
         runs.track({
           handle,
@@ -311,6 +327,24 @@ export function registerTools(server: McpServer, weft: Weft): RunStore {
   );
 
   server.registerTool(
+    "weft_inspect",
+    {
+      title: "Inspect a weft run and recovery state",
+      description:
+        "Read machine-readable run state, retained workspace, candidates, verification records, delivery receipts, and unresolved operations with the exact inspection and resume guidance.",
+      inputSchema: { runId: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    async (args) =>
+      reply(async () => {
+        const records: JournalRecord[] = [];
+        for await (const record of weft.engine.journal.read(args.runId)) records.push(record);
+        if (!records.length) throw new Error(`run ${args.runId} not found`);
+        return { state: reduceState(records) };
+      }),
+  );
+
+  server.registerTool(
     "weft_types",
     {
       title: "Read the weft authoring surface",
@@ -354,6 +388,13 @@ async function startRun(weft: Weft, runs: RunStore, args: RunArgs): Promise<Trac
   // by an exclusive directory create, so a collision can never write into an
   // EXISTING run's directory.
   const runId = await reserveRunId(weft);
+  if (resolved.code !== undefined && resolved.hash !== undefined)
+    await persistRetainedWorkflow(weft, runId, {
+      name: resolved.def.meta.name ?? "workflow",
+      code: resolved.code,
+      hash: resolved.hash,
+      ...(resolved.uiCatalog ? { uiCatalog: resolved.uiCatalog } : {}),
+    });
   if (inline?.code !== undefined) {
     await persistInlineScript(weft, runId, inline.code);
     if (inline.uiCatalog !== undefined) await persistUiCatalog(weft, runId, inline.uiCatalog);

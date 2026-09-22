@@ -21,6 +21,14 @@ export {
   DEFAULT_REFUTERS,
   RefuterVerdictSchema,
 } from "./adversarial.ts";
+export type { DiagnosticRepairOptions } from "./coding.ts";
+export {
+  assertIntegratedWhenChanged,
+  diagnosticRepair,
+  findingKey,
+  groupFindingsByFile,
+  uniqueFindings,
+} from "./coding.ts";
 export type { CompletenessCriticOptions, CompletenessGaps, Gap } from "./critic.ts";
 export { CompletenessGapsSchema, completenessCritic, GapSchema } from "./critic.ts";
 export type { JudgePanelOptions, JudgePanelResult, JudgeVerdict } from "./judge.ts";

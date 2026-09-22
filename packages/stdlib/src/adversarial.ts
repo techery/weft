@@ -85,11 +85,11 @@ export async function adversarialVerify<T>(
     opts.keyFor ?? ((claimIndex: number, refuterIndex: number) => `refute:${claimIndex}:${refuterIndex}`);
   const route = routing(opts);
 
-  const tasks: Array<Promise<RefuterVerdict>> = [];
+  const tasks: Array<() => Promise<RefuterVerdict>> = [];
   for (const [i, claim] of claims.entries()) {
     const described = opts.describe(claim);
     for (let r = 0; r < refuters; r++) {
-      tasks.push(
+      tasks.push(() =>
         ctx.agent(refutePrompt(described, r, refuters), {
           schema: RefuterVerdictSchema,
           key: keyFor(i, r),
@@ -101,7 +101,7 @@ export async function adversarialVerify<T>(
   }
 
   // Settled entries, not ctx.successes(): a branch that failed is a refute vote, not a drop.
-  const settled = await ctx.parallel(tasks);
+  const settled = await ctx.parallel(tasks, { concurrency: 4 });
 
   const survived: T[] = [];
   const refuted: Array<RefutedClaim<T>> = [];

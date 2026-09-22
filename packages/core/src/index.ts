@@ -57,6 +57,12 @@ export type { TestHooks } from "./hooks.ts";
 export type { WireSchema } from "./jsonschema.ts";
 export { jsonUnsafeAt, structuralCheck, toWireSchema, unwrapWireValue, wrapWireValue } from "./jsonschema.ts";
 export { mapWithConcurrency, Semaphore } from "./limiter.ts";
+export type {
+  OperationBinding,
+  OperationBindings,
+  OperationContext,
+  ReconciledOperation,
+} from "./operations.ts";
 export type { CheckState, HumanState, RunState, StepState, TreeNode, TreePhase } from "./projections.ts";
 export { reduceState, renderReport, renderTree } from "./projections.ts";
 export type {
@@ -94,3 +100,4 @@ export {
   MemoryBlobStore,
   MemoryJournalStore,
 } from "./stores.ts";
+export { cleanupOwnedWorkspace } from "./workspace.ts";

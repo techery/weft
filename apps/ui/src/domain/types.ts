@@ -214,6 +214,23 @@ export type Run = {
   journal: JournalEntry[];
   gate: Gate | null;
   steps: Record<string, StepDetail>;
+  recovery?: import("~/api/types").RecoveryAttention[];
+  delivery?: {
+    branch: string;
+    workspacePath: string;
+    retained: boolean;
+    head?: string;
+    candidateId?: string;
+    status:
+      | "Workspace retained"
+      | "Workspace removed"
+      | "Candidate captured"
+      | "Verification failed"
+      | "Verification recorded"
+      | "Delivery confirmed";
+    feedback?: { status: "passed" | "failed" | "pending" | "unknown"; detail: string; updatedAt: number };
+    output?: unknown;
+  };
 };
 
 export type DiffLine = {

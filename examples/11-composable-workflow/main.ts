@@ -9,9 +9,9 @@ await writeFile(join(cwd, "alpha.ts"), "export const alpha = 1;\n");
 await writeFile(join(cwd, "beta.ts"), "export const beta = 2;\n");
 
 const provider = mock()
-  .on({ key: "review:0:alpha.ts" }, { findings: [] })
+  .on({ key: "files/alpha.ts/inspect/review" }, { findings: [] })
   .on(
-    { key: "review:1:beta.ts" },
+    { key: "files/beta.ts/inspect/review" },
     {
       findings: [
         {

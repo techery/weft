@@ -775,6 +775,79 @@ const effects = defineWorkflow(
 );
 
 describe("side-effect fixtures", () => {
+  test.each(["exec", "bash", "fetch", "git", "check"] as const)(
+    "strict mode refuses an unmatched %s effect before the real host runs",
+    async (effect) => {
+      const workflow = defineWorkflow(
+        {
+          name: `missing-${effect}`,
+          description: "missing fixture",
+          input: z.object({}),
+          output: z.boolean(),
+        },
+        async (ctx) => {
+          if (effect === "exec") await ctx.exec("node", ["--version"]);
+          if (effect === "bash") await ctx.bash("echo should-not-run");
+          if (effect === "fetch") await ctx.fetch("https://fixture-only.invalid/");
+          if (effect === "git") await ctx.git.changedSince("HEAD");
+          if (effect === "check") await ctx.check("unit", { exec: ["node", "--version"] });
+          return true;
+        },
+      );
+      await expect(runWorkflow(workflow, { input: {} })).rejects.toThrow(
+        /missing .* fixture \(strict mode\)/,
+      );
+      await expect(
+        runWorkflow(workflow, {
+          input: {},
+          exec: () => undefined,
+          bash: () => undefined,
+          fetch: () => undefined,
+          git: { changedSince: () => undefined },
+        }),
+      ).rejects.toThrow(/missing .* fixture \(strict mode\)/);
+    },
+  );
+
+  test("strict mode never falls through to the host environment", async () => {
+    const name = "WEFT_TEST_STRICT_ENV_SENTINEL";
+    const before = process.env[name];
+    process.env[name] = "host-only";
+    try {
+      const workflow = defineWorkflow(
+        {
+          name: "strict-env",
+          description: "isolated environment",
+          input: z.object({}),
+          output: z.string(),
+        },
+        async (ctx) => (await ctx.env.get(name)) ?? "unset",
+      );
+      expect((await runWorkflow(workflow, { input: {} })).output).toBe("unset");
+      expect((await runWorkflow(workflow, { input: {}, fixtureMode: "integration" })).output).toBe(
+        "host-only",
+      );
+    } finally {
+      if (before === undefined) delete process.env[name];
+      else process.env[name] = before;
+    }
+  });
+
+  test("integration mode explicitly permits a real subprocess", async () => {
+    const workflow = defineWorkflow(
+      {
+        name: "integration-exec",
+        description: "real subprocess",
+        input: z.object({}),
+        output: z.string(),
+      },
+      async (ctx) => (await ctx.exec("node", ["-p", "'integration-ok'"])).stdout.trim(),
+    );
+    expect((await runWorkflow(workflow, { input: {}, fixtureMode: "integration" })).output).toBe(
+      "integration-ok",
+    );
+  });
+
   test("exec/bash/fetch/env records round-trip through the journal", async () => {
     const { output, journal } = await runWorkflow(effects, {
       input: {},

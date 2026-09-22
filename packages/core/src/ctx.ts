@@ -48,14 +48,18 @@ import {
   type IntegrateOptions,
   type IntegrationLedger,
   isCancellation,
+  type KeyedParallelOptions,
   type NoteInput,
   type ParallelFn,
+  type ParallelLaneContext,
   type ParallelOptions,
   type ParallelTask,
   type ParameterizedCheckSuiteDefinition,
   type ParameterizedCheckSuiteResult,
   type PatchRef,
   type Pipeline,
+  type ProcedureDefinition,
+  type ProcedureOptions,
   parseDuration,
   type RecipeDefinition,
   type Risk,
@@ -81,8 +85,9 @@ import * as z from "zod";
 import { canonicalJson, sha256Hex } from "./canonical.ts";
 import { priceFor } from "./config.ts";
 import type { BlobRefJson } from "./events.ts";
-import { toWireSchema, unwrapWireValue } from "./jsonschema.ts";
+import { jsonUnsafeAt, toWireSchema, unwrapWireValue } from "./jsonschema.ts";
 import { mapWithConcurrency } from "./limiter.ts";
+import { withProviderProgress } from "./progress.ts";
 import type { AgentRequest, AgentResult, AgentTaskContext, AgentTaskOperation } from "./provider.ts";
 import { resolveReviewFile } from "./review.ts";
 import {
@@ -92,6 +97,7 @@ import {
   type StepIO,
   sleep as sleepMs,
 } from "./runtime.ts";
+import { attachDeliveryContext, ownedWorkspace } from "./workspace.ts";
 
 const RISK_ORDER: Risk[] = ["low", "medium", "high", "irreversible"];
 
@@ -526,6 +532,10 @@ export function buildCtx(rt: RunRuntime): Ctx {
       ...providedOpts,
       ...(providedOpts.tasks === undefined && active?.tasks !== undefined ? { tasks: active.tasks } : {}),
     } as AgentOptions<S>;
+    if (opts.write && opts.isolation !== "worktree" && ownedWorkspace(rt)) {
+      mode = { ...mode, writeInPlace: true };
+      opts.write = { ...opts.write, mode: opts.write.mode ?? "strict" };
+    }
     if (!opts?.schema) {
       throw new StepError("invalid_input", "ctx.agent: 'schema' is required on every step", {
         step: { kind: "agent" },
@@ -590,6 +600,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     const ordinal = rt.nextAgentOrdinal();
     const label =
       opts.label ?? opts.key ?? `${rt.activeScope()?.phase ?? rt.currentPhase ?? "run"}/agent#${ordinal}`;
+    const agentKey = rt.resolveKey(opts.key ?? label)!;
     reportWireLints(label, wire.lints);
     const scope = opts.write
       ? {
@@ -679,7 +690,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
           workflowId: rt.workflowId,
           workflowName: rt.workflowName,
           runId: rt.runId,
-          step: opts.key ?? label,
+          step: agentKey,
           provider: providerId,
           source: "agent",
           mode: taskMode,
@@ -736,7 +747,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         : null,
     };
 
-    const stepRef = { kind: "agent", key: opts.key, label, runId: rt.runId };
+    const stepRef = { kind: "agent", key: rt.resolveKey(opts.key), label, runId: rt.runId };
 
     const reviveDetailed = async (
       journaled: unknown,
@@ -968,7 +979,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
                   ? agentEnvelopeSchema(wire.json, taskMode === "write", taskObservation?.schema)
                   : wire.json,
                 label,
-                ...(opts.key !== undefined ? { key: opts.key } : {}),
+                ...(opts.key !== undefined ? { key: agentKey } : {}),
                 ...(model !== undefined ? { model } : {}),
                 ...(effort !== undefined ? { effort: effort as never } : {}),
                 maxTurns,
@@ -1126,7 +1137,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
                     // construction — which is the correct verdict.
                     const { outOfScope } = checkScope(files, scope);
                     const quarantined = scope.mode === "strict" && outOfScope.length > 0;
-                    const patchKey = opts.key ?? label;
+                    const patchKey = agentKey;
                     patch = {
                       ref: blob.hash,
                       key: patchKey,
@@ -1163,7 +1174,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
                       {
                         type: "scope.violation",
                         seq: io.seq,
-                        key: opts.key ?? label,
+                        key: agentKey,
                         files: escaped,
                         mode: scope.mode,
                       },
@@ -1201,7 +1212,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
                       {
                         type: "scope.violation",
                         seq: io.seq,
-                        key: opts.key ?? label,
+                        key: agentKey,
                         files: changedIgnored,
                         mode: scope.mode,
                       },
@@ -1250,7 +1261,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
                         {
                           type: "scope.violation",
                           seq: io.seq,
-                          key: opts.key ?? label,
+                          key: agentKey,
                           files: outOfScope,
                           mode: scope.mode,
                         },
@@ -1343,7 +1354,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
       let attempts = 1;
       let result: AgentResult;
       try {
-        result = await provider.run(req, { signal: io.signal });
+        result = await withProviderProgress(rt, io, (control) => provider.run(req, control));
       } catch (err) {
         if (isCancellation(err) || err instanceof StepError) throw err;
         // A provider that failed AFTER burning turns (say, no structured output
@@ -1427,7 +1438,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
         attempts++;
         await io.appendAttempt(`schema repair ${attempts - 1}/${repairMax}`);
         try {
-          result = await provider.repair(result.sessionId, req, issues, { signal: io.signal });
+          result = await withProviderProgress(rt, io, (control) =>
+            provider.repair(result.sessionId, req, issues, control),
+          );
         } catch (err) {
           if (isCancellation(err) || err instanceof StepError) throw err;
           // The failing repair turn's own spend rides the error too.
@@ -1594,6 +1607,73 @@ export function buildCtx(rt: RunRuntime): Ctx {
   }
 
   const parallel = parallelImpl as ParallelFn;
+
+  async function keyedParallel<Item, Result>(
+    items: ReadonlyArray<Item>,
+    run: (item: Item, lane: ParallelLaneContext, index: number) => Promise<Result> | Result,
+    opts: KeyedParallelOptions<Item>,
+  ): Promise<Settled<Result>[]> {
+    if (!opts || typeof opts.keyOf !== "function" || typeof run !== "function") {
+      throw new StepError("invalid_input", "parallel: provide a mapper, key, and keyOf");
+    }
+    if (items.length > config.limits.fanoutMax) {
+      throw new StepError(
+        "invalid_input",
+        `parallel: ${items.length} items exceeds the cap of ${config.limits.fanoutMax}`,
+      );
+    }
+    // This API accepts items, never eager promises. Observe rejections without waiting for an invalid input.
+    if (
+      items.some(
+        (item) =>
+          item !== null &&
+          (typeof item === "object" || typeof item === "function") &&
+          typeof (item as { then?: unknown }).then === "function",
+      )
+    ) {
+      void Promise.allSettled(items);
+      throw new StepError(
+        "invalid_input",
+        "parallel.all/settled: already-started promises are not supported",
+      );
+    }
+    const concurrency =
+      opts.concurrency ?? rt.activeScope()?.parallel?.concurrency ?? Math.max(items.length, 1);
+    if (!Number.isInteger(concurrency) || concurrency < 1) {
+      throw new StepError("invalid_input", "parallel: concurrency must be a positive integer");
+    }
+    const keys = items.map((item, index) => opts.keyOf(item, index));
+    const seen = new Set<string>();
+    for (const key of keys) {
+      if (typeof key !== "string" || key.trim() === "") {
+        throw new StepError("invalid_input", "parallel: keyOf must return a non-empty string");
+      }
+      if (seen.has(key))
+        throw new StepError("invalid_input", `parallel: duplicate item key ${JSON.stringify(key)}`);
+      seen.add(key);
+    }
+    const namespace = rt.reserveBoundary(opts.key);
+    const parent = rt.activeScope();
+    const results = await mapWithConcurrency(items, concurrency, (item, index) => {
+      const itemKey = keys[index]!;
+      const scope = mergeScope(parent, {
+        keyNamespace: `${namespace}/${encodeURIComponent(itemKey)}`,
+        phase: [parent?.phase, opts.key, itemKey].filter(Boolean).join(" / "),
+      });
+      const lane = new Proxy(scopedContext(scope), {
+        get(target, property, receiver) {
+          return property === "itemKey" ? itemKey : Reflect.get(target, property, receiver);
+        },
+      }) as ParallelLaneContext;
+      return toSettled(() => rt.withScope(scope, () => run(item, lane, index)));
+    });
+    const cancelled = results.find((result) => !result.ok && isCancellation(result.error));
+    if (cancelled && !cancelled.ok) throw cancelled.error;
+    return results;
+  }
+
+  parallel.settled = keyedParallel;
+  parallel.all = async (items, run, opts) => all(await keyedParallel(items, run, opts));
 
   function pipeline<I>(items: ReadonlyArray<I>): Pipeline<I, I> {
     if (items.length > config.limits.fanoutMax) {
@@ -2153,7 +2233,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     verifyServe?: (journaled: T) => Promise<boolean>,
   ): Promise<T> {
     const risk = maxRisk(GIT_WRITE_RISK[op], opts?.risk);
-    const gate = await rt.gateStep({ action, risk });
+    const gate = await rt.gateStep({ action, risk, ...(opts?.key ? { key: `${opts.key}:gate` } : {}) });
     if (!gate.approved) {
       throw new StepError("gate_denied", `${action} denied${gate.note ? `: ${gate.note}` : ""}`, {
         step: { kind: "git", key: op, runId: rt.runId },
@@ -2162,8 +2242,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
     return rt.runStep<T>({
       kind: "git",
       label: action,
+      ...(opts?.key ? { key: opts.key } : {}),
       payload: { op: `git.${op}`, args: args ?? null },
-      ...(verifyServe && !rt.host.testHooks ? { verifyServe: (j) => verifyServe(j as T) } : {}),
+      ...(verifyServe && !rt.host.testHooks?.git ? { verifyServe: (j) => verifyServe(j as T) } : {}),
       execute: async (io) => ({ value: await gitHooked(op, args, () => run(io)) }),
     });
   }
@@ -2607,7 +2688,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
   async function checkImpl(
     name: string,
     opts: CheckOptions,
-    definitionMeta?: { revision?: string; inputHash?: string },
+    definitionMeta?: { revision?: string; inputHash?: string; fresh?: boolean },
   ): Promise<CheckResult> {
     const normalize = (value: boolean | CheckExecutionResult): CheckResult => {
       if (typeof value === "boolean") {
@@ -2663,6 +2744,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         ...(opts.key !== undefined ? { key: opts.key } : {}),
         label: `check:${name}`,
         payload: { name, exec: opts.exec, required, ...definitionPayload },
+        ...(definitionMeta?.fresh ? { verifyServe: async () => false } : {}),
         revive: reviveCheckResult,
         onSettle: settle,
         execute: async (io) => {
@@ -2707,7 +2789,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         // content hash. Serving a journaled pass could vouch for an artifact a
         // diverged upstream step has since replaced, so validation re-runs on
         // every resume instead of being served.
-        ...(definitionMeta === undefined ? { verifyServe: async () => false } : {}),
+        ...(!definitionMeta?.revision || definitionMeta.fresh ? { verifyServe: async () => false } : {}),
         execute: async () => {
           const abort = new AbortController();
           let timer: NodeJS.Timeout | undefined;
@@ -2759,6 +2841,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
         value: {
           status: "pass",
           disposition: "waived",
+          ...(definitionMeta ? { status: "fail" as const } : {}),
           ...(opts.skip?.reason ? { evidence: opts.skip.reason } : {}),
         },
       }),
@@ -2800,8 +2883,28 @@ export function buildCtx(rt: RunRuntime): Ctx {
       );
     }
     const policy: CheckPolicy =
-      definition.policy === "required" || overrides.policy === "required" ? "required" : "advisory";
+      overrides.purpose === "diagnostic"
+        ? "advisory"
+        : definition.policy === "required" || overrides.policy === "required"
+          ? "required"
+          : "advisory";
     const inputHash = sha256Hex(canonicalJson(parsedInput ?? null));
+    if (overrides.waive) {
+      if (!overrides.waive.reason.trim())
+        throw new StepError("invalid_input", "check waiver requires a reason");
+      if (overrides.waive.expiresAt !== undefined) {
+        const expires = Date.parse(overrides.waive.expiresAt);
+        if (!Number.isFinite(expires) || expires <= rt.host.clock()) {
+          throw new StepError("invalid_input", "check waiver is expired or has an invalid expiresAt");
+        }
+      }
+      if (policy === "required") {
+        throw new StepError(
+          "invalid_input",
+          "required checks cannot be waived; use diagnostic checks and an explicit delivery policy",
+        );
+      }
+    }
     if (overrides.trust !== undefined) {
       if (!definition.revision) {
         throw new StepError(
@@ -2883,6 +2986,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     return checkImpl(definition.name, source, {
       ...(definition.revision !== undefined ? { revision: definition.revision } : {}),
       inputHash,
+      ...(overrides.fresh ? { fresh: true } : {}),
     });
   }
 
@@ -3435,10 +3539,11 @@ export function buildCtx(rt: RunRuntime): Ctx {
     });
   }) as Ctx["signal"];
 
-  async function sleepFn(duration: Duration): Promise<void> {
+  async function sleepFn(duration: Duration, options?: { key?: string }): Promise<void> {
     const ms = parseDuration(duration);
     await rt.runStep<{ firedAt: number }>({
       kind: "sleep",
+      ...(options?.key ? { key: options.key } : {}),
       label: `sleep:${duration}`,
       payload: { op: "sleep", ms },
       reuseIncomplete: true,
@@ -3495,7 +3600,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     workflowId: rt.workflowId,
     workflowName: rt.workflowName,
     runId: rt.runId,
-    step,
+    step: rt.resolveKey(step)!,
     provider: "workflow",
     source: "workflow",
     mode,
@@ -3604,7 +3709,11 @@ export function buildCtx(rt: RunRuntime): Ctx {
 
   // ---- immutable authoring scopes ---------------------------------------
 
-  type ExecutionScopeOptions = CtxScopeOptions & { phase?: string };
+  type ExecutionScopeOptions = CtxScopeOptions & {
+    phase?: string;
+    keyNamespace?: string;
+    definitionPath?: readonly string[];
+  };
 
   const mergeScope = (
     parent: ExecutionScopeOptions | undefined,
@@ -3637,14 +3746,39 @@ export function buildCtx(rt: RunRuntime): Ctx {
       const object = value as object;
       const cached = cache.get(object);
       if (cached) return cached;
-      const proxy = new Proxy(object, {
-        apply(target, thisArg, args) {
-          return rt.withScope(scope, () =>
-            Reflect.apply(target as (...args: unknown[]) => unknown, thisArg, args),
+      // Proxy a facade so frozen capabilities can still be bound. Returning a bound
+      // method from the frozen original would violate JavaScript's Proxy invariants.
+      const facade = typeof value === "function" ? (..._args: unknown[]) => undefined : {};
+      const proxy = new Proxy(facade, {
+        apply(_target, thisArg, args) {
+          const active = rt.activeScope();
+          // A defaults handle captured before entering a procedure must not erase its
+          // identity. Likewise a parent handle used in a nested procedure keeps the
+          // deeper identity. Explicit handles for sibling lanes remain independent.
+          const inheritsIdentity =
+            active?.keyNamespace !== undefined &&
+            (scope.keyNamespace === undefined ||
+              active.keyNamespace === scope.keyNamespace ||
+              active.keyNamespace.startsWith(`${scope.keyNamespace}/`));
+          const effectiveScope = inheritsIdentity
+            ? {
+                ...scope,
+                keyNamespace: active.keyNamespace,
+                definitionPath: active.definitionPath,
+              }
+            : scope;
+          return rt.withScope(effectiveScope, () =>
+            Reflect.apply(value as (...args: unknown[]) => unknown, thisArg, args),
           );
         },
-        get(target, property, receiver) {
-          return bind(Reflect.get(target, property, receiver));
+        get(_target, property) {
+          return bind(Reflect.get(object, property, object));
+        },
+        has: (_target, property) => Reflect.has(object, property),
+        ownKeys: () => Reflect.ownKeys(object),
+        getOwnPropertyDescriptor: (_target, property) => {
+          const descriptor = Reflect.getOwnPropertyDescriptor(object, property);
+          return descriptor ? { ...descriptor, configurable: true } : undefined;
         },
       });
       cache.set(object, proxy);
@@ -3767,6 +3901,103 @@ export function buildCtx(rt: RunRuntime): Ctx {
     return parsedOutput.value as Output;
   };
 
+  const procedure = async <Input, Output, ParsedInput, RawOutput>(
+    definition: ProcedureDefinition<Input, Output, Ctx, ParsedInput, RawOutput>,
+    input: Input,
+    opts: ProcedureOptions,
+  ): Promise<Output> => {
+    if (definition?.kind !== "weft.procedure") {
+      throw new StepError("invalid_input", "ctx.procedure: definition must be created with defineProcedure");
+    }
+    const key = rt.reserveBoundary(opts?.key);
+    const startedAt = Date.now();
+    const parsedInput = await validateSchema(definition.input, input);
+    if (!parsedInput.ok) {
+      throw new StepError(
+        "invalid_input",
+        `procedure:${definition.name}: input failed schema validation: ${parsedInput.issues.map((issue) => `${issue.path || "<root>"}: ${issue.message}`).join("; ")}`,
+      );
+    }
+    const unsafe = jsonUnsafeAt(parsedInput.value);
+    if (unsafe !== undefined)
+      throw new StepError(
+        "invalid_input",
+        `procedure:${definition.name}: input cannot be journaled as JSON at ${unsafe}`,
+      );
+    for (const capability of definition.requires) {
+      if (!(capability in ctx))
+        throw new StepError(
+          "invalid_input",
+          `procedure:${definition.name}: missing capability ${capability}`,
+        );
+    }
+    const inputDigest = sha256Hex(canonicalJson(parsedInput.value));
+    const definitionDigest = sha256Hex(
+      canonicalJson({
+        name: definition.name,
+        revision: definition.revision,
+        body: definition.run.toString(),
+        input: toWireSchema(definition.input).json,
+        output: toWireSchema(definition.output).json,
+        requires: definition.requires,
+      }),
+    );
+    const parent = rt.activeScope();
+    const scope = mergeScope(parent, {
+      keyNamespace: key,
+      definitionPath: [...(parent?.definitionPath ?? []), definitionDigest, inputDigest],
+      phase: [parent?.phase, opts.label ?? definition.name].filter(Boolean).join(" / "),
+    });
+    await rt.append([
+      {
+        type: "procedure.started",
+        key,
+        name: definition.name,
+        revision: definition.revision,
+        definitionDigest,
+        inputDigest,
+        requires: definition.requires,
+      },
+    ]);
+    try {
+      // Never wrap this body in runStep: nested effects must re-enter verification and recovery.
+      const rawOutput = await rt.withScope(scope, () =>
+        definition.run(scopedContext(scope), parsedInput.value as ParsedInput),
+      );
+      const parsedOutput = await validateSchema(definition.output, rawOutput);
+      if (!parsedOutput.ok)
+        throw new StepError(
+          "invalid_output",
+          `procedure:${definition.name}: output failed schema validation: ${parsedOutput.issues.map((issue) => `${issue.path || "<root>"}: ${issue.message}`).join("; ")}`,
+        );
+      const unsafeOutput = jsonUnsafeAt(parsedOutput.value);
+      if (unsafeOutput !== undefined)
+        throw new StepError(
+          "invalid_output",
+          `procedure:${definition.name}: output cannot be journaled as JSON at ${unsafeOutput}`,
+        );
+      await rt.append([
+        {
+          type: "procedure.completed",
+          key,
+          outputDigest: sha256Hex(canonicalJson(parsedOutput.value)),
+          durationMs: Date.now() - startedAt,
+        },
+      ]);
+      return parsedOutput.value as Output;
+    } catch (error) {
+      await rt.append([
+        {
+          type: "procedure.failed",
+          key,
+          error: StepError.from(error).serialize(),
+          durationMs: Date.now() - startedAt,
+        },
+      ]);
+      throw error;
+    }
+  };
+
   // ---- assemble -----------------------------------------------------------
 
   ctx = {
@@ -3794,6 +4025,7 @@ export function buildCtx(rt: RunRuntime): Ctx {
     tasks,
     scope: deriveScope,
     recipe,
+    procedure,
     step,
     signal: signalFn,
     sleep: sleepFn,
@@ -3811,8 +4043,9 @@ export function buildCtx(rt: RunRuntime): Ctx {
       ...(rt.baseRef !== undefined ? { baseRef: rt.baseRef } : {}),
       depth: rt.depth,
     },
-  };
-  return ctx;
+  } as Ctx;
+  // The delivery module completes the context before any workflow can observe it.
+  return attachDeliveryContext(rt, ctx);
 }
 
 /** POSIX-safe shell spelling for the command copied into agent instructions. */

@@ -30,7 +30,8 @@ export interface ParallelLaneContext<
 }
 
 /**
- * Why: Separates fail-fast and settled fan-out at the method boundary and never accepts already-started promises.
+ * Why: Separates required and settled fan-out at the method boundary and never accepts already-started promises.
+ * Every lane settles before all throws; duplicate semantic item keys fail before dispatch.
  * Use: Choose `all` for required lanes or `settled` when workflow code will inspect each failure explicitly.
  */
 export interface ParallelFn<TaskInput = unknown, TaskOutput = TaskInput, Workspace extends boolean = false> {

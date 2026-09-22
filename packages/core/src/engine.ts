@@ -22,6 +22,7 @@ import { buildCtx } from "./ctx.ts";
 import type { HumanRequestEvent, HumanReviewFileEdit, JournalEvent, JournalRecord } from "./events.ts";
 import { jsonUnsafeAt, structuralCheck } from "./jsonschema.ts";
 import { Semaphore } from "./limiter.ts";
+import { pendingOperationCalls } from "./operations.ts";
 import { type RunState, reduceState, renderReport, renderTree } from "./projections.ts";
 import type { AgentProvider, ProviderRegistry } from "./provider.ts";
 import { ReplayIndex, type ReuseMode } from "./replay.ts";
@@ -192,8 +193,21 @@ function drainWithin(result: Promise<unknown>, ms: number): Promise<boolean> {
  * text would collide — and that is fine, because a false "unchanged" only restores the
  * previous behaviour.
  */
-function definitionHash(def: WorkflowDefinition): string {
-  return sha256Hex(`${def.meta.name ?? ""}\n${def.run.toString()}`);
+function definitionHash(def: WorkflowDefinition, fallbackName = ""): string {
+  return sha256Hex(`${def.meta.name ?? fallbackName}\n${def.run.toString()}`);
+}
+
+/** Older direct/child starts hashed unnamed definitions before assigning a display name. */
+function resumedDefinitionHash(
+  def: WorkflowDefinition,
+  workflowName: string,
+  recordedBodyHash: string | undefined,
+): string {
+  if (def.meta.name === undefined) {
+    const legacy = definitionHash(def);
+    if (recordedBodyHash === legacy) return legacy;
+  }
+  return definitionHash(def, workflowName);
 }
 
 /** Task-schema lineage follows durable identity and executable semantics, never display names. */
@@ -296,6 +310,7 @@ async function resolveRegistryWorkflow(
 }
 
 export interface EngineOptions {
+  operations?: import("./operations.ts").OperationBindings;
   journal: JournalStore;
   blobs: BlobStore;
   providers: ProviderRegistry;
@@ -321,6 +336,10 @@ export interface StartOptions {
 export interface ResumeOptions {
   def?: WorkflowDefinition;
   reuse?: ReuseMode;
+  /** Automatic wakeups only: refuse terminal runs under the run lease (invalid_input, reason: run_terminal). */
+  nonterminalOnly?: boolean;
+  /** Strict requires matching recorded/current bundle and body identities. Default preserves edit-tolerant compatibility. */
+  mode?: "strict" | "edit-tolerant";
   /**
    * Bundle content hash of the script being resumed. Compared against the one the run
    * journaled to decide whether step positions still name the same call sites: it is the
@@ -374,6 +393,7 @@ interface ActiveRun {
 }
 
 export class Engine implements EngineHost {
+  readonly operations: import("./operations.ts").OperationBindings;
   readonly config: EngineConfig;
   readonly providers: ProviderRegistry;
   readonly journal: JournalStore;
@@ -384,11 +404,14 @@ export class Engine implements EngineHost {
   private readonly providerLimiters = new Map<string, Semaphore>();
   private readonly registry: WorkflowRegistry | undefined;
   private readonly active = new Map<string, ActiveRun>();
+  /** Timed-out host calls can still be running after their workflow result fails. */
+  private readonly operationDrains = new Map<string, ActiveRun>();
   /** Per-request answer serialization: `runId::requestId` → in-flight delivery. */
   private readonly answerChains = new Map<string, Promise<void>>();
   private readonly clockFn: () => number;
 
   constructor(opts: EngineOptions) {
+    this.operations = Object.freeze({ ...(opts.operations ?? {}) });
     this.journal = opts.journal;
     this.blobs = opts.blobs;
     this.providers = opts.providers;
@@ -423,7 +446,7 @@ export class Engine implements EngineHost {
     }
     const name = def.meta.name ?? "workflow";
     const workflowId = def.meta.id ?? name;
-    const bodyHash = definitionHash(def);
+    const bodyHash = definitionHash(def, name);
     // The RAW input is what gets journaled, so it must survive the JSONL round
     // trip; the schema is reapplied to it on every execution (below and on each
     // resume), so a transform's output — a Date, a class — never needs to.
@@ -456,6 +479,7 @@ export class Engine implements EngineHost {
       abort: new AbortController(),
       agentCounter: { count: 0, warned: false },
       reuse: opts.reuse ?? "content",
+      ...(opts.defHash !== undefined ? { definitionBundleHash: opts.defHash } : {}),
     };
     const runtime = new RunRuntime({
       host: this,
@@ -510,6 +534,20 @@ export class Engine implements EngineHost {
   }
 
   async resume(runId: string, opts: ResumeOptions = {}): Promise<RunHandle> {
+    if (this.operationDrains.has(runId))
+      throw new StepError(
+        "recovery_required",
+        `run ${runId}: a timed-out host operation is still draining; wait for it to stop before reconciliation`,
+      );
+    if (opts.mode !== undefined && opts.mode !== "strict" && opts.mode !== "edit-tolerant") {
+      throw new StepError("invalid_input", "resume mode must be strict or edit-tolerant");
+    }
+    if (opts.mode === "strict" && opts.reuse === "key") {
+      throw new StepError(
+        "invalid_input",
+        "strict resume requires content reuse; key reuse is edit-tolerant only",
+      );
+    }
     const existing = this.active.get(runId);
     if (existing) {
       return {
@@ -523,6 +561,39 @@ export class Engine implements EngineHost {
     if (records.length === 0) throw new Error(`run ${runId} not found`);
     const created = records.find((r) => r.ev.type === "run.created")?.ev;
     if (created?.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
+
+    // A child that inherited its ancestor's owned checkout cannot claim only its
+    // own journal and mutate that shared checkout independently. Internal parent
+    // replay uses executeChildRun; public wakeups must start at the owning root.
+    let ancestorId = created.parentRunId;
+    const ancestors = new Set<string>([runId]);
+    while (ancestorId !== undefined) {
+      if (ancestors.has(ancestorId) || ancestors.size > 64)
+        throw new StepError(
+          "recovery_required",
+          `run ${runId}: invalid ancestor chain; inspect the owning root before resuming`,
+        );
+      ancestors.add(ancestorId);
+      let ancestor: Extract<JournalEvent, { type: "run.created" }> | undefined;
+      for await (const record of this.journal.read(ancestorId)) {
+        if (record.ev.type === "run.created") ancestor = record.ev;
+        if (
+          (record.ev.type === "workspace.ready" || record.ev.type === "workspace.intent") &&
+          record.ev.workspace.path === created.cwd
+        ) {
+          throw new StepError(
+            "recovery_required",
+            `run ${runId}: this child shares workspace ownership with ${ancestorId}; resume the owning parent/root run instead`,
+          );
+        }
+      }
+      if (!ancestor)
+        throw new StepError(
+          "recovery_required",
+          `run ${runId}: ancestor ${ancestorId} is unavailable; inspect the owning root before resuming`,
+        );
+      ancestorId = ancestor.parentRunId;
+    }
 
     let def = opts.def;
     let workflowName = def?.meta.name ?? created.workflow.name;
@@ -545,6 +616,31 @@ export class Engine implements EngineHost {
       );
     }
     assertResumedWorkflowIdentity(runId, created.workflow, def);
+    if (opts.mode === "strict") {
+      if (!created.workflow.defHash || !bundleHash || !created.workflow.bodyHash) {
+        throw new StepError(
+          "recovery_required",
+          `run ${runId}: strict resume requires recorded and current executable bundle identities; inspect the workflow and use edit-tolerant mode explicitly if that is intended`,
+        );
+      }
+      if (
+        created.workflow.defHash !== bundleHash ||
+        created.workflow.bodyHash !== resumedDefinitionHash(def, workflowName, created.workflow.bodyHash)
+      ) {
+        throw new StepError(
+          "recovery_required",
+          `run ${runId}: strict resume refused a changed workflow definition; restore the original definition or inspect replay and use edit-tolerant mode explicitly`,
+          {
+            detail: {
+              recordedBundle: created.workflow.defHash,
+              currentBundle: bundleHash,
+              recordedBody: created.workflow.bodyHash,
+              currentBody: resumedDefinitionHash(def, workflowName, created.workflow.bodyHash),
+            },
+          },
+        );
+      }
+    }
     const resumeOpts: ResumeOptions = {
       ...opts,
       ...(bundleHash !== undefined ? { defHash: bundleHash } : {}),
@@ -566,9 +662,19 @@ export class Engine implements EngineHost {
     // still executing would run it twice.
     const lease = await this.claimRun(runId);
     try {
+      let resumeRecords = records;
+      if (opts.nonterminalOnly) {
+        resumeRecords = [];
+        for await (const record of this.journal.read(runId)) resumeRecords.push(record);
+        if (["complete", "failed", "cancelled"].includes(reduceState(resumeRecords).status)) {
+          throw new StepError("invalid_input", `run ${runId} is terminal; automatic resume skipped`, {
+            detail: { reason: "run_terminal" },
+          });
+        }
+      }
       return await this.resumeSetup(
         runId,
-        records,
+        resumeRecords,
         created,
         def,
         workflowName,
@@ -614,6 +720,8 @@ export class Engine implements EngineHost {
       abort: new AbortController(),
       agentCounter: { count: agentDispatches, warned: false },
       reuse: opts.reuse ?? "content",
+      resumeMode: opts.mode ?? "edit-tolerant",
+      ...(opts.defHash !== undefined ? { definitionBundleHash: opts.defHash } : {}),
       // An edited script moves every step after the edit, so a step's seq no longer
       // names the same call site the journal recorded it at. Salvage by content still
       // works — that is the point of edit-tolerant replay — but a KEYLESS step whose
@@ -621,7 +729,7 @@ export class Engine implements EngineHost {
       // and replay re-runs it instead of serving whichever entry landed at its seq.
       positionsTrusted: versionUnchanged(
         {
-          body: definitionHash(def),
+          body: resumedDefinitionHash(def, workflowName, created.workflow.bodyHash),
           ...(opts.defHash !== undefined ? { bundle: opts.defHash } : {}),
         },
         created.workflow,
@@ -1042,7 +1150,14 @@ export class Engine implements EngineHost {
     let drained = true;
     try {
       rt.setStatus("executing");
+      await prepareOwnedWorkspace(rt, def, input);
       const ctx = buildCtx(rt);
+      for (const [index, command] of workspacePreparation(rt).entries()) {
+        const [file, ...args] = command;
+        const prepared = await ctx.exec(file, [...args], { key: `$workspace:prepare:${index}` });
+        if (prepared.exitCode !== 0)
+          throw new StepError("exec_failed", `workspace preparation failed: ${file}`, { detail: prepared });
+      }
       const rawOutput = await def.run(ctx, input);
       // The body settled, but a step it stopped awaiting can still be running: still
       // spending, still writing to the repository, and still about to append. Appending
@@ -1136,11 +1251,22 @@ export class Engine implements EngineHost {
       span.end();
       // Release inside this finally (not the detached cleanup chain) so anything that
       // awaited result — a cancel, a test about to resume elsewhere — sees it free.
-      if (active.leaseTimer) clearInterval(active.leaseTimer);
+      const pendingCalls = pendingOperationCalls(rt);
+      if (pendingCalls.length > 0 && !rt.fenced) {
+        // A timeout ends the workflow wait, not the underlying host call. Keep
+        // ownership renewable without delaying the failure outcome. A later
+        // reconciler must not race an adapter that can still land its effect.
+        this.operationDrains.set(rt.runId, active);
+        void Promise.allSettled(pendingCalls).then(async () => {
+          if (active.leaseTimer) clearInterval(active.leaseTimer);
+          if (drained) await active.lease?.release().catch(() => undefined);
+          if (this.operationDrains.get(rt.runId) === active) this.operationDrains.delete(rt.runId);
+        });
+      } else if (active.leaseTimer) clearInterval(active.leaseTimer);
       // Never release ownership over still-live work (shutdown() takes the same
       // position): a step past the drain window forfeits the release and the claim
       // TTL-expires instead, so no second process can start appending under it.
-      if (drained) await active.lease?.release().catch(() => undefined);
+      if (drained && pendingCalls.length === 0) await active.lease?.release().catch(() => undefined);
       // A fenced run's projections belong to its new owner — don't clobber them.
       if (!rt.fenced) await this.snapshot(active).catch(() => undefined);
     }
@@ -1339,6 +1465,7 @@ export class Engine implements EngineHost {
     const parent = spec.parent;
     let def: WorkflowDefinition | undefined;
     let uiCatalog: CompiledUiCatalog | undefined;
+    let childBundleHash: string | undefined;
     if (spec.def !== undefined) {
       if (!isWorkflowDefinition(spec.def)) {
         throw new StepError("invalid_input", `ctx.workflow: not a workflow definition`, {
@@ -1347,12 +1474,14 @@ export class Engine implements EngineHost {
       }
       def = spec.def;
       uiCatalog = parent.uiCatalog;
+      childBundleHash = parent.shared.definitionBundleHash;
     } else {
       const resolved = this.registry
         ? await resolveRegistryWorkflow(this.registry, { name: spec.name })
         : undefined;
       def = resolved?.def;
       uiCatalog = resolved?.uiCatalog;
+      childBundleHash = resolved?.hash;
     }
     if (!def) {
       throw new StepError("invalid_input", `workflow "${spec.name}" not found in the registry`, {
@@ -1371,6 +1500,8 @@ export class Engine implements EngineHost {
       abort: parent.shared.abort,
       agentCounter: parent.shared.agentCounter,
       reuse: parent.shared.reuse,
+      resumeMode: parent.shared.resumeMode,
+      ...(childBundleHash !== undefined ? { definitionBundleHash: childBundleHash } : {}),
     };
 
     let childId = spec.childRunId;
@@ -1433,22 +1564,42 @@ export class Engine implements EngineHost {
     if (resuming) {
       for await (const rec of this.journal.read(childId)) records.push(rec);
       const created = records.find((r) => r.ev.type === "run.created")?.ev;
+      if (shared.resumeMode === "strict") {
+        if (
+          created?.type !== "run.created" ||
+          !created.workflow.bodyHash ||
+          created.workflow.bodyHash !==
+            resumedDefinitionHash(def, childWorkflowName, created.workflow.bodyHash) ||
+          (created.workflow.defHash !== undefined
+            ? created.workflow.defHash !== childBundleHash
+            : spec.def === undefined)
+        ) {
+          throw new StepError(
+            "recovery_required",
+            `child run ${childId}: strict resume cannot establish unchanged definition identity`,
+          );
+        }
+      }
       if (created?.type === "run.created") rawInput = created.input === undefined ? {} : created.input;
       // Re-entering a child is a resume, and it needs the same guard the root got. A
       // child that defaulted to trusting positions served the deleted call site's answer
       // to the one that slid into its seq — the exact failure the version stamp exists to
       // stop, reachable through any `ctx.workflow` whose definition changed.
       //
-      // INHERITED, not just compared. A child has only its own body hash to go on: no
-      // host resolved it, so there is no bundle stamp at this level, and the body of a
-      // child that delegates to an imported helper reads identical however that helper is
-      // edited. The root's resume DID see the bundle move — and it is the same bundle,
-      // holding this child's call sites too. Starting a child at `true` there would hand
-      // back the disagreement the root just established.
+      // Parent identity remains a floor for inline child definitions. Named children
+      // also have their registry bundle identity; strict mode checks it above. The
+      // inherited positional floor prevents unchanged child body text from hiding an
+      // edited helper in the parent's bundle during edit-tolerant replay.
       shared.positionsTrusted =
         parent.shared.positionsTrusted !== false &&
         versionUnchanged(
-          { body: definitionHash(def) },
+          {
+            body: resumedDefinitionHash(
+              def,
+              childWorkflowName,
+              created?.type === "run.created" ? created.workflow.bodyHash : undefined,
+            ),
+          },
           created?.type === "run.created" ? created.workflow : {},
         );
       replay = ReplayIndex.fromRecords(records);
@@ -1501,7 +1652,7 @@ export class Engine implements EngineHost {
     }
     const input = check.value;
 
-    const bodyHash = definitionHash(def);
+    const bodyHash = definitionHash(def, childWorkflowName);
     const taskSchemaBinding = await this.taskTracker?.prepare?.(
       { id: childWorkflowId, name: childWorkflowName },
       def.meta.tasks?.extensions,
@@ -1538,13 +1689,14 @@ export class Engine implements EngineHost {
           type: "run.created",
           runId: childId,
           // The child stamps its own version for the same reason the root does: it has
-          // its own journal, its own replay, and its own call sites to move. No bundle
-          // hash exists here — a child definition is a value in the parent's module, not
-          // something a host resolved and hashed — so the body hash is the whole check.
+          // its own journal, its own replay, and its own call sites to move. Inline
+          // children inherit the parent's bundle stamp; named children use their
+          // registry bundle stamp when the host supplies one.
           workflow: {
             id: def.meta.id ?? def.meta.name ?? spec.name,
             name: def.meta.name ?? spec.name,
             bodyHash,
+            ...(childBundleHash !== undefined ? { defHash: childBundleHash } : {}),
             ...(this.taskTracker ? { taskContextVersion: TASK_CONTEXT_VERSION } : {}),
             ...(taskSchemaBinding && def.meta.tasks ? { taskSchemaBinding } : {}),
             ...(def.meta.tasks ? { taskSchemaVersion: def.meta.tasks.schemaVersion ?? 1 } : {}),
@@ -1704,27 +1856,34 @@ export class Engine implements EngineHost {
     opts: { channel?: string; reviewEdit?: { content: string; beforeSha256: string } } = {},
   ): Promise<void> {
     const active = this.active.get(runId);
-    if (active) {
-      const wait = active.runtime.pendingWait(requestId);
-      if (!wait) {
-        // The request may live in a DESCENDANT whose question this handle
-        // surfaced (suspensionOf aggregates children): route to the run that
-        // actually owns it, so callers can answer through the id they polled.
-        const owner = this.requestOwner(active, requestId);
-        if (owner !== undefined) return this.answer(owner, requestId, answer, opts);
-        // Distinguish "already answered" (a serialized concurrent caller lost
-        // the race) from an id nobody ever requested.
-        let standing = false;
-        let superseded = false;
-        for (const r of active.records) {
-          if (r.ev.type === "human.answered" && r.ev.id === requestId) standing = true;
-          else if (r.ev.type === "human.rejected" && r.ev.id === requestId) standing = false;
-          else if (r.ev.type === "human.superseded" && r.ev.id === requestId) superseded = true;
-        }
-        if (superseded) throw new Error(`run ${runId}: request ${requestId} was superseded`);
-        if (standing) throw new Error(`run ${runId}: request ${requestId} is already answered`);
+    const wait = active?.runtime.pendingWait(requestId);
+    if (active && !wait) {
+      // The request may live in a DESCENDANT whose question this handle
+      // surfaced (suspensionOf aggregates children): route to the run that
+      // actually owns it, so callers can answer through the id they polled.
+      const owner = this.requestOwner(active, requestId);
+      if (owner !== undefined) return this.answer(owner, requestId, answer, opts);
+      // Distinguish "already answered" (a serialized concurrent caller lost
+      // the race) from an id nobody ever requested.
+      let standing = false;
+      let superseded = false;
+      for (const r of active.records) {
+        if (r.ev.type === "human.answered" && r.ev.id === requestId) standing = true;
+        else if (r.ev.type === "human.rejected" && r.ev.id === requestId) standing = false;
+        else if (r.ev.type === "human.superseded" && r.ev.id === requestId) superseded = true;
+      }
+      if (superseded) throw new Error(`run ${runId}: request ${requestId} was superseded`);
+      if (standing) throw new Error(`run ${runId}: request ${requestId} is already answered`);
+      if (
+        !active.records.some((record) => record.ev.type === "human.requested" && record.ev.id === requestId)
+      ) {
         throw new Error(`run ${runId}: no pending request ${requestId}`);
       }
+      // Replay may still be preparing its workspace before registering this
+      // durable request. Use the same conditional journal answer as another
+      // host; the external-event tail buffers it until the waiter is ready.
+    }
+    if (active && wait) {
       const issues = structuralCheck(wait.request.schema, answer);
       if (issues.length > 0) {
         throw new StepError(
@@ -1854,6 +2013,10 @@ export class Engine implements EngineHost {
         );
       }
       const reviewEdit = await this.prepareReviewEdit(request, opts.reviewEdit);
+      const created = records.find((record) => record.ev.type === "run.created")?.ev;
+      if (created?.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
+      const reviewCwd =
+        reviewEdit === undefined ? created.cwd : ((await verifiedWorkspacePath(records)) ?? created.cwd);
       const events: JournalEvent[] = [
         {
           type: "human.answered",
@@ -1867,15 +2030,11 @@ export class Engine implements EngineHost {
       if (!this.journal.appendIf) {
         // No conditional append: accept the race (single-process hosts don't race themselves).
         await this.journal.append(runId, events);
-        const created = records.find((record) => record.ev.type === "run.created")?.ev;
-        if (created?.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
-        await applyReviewFileEdit(created.cwd, request.reviewSubject, reviewEdit, this.blobs);
+        await applyReviewFileEdit(reviewCwd, request.reviewSubject, reviewEdit, this.blobs);
         return;
       }
       if (await this.journal.appendIf(runId, records.length, events)) {
-        const created = records.find((record) => record.ev.type === "run.created")?.ev;
-        if (created?.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
-        await applyReviewFileEdit(created.cwd, request.reviewSubject, reviewEdit, this.blobs);
+        await applyReviewFileEdit(reviewCwd, request.reviewSubject, reviewEdit, this.blobs);
         return;
       }
     }
@@ -2055,6 +2214,8 @@ export class Engine implements EngineHost {
    * window forfeits the release and its claim TTL-expires instead.
    */
   async shutdown(): Promise<void> {
+    for (const draining of this.operationDrains.values())
+      if (draining.leaseTimer) clearInterval(draining.leaseTimer);
     const actives = [...this.active.values()];
     this.active.clear();
     for (const active of actives) {
@@ -2079,8 +2240,12 @@ export class Engine implements EngineHost {
       await active.runtime.flushAppends();
       // Releases are owner-checked, so drive()'s own release (already run by the
       // time result settles) and this one can never evict the run's next claimant.
-      await active.lease?.release().catch(() => undefined);
+      if (pendingOperationCalls(active.runtime).length === 0)
+        await active.lease?.release().catch(() => undefined);
     }
+    // A drive may have moved into operationDrains while shutdown was draining it.
+    for (const draining of this.operationDrains.values())
+      if (draining.leaseTimer) clearInterval(draining.leaseTimer);
   }
 
   // -- inspection -----------------------------------------------------------
@@ -2191,12 +2356,14 @@ export class Engine implements EngineHost {
     if (created?.type !== "run.created") throw new Error(`run ${runId}: missing run.created`);
     let def = opts.def;
     let workflowName = def?.meta.name ?? created.workflow.name;
+    let bundleHash = opts.def !== undefined ? opts.defHash : undefined;
     let uiCatalog = opts.def !== undefined ? opts.uiCatalog : undefined;
     if (!def && this.registry) {
       const resolved = await resolveRegistryWorkflow(this.registry, created.workflow);
       if (resolved) {
         def = resolved.def;
         workflowName = resolved.name;
+        bundleHash = resolved.hash;
         uiCatalog = resolved.uiCatalog;
       }
     }
@@ -2224,6 +2391,13 @@ export class Engine implements EngineHost {
         abort: new AbortController(),
         agentCounter: { count: 0, warned: false },
         reuse: opts.reuse ?? "content",
+        positionsTrusted: versionUnchanged(
+          {
+            body: resumedDefinitionHash(def, workflowName, created.workflow.bodyHash),
+            ...(bundleHash !== undefined ? { bundle: bundleHash } : {}),
+          },
+          created.workflow,
+        ),
       },
       replay: ReplayIndex.fromRecords(records),
       dry: true,
@@ -2242,7 +2416,12 @@ export class Engine implements EngineHost {
     }
     let completed = false;
     try {
+      await prepareOwnedWorkspace(runtime, def, inputCheck.value);
       const ctx = buildCtx(runtime);
+      for (const [index, command] of workspacePreparation(runtime).entries()) {
+        const [file, ...args] = command;
+        await ctx.exec(file, [...args], { key: `$workspace:prepare:${index}` });
+      }
       await def.run(ctx, inputCheck.value);
       completed = true;
     } catch (err) {
@@ -2264,3 +2443,5 @@ export class Engine implements EngineHost {
     };
   }
 }
+
+import { prepareOwnedWorkspace, verifiedWorkspacePath, workspacePreparation } from "./workspace.ts";

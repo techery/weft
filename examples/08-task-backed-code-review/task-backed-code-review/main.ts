@@ -112,7 +112,8 @@ export default defineWorkflow(
 
     ctx.phase("Review");
     const reviewResults = await ctx.parallel(
-      reviewed.map((file) =>
+      reviewed,
+      (file) =>
         ctx.agent(
           [
             `Review ${file} for real correctness, security, performance, accessibility, or test defects.`,
@@ -134,7 +135,7 @@ export default defineWorkflow(
             },
           },
         ),
-      ),
+      { concurrency: 4 },
     );
     const reviewFailures = reviewResults.filter((result) => !result.ok);
     if (reviewFailures.length > 0) {
@@ -174,7 +175,8 @@ export default defineWorkflow(
 
     ctx.phase("Refute");
     const verdictResults = await ctx.parallel(
-      findings.map((finding) =>
+      findings,
+      (finding) =>
         ctx.agent(
           [
             `Try to refute this claim about ${finding.file}:${finding.line}.`,
@@ -189,7 +191,7 @@ export default defineWorkflow(
             tasks: false,
           },
         ),
-      ),
+      { concurrency: 4 },
     );
     const verdictFailures = verdictResults.filter((result) => !result.ok);
     if (verdictFailures.length > 0) {

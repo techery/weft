@@ -4,15 +4,17 @@
  * imports, reports schema warnings, and runs a best-effort TypeScript typecheck.
  *
  * Findings print as `file:line:col  rule  message` with the fix-it underneath, and any
- * finding at all fails the command. The `tsc --noEmit` pass that catches a missing
+ * gate/lint finding fails the command; authoring migration hints are advisory. The `tsc --noEmit` pass that catches a missing
  * `schema:` runs after, best effort: a repo without TypeScript installed still gets a gate.
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { promisify } from "node:util";
 import { toWireSchema } from "@techery/weft-core";
+import { workflowMigrationWarnings } from "@techery/weft-gate";
 import { type GateDiagnostic, GateError, loadWorkflow } from "@techery/weft-host";
 import { Command } from "commander";
 import pc from "picocolors";
@@ -25,6 +27,7 @@ const run = promisify(execFile);
 interface CheckOptions {
   /** `--no-tsc` turns off the type-check pass. */
   tsc?: boolean;
+  strict?: boolean;
 }
 
 export function checkCommand(io: CliIo): Command {
@@ -32,15 +35,27 @@ export function checkCommand(io: CliIo): Command {
     .description("lint, gate, bundle, schema-check, and type-check workflows")
     .argument("[name]", "check one workflow instead of all of them")
     .option("--no-tsc", "skip the best-effort tsc --noEmit pass")
+    .option("--strict", "require workflows and a completed typecheck; fail on unavailable compiler or SDK")
     .action(async (name: string | undefined, opts: CheckOptions, cmd: Command) => {
+      if (opts.strict && opts.tsc === false) throw new Error("--strict cannot be combined with --no-tsc");
       const weft = await openWeft(cmd);
       try {
         const dirs = workflowDirs(weft);
         const selection = await filesToCheck(weft.registry, dirs, name);
         const { files } = selection;
+        for (const file of new Set([...files, ...selection.issues.map((issue) => issue.file)])) {
+          const source = await readFile(file, "utf8").catch(() => undefined);
+          if (source !== undefined) {
+            for (const warning of workflowMigrationWarnings(source, file)) {
+              io.out(pc.yellow("warning: authoring migration (advisory)"));
+              say(io, ...renderDiagnostic(warning));
+            }
+          }
+        }
         if (files.length === 0) {
           if (selection.issues.length === 0) {
             io.out(pc.dim(`nothing to check in ${dirs.join(", ")} — scaffold one with: weft new <name>`));
+            if (opts.strict) process.exitCode = 1;
           }
           for (const issue of selection.issues) renderIssue(io, issue);
           const diagnostics = selection.issues.flatMap((issue) => issue.diagnostics);
@@ -91,10 +106,17 @@ export function checkCommand(io: CliIo): Command {
           return;
         }
         if (opts.tsc !== false) {
-          const result = await typecheck(files, weft.cwd);
+          const result = await typecheck(files, weft.cwd, opts.strict === true);
           say(io, ...result.lines);
           if (result.failed) process.exitCode = 1;
+        } else {
+          io.out(pc.dim("tsc: skipped by --no-tsc; validation is incomplete"));
         }
+        io.out(
+          pc.dim(
+            "check validates workflow source; run weft test for behavior and integration tests for real providers and delivery",
+          ),
+        );
       } finally {
         await weft.close();
       }
@@ -146,7 +168,7 @@ function renderDiagnostic(d: GateDiagnostic): string[] {
 
 interface NamedRegistry {
   listWithIssues(): Promise<{
-    entries: Array<{ name: string; file: string }>;
+    entries: Array<{ id?: string; name: string; file: string }>;
     issues: Array<{ file: string; error: string; diagnostics: GateDiagnostic[] }>;
   }>;
 }
@@ -169,7 +191,9 @@ async function filesToCheck(
     };
   }
 
-  const hit = inspection.entries.find((entry) => entry.name === name);
+  const matches = inspection.entries.filter((entry) => entry.name === name || entry.id === name);
+  if (matches.length > 1) throw new Error(`ambiguous workflow identity ${JSON.stringify(name)}`);
+  const hit = matches[0];
   if (hit) return { files: [hit.file], lintTargets: [path.dirname(hit.file)], issues: [] };
   const packageDirs = dirs.map((dir) => path.join(dir, name));
   const directIssues = inspection.issues.filter((issue) =>
@@ -215,12 +239,13 @@ function renderIssue(io: CliIo, issue: { file: string; error: string; diagnostic
 async function typecheck(
   files: readonly string[],
   cwd: string,
+  strict: boolean,
 ): Promise<{ lines: string[]; failed: boolean }> {
   const tsc = resolveTsc();
   if (!tsc) {
     return {
       lines: [pc.dim("tsc: typescript is not installed here — skipping the type-check pass")],
-      failed: false,
+      failed: strict,
     };
   }
   const args = [
@@ -256,7 +281,7 @@ async function typecheck(
     if (sdkMissing && actionable.length === 0) {
       return {
         lines: [pc.dim("tsc: @techery/weft-sdk is not installed here — skipping the type-check pass")],
-        failed: false,
+        failed: strict,
       };
     }
     return {

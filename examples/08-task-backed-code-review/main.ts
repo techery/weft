@@ -72,6 +72,8 @@ try {
 
   const result = await runWorkflow(workflow, {
     cwd,
+    // Exercise the real scratch repository above; providers and human input stay mocked.
+    fixtureMode: "integration",
     input: { maxFiles: 1, reviewWith: "codex", refuteWith: "claude" },
     providers: { codex: review, claude: refute },
     answers: () => ({ record: [fingerprint], comment: "Keep this regression visible." }),

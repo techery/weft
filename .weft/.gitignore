@@ -4,3 +4,6 @@ runs/
 blobs/
 tasks/
 index.sqlite
+# Weft owned workspaces and delivery recovery state
+workspaces/
+github-delivery/

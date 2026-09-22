@@ -1,3 +1,4 @@
+import type { WorkspaceOptions } from "./delivery.ts";
 import type { AnySchema, InferIn, InferOut } from "./schema.ts";
 import type { Ctx, Effort, ProviderId } from "./types.ts";
 
@@ -58,6 +59,8 @@ export interface WorkflowMeta<
    * schema lets a workflow add typed context without weakening those invariants.
    */
   tasks?: Tasks;
+  /** Opt into a retained run-owned worktree. Existing workflows keep their caller cwd. */
+  workspace?: WorkspaceOptions | ((input: InferOut<InS>) => WorkspaceOptions);
 }
 
 export type InferWorkflowTaskExtensionInput<Tasks> = Tasks extends {
@@ -86,6 +89,7 @@ export interface WorkflowDefinition<
     output: AnySchema;
     defaults?: { provider?: ProviderId; model?: string; effort?: Effort };
     tasks?: WorkflowTaskSchemaConfig;
+    workspace?: WorkspaceOptions | ((input: any) => WorkspaceOptions);
   };
   readonly run: (ctx: Ctx<any>, input: In) => Promise<Out>;
   /** Type-only carrier for the raw value accepted by the input schema. */

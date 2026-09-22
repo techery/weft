@@ -152,6 +152,7 @@ const resultViewNode = defineResultView({
 });
 
 const taskContractNode = defineTaskContract({
+  semanticRevision: "v1",
   schema: ExampleExtensions,
 });
 

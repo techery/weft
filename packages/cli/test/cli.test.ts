@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,7 @@ import { selectWorkflows, weftLintRunner } from "../src/commands/lint.ts";
 import {
   bunRunnerFor,
   DEFAULT_WORKFLOW_TEST_PATTERN,
+  discoverTests,
   nodeRunnerFor,
   runnerFor,
   selectRunner,
@@ -261,6 +262,49 @@ describe("weft run", () => {
 });
 
 describe("human in the loop", () => {
+  it.each(["registry", "path"])(
+    "retained resume survives removed %s source without opting into edited code",
+    async (kind) => {
+      const root = await tempRoot();
+      const source = await write(root, ".weft/workflows/ship/main.ts", SHIP);
+      await cli("--cwd", root, "--mock", "run", kind === "path" ? source : "ship");
+      const [runId = ""] = await runIds(root);
+      await cli("--cwd", root, "--mock", "answer", runId, "h1", '{"approved":true}');
+      await rm(source);
+      await expect(
+        cli("--cwd", root, "--mock", "resume", runId, "--mode", "retained", "--reuse", "key"),
+      ).rejects.toThrow(/key reuse is edit-tolerant only/);
+      const resumed = await cli("--cwd", root, "--mock", "resume", runId, "--mode", "retained");
+      expect(resumed.text).toContain("complete");
+      await rm(path.join(root, ".weft/runs", runId, "retained-workflow.json"));
+      await expect(cli("--cwd", root, "--mock", "resume", runId, "--mode", "retained")).rejects.toThrow(
+        /no retained executable source/,
+      );
+    },
+  );
+
+  it("supports strict same-definition resume and rejects changed bundles with an explicit remedy", async () => {
+    const root = await tempRoot();
+    await write(root, ".weft/workflows/ship/main.ts", SHIP);
+    await cli("--cwd", root, "--mock", "run", "ship");
+    const [runId = ""] = await runIds(root);
+    await cli("--cwd", root, "--mock", "answer", runId, "h1", '{"approved":true}');
+    await write(
+      root,
+      ".weft/workflows/ship/main.ts",
+      SHIP.replace("ship the release", "ship the revised release"),
+    );
+    await expect(cli("--cwd", root, "--mock", "resume", runId, "--mode", "strict")).rejects.toThrow(
+      /strict resume refused a changed workflow/,
+    );
+    await expect(cli("--cwd", root, "--mock", "resume", runId, "--mode", "unknown")).rejects.toThrow(
+      /--mode must be strict, retained, or edit-tolerant/,
+    );
+    await write(root, ".weft/workflows/ship/main.ts", SHIP);
+    const resumed = await cli("--cwd", root, "--mock", "resume", runId, "--mode", "strict");
+    expect(resumed.text).toContain("complete");
+  });
+
   it("suspends, prints the answer command, and completes over answer + resume", async () => {
     const root = await tempRoot();
     await write(root, ".weft/workflows/ship/main.ts", SHIP);
@@ -384,6 +428,22 @@ describe("--mock", () => {
 });
 
 describe("weft replay --dry", () => {
+  it("previews a path-ref workflow against its current source with no journal changes", async () => {
+    const root = await tempRoot();
+    const file = await write(root, "flows/greet.ts", GREET);
+    await cli("--cwd", root, "--mock", "run", file);
+    const [runId = ""] = await runIds(root);
+    const before = await readFile(path.join(root, ".weft/runs", runId, "journal.jsonl"), "utf8");
+    expect((await cli("--cwd", root, "--mock", "replay", runId, "--dry")).text).toContain(
+      "replays to completion",
+    );
+    await write(root, "flows/greet.ts", GREET.replace("echo hello", "echo goodbye"));
+    const changed = await cli("--cwd", root, "--mock", "replay", runId, "--dry", "--reuse", "content");
+    expect(changed.text).toMatch(/diverged\s+1/);
+    expect(changed.text).toContain("greet");
+    expect(await readFile(path.join(root, ".weft/runs", runId, "journal.jsonl"), "utf8")).toBe(before);
+  });
+
   it("reports what a resume would reuse without touching the journal", async () => {
     const root = await tempRoot();
     await write(root, ".weft/workflows/audit/main.ts", AUDIT);
@@ -421,6 +481,44 @@ describe("weft diff", () => {
 });
 
 describe("weft check", () => {
+  it("reports advisory composition choices without failing otherwise valid source", async () => {
+    const root = await tempRoot();
+    await write(
+      root,
+      ".weft/workflows/audit/main.ts",
+      AUDIT.replace("at: await ctx.now()", "at: ctx.successes(await ctx.parallel([ctx.now()]))[0] ?? 0"),
+    );
+    const result = await cli("--cwd", root, "--mock", "check", "audit", "--no-tsc");
+    expect(result.exitCode).toBeUndefined();
+    expect(result.text).toContain("migration-optional-lanes");
+    expect(result.text).toContain("migration-eager-parallel");
+    expect(result.text).toContain("advisory");
+  });
+
+  it("prints a runnable-SDK remedy while preserving the preview import gate failure", async () => {
+    const root = await tempRoot();
+    await write(
+      root,
+      ".weft/workflows/audit/main.ts",
+      AUDIT.replace("@techery/weft-sdk", "@techery/weft-dsl-proto"),
+    );
+    const result = await cli("--cwd", root, "--mock", "check", "audit", "--no-tsc");
+    expect(result.exitCode).toBe(1);
+    expect(result.text).toContain("migration-preview-import");
+    expect(result.text).toContain("Use @techery/weft-sdk for runnable workflows");
+  });
+  it("strict mode rejects empty registries and contradictory skip flags", async () => {
+    const root = await tempRoot();
+    expect((await cli("--cwd", root, "--mock", "check", "--strict")).exitCode).toBe(1);
+    await expect(cli("--cwd", root, "check", "--strict", "--no-tsc")).rejects.toThrow(/cannot be combined/);
+  });
+  it("strict mode fails when the workflow SDK is unavailable to typechecking", async () => {
+    const root = await tempRoot();
+    await write(root, ".weft/workflows/audit/main.ts", AUDIT);
+    const result = await cli("--cwd", root, "--mock", "check", "audit", "--strict");
+    expect(result.exitCode).toBe(1);
+    expect(result.text).toContain("@techery/weft-sdk is not installed here");
+  });
   it("flags a banned global with its fix-it and fails", async () => {
     const root = await tempRoot();
     await write(root, ".weft/workflows/bad/main.ts", BANNED);
@@ -585,12 +683,9 @@ describe("weft skill", () => {
 
   it("documents every public Ctx surface derived from the SDK", async () => {
     const printed = await cli("--cwd", await tempRoot(), "skill");
-    const prototypeBlock = boundedSection(
-      printed.text,
-      "<!-- weft-dsl-proto-reference:start -->",
-      "<!-- weft-dsl-proto-reference:end -->",
-    );
-    const sdkSkill = printed.text.replace(prototypeBlock, "");
+    const sdkSkill = printed.text;
+    expect(sdkSkill).not.toContain("<!-- weft-dsl-proto-reference:start -->");
+    expect(sdkSkill).not.toContain("ctx.agent(planner, issue");
     const { stdout } = await run(process.execPath, ["scripts/check-example-coverage.mjs", "--list"], {
       cwd: process.cwd(),
     });
@@ -602,7 +697,7 @@ describe("weft skill", () => {
   });
 
   it("documents every public DSL prototype context surface and authoring value", async () => {
-    const printed = await cli("--cwd", await tempRoot(), "skill");
+    const printed = await cli("--cwd", await tempRoot(), "skill", "--preview");
     const prototypeBlock = boundedSection(
       printed.text,
       "<!-- weft-dsl-proto-reference:start -->",
@@ -624,7 +719,7 @@ describe("weft skill", () => {
   });
 
   it("separates the runnable SDK from the declaration-only DSL prototype", async () => {
-    const printed = await cli("--cwd", await tempRoot(), "skill");
+    const printed = await cli("--cwd", await tempRoot(), "skill", "--preview");
     const prototypeBlock = boundedSection(
       printed.text,
       "<!-- weft-dsl-proto-reference:start -->",
@@ -644,15 +739,14 @@ describe("weft skill", () => {
     expect(printed.text).toContain("provider output should contain new remote facts");
     expect(printed.text).toContain("defineProcedure");
     expect(printed.text).toContain("ctx.procedure(redBaseline");
-    expect(printed.text).toContain("replay returns the recorded result instead of re-entering");
+    expect(printed.text).toContain("Resume always re-enters its body");
     expect(printed.text).toContain("that requirement is contravariant");
     expect(printed.text).toContain("A procedure is not a child workflow");
     expect(printed.text).toContain("future host performs those comparisons internally");
     expect(printed.text).toContain("A `subject` is simply the thing");
     expect(printed.text).toContain("const planner = defineAgent");
-    expect(printed.text).toContain(
-      "no author-maintained task-contract version, revision, or migration chain",
-    );
+    expect(printed.text).toContain("persistent cross-run task lifetime");
+    expect(printed.text).toContain('semanticRevision: "tasks-v1"');
     expect(printed.text).toContain("ctx.agent.detailed");
     expect(printed.text).toContain('from "@techery/weft-sdk"');
     expect(printed.text).toContain("validated value directly");
@@ -712,7 +806,7 @@ describe("weft skill", () => {
       "`taskSeeds`",
       "actionable TypeScript diagnostics fail",
       "main.ts",
-      "not published to npm",
+      "does not assert a registry publication status",
     ]) {
       expect(printed.text).toContain(contract);
     }
@@ -773,16 +867,159 @@ describe("weft skill", () => {
     expect(printed.text).toContain('tasks: { mode: "write" }');
     expect(printed.text).toContain('tasks: { mode: "read", statuses: ["blocked"] }');
     expect(printed.text).toContain('meta.tasks.agentAccess: "write"');
-    expect(printed.text).toContain("Side-effect fixture tables are interceptors, not a host sandbox");
-    expect(printed.text).toContain("falls through to the real host implementation");
+    expect(printed.text).toContain('fixtureMode: "strict"');
+    expect(printed.text).toContain("fails before dispatch");
+    expect(printed.text).toContain('fixtureMode: "integration"');
     expect(printed.text).toContain("CompletenessGapsSchema");
     expect(printed.text).toContain("`loopUntilDry` has no");
     expect(printed.text).toContain("result-schema export");
     expect(printed.text).not.toContain("Each also exports a schema builder");
   });
+
+  it("derives its machine-readable command schema from the parser", async () => {
+    const root = await tempRoot();
+    const printed = await cli("--cwd", root, "skill", "--commands-json");
+    const schema = JSON.parse(printed.text);
+    expect(schema.name).toBe("weft");
+    expect(schema.commands.map((command: { name: string }) => command.name)).toEqual(
+      buildProgram().commands.map((command) => command.name()),
+    );
+    expect(
+      schema.commands.find((command: { name: string }) => command.name === "test").options,
+    ).toContainEqual(expect.objectContaining({ flags: "--allow-empty" }));
+    expect(await readdir(root)).toEqual([]);
+  });
 });
 
 describe("weft test", () => {
+  it("selects a nested example package when its collection also has a main.ts runner", async () => {
+    const root = await tempRoot();
+    await write(root, "examples/collection/main.ts", 'import "./audit/tests/behavior.test.js";');
+    await write(root, "examples/collection/audit/main.ts", AUDIT);
+    await mkdir(path.join(root, "examples/collection/audit/lib"));
+    await write(root, "examples/collection/audit/CHANGELOG.md", "# Test workflow changelog\n");
+    await write(
+      root,
+      "examples/collection/audit/tests/behavior.test.js",
+      'import test from "node:test"; test("behavior", () => {});',
+    );
+    const result = await cli(
+      "--cwd",
+      root,
+      "--mock",
+      "--extra-workflow-dir",
+      "examples/collection",
+      "test",
+      "audit",
+    );
+    expect(result.exitCode).toBeUndefined();
+    expect(result.text).toContain("discovered 1 workflows, 1 test files");
+  });
+
+  it("finds tests by registry name and stable id across extra roots", async () => {
+    const root = await tempRoot();
+    await write(
+      root,
+      "examples/one/audit/main.ts",
+      AUDIT.replace("description:", 'id: "stable.audit", description:'),
+    );
+    await write(
+      root,
+      "examples/one/audit/tests/behavior.test.js",
+      'import test from "node:test"; test("behavior", () => {});\n',
+    );
+    for (const selection of [[], ["audit"], ["stable.audit"]]) {
+      const result = await cli(
+        "--cwd",
+        root,
+        "--mock",
+        "--extra-workflow-dir",
+        "examples/one",
+        "test",
+        ...selection,
+      );
+      expect(result.exitCode).toBeUndefined();
+      expect(result.text).toContain("discovered 1 workflows, 1 test files");
+      expect(result.text).toContain("behavior.test.js");
+    }
+  });
+
+  it("fails an unintended empty registry, package, or glob selection", async () => {
+    const root = await tempRoot();
+    await expect(cli("--cwd", root, "--mock", "test")).rejects.toThrow(/no test files selected/);
+    expect((await cli("--cwd", root, "--mock", "test", "--allow-empty")).exitCode).toBeUndefined();
+    await write(root, ".weft/workflows/audit/main.ts", AUDIT);
+    await expect(cli("--cwd", root, "--mock", "test", "audit")).rejects.toThrow(/no test files selected/);
+    await expect(cli("--cwd", root, "--mock", "test", "missing/**/*.test.ts")).rejects.toThrow(
+      /no test files selected/,
+    );
+  });
+
+  it("does not hide registry loading failures behind successful test discovery", async () => {
+    const root = await tempRoot();
+    const registry = {
+      listWithIssues: async () => ({
+        entries: [],
+        issues: [{ file: "broken/main.ts", error: "invalid workflow" }],
+      }),
+      loadIdentity: async () => ({ file: "unused" }),
+    };
+    await expect(discoverTests(registry, root)).rejects.toThrow(
+      /workflow discovery failed.*\nbroken\/main.ts: invalid workflow/,
+    );
+  });
+
+  it("executes all freshly scaffolded behavior tests with strict fixtures", async () => {
+    const root = await tempRoot();
+    await write(root, "package.json", '{"type":"module"}\n');
+    await symlink(path.join(process.cwd(), "node_modules"), path.join(root, "node_modules"), "dir");
+    for (const template of ["simple", "review", "task"]) {
+      await cli("--cwd", root, "--mock", "new", template, "--template", template);
+    }
+    const tested = await cli("--cwd", root, "--mock", "test");
+    expect(tested.text).toContain("discovered 3 workflows, 3 test files");
+    expect(tested.exitCode).toBeUndefined();
+  });
+
+  it("executes the README onboarding workflow and its exact Node assertion snippet", async () => {
+    const root = await tempRoot();
+    await write(root, "package.json", '{"type":"module"}\n');
+    await symlink(path.join(process.cwd(), "node_modules"), path.join(root, "node_modules"), "dir");
+    const readme = await readFile(path.join(process.cwd(), "README.md"), "utf8");
+    const snippets = [...readme.matchAll(/```ts\n([\s\S]*?)\n```/g)].map((match) => match[1]!);
+    const main = snippets.find((snippet) => snippet.includes('id: "review"'))!;
+    const schemas = snippets.find((snippet) => snippet.includes("export const Finding ="))!;
+    const test = snippets.find((snippet) => snippet.includes('test("keeps only findings'))!;
+    expect(main).toBeDefined();
+    expect(schemas).toBeDefined();
+    expect(test).toBeDefined();
+    await write(root, ".weft/workflows/review/main.ts", main);
+    await write(root, ".weft/workflows/review/lib/schemas.ts", schemas);
+    await write(root, "test/onboarding.test.ts", test);
+    const result = await cli("--cwd", root, "--mock", "test", "test/onboarding.test.ts", "--runner", "node");
+    expect(result.exitCode).toBeUndefined();
+    await run(
+      process.execPath,
+      [
+        path.join(process.cwd(), "node_modules/typescript/bin/tsc"),
+        "--noEmit",
+        "--strict",
+        "--target",
+        "es2023",
+        "--module",
+        "nodenext",
+        "--jsx",
+        "react-jsx",
+        "--allowImportingTsExtensions",
+        "--skipLibCheck",
+        "test/onboarding.test.ts",
+      ],
+      { cwd: root },
+    ).catch((error: { stdout?: string; stderr?: string; message: string }) => {
+      throw new Error(`${error.message}\n${error.stdout ?? ""}${error.stderr ?? ""}`);
+    });
+  });
+
   it("defaults to tests owned by workflow packages", () => {
     expect(DEFAULT_WORKFLOW_TEST_PATTERN).toBe(".weft/workflows/*/tests/**/*.test.ts");
   });

@@ -8,6 +8,7 @@
  */
 import type {
   ArtifactEntry,
+  AttentionResponse,
   ConfigResponse,
   Meta,
   PatchResponse,
@@ -96,6 +97,7 @@ export const api = {
     request<RunDetail>(`/api/runs/${encodeURIComponent(runId)}${opts.detail ? "?detail=1" : ""}`),
 
   pending: () => request<PendingResponse>("/api/pending"),
+  attention: () => request<AttentionResponse>("/api/attention"),
 
   workflows: () => request<WorkflowRow[]>("/api/workflows"),
   workflowIssues: () => request<WorkflowIssue[]>("/api/workflows/issues"),

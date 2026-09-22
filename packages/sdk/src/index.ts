@@ -34,6 +34,7 @@ export {
   isWorkflowId,
   WORKFLOW_ID_PATTERN,
 } from "./define.ts";
+export * from "./delivery.ts";
 export type { Duration } from "./duration.ts";
 export { formatDuration, parseDuration } from "./duration.ts";
 export type { SerializedStepError, StepErrorCode, StepRef } from "./errors.ts";
@@ -43,6 +44,8 @@ export {
   isCancellation,
   StepError,
 } from "./errors.ts";
+export type { ProcedureDefinition, ProcedureFn, ProcedureOptions } from "./procedure.ts";
+export { defineProcedure } from "./procedure.ts";
 export type {
   AnySchema,
   InferIn,
@@ -120,9 +123,12 @@ export type {
   HumanTimeoutPolicy,
   IntegrateOptions,
   IntegrationLedger,
+  KeyedParallelOptions,
   NoteInput,
   ParallelEagerOptions,
   ParallelFn,
+  ParallelItems,
+  ParallelLaneContext,
   ParallelOptions,
   ParallelTask,
   ParallelThunk,
@@ -134,6 +140,7 @@ export type {
   PromptSection,
   PromptTemplate,
   ProviderId,
+  ProviderProgress,
   ProviderRequirements,
   RecipeDefinition,
   Risk,

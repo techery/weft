@@ -148,6 +148,8 @@ export interface HumanRejectedEvent {
 }
 
 export type JournalEvent =
+  | import("./workspace.ts").WorkspaceEvent
+  | import("./operations.ts").OperationEvent
   // run lifecycle
   | {
       type: "run.created";
@@ -179,6 +181,20 @@ export type JournalEvent =
   | { type: "run.completed"; output: unknown }
   | { type: "run.failed"; error: SerializedStepError }
   | { type: "run.cancelled" }
+  | { type: "resume.blocked"; reason: string; source: "deadline-scheduler" }
+  | { type: "step.progress"; seq: number; progress: import("@techery/weft-sdk").ProviderProgress }
+  // Procedures trace transparent bodies; their output never replaces leaf replay.
+  | {
+      type: "procedure.started";
+      key: string;
+      name: string;
+      revision: string;
+      definitionDigest: string;
+      inputDigest: string;
+      requires: readonly string[];
+    }
+  | { type: "procedure.completed"; key: string; outputDigest: string; durationMs: number }
+  | { type: "procedure.failed"; key: string; error: SerializedStepError; durationMs: number }
   // steps
   | {
       type: "step.scheduled";
@@ -192,6 +208,9 @@ export type JournalEvent =
       route?: { provider: string; model?: string; effort?: string };
       scope?: { paths: string[]; also?: string[]; mode: "warn" | "strict" };
       payload?: unknown;
+      /** Original schedule time retained by a resumed durable wait. */
+      originAt?: number;
+      timeoutMs?: number;
       /** JSON Schema for the validated output, when this step declared one. */
       schema?: unknown;
       childRunId?: string;

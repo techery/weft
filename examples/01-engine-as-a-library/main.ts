@@ -23,6 +23,7 @@ import {
 } from "@techery/weft-core";
 import { mock } from "@techery/weft-provider-mock";
 import { defineWorkflow, z } from "@techery/weft-sdk";
+import { findingKey, uniqueFindings } from "@techery/weft-stdlib";
 
 // ---------------------------------------------------------------------------
 // The workflow — defined inline, exactly as a .weft/workflows/*/main.ts entry would be
@@ -47,32 +48,33 @@ const audit = defineWorkflow(
   },
   async (ctx, { paths }) => {
     ctx.phase("Find");
-    const found = ctx.successes(
+    const found = ctx.all(
       await ctx.parallel(
-        paths.map((p) =>
+        [...new Set(paths)],
+        (p) =>
           ctx.agent(`Find correctness bugs in ${p}. Cite file:line and quote the evidence.`, {
             schema: z.object({ findings: z.array(Finding) }),
             key: `find:${p}`,
           }),
-        ),
+        { concurrency: 4 },
       ),
     );
-    const findings = found.flatMap((r) => r.findings);
+    const findings = uniqueFindings(found.flatMap((r) => r.findings));
     ctx.log(`${findings.length} candidate findings across ${paths.length} paths`);
 
     ctx.phase("Verify");
-    const graded = ctx.successes(
+    const graded = ctx.all(
       await ctx
         .pipeline(findings)
         .step((f) =>
           ctx.agent(`Try to refute: ${f.claim} (${f.file}:${f.line}). Default real=false if unsure.`, {
             schema: Verdict,
             provider: "codex", // a different vendor grades
-            key: `refute:${f.file}:${f.line}`,
+            key: `refute:${findingKey(f)}`,
           }),
         )
         .map((verdict, finding) => ({ finding, verdict }))
-        .run(),
+        .run({ concurrency: 4 }),
     );
 
     for (const { finding, verdict } of graded) {
@@ -130,7 +132,9 @@ const BUGS: Record<string, Finding[]> = {
 };
 
 /** Findings the refuting vendor knocks down — everything else survives. */
-const REFUTED = new Map([["src/db/pool.ts:9", "the pool wrapper releases in a finally block one frame up"]]);
+const REFUTED = new Map([
+  [findingKey(BUGS["src/db/pool.ts"]![0]!), "the pool wrapper releases in a finally block one frame up"],
+]);
 
 const fixtures = mock()
   .on({ key: "find:*" }, (req) => ({ findings: BUGS[req.key?.slice("find:".length) ?? ""] ?? [] }))

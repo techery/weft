@@ -9,6 +9,12 @@
  * and edits reach the tree only as journaled patches (C6).
  */
 import { defineWorkflow, z } from "@techery/weft-sdk";
+import {
+  assertIntegratedWhenChanged,
+  findingKey,
+  groupFindingsByFile,
+  uniqueFindings,
+} from "@techery/weft-stdlib";
 import { Finding, FixResult, Verdict } from "./lib/schemas.ts";
 
 /** Cross-vendor refutation panel: two vendors, three votes, majority wins. */
@@ -22,42 +28,48 @@ export default defineWorkflow(
   },
   async (ctx, { paths }) => {
     ctx.phase("Find");
-    const found = ctx.successes(
+    const found = ctx.all(
       await ctx.parallel(
-        paths.map((p) =>
+        [...new Set(paths)],
+        (p) =>
           ctx.agent(`Find correctness bugs in ${p}. Cite file:line and quote the evidence.`, {
             schema: z.object({ findings: z.array(Finding) }),
             key: `find:${p}`,
             effort: "high",
           }),
-        ),
+        { concurrency: 4 },
       ),
     );
-    const findings = found.flatMap((r) => r.findings); // typed; no nulls
+    const findings = uniqueFindings(found.flatMap((r) => r.findings));
 
     ctx.phase("Verify");
-    const real = ctx.successes(
-      await ctx
-        .pipeline(findings)
-        .step((f) =>
-          ctx.parallel(
-            PANEL.map((provider, i) =>
-              ctx.agent(`Try to refute: ${f.claim} (${f.file}:${f.line})\n\n${f.evidence}`, {
-                schema: Verdict,
-                provider,
-                key: `refute:${f.file}:${f.line}:${i}`,
-              }),
+    const verified = ctx.all(
+      await ctx.parallel(
+        findings,
+        async (f) => {
+          const votes = ctx.all(
+            await ctx.parallel(
+              PANEL,
+              (provider, i) =>
+                ctx.agent(`Try to refute: ${f.claim} (${f.file}:${f.line})\n\n${f.evidence}`, {
+                  schema: Verdict,
+                  provider,
+                  key: `refute:${findingKey(f)}:${i}`,
+                }),
+              { concurrency: PANEL.length },
             ),
-          ),
-        )
-        .filter((votes) => ctx.successes(votes).filter((v) => v.real).length >= 2)
-        .map((_votes, f) => f)
-        .run(),
+          );
+          return { finding: f, real: votes.filter((vote) => vote.real).length >= 2 };
+        },
+        { concurrency: 4 },
+      ),
     );
+    const real = verified.filter((result) => result.real).map(({ finding }) => finding);
     await ctx.note({
       kind: "claim",
       text: `${real.length} of ${findings.length} findings survived refutation`,
     });
+    if (real.length === 0) return { fixed: [], skipped: [] };
 
     ctx.phase("Fix");
     const go = await ctx.gate({
@@ -70,23 +82,28 @@ export default defineWorkflow(
       return { fixed: [], skipped: real };
     }
 
-    const fixes = ctx.successes(
-      await ctx.parallel(
-        real.map((f) =>
-          ctx.agent.detailed(`Fix and add a focused test: ${f.claim} (${f.file}:${f.line})`, {
-            schema: FixResult,
-            isolation: "worktree", // its own git worktree at the integration tree
-            write: { paths: [f.file, "**/*.test.ts"], also: ["pnpm-lock.yaml"], mode: "warn" },
-            key: `fix:${f.file}`,
-          }),
-        ),
-      ),
-    );
-    const ledger = await ctx.integrate(fixes, { order: "sequential", onConflict: "ask" });
-    const merged = new Set(ledger.merged);
+    const fixed: Finding[] = [];
+    // One coherent writer per file; each later writer starts from the integrated
+    // tree, so shared regression tests cannot be edited from competing bases.
+    for (const group of groupFindingsByFile(real)) {
+      const key = `fix:${group.file}`;
+      const fix = await ctx.agent.detailed(
+        `Fix all of these findings together and add focused regression tests:\n${group.findings.map((f) => `${f.file}:${f.line} — ${f.claim}\n${f.evidence}`).join("\n\n")}`,
+        {
+          schema: FixResult,
+          isolation: "worktree", // its own git worktree at the integration tree
+          write: { paths: [group.file, "**/*.test.ts"], also: ["pnpm-lock.yaml"], mode: "strict" },
+          key,
+        },
+      );
+      const ledger = await ctx.integrate([fix], { order: "sequential", onConflict: "fail" });
+      assertIntegratedWhenChanged(key, fix.files, ledger.merged, ledger.quarantined);
+      // A successful model answer without an integrated patch is not a fix.
+      if (fix.patch && ledger.merged.includes(fix.patch.key)) fixed.push(...group.findings);
+    }
 
     ctx.phase("Check");
-    const tests = await ctx.check("tests", { exec: ["pnpm", "test"], required: true });
+    const tests = await ctx.check("tests", { key: "tests", exec: ["pnpm", "test"], required: true });
     if (tests.status === "fail") {
       await ctx.note({
         kind: "risk",
@@ -95,9 +112,7 @@ export default defineWorkflow(
       });
     }
 
-    return {
-      fixed: real.filter((f) => merged.has(`fix:${f.file}`)),
-      skipped: real.filter((f) => !merged.has(`fix:${f.file}`)),
-    };
+    const fixedKeys = new Set(fixed.map(findingKey));
+    return { fixed, skipped: real.filter((f) => !fixedKeys.has(findingKey(f))) };
   },
 );

@@ -162,6 +162,24 @@ export function adaptRun(detail: RunDetail, extras: RunExtras = {}): Run {
   const running = steps.filter((step) => step.status === "running");
   const pending = detail.humans.filter((human) => human.status === "pending");
   const gate = extras.pending ? adaptGate(extras.pending) : adaptGateFromState(detail, pending[0]);
+  const candidate = detail.candidates?.at(-1);
+  const verification = candidate
+    ? detail.verifications?.findLast((item) => item.candidateId === candidate.id)
+    : undefined;
+  const delivery = candidate
+    ? detail.deliveries?.findLast((item) => item.candidateId === candidate.id)
+    : undefined;
+  const observed = candidate
+    ? detail.operations?.findLast(
+        (operation) =>
+          operation.binding === "github.pr-feedback" &&
+          operation.status === "complete" &&
+          !!operation.output &&
+          typeof operation.output === "object" &&
+          (operation.output as { head?: unknown }).head === candidate.head,
+      )
+    : undefined;
+  const feedback = observed?.output as { status?: unknown; detail?: unknown } | undefined;
 
   return {
     id: detail.runId,
@@ -182,7 +200,7 @@ export function adaptRun(detail: RunDetail, extras: RunExtras = {}): Run {
       : running.map((step) => ({
           label: step.phase ?? "",
           name: labelOf(step),
-          meta: duration(step.startedAt, undefined),
+          meta: step.progress?.message ?? duration(step.startedAt, undefined),
           stepId: stepId(step.seq),
         })),
     findings: findingsOf(detail),
@@ -196,6 +214,44 @@ export function adaptRun(detail: RunDetail, extras: RunExtras = {}): Run {
     journal: extras.journal ?? [],
     gate,
     steps: stepsOf(detail, steps, pending, extras.agentSessions),
+    recovery: detail.attention ?? [],
+    ...(detail.workspace
+      ? {
+          delivery: {
+            branch: candidate?.branch ?? detail.workspace.branch,
+            workspacePath: detail.workspace.path,
+            retained: detail.workspace.retained !== false,
+            head: candidate?.head,
+            candidateId: candidate?.id,
+            status: delivery
+              ? ("Delivery confirmed" as const)
+              : verification
+                ? verification.passed
+                  ? ("Verification recorded" as const)
+                  : ("Verification failed" as const)
+                : candidate
+                  ? ("Candidate captured" as const)
+                  : detail.workspace.retained === false
+                    ? ("Workspace removed" as const)
+                    : ("Workspace retained" as const),
+            ...(delivery ? { output: delivery.output } : {}),
+            ...(observed &&
+            feedback &&
+            (feedback.status === "passed" ||
+              feedback.status === "failed" ||
+              feedback.status === "pending" ||
+              feedback.status === "unknown")
+              ? {
+                  feedback: {
+                    status: feedback.status,
+                    detail: typeof feedback.detail === "string" ? feedback.detail : "",
+                    updatedAt: observed.updatedAt,
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -219,7 +275,9 @@ function pillOf(detail: RunDetail, running: number, pending: number): string {
     case "complete":
       return `done · ${ago(detail.updatedAt)}`;
     case "failed":
-      return `failed · ${detail.error?.code ?? "error"}`;
+      return detail.error?.code === "recovery_required"
+        ? "Recovery required"
+        : `failed · ${detail.error?.code ?? "error"}`;
     case "cancelled":
       return "stopped";
     default:
@@ -400,6 +458,7 @@ function machineStep(
   const cost = step.usage?.usd;
   const cells: StepCell[] = [
     { k: "kind", v: step.kind },
+    ...(step.status === "running" && step.progress ? [{ k: "activity", v: step.progress.message }] : []),
     ...(step.route
       ? [{ k: "provider", v: `${step.route.provider}${step.route.model ? `/${step.route.model}` : ""}` }]
       : []),
